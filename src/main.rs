@@ -4,11 +4,17 @@
 #![expect(static_mut_refs)]
 
 use embassy_executor::Spawner;
-
+use embedded_graphics::{pixelcolor::Rgb888, prelude::*};
 use esp_hal::{
+    dma_tx_buffer,
+    gpio::{Level, Output, OutputConfig},
     interrupt::software::SoftwareInterruptControl,
+    ram, spi,
+    time::Rate,
     timer::timg::TimerGroup,
 };
+use esp_println::println;
+use octowhere::drivers::{co5300::Co5300Display, framebuffer::Framebuffer, qspi_bus::QspiBus};
 use static_cell::StaticCell;
 
 use esp_alloc as _;
@@ -21,13 +27,18 @@ static CORE1_EXECUTOR: StaticCell<esp_rtos::embassy::Executor> = StaticCell::new
 #[embassy_executor::task]
 async fn second_core(_spawner: Spawner) {}
 
+// TODO: CO5300 display driver
+// CST9217 touch
+// AXP2101 power
+
 #[esp_rtos::main]
 async fn main(_spawner: Spawner) {
+    // PERF: Figure out if we can reclaim any SRAM from the bootloader
     // Heap: 64KB SRAM + PSRAM for large allocs
-    esp_alloc::heap_allocator!(size: 64 * 1024);
+    esp_alloc::heap_allocator!(#[ram(reclaimed)] size: 64 * 1024);
 
     // PERF: How low can we drop the clock before running into timing issues?
-    let peripherals =
+    let mut peripherals =
         esp_hal::init(esp_hal::Config::default().with_cpu_clock(esp_hal::clock::CpuClock::_240MHz));
     let sw_int = SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
 
@@ -40,9 +51,11 @@ async fn main(_spawner: Spawner) {
     esp_rtos::start(timg0.timer0, sw_int.software_interrupt0);
 
     // Start up the executor on the second core.
-    // PERF: Do we need the second core?
+    // PERF: We want to utilize cores fairly evenly because running both uses little more power
+    // than running just one.
+    // Idea: When using double buffering, have core0 handle the drawing, and core1 handle flipping
     esp_rtos::start_second_core(
-        peripherals.CPU_CTRL,
+        peripherals.CPU_CTRL.reborrow(),
         sw_int.software_interrupt1,
         // SAFETY: This static mut value must not be accessed ever again, anywhere
         unsafe { &mut CORE1_STACK },
@@ -55,4 +68,34 @@ async fn main(_spawner: Spawner) {
     );
 
     esp_println::logger::init_logger_from_env();
+
+    // === Display 80MHz DMA ===
+    let spi_config = spi::master::Config::default()
+        .with_frequency(Rate::from_mhz(80))
+        .with_mode(spi::Mode::_0);
+
+    let dma_tx = dma_tx_buffer!(8000).unwrap();
+
+    let spi = spi::master::Spi::new(peripherals.SPI2, spi_config)
+        .expect("SPI failed")
+        .with_sck(peripherals.GPIO38)
+        .with_sio0(peripherals.GPIO4)
+        .with_sio1(peripherals.GPIO5)
+        .with_sio2(peripherals.GPIO6)
+        .with_sio3(peripherals.GPIO7)
+        .with_dma(peripherals.DMA_CH0)
+        .into_async();
+    let cs = Output::new(peripherals.GPIO12, Level::High, OutputConfig::default());
+    let reset = Output::new(peripherals.GPIO39, Level::High, OutputConfig::default());
+
+    let spi = QspiBus::new(spi, dma_tx, cs);
+    let mut display = Co5300Display::new(spi, reset, peripherals.GPIO13).await;
+
+    println!("[DISPLAY] OK (TE VSync enabled)");
+
+    // Framebuffer in PSRAM, around 600Kb
+    let mut fb = Framebuffer::new();
+    fb.clear_color(Rgb888::BLACK);
+    fb.flush(&mut display);
+    println!("[FB] OK");
 }
