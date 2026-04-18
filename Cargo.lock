@@ -1231,6 +1231,7 @@ name = "octowhere"
 version = "0.1.0"
 dependencies = [
  "axp2101-embedded",
+ "embassy-embedded-hal",
  "embassy-executor",
  "embassy-futures",
  "embassy-sync 0.8.0",

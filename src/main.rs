@@ -3,18 +3,25 @@
 // Now defaults to deny in Rust-2024, however abusing statics is necessary in the embedded world.
 #![expect(static_mut_refs)]
 
+use axp2101_embedded::AsyncAxp2101;
+use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_executor::Spawner;
+use embassy_sync::{blocking_mutex::raw::NoopRawMutex, mutex::Mutex};
 use embedded_graphics::{pixelcolor::Rgb888, prelude::*};
 use esp_hal::{
     dma_tx_buffer,
     gpio::{Level, Output, OutputConfig},
+    i2c::master::I2c,
     interrupt::software::SoftwareInterruptControl,
     ram, spi,
     time::Rate,
     timer::timg::TimerGroup,
 };
 use esp_println::println;
-use octowhere::drivers::{co5300::Co5300Display, framebuffer::Framebuffer, qspi_bus::QspiBus};
+use octowhere::{
+    drivers::{co5300::Co5300Display, framebuffer::Framebuffer, qspi_bus::QspiBus},
+    peripherals::{imu::Qmi8658Imu, rtc::Pcf85063aRtc},
+};
 use static_cell::StaticCell;
 
 use esp_alloc as _;
@@ -27,9 +34,7 @@ static CORE1_EXECUTOR: StaticCell<esp_rtos::embassy::Executor> = StaticCell::new
 #[embassy_executor::task]
 async fn second_core(_spawner: Spawner) {}
 
-// TODO: CO5300 display driver
-// CST9217 touch
-// AXP2101 power
+// TODO: CST9217 touch
 
 #[esp_rtos::main]
 async fn main(_spawner: Spawner) {
@@ -42,10 +47,8 @@ async fn main(_spawner: Spawner) {
         esp_hal::init(esp_hal::Config::default().with_cpu_clock(esp_hal::clock::CpuClock::_240MHz));
     let sw_int = SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
 
-    // PSRAM
     esp_alloc::psram_allocator!(peripherals.PSRAM, esp_hal::psram);
 
-    // Embassy timer
     let timg0 = TimerGroup::new(peripherals.TIMG0);
 
     esp_rtos::start(timg0.timer0, sw_int.software_interrupt0);
@@ -69,33 +72,66 @@ async fn main(_spawner: Spawner) {
 
     esp_println::logger::init_logger_from_env();
 
-    // === Display 80MHz DMA ===
-    let spi_config = spi::master::Config::default()
-        .with_frequency(Rate::from_mhz(80))
-        .with_mode(spi::Mode::_0);
+    let i2c = I2c::new(
+        peripherals.I2C0,
+        esp_hal::i2c::master::Config::default().with_frequency(Rate::from_khz(400)),
+    )
+    .expect("I2C failed")
+    .with_sda(peripherals.GPIO15)
+    .with_scl(peripherals.GPIO14)
+    .into_async();
 
-    let dma_tx = dma_tx_buffer!(8000).unwrap();
+    let i2c = Mutex::<NoopRawMutex, _>::new(i2c);
 
-    let spi = spi::master::Spi::new(peripherals.SPI2, spi_config)
-        .expect("SPI failed")
-        .with_sck(peripherals.GPIO38)
-        .with_sio0(peripherals.GPIO4)
-        .with_sio1(peripherals.GPIO5)
-        .with_sio2(peripherals.GPIO6)
-        .with_sio3(peripherals.GPIO7)
-        .with_dma(peripherals.DMA_CH0)
-        .into_async();
-    let cs = Output::new(peripherals.GPIO12, Level::High, OutputConfig::default());
-    let reset = Output::new(peripherals.GPIO39, Level::High, OutputConfig::default());
+    let i2c_peripherals = async {
+        let mut axp2101 = AsyncAxp2101::new(I2cDevice::new(&i2c));
+        axp2101.init().await.unwrap();
+        axp2101.disable_general_adc_channel().await.unwrap();
+        println!("[Power] AXP2101 PMIC initalized");
 
-    let spi = QspiBus::new(spi, dma_tx, cs);
-    let mut display = Co5300Display::new(spi, reset, peripherals.GPIO13).await;
+        let mut rtc = Pcf85063aRtc::new(I2cDevice::new(&i2c));
+        rtc.init().await.unwrap();
+        println!("[RTC] OK");
 
-    println!("[DISPLAY] OK (TE VSync enabled)");
+        let mut imu = Qmi8658Imu::new(I2cDevice::new(&i2c));
+        imu.init().await.unwrap();
+        println!("[IMU] OK");
 
-    // Framebuffer in PSRAM, around 600Kb
-    let mut fb = Framebuffer::new();
-    fb.clear_color(Rgb888::BLACK);
-    fb.flush(&mut display);
-    println!("[FB] OK");
+        (axp2101, rtc, imu)
+    };
+
+    let display = async {
+        let spi_config = spi::master::Config::default()
+            .with_frequency(Rate::from_mhz(80))
+            .with_mode(spi::Mode::_0);
+
+        let dma_tx = dma_tx_buffer!(8000).unwrap();
+
+        let spi = spi::master::Spi::new(peripherals.SPI2, spi_config)
+            .expect("SPI failed")
+            .with_sck(peripherals.GPIO38)
+            .with_sio0(peripherals.GPIO4)
+            .with_sio1(peripherals.GPIO5)
+            .with_sio2(peripherals.GPIO6)
+            .with_sio3(peripherals.GPIO7)
+            .with_dma(peripherals.DMA_CH0)
+            .into_async();
+        let cs = Output::new(peripherals.GPIO12, Level::High, OutputConfig::default());
+        let reset = Output::new(peripherals.GPIO39, Level::High, OutputConfig::default());
+
+        let spi = QspiBus::new(spi, dma_tx, cs);
+        let mut display = Co5300Display::new(spi, reset, peripherals.GPIO13).await;
+
+        println!("[DISPLAY] OK");
+
+        // Framebuffer in PSRAM, around 600Kb
+        let mut fb = Framebuffer::new();
+        fb.clear_color(Rgb888::BLACK);
+        fb.flush(&mut display);
+        println!("[FB] OK");
+        (display, fb)
+    };
+
+    let ((power, rtc, imu), (display, fb)) =
+        embassy_futures::join::join(i2c_peripherals, display).await;
 }
