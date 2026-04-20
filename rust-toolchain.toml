@@ -1,2 +1,3 @@
 [toolchain]
-channel = "esp"
+# Use locally-built version of the ESP rust toolchain
+channel = "esp-nightly"

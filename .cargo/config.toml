@@ -7,6 +7,7 @@ rustflags = ["-C", "link-arg=-Tlinkall.x"]
 
 [unstable]
 build-std = ["core", "alloc"]
+build-std-features = ["optimize_for_size"]
 
 [env]
 # "error" silences the harmless esp_wifi_internal_tx warnings that fire

@@ -1,3 +1,4 @@
+#![feature(impl_trait_in_assoc_type)]
 #![no_std]
 #![no_main]
 // Now defaults to deny in Rust-2024, however abusing statics is necessary in the embedded world.
@@ -85,6 +86,8 @@ async fn main(_spawner: Spawner) {
     let i2c = Mutex::<NoopRawMutex, _>::new(i2c);
     let i2c = I2cDevice::new(&i2c);
 
+    // FIXME: May not be actually routed anywhere on the waveshare board we're using, in which case
+    // this has to go :(
     let exio_int = Input::new(peripherals.GPIO0, InputConfig::default());
     let mut exio = Tca9554::new(i2c.clone(), tca9554::Address::standard())
         .with_int::<_, 8, embassy_sync::blocking_mutex::raw::NoopRawMutex>(exio_int);

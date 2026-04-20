@@ -4,19 +4,20 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-esp-hal = { version = "1.1.0-rc.0", default-features = true, features = ["esp32s3", "unstable"] }
+esp-hal = { version = "1.1.0-rc.0", default-features = true, features = ["esp32s3", "requires-unstable", "unstable"] }
 esp-rtos = { version = "0.3.0", features = ["esp32s3", "embassy", "esp-alloc"] }
-esp-alloc = "0.10.0"
+esp-alloc = { version = "0.10.0", features = ["nightly"] }
 esp-println = { version = "0.17.0", features = ["esp32s3", "log-04"] }
 esp-backtrace = { version = "0.19.0", features = ["esp32s3", "panic-handler", "println"] }
 esp-bootloader-esp-idf = { version = "0.5", features = ["esp32s3"] }
 log = "0.4"
 
-embassy-executor = "0.10.0"
+# Allows for truly statically allocated tasks instead of a bump allocator
+embassy-executor = { version = "0.10.0", features = ["nightly"] }
 embassy-time = "0.5.1"
 embassy-sync = "0.8"
 embassy-futures = "0.1"
-static_cell = "2.1"
+static_cell = { version = "2.1", features = ["nightly"] }
 
 embedded-graphics = "0.8"
 embedded-graphics-core = "0.4"
@@ -49,3 +50,5 @@ opt-level = "s"
 [profile.release]
 opt-level = "s"
 lto = true
+codegen-units = 1
+panic = "abort"
