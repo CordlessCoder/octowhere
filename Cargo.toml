@@ -30,6 +30,8 @@ embedded-io-async = "0.7"
 axp2101-embedded = { version = "0.3.0", features = ["async"] }
 futures = { version = "0.3.32", default-features = false, features = ["async-await"] }
 embassy-embedded-hal = "0.6.0"
+ph-qmi8658 = { version = "0.1.1", features = ["fixed"] }
+tca9554 = { version = "0.1.1", features = ["interrupt"] }
 
 [patch.crates-io]
 esp-hal = { git = "https://github.com/CordlessCoder/esp-hal" }
@@ -38,7 +40,8 @@ esp-rom-sys = { git = "https://github.com/CordlessCoder/esp-hal" }
 esp-alloc = { git = "https://github.com/CordlessCoder/esp-hal" }
 esp-bootloader-esp-idf = { git = "https://github.com/CordlessCoder/esp-hal" }
 esp-println = { git = "https://github.com/CordlessCoder/esp-hal" } 
-esp-backtrace ={ git = "https://github.com/CordlessCoder/esp-hal" } 
+esp-backtrace = { git = "https://github.com/CordlessCoder/esp-hal" } 
+tca9554 = { git = "https://github.com/CordlessCoder/tca9554-rs" } 
 
 [profile.dev]
 opt-level = "s"

@@ -3,6 +3,8 @@
 // I2C address 0x51, BCD encoded time registers
 use embedded_hal_async::i2c::I2c;
 
+use crate::peripherals::i2c_helper;
+
 const PCF85063A_ADDR: u8 = 0x51;
 
 // Registers
@@ -51,16 +53,12 @@ impl<I: I2c> Pcf85063aRtc<I> {
         Self { i2c }
     }
 
-    async fn read_reg(&mut self, reg: u8) -> Result<u8, I::Error> {
-        let mut buf = [0u8];
-        self.i2c
-            .write_read(PCF85063A_ADDR, &[reg], &mut buf)
-            .await?;
-        Ok(buf[0])
+    fn read_reg(&mut self, reg: u8) -> impl Future<Output = Result<u8, I::Error>> {
+        i2c_helper::read_reg_byte(&mut self.i2c, PCF85063A_ADDR, reg)
     }
 
-    async fn write_reg(&mut self, reg: u8, val: u8) -> Result<(), I::Error> {
-        self.i2c.write(PCF85063A_ADDR, &[reg, val]).await
+    fn write_reg(&mut self, reg: u8, val: u8) -> impl Future<Output = Result<(), I::Error>> {
+        i2c_helper::write_reg(&mut self.i2c, PCF85063A_ADDR, reg, val)
     }
 
     /// Initialize RTC: ensure oscillator running, 24h mode.

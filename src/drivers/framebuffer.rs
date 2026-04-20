@@ -24,25 +24,17 @@ const PIXEL_COUNT: usize = WIDTH * HEIGHT;
 pub type Color = Rgb888;
 
 pub struct Framebuffer {
-    buf: Box<[u8; PIXEL_COUNT * BYTES_PER_PIXEL]>,
-}
-
-impl Default for Framebuffer {
-    fn default() -> Self {
-        Self::new()
-    }
+    buf: [u8; PIXEL_COUNT * BYTES_PER_PIXEL],
 }
 
 impl Framebuffer {
-    /// Allocate framebuffer in PSRAM (via global allocator).
-    pub fn new() -> Self {
+    #[must_use]
+    pub fn alloc() -> Box<Framebuffer> {
         unsafe {
             // Initialize in-place on the heap
-            let mut buf = Box::new_uninit();
-            core::ptr::write_bytes(buf.as_mut_ptr(), 0, 1);
-            Self {
-                buf: buf.assume_init(),
-            }
+            let mut alloc = Box::new_uninit();
+            core::ptr::write_bytes(alloc.as_mut_ptr(), 0, 1);
+            alloc.assume_init()
         }
     }
 
@@ -151,12 +143,12 @@ impl Framebuffer {
 
     /// Get raw buffer for direct access.
     pub fn buffer(&self) -> &[u8] {
-        &self.buf[..]
+        &self.buf
     }
 
     /// Get mutable raw buffer for direct access (snapshot restore).
     pub fn buffer_mut(&mut self) -> &mut [u8] {
-        &mut self.buf[..]
+        &mut self.buf
     }
 }
 

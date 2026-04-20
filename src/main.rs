@@ -10,22 +10,23 @@ use embassy_sync::{blocking_mutex::raw::NoopRawMutex, mutex::Mutex};
 use embedded_graphics::{pixelcolor::Rgb888, prelude::*};
 use esp_hal::{
     dma_tx_buffer,
-    gpio::{Level, Output, OutputConfig},
+    gpio::{Input, InputConfig, Level, Output, OutputConfig},
     i2c::master::I2c,
     interrupt::software::SoftwareInterruptControl,
-    ram, spi,
+    spi,
     time::Rate,
     timer::timg::TimerGroup,
 };
 use esp_println::println;
 use octowhere::{
     drivers::{co5300::Co5300Display, framebuffer::Framebuffer, qspi_bus::QspiBus},
-    peripherals::{imu::Qmi8658Imu, rtc::Pcf85063aRtc},
+    peripherals::rtc::Pcf85063aRtc,
 };
 use static_cell::StaticCell;
 
 use esp_alloc as _;
 use esp_backtrace as _;
+use tca9554::Tca9554;
 esp_bootloader_esp_idf::esp_app_desc!();
 
 static mut CORE1_STACK: esp_hal::system::Stack<8192> = esp_hal::system::Stack::new();
@@ -40,7 +41,7 @@ async fn second_core(_spawner: Spawner) {}
 async fn main(_spawner: Spawner) {
     // PERF: Figure out if we can reclaim any SRAM from the bootloader
     // Heap: 64KB SRAM + PSRAM for large allocs
-    esp_alloc::heap_allocator!(#[ram(reclaimed)] size: 64 * 1024);
+    // esp_alloc::heap_allocator!(#[ram(reclaimed)] size: 64 * 1024);
 
     // PERF: How low can we drop the clock before running into timing issues?
     let mut peripherals =
@@ -82,19 +83,27 @@ async fn main(_spawner: Spawner) {
     .into_async();
 
     let i2c = Mutex::<NoopRawMutex, _>::new(i2c);
+    let i2c = I2cDevice::new(&i2c);
+
+    let exio_int = Input::new(peripherals.GPIO0, InputConfig::default());
+    let mut exio = Tca9554::new(i2c.clone(), tca9554::Address::standard())
+        .with_int::<_, 8, embassy_sync::blocking_mutex::raw::NoopRawMutex>(exio_int);
 
     let i2c_peripherals = async {
-        let mut axp2101 = AsyncAxp2101::new(I2cDevice::new(&i2c));
+        exio.init().await.unwrap();
+
+        let mut axp2101 = AsyncAxp2101::new(i2c.clone());
         axp2101.init().await.unwrap();
         axp2101.disable_general_adc_channel().await.unwrap();
         println!("[Power] AXP2101 PMIC initalized");
 
-        let mut rtc = Pcf85063aRtc::new(I2cDevice::new(&i2c));
+        let mut rtc = Pcf85063aRtc::new(i2c.clone());
         rtc.init().await.unwrap();
         println!("[RTC] OK");
 
-        let mut imu = Qmi8658Imu::new(I2cDevice::new(&i2c));
-        imu.init().await.unwrap();
+        let imu_int2 = Input::new(peripherals.GPIO21, InputConfig::default());
+        let mut imu = ph_qmi8658::Qmi8658::new_i2c(i2c.clone(), Some(exio.pin(6)), Some(imu_int2));
+        imu.init(&mut embassy_time::Delay).await.unwrap();
         println!("[IMU] OK");
 
         (axp2101, rtc, imu)
@@ -124,8 +133,9 @@ async fn main(_spawner: Spawner) {
 
         println!("[DISPLAY] OK");
 
-        // Framebuffer in PSRAM, around 600Kb
-        let mut fb = Framebuffer::new();
+        // Statically alloacted framebuffer, around 600Kb
+
+        let mut fb = Framebuffer::alloc();
         fb.clear_color(Rgb888::BLACK);
         fb.flush(&mut display);
         println!("[FB] OK");
