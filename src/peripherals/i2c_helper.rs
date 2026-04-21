@@ -38,3 +38,13 @@ pub async fn read_reg<I: I2c>(
 pub async fn write_reg<I: I2c>(i2c: &mut I, addr: u8, reg: u8, val: u8) -> Result<(), I::Error> {
     i2c.write(addr, &[reg, val]).await
 }
+
+pub async fn write_wide_reg<I: I2c>(
+    i2c: &mut I,
+    addr: u8,
+    reg: u16,
+    val: u8,
+) -> Result<(), I::Error> {
+    let reg = reg.to_be_bytes();
+    i2c.write(addr, &[reg[0], reg[1], val]).await
+}

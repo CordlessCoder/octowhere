@@ -22,16 +22,12 @@ pub fn fill_buf_repeat<'b>(buf: &'b mut [u8], data: &[u8], n: usize) -> &'b mut 
 
     // `rem` (`= n - 2^expn`) repetition is done by copying
     // first `rem` repetitions from `buf` itself.
-    let rem_len = n * data.len() - buf.len();
+    let rem_len = n * data.len() - len;
     if rem_len > 0 {
         // `buf.extend(buf[0 .. rem_len])`:
         unsafe {
             // This is non-overlapping since `2^expn > rem`.
-            core::ptr::copy_nonoverlapping(
-                buf.as_ptr(),
-                (buf.as_mut_ptr()).add(buf.len()),
-                rem_len,
-            );
+            core::ptr::copy_nonoverlapping(buf.as_ptr(), (buf.as_mut_ptr()).add(len), rem_len);
         }
     }
     &mut buf[..data.len() * n]

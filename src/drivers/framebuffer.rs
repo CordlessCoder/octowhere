@@ -4,12 +4,15 @@
 
 use alloc::boxed::Box;
 use embedded_graphics::pixelcolor::Rgb888;
+use embedded_graphics::pixelcolor::raw::RawU24;
 use embedded_graphics_core::draw_target::DrawTarget;
 use embedded_graphics_core::geometry::{OriginDimensions, Size};
 use embedded_graphics_core::pixelcolor::Rgb565;
 use embedded_graphics_core::pixelcolor::raw::RawU16;
 use embedded_graphics_core::prelude::*;
 use embedded_graphics_core::primitives::Rectangle;
+use embedded_hal::delay::DelayNs;
+use esp_println::dbg;
 
 use crate::board;
 use crate::drivers::co5300::Co5300Display;
@@ -57,7 +60,7 @@ impl Framebuffer {
     }
 
     /// Fill a rectangular region.
-    pub fn fill_rect(&mut self, x: usize, y: usize, w: usize, h: usize, color: u16) {
+    pub fn fill_rect(&mut self, x: usize, y: usize, w: usize, h: usize, color: RawU24) {
         let x_end = (x + w).min(WIDTH);
         let y_end = (y + h).min(HEIGHT);
         let raw = color.to_be_bytes();
@@ -72,19 +75,14 @@ impl Framebuffer {
         }
     }
 
-    /// VSync flush for watchface / menus. Same as swap_and_flush but kept distinct for clarity.
-    pub fn flush_vsync(&self, display: &mut Co5300Display) {
-        let te = display.te();
-        for _ in 0..400 {
-            if te.is_high() {
-                break;
-            }
-        }
-        self.flush(display);
+    /// VSync flush for watchface / menus.
+    pub async fn flush_vsync(&self, display: &mut Co5300Display<'_>) {
+        display.te_mut().wait_for_high().await;
+        self.flush(display).await;
     }
 
     /// Flush the entire framebuffer to the display via DMA QSPI.
-    pub fn flush(&self, display: &mut Co5300Display) {
+    pub async fn flush(&self, display: &mut Co5300Display<'_>) {
         display.set_addr_window(0, 0, WIDTH as u16, HEIGHT as u16);
         let mut stream = display.begin_stream();
         let mut remaining = &self.buf[..];
@@ -93,7 +91,7 @@ impl Framebuffer {
             let chunk = buf.len().min(remaining.len());
             let captured = remaining.split_off(..chunk).unwrap();
             buf[..chunk].copy_from_slice(captured);
-            stream.stream_pixels(chunk);
+            stream.stream_pixels_async(chunk).await;
         }
     }
 
@@ -152,14 +150,14 @@ impl Framebuffer {
     }
 }
 
-impl OriginDimensions for Framebuffer {
+impl OriginDimensions for Box<Framebuffer> {
     fn size(&self) -> Size {
         Size::new(WIDTH as u32, HEIGHT as u32)
     }
 }
 
-impl DrawTarget for Framebuffer {
-    type Color = Rgb565;
+impl DrawTarget for Box<Framebuffer> {
+    type Color = Rgb888;
     type Error = DisplayError;
 
     fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
@@ -217,13 +215,12 @@ impl DrawTarget for Framebuffer {
         if area.size.width == 0 || area.size.height == 0 {
             return Ok(());
         }
-        let raw = RawU16::from(color).into_inner();
         self.fill_rect(
             area.top_left.x as usize,
             area.top_left.y as usize,
             area.size.width as usize,
             area.size.height as usize,
-            raw,
+            color.into(),
         );
         Ok(())
     }

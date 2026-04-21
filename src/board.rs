@@ -11,9 +11,10 @@ pub const LCD_SDIO3: u8 = 7;
 pub const LCD_SCLK: u8 = 38;
 pub const LCD_CS: u8 = 12;
 pub const LCD_RESET: u8 = 39;
+
 pub const LCD_WIDTH: u16 = 466;
 pub const LCD_HEIGHT: u16 = 466;
-pub const LCD_COL_OFFSET: u16 = 22;
+pub const LCD_COL_OFFSET: u16 = 6;
 pub const LCD_ROW_OFFSET: u16 = 0;
 // Display TE (Tearing Effect sync)
 pub const LCD_TE: u8 = 13;

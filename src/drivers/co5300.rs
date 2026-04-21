@@ -9,6 +9,7 @@ use embedded_graphics_core::primitives::Rectangle;
 
 use esp_hal::gpio::{Input, InputConfig, InputPin, Output};
 use esp_hal::spi::master::{Address, Command, DataMode};
+use futures::FutureExt;
 
 use crate::board::{self, delay_ms, delay_ms_async, delay_us, delay_us_async};
 use crate::drivers::framebuffer::{BYTES_PER_PIXEL, Color};
@@ -16,6 +17,9 @@ use crate::drivers::qspi_bus::{QSPIOperation, QspiBus};
 use crate::util::fill_buf_repeat;
 
 use embedded_graphics_core::geometry::Point;
+
+pub const X_OFFS: u16 = 6;
+pub const Y_OFFS: u16 = 0;
 
 // CO5300 commands (from Arduino_CO5300.h)
 // const CMD_SWRESET: u8 = 0x01;
@@ -62,10 +66,10 @@ pub enum DisplayError {
 /// Turn display on (exit sleep + display ON).
 /// MIPI DCS order: SLPOUT -> 120ms -> DISPON -> 20ms.
 static CO5300_EXIT_SLEEP: [QSPIOperation; 4] = [
-    QSPIOperation::Command(CMD_SLPOUT),
-    QSPIOperation::Delay(SLPOUT_DELAY_MS),
     QSPIOperation::Command(CMD_DISPON),
     QSPIOperation::Delay(20),
+    QSPIOperation::Command(CMD_SLPOUT),
+    QSPIOperation::Delay(SLPOUT_DELAY_MS),
 ];
 static CO5300_ENTER_SLEEP: [QSPIOperation; 4] = [
     QSPIOperation::Command(CMD_DISPOFF),
@@ -77,12 +81,12 @@ static CO5300_ENTER_SLEEP: [QSPIOperation; 4] = [
 static CO5300_INIT: [QSPIOperation; 14] = [
     QSPIOperation::Command(CMD_SLPOUT),
     QSPIOperation::Delay(SLPOUT_DELAY_MS),
-    // Vendor register access
+    // Set command page 0
     QSPIOperation::CommandD8(0xFE, 0x00),
     // SPI mode control
     QSPIOperation::CommandD8(CMD_SPIMODECTL, 0x80),
     // // 16-bit RGB565
-    // QSPIOperation::Command8D8(CMD_PIXFMT, 0x55),
+    // QSPIOperation::CommandD8(CMD_PIXFMT, 0x55),
     // 24-bit RGB888
     QSPIOperation::CommandD8(CMD_PIXFMT, 0x77),
     // Write CTRL Display Brightness
@@ -106,8 +110,7 @@ static CO5300_INIT: [QSPIOperation; 14] = [
 ];
 
 impl<'d> Co5300Display<'d> {
-    pub async fn new(bus: QspiBus<'d>, reset: Output<'d>, te_pin: impl InputPin + 'd) -> Self {
-        let te_pin = Input::new(te_pin, InputConfig::default());
+    pub async fn new(bus: QspiBus<'d>, reset: Output<'d>, te_pin: Input<'d>) -> Self {
         let mut disp = Self {
             bus,
             reset,
@@ -204,6 +207,9 @@ impl<'d> Co5300Display<'d> {
     pub fn te(&self) -> &Input<'d> {
         &self.te_pin
     }
+    pub fn te_mut(&mut self) -> &mut Input<'d> {
+        &mut self.te_pin
+    }
 
     /// Set display brightness (0x00 = off, 0xD0 = default, 0xFF = max).
     pub fn set_brightness(&mut self, brightness: u8) {
@@ -247,6 +253,20 @@ pub struct PixelStream<'r, 'd> {
 impl PixelStream<'_, '_> {
     pub fn buf(&mut self) -> &mut [u8] {
         self.disp.bus.tx.as_mut_slice()
+    }
+    pub fn stream_pixels_async(&mut self, bytes: usize) -> impl Future<Output = ()> {
+        self.disp
+            .bus
+            .spi
+            .half_duplex_write_and_wait(
+                DataMode::Quad,
+                Command::None,
+                Address::None,
+                0,
+                bytes,
+                &mut self.disp.bus.tx,
+            )
+            .map(|res| res.unwrap())
     }
     pub fn stream_pixels(&mut self, bytes: usize) {
         self.disp

@@ -1,7 +1,8 @@
+#![feature(inherent_associated_types)]
 #![no_std]
 extern crate alloc;
 
-pub mod drivers;
 pub mod board;
-pub mod util;
+pub mod drivers;
 pub mod peripherals;
+pub mod util;

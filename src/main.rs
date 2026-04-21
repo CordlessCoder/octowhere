@@ -1,16 +1,21 @@
 #![feature(impl_trait_in_assoc_type)]
+#![feature(inherent_associated_types)]
 #![no_std]
 #![no_main]
 // Now defaults to deny in Rust-2024, however abusing statics is necessary in the embedded world.
 #![expect(static_mut_refs)]
+extern crate alloc;
 
 use axp2101_embedded::AsyncAxp2101;
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_executor::Spawner;
 use embassy_sync::{blocking_mutex::raw::NoopRawMutex, mutex::Mutex};
-use embedded_graphics::{pixelcolor::Rgb888, prelude::*};
+use embassy_time::{Duration, Instant, Ticker};
+use embedded_bitmap_fonts::TextStyle;
+use embedded_graphics::{mono_font, pixelcolor::Rgb888, prelude::*};
 use esp_hal::{
-    dma_tx_buffer,
+    dma::{DmaRxBuf, DmaTxBuf},
+    dma_buffers, dma_tx_buffer,
     gpio::{Input, InputConfig, Level, Output, OutputConfig},
     i2c::master::I2c,
     interrupt::software::SoftwareInterruptControl,
@@ -18,10 +23,11 @@ use esp_hal::{
     time::Rate,
     timer::timg::TimerGroup,
 };
-use esp_println::println;
+use esp_println::{dbg, println};
 use octowhere::{
+    board::delay_ms_async,
     drivers::{co5300::Co5300Display, framebuffer::Framebuffer, qspi_bus::QspiBus},
-    peripherals::rtc::Pcf85063aRtc,
+    peripherals::{rtc::Pcf85063aRtc, touch::Cst9217},
 };
 use static_cell::StaticCell;
 
@@ -79,8 +85,8 @@ async fn main(_spawner: Spawner) {
         esp_hal::i2c::master::Config::default().with_frequency(Rate::from_khz(400)),
     )
     .expect("I2C failed")
-    .with_sda(peripherals.GPIO15)
     .with_scl(peripherals.GPIO14)
+    .with_sda(peripherals.GPIO15)
     .into_async();
 
     let i2c = Mutex::<NoopRawMutex, _>::new(i2c);
@@ -88,28 +94,74 @@ async fn main(_spawner: Spawner) {
 
     // FIXME: May not be actually routed anywhere on the waveshare board we're using, in which case
     // this has to go :(
-    let exio_int = Input::new(peripherals.GPIO0, InputConfig::default());
-    let mut exio = Tca9554::new(i2c.clone(), tca9554::Address::standard())
-        .with_int::<_, 8, embassy_sync::blocking_mutex::raw::NoopRawMutex>(exio_int);
+    // let exio_int = Input::new(peripherals.GPIO0, InputConfig::default());
+    let mut exio = Tca9554::new(i2c.clone(), tca9554::Address::standard());
 
     let i2c_peripherals = async {
+        use embedded_hal_async::i2c::I2c;
         exio.init().await.unwrap();
 
-        let mut axp2101 = AsyncAxp2101::new(i2c.clone());
-        axp2101.init().await.unwrap();
-        axp2101.disable_general_adc_channel().await.unwrap();
-        println!("[Power] AXP2101 PMIC initalized");
+        let axp2101 = ();
+        // let mut axp2101 = AsyncAxp2101::with_address(i2c.clone(), 0x34);
+        // axp2101.init().await.unwrap();
+        // axp2101.disable_general_adc_channel().await.unwrap();
+        // println!("[Power] AXP2101 PMIC initalized");
 
         let mut rtc = Pcf85063aRtc::new(i2c.clone());
         rtc.init().await.unwrap();
         println!("[RTC] OK");
 
+        let imu = ();
         let imu_int2 = Input::new(peripherals.GPIO21, InputConfig::default());
-        let mut imu = ph_qmi8658::Qmi8658::new_i2c(i2c.clone(), Some(exio.pin(6)), Some(imu_int2));
+
+        let lpf = ph_qmi8658::LowPassFilterMode::OdrPercent14_0;
+        let config = ph_qmi8658::Config {
+            accel: Some(ph_qmi8658::AccelConfig {
+                range: ph_qmi8658::AccelRange::G8,
+                odr: ph_qmi8658::AccelOutputDataRate::Hz125,
+                lpf: Some(lpf),
+            }),
+            gyro: Some(ph_qmi8658::GyroConfig {
+                range: ph_qmi8658::GyroRange::Dps512,
+                odr: ph_qmi8658::GyroOutputDataRate::Hz125,
+                lpf: Some(lpf),
+            }),
+        };
+
+        let mut imu = ph_qmi8658::Qmi8658::with_i2c_config(
+            i2c.clone(),
+            None::<core::convert::Infallible>,
+            Some(imu_int2),
+            config,
+            ph_qmi8658::I2cConfig::new(0x6B),
+        );
         imu.init(&mut embassy_time::Delay).await.unwrap();
+        imu.apply_interrupt_config(ph_qmi8658::InterruptConfig {
+            ctrl9_handshake_statusint: false,
+            motion_pin: ph_qmi8658::InterruptPin::Int2,
+            pedometer: false,
+            significant_motion: false,
+            no_motion: false,
+            any_motion: false,
+            tap: false,
+        })
+        .await
+        .unwrap();
+        imu.set_mode_with_delay(
+            &mut embassy_time::Delay,
+            ph_qmi8658::OperatingMode::AccelGyroOnly,
+        )
+        .await
+        .unwrap();
         println!("[IMU] OK");
 
-        (axp2101, rtc, imu)
+        let touch_rst = Output::new(peripherals.GPIO40, Level::High, OutputConfig::default());
+        let touch_int = Input::new(peripherals.GPIO11, InputConfig::default());
+        let mut touch = Cst9217::new(i2c.clone(), touch_rst, Some(touch_int), embassy_time::Delay);
+        touch.init().await.unwrap();
+        println!("[TOUCH] OK");
+
+        (axp2101, rtc, imu, touch)
     };
 
     let display = async {
@@ -118,6 +170,10 @@ async fn main(_spawner: Spawner) {
             .with_mode(spi::Mode::_0);
 
         let dma_tx = dma_tx_buffer!(8000).unwrap();
+
+        let reset = Output::new(peripherals.GPIO39, Level::High, OutputConfig::default());
+        let te = Input::new(peripherals.GPIO13, InputConfig::default());
+        let cs = Output::new(peripherals.GPIO12, Level::High, OutputConfig::default());
 
         let spi = spi::master::Spi::new(peripherals.SPI2, spi_config)
             .expect("SPI failed")
@@ -128,23 +184,96 @@ async fn main(_spawner: Spawner) {
             .with_sio3(peripherals.GPIO7)
             .with_dma(peripherals.DMA_CH0)
             .into_async();
-        let cs = Output::new(peripherals.GPIO12, Level::High, OutputConfig::default());
-        let reset = Output::new(peripherals.GPIO39, Level::High, OutputConfig::default());
-
         let spi = QspiBus::new(spi, dma_tx, cs);
-        let mut display = Co5300Display::new(spi, reset, peripherals.GPIO13).await;
+        let mut display = Co5300Display::new(spi, reset, te).await;
 
         println!("[DISPLAY] OK");
 
-        // Statically alloacted framebuffer, around 600Kb
+        // delay_ms_async(100).await;
 
         let mut fb = Framebuffer::alloc();
-        fb.clear_color(Rgb888::BLACK);
-        fb.flush(&mut display);
+        fb.clear_color(Rgb888::CSS_DIM_GRAY);
+        // fb.clear_color(Rgb888::CSS_GREEN);
+        fb.flush_vsync(&mut display).await;
         println!("[FB] OK");
         (display, fb)
     };
 
-    let ((power, rtc, imu), (display, fb)) =
+    let ((power, mut rtc, imu, touch), (mut display, mut fb)) =
         embassy_futures::join::join(i2c_peripherals, display).await;
+    // let (mut display, mut fb) = display.await;
+    display.set_brightness(120);
+
+    let mut ticker = Ticker::every(Duration::from_secs(1));
+    loop {
+        fb.clear_color(Rgb888::BLACK);
+
+        use embedded_graphics::{
+            prelude::*,
+            primitives::{
+                Circle, PrimitiveStyle, PrimitiveStyleBuilder, Rectangle, StrokeAlignment, Triangle,
+            },
+            text::{Alignment, Text},
+        };
+        // Create styles used by the drawing operations.
+        let thin_stroke = PrimitiveStyle::with_stroke(Rgb888::BLUE, 4);
+        let thick_stroke = PrimitiveStyle::with_stroke(Rgb888::RED, 8);
+        let border_stroke = PrimitiveStyleBuilder::new()
+            .stroke_color(Rgb888::CSS_ORANGE)
+            .stroke_width(8)
+            .stroke_alignment(StrokeAlignment::Inside)
+            .build();
+        let fill = PrimitiveStyle::with_fill(Rgb888::CSS_GRAY);
+        let character_style = TextStyle::new(
+            &embedded_bitmap_fonts::terminus::FONT_16x32,
+            Rgb888::CSS_ORANGE,
+        );
+
+        let yoffset = 200;
+
+        let bbox = display.bounding_box();
+
+        // Draw a 3px wide outline around the display.
+        Circle::new(Point::new(0, 0), bbox.size.width)
+            .into_styled(border_stroke)
+            .draw(&mut fb)
+            .unwrap();
+
+        // Draw a triangle.
+        Triangle::new(
+            Point::new(56, 64 + yoffset),
+            Point::new(56 + 64, 64 + yoffset),
+            Point::new(56 + 32, yoffset),
+        )
+        .into_styled(thin_stroke)
+        .draw(&mut fb)
+        .unwrap();
+
+        // Draw a filled square
+        Rectangle::new(Point::new(200, yoffset), Size::new(64, 64))
+            .into_styled(fill)
+            .draw(&mut fb)
+            .unwrap();
+
+        // Draw a circle with a 3px wide stroke.
+        Circle::new(Point::new(340, yoffset), 68)
+            .into_styled(thick_stroke)
+            .draw(&mut fb)
+            .unwrap();
+
+        // Draw centered text.
+        let time = rtc.get_time().await.unwrap();
+        let text = alloc::format!("{}h, {}m, {}s", time.hours, time.minutes, time.seconds);
+        Text::with_alignment(
+            &text,
+            display.bounding_box().center() + Point::new(0, 60),
+            character_style,
+            Alignment::Center,
+        )
+        .draw(&mut fb)
+        .unwrap();
+
+        fb.flush_vsync(&mut display).await;
+        ticker.next().await;
+    }
 }
