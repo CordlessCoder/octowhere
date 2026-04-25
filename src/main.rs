@@ -238,10 +238,7 @@ async fn main(_spawner: Spawner) {
 
         use embedded_graphics::{
             prelude::*,
-            primitives::{
-                Circle, PrimitiveStyle, PrimitiveStyleBuilder, Rectangle, StrokeAlignment, Triangle,
-            },
-            text::{Alignment, Text},
+            primitives::{Circle, PrimitiveStyle, PrimitiveStyleBuilder, StrokeAlignment},
         };
         // Create styles used by the drawing operations.
         let thin_stroke = PrimitiveStyle::with_stroke(Color::BLUE, 4);
@@ -310,7 +307,8 @@ async fn main(_spawner: Spawner) {
                         point.y.saturating_sub(40),
                         80,
                         80,
-                    );
+                    )
+                    .await;
                 }
             }
             TouchData::CoverGesture => {}
@@ -324,7 +322,8 @@ async fn main(_spawner: Spawner) {
                         point.y.saturating_sub(40),
                         80,
                         80,
-                    );
+                    )
+                    .await;
                 }
             }
             TouchData::CoverGesture => {}

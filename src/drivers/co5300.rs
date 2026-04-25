@@ -248,7 +248,7 @@ where
             return;
         }
         let mut stream = self.begin_stream();
-        let buf = stream.buf();
+        let buf = stream.buf_remaining();
         let chunk_size = (buf.len() / data.len()).min(count);
         assert!(chunk_size > 0);
         fill_buf_repeat(buf, data, chunk_size);
@@ -257,7 +257,8 @@ where
             let n = remaining.min(chunk_size);
             let bytes = n * data.len();
 
-            stream.stream_pixels(bytes);
+            stream.write(bytes);
+            stream.flush_buf();
 
             remaining -= n;
         }
@@ -311,6 +312,25 @@ where
         self.bus.batch_async(&CO5300_ENTER_SLEEP)
     }
 
+    pub async fn begin_stream_async<'r>(&'r mut self) -> PixelStream<'r, 'd, C> {
+        self.bus.cs.set_low();
+        self.bus
+            .spi
+            .half_duplex_write_and_wait(
+                DataMode::Quad,
+                Command::_8Bit(0x32, DataMode::Single),
+                Address::_24Bit(0x003C00, DataMode::Single),
+                0,
+                0,
+                &mut self.bus.tx,
+            )
+            .await
+            .unwrap();
+        PixelStream {
+            disp: self,
+            buffered: 0,
+        }
+    }
     pub fn begin_stream<'r>(&'r mut self) -> PixelStream<'r, 'd, C> {
         self.bus.cs.set_low();
         self.bus
@@ -324,7 +344,10 @@ where
                 &mut self.bus.tx,
             )
             .unwrap();
-        PixelStream { disp: self }
+        PixelStream {
+            disp: self,
+            buffered: 0,
+        }
     }
 }
 
@@ -333,30 +356,61 @@ where
     <C as embedded_graphics::pixelcolor::raw::ToBytes>::Bytes: core::convert::AsRef<[u8]>,
 {
     disp: &'r mut Co5300Display<'d, C>,
+    buffered: usize,
 }
 
 impl<C: Co5300ColorMode> PixelStream<'_, '_, C>
 where
     <C as embedded_graphics::pixelcolor::raw::ToBytes>::Bytes: core::convert::AsRef<[u8]>,
 {
-    pub fn buf(&mut self) -> &mut [u8] {
-        self.disp.bus.tx.as_mut_slice()
+    pub async fn flush_if_needed_and_get_buf_async(&mut self) -> &mut [u8] {
+        if self.should_flush() {
+            self.flush_buf_async().await;
+        }
+        self.buf_remaining()
     }
-    pub fn stream_pixels_async(&mut self, bytes: usize) -> impl Future<Output = ()> {
-        self.disp
-            .bus
+    pub fn flush_if_needed_and_get_buf(&mut self) -> &mut [u8] {
+        if self.should_flush() {
+            self.flush_buf();
+        }
+        self.buf_remaining()
+    }
+    pub fn buf_remaining(&mut self) -> &mut [u8] {
+        &mut self.disp.bus.tx.as_mut_slice()[self.buffered..]
+    }
+    #[inline(always)]
+    pub fn write(&mut self, bytes: usize) {
+        self.buffered += bytes;
+    }
+    #[inline(always)]
+    pub fn buffered(&self) -> usize {
+        self.buffered
+    }
+    #[inline(always)]
+    pub fn should_flush(&self) -> bool {
+        self.buffered >= self.disp.bus.tx.len() / 2
+    }
+    pub fn flush_buf_async(&mut self) -> impl Future<Output = ()> {
+        let Self { disp, buffered } = self;
+        disp.bus
             .spi
             .half_duplex_write_and_wait(
                 DataMode::Quad,
                 Command::None,
                 Address::None,
                 0,
-                bytes,
-                &mut self.disp.bus.tx,
+                *buffered,
+                &mut disp.bus.tx,
             )
-            .map(|res| res.unwrap())
+            .map(|res| {
+                res.unwrap();
+                *buffered = 0
+            })
     }
-    pub fn stream_pixels(&mut self, bytes: usize) {
+    pub fn flush_buf(&mut self) {
+        if self.buffered == 0 {
+            return;
+        }
         self.disp
             .bus
             .spi
@@ -365,12 +419,15 @@ where
                 Command::None,
                 Address::None,
                 0,
-                bytes,
+                self.buffered,
                 &mut self.disp.bus.tx,
             )
             .unwrap();
+        self.buffered = 0;
     }
-    pub fn end(self) {}
+    pub fn end(mut self) {
+        self.flush_buf();
+    }
 }
 
 impl<C: Co5300ColorMode> Drop for PixelStream<'_, '_, C>
@@ -437,47 +494,14 @@ where
             area.size.height as u16,
         );
 
-        // CO5300 requires minimum 2-line writes.
-        // If height is 1, double it and duplicate each row.
-        let actual_h = area.size.height.max(2) as u16;
-        let needs_row_dup = area.size.height < 2;
-
-        self.set_addr_window(
-            area.top_left.x as u16,
-            area.top_left.y as u16,
-            area.size.width as u16,
-            actual_h,
-        );
-
         let mut stream = self.begin_stream();
-        let w = area.size.width as usize;
-        let mut col = 0usize;
-
         for color in colors.into_iter() {
-            let buf = stream.buf();
             let raw = color.to_be_bytes();
             let raw = raw.as_ref();
-            buf[col * C::BYTES_PER_PIXEL..][..C::BYTES_PER_PIXEL].copy_from_slice(&raw);
-            col += 1;
-
-            // End of row
-            if col >= w {
-                let bytes = w * raw.len();
-                stream.stream_pixels(bytes);
-                if needs_row_dup {
-                    // Duplicate the row for minimum 2-line requirement
-                    stream.stream_pixels(bytes);
-                }
-                col = 0;
-            }
+            stream.flush_if_needed_and_get_buf()[..C::BYTES_PER_PIXEL].copy_from_slice(raw);
+            stream.write(C::BYTES_PER_PIXEL);
         }
-        // Flush remaining partial row
-        if col > 0 {
-            stream.stream_pixels(col * C::BYTES_PER_PIXEL);
-            if needs_row_dup {
-                stream.stream_pixels(col * C::BYTES_PER_PIXEL);
-            }
-        }
+        stream.flush_buf();
         stream.end();
 
         Ok(())

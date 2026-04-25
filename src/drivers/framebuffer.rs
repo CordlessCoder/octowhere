@@ -105,19 +105,28 @@ where
     /// Flush the entire framebuffer to the display via DMA QSPI.
     pub async fn flush(&self, display: &mut Co5300Display<'_, C>) {
         display.set_addr_window(0, 0, WIDTH as u16, HEIGHT as u16);
-        let mut stream = display.begin_stream();
+        let mut stream = display.begin_stream_async().await;
         let mut remaining = &self.buf[..];
         while !remaining.is_empty() {
-            let buf = stream.buf();
+            let buf = stream.buf_remaining();
             let chunk = buf.len().min(remaining.len());
             let captured = remaining.split_off(..chunk).unwrap();
             buf[..chunk].copy_from_slice(captured);
-            stream.stream_pixels_async(chunk).await;
+            stream.write(chunk);
+            stream.flush_buf_async().await;
         }
+        stream.end();
     }
 
     /// Flush only a rectangular region (dirty rect optimization).
-    pub fn flush_region(&self, display: &mut Co5300Display<'_, C>, x: u16, y: u16, w: u16, h: u16) {
+    pub async fn flush_region(
+        &self,
+        display: &mut Co5300Display<'_, C>,
+        x: u16,
+        y: u16,
+        w: u16,
+        h: u16,
+    ) {
         if w == 0 || h == 0 {
             return;
         }
@@ -152,14 +161,15 @@ where
         // per-row(buffer fits anywhere between 2 and 8k pixels depending on pixel type)
 
         display.set_addr_window(x0 as u16, y0 as u16, flush_w as u16, flush_h as u16);
-        let mut stream = display.begin_stream();
+        let mut stream = display.begin_stream_async().await;
         for row in y0..(y0 + flush_h) {
             let start = row * WIDTH + x0;
             let end = start + flush_w;
             let line = &self.buf[start * C::BYTES_PER_PIXEL..end * C::BYTES_PER_PIXEL];
-            stream.buf()[..line.len()].copy_from_slice(line);
-            stream.stream_pixels(line.len());
+            stream.flush_if_needed_and_get_buf_async().await[..line.len()].copy_from_slice(line);
+            stream.write(line.len());
         }
+        stream.flush_buf_async().await;
         stream.end();
     }
 

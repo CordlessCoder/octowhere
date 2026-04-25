@@ -244,11 +244,11 @@ impl<I: I2c, RST: OutputPin, INT, DELAY: embedded_hal_async::delay::DelayNs>
 
         for i in 0..point_count {
             let data_idx = (i * 5) + if i == 0 { 0 } else { 2 };
-            let data = &buf[data_idx as usize..][..5];
+            let data = &buf[data_idx as usize..][..4];
             let id = data[0] >> 4;
             let event = data[0] & 0x0F;
             let x = ((data[1] as u16) << 4) | (data[3] >> 4) as u16;
-            let y = ((data[2] as u16) << 4) | (data[4] & 0x0F) as u16;
+            let y = ((data[2] as u16) << 4) | (data[3] & 0x0F) as u16;
             if event == 0x06 && id < MAX_FINGER_NUM as u8 {
                 let mut point = TouchPoint { x, y };
                 self.config.apply(self.width, self.height, &mut point);
