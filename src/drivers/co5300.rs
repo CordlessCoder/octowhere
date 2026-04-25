@@ -11,7 +11,7 @@ use embedded_graphics_core::geometry::{OriginDimensions, Size};
 use embedded_graphics_core::prelude::*;
 use embedded_graphics_core::primitives::Rectangle;
 
-use esp_hal::gpio::{Input, InputConfig, InputPin, Output};
+use esp_hal::gpio::{Input, Output};
 use esp_hal::spi::master::{Address, Command, DataMode};
 use futures::FutureExt;
 

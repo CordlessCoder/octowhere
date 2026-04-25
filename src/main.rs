@@ -5,20 +5,14 @@
 #![expect(static_mut_refs)]
 extern crate alloc;
 
-use axp2101_embedded::AsyncAxp2101;
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_executor::Spawner;
 use embassy_sync::{blocking_mutex::raw::NoopRawMutex, mutex::Mutex};
 use embassy_time::{Duration, Instant, Ticker};
 use embedded_bitmap_fonts::TextStyle;
-use embedded_graphics::{
-    mono_font,
-    pixelcolor::{Gray8, Rgb565, Rgb888},
-    prelude::*,
-};
+use embedded_graphics::{pixelcolor::Rgb565, prelude::*};
 use esp_hal::{
-    dma::{DmaRxBuf, DmaTxBuf},
-    dma_buffers, dma_tx_buffer,
+    dma_tx_buffer,
     gpio::{Input, InputConfig, Level, Output, OutputConfig},
     i2c::master::I2c,
     interrupt::software::SoftwareInterruptControl,
@@ -26,14 +20,10 @@ use esp_hal::{
     time::Rate,
     timer::timg::TimerGroup,
 };
-use esp_println::{dbg, println};
+use esp_println::println;
 use octowhere::{
-    drivers::{
-        co5300::Co5300Display,
-        framebuffer::{self, Framebuffer},
-        qspi_bus::QspiBus,
-    },
-    peripherals::{rtc::Pcf85063aRtc, touch::Cst9217},
+    drivers::{co5300::Co5300Display, framebuffer::Framebuffer, qspi_bus::QspiBus},
+    peripherals::{rtc::Pcf85063aRtc, touch::{Cst9217, TouchData}},
 };
 use static_cell::StaticCell;
 
@@ -208,7 +198,7 @@ async fn main(_spawner: Spawner) {
         (display, fb)
     };
 
-    let ((mut rtc, imu, touch), (mut display, mut fb)) =
+    let ((_rtc, _imu, mut touch), (mut display, mut fb)) =
         embassy_futures::join::join(i2c_peripherals, display).await;
     // let (mut display, mut fb) = display.await;
     display.set_brightness(120);
@@ -284,6 +274,19 @@ async fn main(_spawner: Spawner) {
             &text,
             display.bounding_box().center() + Point::new(0, 60),
             character_style,
+            Alignment::Center,
+        )
+        .draw(&mut fb)
+        .unwrap();
+
+        let touch_data = touch.read_touch_data().await.unwrap();
+
+        core::mem::drop(text);
+        let text = alloc::format!("touch: {touch_data:#?}",);
+        Text::with_alignment(
+            &text,
+            display.bounding_box().center() - Point::new(0, 180),
+            TextStyle::new(&embedded_bitmap_fonts::terminus::FONT_8x16, Color::CSS_BLUE),
             Alignment::Center,
         )
         .draw(&mut fb)

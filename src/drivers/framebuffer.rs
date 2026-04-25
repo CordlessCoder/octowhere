@@ -5,16 +5,10 @@
 use core::marker::PhantomData;
 
 use alloc::boxed::Box;
-use embedded_graphics::pixelcolor::Rgb888;
-use embedded_graphics::pixelcolor::raw::RawU24;
 use embedded_graphics_core::draw_target::DrawTarget;
 use embedded_graphics_core::geometry::{OriginDimensions, Size};
-use embedded_graphics_core::pixelcolor::Rgb565;
-use embedded_graphics_core::pixelcolor::raw::RawU16;
 use embedded_graphics_core::prelude::*;
 use embedded_graphics_core::primitives::Rectangle;
-use embedded_hal::delay::DelayNs;
-use esp_println::dbg;
 
 use crate::board;
 use crate::drivers::co5300::Co5300ColorMode;

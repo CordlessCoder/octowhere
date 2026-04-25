@@ -1288,6 +1288,7 @@ dependencies = [
  "esp-println",
  "esp-rtos",
  "futures",
+ "heapless 0.9.2",
  "log",
  "ph-qmi8658",
  "static_cell",

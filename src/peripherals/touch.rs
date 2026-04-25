@@ -1,7 +1,5 @@
-use axp2101_embedded::AXP2101_CHIP_ID;
 use embedded_hal::digital::OutputPin;
-use embedded_hal_async::{digital::Wait, i2c::I2c};
-use esp_println::dbg;
+use embedded_hal_async::i2c::I2c;
 use log::{Level, log};
 
 use crate::peripherals::i2c_helper;
@@ -31,11 +29,14 @@ const CST92XX_MEM_SIZE: u32 = 0x007F80;
 
 const MAX_FINGER_NUM: usize = 2;
 const PROGRAM_PAGE_SIZE: u8 = 128;
+const READ_BUF_SIZE: usize = MAX_FINGER_NUM * 5 + 5;
 
-const ADDR: u8 = 0x5A;
 const ACK_VALUE: u8 = 0xAB;
 
+// TODO: Impl Lpscan mode
+
 #[repr(u8)]
+#[derive(Debug, Clone, Copy)]
 pub enum Cst9217RunMode {
     Normal = 0x00,
     LowPower = 0x01,
@@ -54,9 +55,12 @@ pub enum Cst9217RunMode {
 
 pub struct Cst9217<I, INT, RST, DELAY> {
     i2c: I,
+    addr: u8,
     reset: RST,
     int: INT,
     delay: DELAY,
+    width: u16,
+    height: u16,
 }
 
 #[derive(Debug)]
@@ -73,24 +77,43 @@ impl<I2CError> From<I2CError> for Cst9217Error<I2CError> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TouchPoint {
+    x: u16,
+    y: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TouchData {
+    CoverGesture,
+    Points(heapless::Vec<TouchPoint, 5, u8>),
+}
+
 impl<I: I2c, RST: OutputPin, INT, DELAY: embedded_hal_async::delay::DelayNs>
     Cst9217<I, INT, RST, DELAY>
 {
     pub fn new(i2c: I, reset: RST, int: INT, delay: DELAY) -> Self {
         Self {
             i2c,
+            addr: 0x5A,
             int,
             reset,
             delay,
+            width: 0,
+            height: 0,
         }
+    }
+    pub fn with_address(mut self, addr: u8) -> Self {
+        self.addr = addr;
+        self
     }
 
     pub async fn init(&mut self) -> Result<(), Cst9217Error<I::Error>> {
-        i2c_helper::write_wide_reg(&mut self.i2c, ADDR, REG_DEBUG_MODE, 0x01).await?;
+        i2c_helper::write_wide_reg(&mut self.i2c, self.addr, REG_DEBUG_MODE, 0x01).await?;
         self.delay.delay_ms(10).await;
         let mut buf = [0u8; 4];
         self.i2c
-            .write_read(ADDR, &REG_CHECKCODE.to_be_bytes(), &mut buf)
+            .write_read(self.addr, &REG_CHECKCODE.to_be_bytes(), &mut buf)
             .await?;
         let checkcode = u32::from_le_bytes(buf);
         if (checkcode & 0xffff0000) != 0xCACA0000 {
@@ -99,17 +122,16 @@ impl<I: I2c, RST: OutputPin, INT, DELAY: embedded_hal_async::delay::DelayNs>
         }
 
         self.i2c
-            .write_read(ADDR, &REG_RESOLUTION.to_be_bytes(), &mut buf)
+            .write_read(self.addr, &REG_RESOLUTION.to_be_bytes(), &mut buf)
             .await?;
-        let width = u16::from_le_bytes(buf[0..2].try_into().unwrap());
-        let height = u16::from_le_bytes(buf[2..4].try_into().unwrap());
-        // TODO: Use checkcode, width, height
+        self.width = u16::from_le_bytes(buf[0..2].try_into().unwrap());
+        self.height = u16::from_le_bytes(buf[2..4].try_into().unwrap());
 
         self.i2c
-            .write_read(ADDR, &REG_PROJECT_ID.to_be_bytes(), &mut buf)
+            .write_read(self.addr, &REG_PROJECT_ID.to_be_bytes(), &mut buf)
             .await
             .unwrap();
-        let touch_project_id = u16::from_le_bytes(buf[0..2].try_into().unwrap());
+        let _touch_project_id = u16::from_le_bytes(buf[0..2].try_into().unwrap());
         let chip_id = u16::from_le_bytes(buf[2..4].try_into().unwrap());
         if chip_id != CST9217_CHIP_ID {
             return Err(Cst9217Error::IDMismatch);
@@ -117,7 +139,7 @@ impl<I: I2c, RST: OutputPin, INT, DELAY: embedded_hal_async::delay::DelayNs>
 
         let mut buf = [0u8; 8];
         self.i2c
-            .write_read(ADDR, &REG_VERSION.to_be_bytes(), &mut buf)
+            .write_read(self.addr, &REG_VERSION.to_be_bytes(), &mut buf)
             .await?;
 
         let fw_version = u32::from_le_bytes(buf[0..4].try_into().unwrap());
@@ -143,15 +165,68 @@ impl<I: I2c, RST: OutputPin, INT, DELAY: embedded_hal_async::delay::DelayNs>
         self.delay.delay_ms(30).await;
         Ok(())
     }
-    // pub fn sleep(&mut self) -> impl Future<Output = Result<(), I::Error>> {
-    //     todo!("Need to implement set_mode")
-    // }
-    pub fn wakeup(&self) {}
-    pub fn idle(&self) {}
-
-    pub fn is_pressed(&self) -> bool {
-        todo!()
+    pub async fn sleep(&mut self) -> Result<(), I::Error> {
+        self.set_mode(Cst9217RunMode::DebugInfo).await?;
+        self.i2c
+            .write(self.addr, &REG_SLEEP_MODE.to_be_bytes())
+            .await
     }
+    pub async fn set_mode(&mut self, mode: Cst9217RunMode) -> Result<(), I::Error> {
+        let write = match mode {
+            Cst9217RunMode::Normal => REG_NORMAL_MODE,
+            Cst9217RunMode::DebugDiff => REG_DIFF_MODE,
+            Cst9217RunMode::DebugRawdata => REG_RAW_MODE,
+            Cst9217RunMode::DebugInfo => REG_DEBUG_MODE,
+            Cst9217RunMode::Factory => REG_FACTORY_MODE,
+            _ => unimplemented!(),
+        };
+        self.i2c.write(self.addr, &write.to_be_bytes()).await
+    }
+
+    pub async fn read_touch_data(&mut self) -> Result<TouchData, I::Error> {
+        let mut buf = [0u8; READ_BUF_SIZE];
+        self.i2c
+            .write_read(self.addr, &REG_READ.to_be_bytes(), &mut buf)
+            .await?;
+        let ack = [
+            REG_READ.to_be_bytes()[0],
+            REG_READ.to_be_bytes()[1],
+            CST92XX_ACK,
+        ];
+        self.i2c.write(self.addr, &ack).await?;
+        // Check for cover screen gesture
+        if buf[4] >> 7 == 1 {
+            return Ok(TouchData::CoverGesture);
+        }
+        let mut points = heapless::Vec::new();
+
+        let point_count = buf[5] & 0x7F;
+        if point_count > MAX_FINGER_NUM as u8 || point_count == 0 {
+            return Ok(TouchData::Points(points));
+        }
+
+        for i in 0..point_count {
+            let data_idx = (i * 5) + if i == 0 { 0 } else { 2 };
+            let data = &buf[data_idx as usize..][..5];
+            let id = data[0] >> 4;
+            let event = data[0] & 0x0F;
+            let x = (data[1] << 4) | (data[3] >> 4);
+            let y = (data[2] << 4) | (data[4] & 0x0F);
+            if event == 0x06 && id < MAX_FINGER_NUM as u8 {
+                _ = points.push(TouchPoint {
+                    x: x as u16,
+                    y: y as u16,
+                });
+            }
+        }
+        // NOTE: Should we care about this?
+        // Swap XY or mirroring coordinates,if set
+        // updateXY(_touchPoints);
+        Ok(TouchData::Points(points))
+    }
+    // pub fn is_pressed(&self) -> bool {
+    //     todo!()
+    // }
 
     // pub fn getSuppor
 }
