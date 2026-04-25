@@ -1,3 +1,4 @@
+use embedded_graphics::prelude::Size;
 use embedded_hal::digital::OutputPin;
 use embedded_hal_async::i2c::I2c;
 use log::{Level, log};
@@ -53,6 +54,37 @@ pub enum Cst9217RunMode {
     Lpscan = 0x13,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Cst9217Config {
+    pub swap_xy: bool,
+    pub scale_x: Option<f32>,
+    pub scale_y: Option<f32>,
+    pub mirror_x: bool,
+    pub mirror_y: bool,
+}
+
+impl Cst9217Config {
+    fn apply(&self, width: u16, height: u16, point: &mut TouchPoint) {
+        if self.swap_xy {
+            core::mem::swap(&mut point.x, &mut point.y);
+        }
+        if let Some(scale) = self.scale_x {
+            point.x = (point.x as f32 * scale) as u16;
+        }
+        if let Some(scale) = self.scale_y {
+            point.y = (point.y as f32 * scale) as u16;
+        }
+        if self.mirror_x {
+            point.x = width.saturating_sub(point.x);
+        }
+        if self.mirror_y {
+            point.y = height.saturating_sub(point.y);
+        }
+        point.x = point.x.min(width);
+        point.y = point.y.min(width);
+    }
+}
+
 pub struct Cst9217<I, INT, RST, DELAY> {
     i2c: I,
     addr: u8,
@@ -61,6 +93,7 @@ pub struct Cst9217<I, INT, RST, DELAY> {
     delay: DELAY,
     width: u16,
     height: u16,
+    config: Cst9217Config,
 }
 
 #[derive(Debug)]
@@ -79,8 +112,8 @@ impl<I2CError> From<I2CError> for Cst9217Error<I2CError> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TouchPoint {
-    x: u16,
-    y: u16,
+    pub x: u16,
+    pub y: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,11 +134,15 @@ impl<I: I2c, RST: OutputPin, INT, DELAY: embedded_hal_async::delay::DelayNs>
             delay,
             width: 0,
             height: 0,
+            config: Default::default(),
         }
     }
     pub fn with_address(mut self, addr: u8) -> Self {
         self.addr = addr;
         self
+    }
+    pub fn set_config(&mut self, config: Cst9217Config) {
+        self.config = config;
     }
 
     pub async fn init(&mut self) -> Result<(), Cst9217Error<I::Error>> {
@@ -210,19 +247,24 @@ impl<I: I2c, RST: OutputPin, INT, DELAY: embedded_hal_async::delay::DelayNs>
             let data = &buf[data_idx as usize..][..5];
             let id = data[0] >> 4;
             let event = data[0] & 0x0F;
-            let x = (data[1] << 4) | (data[3] >> 4);
-            let y = (data[2] << 4) | (data[4] & 0x0F);
+            let x = ((data[1] as u16) << 4) | (data[3] >> 4) as u16;
+            let y = ((data[2] as u16) << 4) | (data[4] & 0x0F) as u16;
             if event == 0x06 && id < MAX_FINGER_NUM as u8 {
-                _ = points.push(TouchPoint {
-                    x: x as u16,
-                    y: y as u16,
-                });
+                let mut point = TouchPoint { x, y };
+                self.config.apply(self.width, self.height, &mut point);
+                _ = points.push(point);
             }
         }
         // NOTE: Should we care about this?
         // Swap XY or mirroring coordinates,if set
         // updateXY(_touchPoints);
         Ok(TouchData::Points(points))
+    }
+    pub fn resolution(&self) -> Size {
+        Size {
+            width: self.width as u32,
+            height: self.height as u32,
+        }
     }
     // pub fn is_pressed(&self) -> bool {
     //     todo!()

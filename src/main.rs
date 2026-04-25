@@ -23,7 +23,10 @@ use esp_hal::{
 use esp_println::println;
 use octowhere::{
     drivers::{co5300::Co5300Display, framebuffer::Framebuffer, qspi_bus::QspiBus},
-    peripherals::{rtc::Pcf85063aRtc, touch::{Cst9217, TouchData}},
+    peripherals::{
+        rtc::Pcf85063aRtc,
+        touch::{Cst9217, Cst9217Config, TouchData},
+    },
 };
 use static_cell::StaticCell;
 
@@ -156,7 +159,15 @@ async fn main(_spawner: Spawner) {
         let touch_int = Input::new(peripherals.GPIO11, InputConfig::default());
         let mut touch = Cst9217::new(i2c.clone(), touch_rst, Some(touch_int), embassy_time::Delay);
         touch.init().await.unwrap();
-        println!("[TOUCH] OK");
+        touch.set_config(Cst9217Config {
+            mirror_x: true,
+            mirror_y: true,
+            scale_x: None,
+            scale_y: None,
+            swap_xy: false,
+        });
+        let res = touch.resolution();
+        println!("[TOUCH] OK, Resolution: {res}");
 
         (rtc, imu, touch)
     };
@@ -208,6 +219,7 @@ async fn main(_spawner: Spawner) {
     let mut flush = Duration::MIN;
     let mut clear = Duration::MIN;
     loop {
+        let touch_data = touch.read_touch_data().await.unwrap();
         let start = Instant::now();
 
         use embedded_graphics::{
@@ -221,7 +233,11 @@ async fn main(_spawner: Spawner) {
         let thin_stroke = PrimitiveStyle::with_stroke(Color::BLUE, 4);
         let thick_stroke = PrimitiveStyle::with_stroke(Color::RED, 8);
         let border_stroke = PrimitiveStyleBuilder::new()
-            .stroke_color(Color::CSS_ORANGE)
+            .stroke_color(if touch_data != TouchData::CoverGesture {
+                Color::CSS_ORANGE
+            } else {
+                Color::CSS_CYAN
+            })
             .stroke_width(8)
             .stroke_alignment(StrokeAlignment::Inside)
             .build();
@@ -263,6 +279,23 @@ async fn main(_spawner: Spawner) {
             .draw(&mut fb)
             .unwrap();
 
+        match touch_data {
+            TouchData::Points(points) => {
+                for point in points {
+                    // Draw a circle with a 3px wide stroke.
+                    Circle::new(Point::new(point.x as i32, point.y as i32), 40)
+                        .into_styled(
+                            PrimitiveStyleBuilder::new()
+                                .fill_color(Color::CSS_CYAN)
+                                .build(),
+                        )
+                        .draw(&mut fb)
+                        .unwrap();
+                }
+            }
+            TouchData::CoverGesture => {}
+        }
+
         // Draw centered text.
         let text = alloc::format!(
             "clear: {:.1}ms\nframetime: {:.1}ms\nflush: {:.1}ms",
@@ -274,19 +307,6 @@ async fn main(_spawner: Spawner) {
             &text,
             display.bounding_box().center() + Point::new(0, 60),
             character_style,
-            Alignment::Center,
-        )
-        .draw(&mut fb)
-        .unwrap();
-
-        let touch_data = touch.read_touch_data().await.unwrap();
-
-        core::mem::drop(text);
-        let text = alloc::format!("touch: {touch_data:#?}",);
-        Text::with_alignment(
-            &text,
-            display.bounding_box().center() - Point::new(0, 180),
-            TextStyle::new(&embedded_bitmap_fonts::terminus::FONT_8x16, Color::CSS_BLUE),
             Alignment::Center,
         )
         .draw(&mut fb)
