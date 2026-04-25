@@ -275,15 +275,22 @@ where
     }
 
     /// Get mutable reference to bus (for framebuffer flush).
+    #[inline(always)]
     pub fn bus_mut(&mut self) -> &mut QspiBus<'d> {
         &mut self.bus
     }
 
+    #[inline(always)]
     pub fn te(&self) -> &Input<'d> {
         &self.te_pin
     }
+    #[inline(always)]
     pub fn te_mut(&mut self) -> &mut Input<'d> {
         &mut self.te_pin
+    }
+
+    pub fn wait_for_vsync(&mut self) -> impl Future<Output = ()> {
+        self.te_pin.wait_for_high()
     }
 
     /// Set display brightness (0x00 = off, 0xD0 = default, 0xFF = max).

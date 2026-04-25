@@ -90,7 +90,7 @@ where
             let end = row * WIDTH + x_end;
             fill_buf_repeat(
                 &mut self.buf[start * raw.len()..end * raw.len()],
-                &raw,
+                raw,
                 end - start,
             );
         }
@@ -98,7 +98,7 @@ where
 
     /// VSync flush for watchface / menus.
     pub async fn flush_vsync(&self, display: &mut Co5300Display<'_, C>) {
-        display.te_mut().wait_for_high().await;
+        display.wait_for_vsync().await;
         self.flush(display).await;
     }
 
@@ -147,6 +147,9 @@ where
 
         let flush_w = (x1 - x0).max(2).min(WIDTH - x0);
         let flush_h = (y1 - y0).max(2).min(HEIGHT - y0);
+
+        // PERF: Buffer as much as possible into stream.buf() before streaming, instead of doing it
+        // per-row(buffer fits anywhere between 2 and 8k pixels depending on pixel type)
 
         display.set_addr_window(x0 as u16, y0 as u16, flush_w as u16, flush_h as u16);
         let mut stream = display.begin_stream();

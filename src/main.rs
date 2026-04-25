@@ -43,7 +43,13 @@ static CORE1_EXECUTOR: StaticCell<esp_rtos::embassy::Executor> = StaticCell::new
 type Color = Rgb565;
 
 #[embassy_executor::task]
-async fn second_core(_spawner: Spawner) {}
+async fn second_core(_spawner: Spawner, gpio0: esp_hal::peripherals::GPIO0<'static>) {
+    let mut gpio0 = Input::new(gpio0, InputConfig::default());
+    loop {
+        gpio0.wait_for_any_edge().await;
+        println!("GPIO0: {:?}", gpio0.level());
+    }
+}
 
 // TODO: CST9217 touch
 
@@ -76,7 +82,7 @@ async fn main(_spawner: Spawner) {
         || {
             let executor = CORE1_EXECUTOR.init_with(esp_rtos::embassy::Executor::new);
             executor.run(|spawner| {
-                spawner.spawn(second_core(spawner).unwrap());
+                spawner.spawn(second_core(spawner, peripherals.GPIO0).unwrap());
             })
         },
     );
@@ -95,6 +101,9 @@ async fn main(_spawner: Spawner) {
     let i2c = Mutex::<NoopRawMutex, _>::new(i2c);
     let i2c = I2cDevice::new(&i2c);
 
+    let gyro_range = ph_qmi8658::GyroRange::Dps512;
+    let accel_range = ph_qmi8658::AccelRange::G2;
+
     // FIXME: May not be actually routed anywhere on the waveshare board we're using, in which case
     // this has to go :(
     // let exio_int = Input::new(peripherals.GPIO0, InputConfig::default());
@@ -112,15 +121,15 @@ async fn main(_spawner: Spawner) {
         rtc.init().await.unwrap();
         println!("[RTC] OK");
 
-        let lpf = ph_qmi8658::LowPassFilterMode::OdrPercent14_0;
+        let lpf = ph_qmi8658::LowPassFilterMode::OdrPercent2_62;
         let config = ph_qmi8658::Config {
             accel: Some(ph_qmi8658::AccelConfig {
-                range: ph_qmi8658::AccelRange::G8,
+                range: accel_range,
                 odr: ph_qmi8658::AccelOutputDataRate::Hz125,
                 lpf: Some(lpf),
             }),
             gyro: Some(ph_qmi8658::GyroConfig {
-                range: ph_qmi8658::GyroRange::Dps512,
+                range: gyro_range,
                 odr: ph_qmi8658::GyroOutputDataRate::Hz125,
                 lpf: Some(lpf),
             }),
@@ -136,24 +145,25 @@ async fn main(_spawner: Spawner) {
             ph_qmi8658::I2cConfig::new(0x6B),
         );
         imu.init(&mut embassy_time::Delay).await.unwrap();
-        imu.apply_interrupt_config(ph_qmi8658::InterruptConfig {
-            ctrl9_handshake_statusint: false,
-            motion_pin: ph_qmi8658::InterruptPin::Int2,
-            pedometer: false,
-            significant_motion: false,
-            no_motion: false,
-            any_motion: false,
-            tap: false,
-        })
-        .await
-        .unwrap();
+        // imu.apply_interrupt_config(ph_qmi8658::InterruptConfig {
+        //     ctrl9_handshake_statusint: false,
+        //     motion_pin: ph_qmi8658::InterruptPin::Int2,
+        //     pedometer: false,
+        //     significant_motion: false,
+        //     no_motion: false,
+        //     any_motion: false,
+        //     tap: false,
+        // })
+        // .await
+        // .unwrap();
         imu.set_mode_with_delay(
             &mut embassy_time::Delay,
             ph_qmi8658::OperatingMode::AccelGyroOnly,
         )
         .await
         .unwrap();
-        println!("[IMU] OK");
+
+        println!("[IMU] INIT");
 
         let touch_rst = Output::new(peripherals.GPIO40, Level::High, OutputConfig::default());
         let touch_int = Input::new(peripherals.GPIO11, InputConfig::default());
@@ -204,23 +214,144 @@ async fn main(_spawner: Spawner) {
             Color,
         >::alloc();
         fb.clear_color(Color::CSS_DIM_GRAY);
-        fb.flush_vsync(&mut display).await;
+        fb.flush(&mut display).await;
         println!("[FB] OK");
         (display, fb)
     };
 
-    let ((_rtc, _imu, mut touch), (mut display, mut fb)) =
+    let ((_rtc, mut imu, mut touch), (mut display, mut fb)) =
         embassy_futures::join::join(i2c_peripherals, display).await;
     // let (mut display, mut fb) = display.await;
     display.set_brightness(120);
+
+    fb.clear_color(Color::BLACK);
+    fb.flush(&mut display).await;
+
+    let mut ticker = Ticker::every(Duration::from_millis(1000 / 60));
+    let mut prev_touch_data = TouchData::Points(heapless::Vec::new());
+    loop {
+        // PERF: Sleep until we get a touch event?
+        let start = Instant::now();
+        let touch_data = touch.read_touch_data().await.unwrap();
+
+        let read_touch = start.elapsed();
+
+        use embedded_graphics::{
+            prelude::*,
+            primitives::{
+                Circle, PrimitiveStyle, PrimitiveStyleBuilder, Rectangle, StrokeAlignment, Triangle,
+            },
+            text::{Alignment, Text},
+        };
+        // Create styles used by the drawing operations.
+        let thin_stroke = PrimitiveStyle::with_stroke(Color::BLUE, 4);
+        let thick_stroke = PrimitiveStyle::with_stroke(Color::RED, 8);
+        let border_stroke = PrimitiveStyleBuilder::new()
+            .stroke_color(if touch_data != TouchData::CoverGesture {
+                Color::CSS_ORANGE
+            } else {
+                Color::CSS_CYAN
+            })
+            .stroke_width(8)
+            .stroke_alignment(StrokeAlignment::Inside)
+            .build();
+        let fill = PrimitiveStyle::with_fill(Color::CSS_GRAY);
+        let character_style = TextStyle::new(
+            &embedded_bitmap_fonts::terminus::FONT_16x32,
+            Color::CSS_ORANGE,
+        );
+
+        let yoffset = 200;
+
+        let bbox = display.bounding_box();
+
+        display.wait_for_vsync().await;
+        let vsync_wait = start.elapsed() - read_touch;
+
+        match &prev_touch_data {
+            TouchData::Points(points) => {
+                for point in points {
+                    fb.fill_rect(
+                        point.x.saturating_sub(40) as usize,
+                        point.y.saturating_sub(40) as usize,
+                        80,
+                        80,
+                        &Color::BLACK.to_be_bytes(),
+                    );
+                }
+            }
+            TouchData::CoverGesture => {}
+        }
+        match &touch_data {
+            TouchData::Points(points) => {
+                for point in points {
+                    // Draw a circle with a 3px wide stroke.
+                    Circle::new(Point::new(point.x as i32 - 40, point.y as i32 - 40), 80)
+                        .into_styled(
+                            PrimitiveStyleBuilder::new()
+                                .fill_color(Color::CSS_CYAN)
+                                .build(),
+                        )
+                        .draw(&mut fb)
+                        .unwrap();
+                }
+            }
+            TouchData::CoverGesture => {}
+        }
+
+        let frametime = start.elapsed() - vsync_wait - read_touch;
+
+        match &prev_touch_data {
+            TouchData::Points(points) => {
+                for point in points {
+                    fb.flush_region(
+                        &mut display,
+                        point.x.saturating_sub(40),
+                        point.y.saturating_sub(40),
+                        80,
+                        80,
+                    );
+                }
+            }
+            TouchData::CoverGesture => {}
+        }
+        match &touch_data {
+            TouchData::Points(points) => {
+                for point in points {
+                    fb.flush_region(
+                        &mut display,
+                        point.x.saturating_sub(40),
+                        point.y.saturating_sub(40),
+                        80,
+                        80,
+                    );
+                }
+            }
+            TouchData::CoverGesture => {}
+        }
+
+        let flush = start.elapsed() - vsync_wait - frametime - read_touch;
+
+        esp_println::println!(
+            "read touch: {:.1}ms\ndraw: {:.1}ms\nvsync: {:.1}ms\nspi: {:.1}ms",
+            read_touch.as_micros() as f32 / 1_000.,
+            frametime.as_micros() as f32 / 1_000.,
+            vsync_wait.as_micros() as f32 / 1_000.,
+            flush.as_micros() as f32 / 1_000.,
+        );
+
+        prev_touch_data = touch_data;
+        ticker.next().await;
+    }
 
     let mut ticker = Ticker::every(Duration::from_millis(1000 / 30));
     let mut frametime = Duration::MIN;
     let mut flush = Duration::MIN;
     let mut clear = Duration::MIN;
+    let mut vsync_wait = Duration::MIN;
     loop {
-        let touch_data = touch.read_touch_data().await.unwrap();
         let start = Instant::now();
+        let touch_data = touch.read_touch_data().await.unwrap();
 
         use embedded_graphics::{
             prelude::*,
@@ -298,28 +429,33 @@ async fn main(_spawner: Spawner) {
 
         // Draw centered text.
         let text = alloc::format!(
-            "clear: {:.1}ms\nframetime: {:.1}ms\nflush: {:.1}ms",
+            "fb clear: {:.1}ms\ndraw: {:.1}ms\nvsync: {:.1}ms\nspi: {:.1}ms",
             clear.as_micros() as f32 / 1_000.,
             frametime.as_micros() as f32 / 1_000.,
-            flush.as_micros() as f32 / 1_000.
+            vsync_wait.as_micros() as f32 / 1_000.,
+            flush.as_micros() as f32 / 1_000.,
         );
         Text::with_alignment(
             &text,
-            display.bounding_box().center() + Point::new(0, 60),
+            display.bounding_box().center() + Point::new(100, 60),
             character_style,
-            Alignment::Center,
+            Alignment::Right,
         )
         .draw(&mut fb)
         .unwrap();
 
         frametime = start.elapsed();
 
-        fb.flush_vsync(&mut display).await;
+        display.wait_for_vsync().await;
 
-        flush = start.elapsed() - frametime;
+        vsync_wait = start.elapsed() - frametime;
+
+        fb.flush(&mut display).await;
+
+        flush = start.elapsed() - frametime - vsync_wait;
 
         fb.clear_color(Color::BLACK);
-        clear = start.elapsed() - flush - frametime;
+        clear = start.elapsed() - flush - frametime - vsync_wait;
         ticker.next().await;
     }
 }
