@@ -2,6 +2,8 @@
 // 466x466 RGB565 = 434.312 kB
 // Draws to RAM, then flushes entire screen via DMA QSPI
 
+use core::marker::PhantomData;
+
 use alloc::boxed::Box;
 use embedded_graphics::pixelcolor::Rgb888;
 use embedded_graphics::pixelcolor::raw::RawU24;
@@ -15,24 +17,50 @@ use embedded_hal::delay::DelayNs;
 use esp_println::dbg;
 
 use crate::board;
+use crate::drivers::co5300::Co5300ColorMode;
 use crate::drivers::co5300::Co5300Display;
 use crate::drivers::co5300::DisplayError;
 use crate::util::fill_buf_repeat;
 
 const WIDTH: usize = board::LCD_WIDTH as usize;
 const HEIGHT: usize = board::LCD_HEIGHT as usize;
-pub const BYTES_PER_PIXEL: usize = 3;
 const PIXEL_COUNT: usize = WIDTH * HEIGHT;
 
-pub type Color = Rgb888;
-
-pub struct Framebuffer {
-    buf: [u8; PIXEL_COUNT * BYTES_PER_PIXEL],
+pub struct Framebuffer<const N: usize, C: Co5300ColorMode>
+where
+    <C as embedded_graphics::pixelcolor::raw::ToBytes>::Bytes: core::convert::AsRef<[u8]>,
+{
+    buf: [u8; N],
+    color: PhantomData<C>,
 }
 
-impl Framebuffer {
+/// Calculates the required buffer size.
+///
+/// This function is a workaround for current limitations in Rust const generics.
+/// It can be used to calculate the `N` parameter based on the size and color type of the framebuffer.
+pub const fn buffer_size<C: Co5300ColorMode>() -> usize
+where
+    <C as embedded_graphics::pixelcolor::raw::ToBytes>::Bytes: core::convert::AsRef<[u8]>,
+{
+    WIDTH * HEIGHT * C::BYTES_PER_PIXEL
+}
+
+impl<const N: usize, C: Co5300ColorMode> Framebuffer<N, C>
+where
+    <C as embedded_graphics::pixelcolor::raw::ToBytes>::Bytes: core::convert::AsRef<[u8]>,
+{
+    const BUFFER_SIZE: usize = buffer_size::<C>();
+
+    /// Static assertion that N is correct.
+    // MSRV: remove N when constant generic expressions are stabilized
+    #[expect(unused)]
+    const CHECK_N: () = assert!(
+        N == Self::BUFFER_SIZE,
+        "Invalid N: it must be equal to the output of buffer_size for the given width and height"
+    );
+
     #[must_use]
-    pub fn alloc() -> Box<Framebuffer> {
+    pub fn alloc() -> Box<Self> {
         unsafe {
             // Initialize in-place on the heap
             let mut alloc = Box::new_uninit();
@@ -42,33 +70,32 @@ impl Framebuffer {
     }
 
     /// Clear the entire framebuffer with a color.
-    pub fn clear_color(&mut self, color: Color) {
+    pub fn clear_color(&mut self, color: C) {
         let raw = color.to_be_bytes();
-        fill_buf_repeat(self.buf.as_mut_slice(), &raw, PIXEL_COUNT);
+        fill_buf_repeat(self.buf.as_mut_slice(), raw.as_ref(), PIXEL_COUNT);
     }
 
     /// Set a single pixel
     ///
     /// PERF: no panic for speed?
-    #[inline(always)]
-    pub fn set_pixel(&mut self, x: usize, y: usize, color: Color) {
+    #[inline]
+    pub fn set_pixel(&mut self, x: usize, y: usize, color: C) {
         if x < WIDTH && y < HEIGHT {
             let idx = y * WIDTH + x;
-            self.buf[idx * BYTES_PER_PIXEL..][..BYTES_PER_PIXEL]
-                .copy_from_slice(&color.to_be_bytes());
+            self.buf[idx * C::BYTES_PER_PIXEL..][..C::BYTES_PER_PIXEL]
+                .copy_from_slice(color.to_be_bytes().as_ref());
         }
     }
 
     /// Fill a rectangular region.
-    pub fn fill_rect(&mut self, x: usize, y: usize, w: usize, h: usize, color: RawU24) {
+    pub fn fill_rect(&mut self, x: usize, y: usize, w: usize, h: usize, raw: &[u8]) {
         let x_end = (x + w).min(WIDTH);
         let y_end = (y + h).min(HEIGHT);
-        let raw = color.to_be_bytes();
         for row in y..y_end {
             let start = row * WIDTH + x;
             let end = row * WIDTH + x_end;
             fill_buf_repeat(
-                &mut self.buf[start * BYTES_PER_PIXEL..end * BYTES_PER_PIXEL],
+                &mut self.buf[start * raw.len()..end * raw.len()],
                 &raw,
                 end - start,
             );
@@ -76,13 +103,13 @@ impl Framebuffer {
     }
 
     /// VSync flush for watchface / menus.
-    pub async fn flush_vsync(&self, display: &mut Co5300Display<'_>) {
+    pub async fn flush_vsync(&self, display: &mut Co5300Display<'_, C>) {
         display.te_mut().wait_for_high().await;
         self.flush(display).await;
     }
 
     /// Flush the entire framebuffer to the display via DMA QSPI.
-    pub async fn flush(&self, display: &mut Co5300Display<'_>) {
+    pub async fn flush(&self, display: &mut Co5300Display<'_, C>) {
         display.set_addr_window(0, 0, WIDTH as u16, HEIGHT as u16);
         let mut stream = display.begin_stream();
         let mut remaining = &self.buf[..];
@@ -96,7 +123,7 @@ impl Framebuffer {
     }
 
     /// Flush only a rectangular region (dirty rect optimization).
-    pub fn flush_region(&self, display: &mut Co5300Display, x: u16, y: u16, w: u16, h: u16) {
+    pub fn flush_region(&self, display: &mut Co5300Display<'_, C>, x: u16, y: u16, w: u16, h: u16) {
         if w == 0 || h == 0 {
             return;
         }
@@ -132,7 +159,7 @@ impl Framebuffer {
         for row in y0..(y0 + flush_h) {
             let start = row * WIDTH + x0;
             let end = start + flush_w;
-            let line = &self.buf[start * BYTES_PER_PIXEL..end * BYTES_PER_PIXEL];
+            let line = &self.buf[start * C::BYTES_PER_PIXEL..end * C::BYTES_PER_PIXEL];
             stream.buf()[..line.len()].copy_from_slice(line);
             stream.stream_pixels(line.len());
         }
@@ -150,14 +177,20 @@ impl Framebuffer {
     }
 }
 
-impl OriginDimensions for Box<Framebuffer> {
+impl<const N: usize, C: Co5300ColorMode> OriginDimensions for Box<Framebuffer<N, C>>
+where
+    <C as embedded_graphics::pixelcolor::raw::ToBytes>::Bytes: core::convert::AsRef<[u8]>,
+{
     fn size(&self) -> Size {
         Size::new(WIDTH as u32, HEIGHT as u32)
     }
 }
 
-impl DrawTarget for Box<Framebuffer> {
-    type Color = Rgb888;
+impl<const N: usize, C: Co5300ColorMode> DrawTarget for Box<Framebuffer<N, C>>
+where
+    <C as embedded_graphics::pixelcolor::raw::ToBytes>::Bytes: core::convert::AsRef<[u8]>,
+{
+    type Color = C;
     type Error = DisplayError;
 
     fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
@@ -166,9 +199,7 @@ impl DrawTarget for Box<Framebuffer> {
     {
         for Pixel(coord, color) in pixels.into_iter() {
             if coord.x >= 0 && coord.x < WIDTH as i32 && coord.y >= 0 && coord.y < HEIGHT as i32 {
-                let raw = color.to_be_bytes();
-                let idx = coord.y as usize * WIDTH + coord.x as usize;
-                self.buf[idx * BYTES_PER_PIXEL..][..BYTES_PER_PIXEL].copy_from_slice(&raw);
+                self.set_pixel(coord.x as usize, coord.y as usize, color);
             }
         }
         Ok(())
@@ -196,7 +227,8 @@ impl DrawTarget for Box<Framebuffer> {
             if col < w && row < HEIGHT {
                 let raw = color.to_be_bytes();
                 let idx = row * WIDTH + x + col;
-                self.buf[idx * BYTES_PER_PIXEL..][..BYTES_PER_PIXEL].copy_from_slice(&raw);
+                self.buf[idx * C::BYTES_PER_PIXEL..][..C::BYTES_PER_PIXEL]
+                    .copy_from_slice(raw.as_ref());
             }
             col += 1;
             if col >= w {
@@ -220,7 +252,7 @@ impl DrawTarget for Box<Framebuffer> {
             area.top_left.y as usize,
             area.size.width as usize,
             area.size.height as usize,
-            color.into(),
+            color.to_be_bytes().as_ref(),
         );
         Ok(())
     }

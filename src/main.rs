@@ -1,5 +1,4 @@
 #![feature(impl_trait_in_assoc_type)]
-#![feature(inherent_associated_types)]
 #![no_std]
 #![no_main]
 // Now defaults to deny in Rust-2024, however abusing statics is necessary in the embedded world.
@@ -12,7 +11,11 @@ use embassy_executor::Spawner;
 use embassy_sync::{blocking_mutex::raw::NoopRawMutex, mutex::Mutex};
 use embassy_time::{Duration, Instant, Ticker};
 use embedded_bitmap_fonts::TextStyle;
-use embedded_graphics::{mono_font, pixelcolor::Rgb888, prelude::*};
+use embedded_graphics::{
+    mono_font,
+    pixelcolor::{Gray8, Rgb565, Rgb888},
+    prelude::*,
+};
 use esp_hal::{
     dma::{DmaRxBuf, DmaTxBuf},
     dma_buffers, dma_tx_buffer,
@@ -25,8 +28,11 @@ use esp_hal::{
 };
 use esp_println::{dbg, println};
 use octowhere::{
-    board::delay_ms_async,
-    drivers::{co5300::Co5300Display, framebuffer::Framebuffer, qspi_bus::QspiBus},
+    drivers::{
+        co5300::Co5300Display,
+        framebuffer::{self, Framebuffer},
+        qspi_bus::QspiBus,
+    },
     peripherals::{rtc::Pcf85063aRtc, touch::Cst9217},
 };
 use static_cell::StaticCell;
@@ -38,6 +44,10 @@ esp_bootloader_esp_idf::esp_app_desc!();
 
 static mut CORE1_STACK: esp_hal::system::Stack<8192> = esp_hal::system::Stack::new();
 static CORE1_EXECUTOR: StaticCell<esp_rtos::embassy::Executor> = StaticCell::new();
+
+// Rgb888 is higher quality, Rgb565 cuts the size of the framebuffer by a third.
+// Gray8 is 3x smaller than Rgb888... but I'm not sure we love monochrome.
+type Color = Rgb565;
 
 #[embassy_executor::task]
 async fn second_core(_spawner: Spawner) {}
@@ -98,11 +108,9 @@ async fn main(_spawner: Spawner) {
     let mut exio = Tca9554::new(i2c.clone(), tca9554::Address::standard());
 
     let i2c_peripherals = async {
-        use embedded_hal_async::i2c::I2c;
         exio.init().await.unwrap();
 
-        let axp2101 = ();
-        // let mut axp2101 = AsyncAxp2101::with_address(i2c.clone(), 0x34);
+        // let mut axp2101 = AsyncAxp2101::new(i2c.clone());
         // axp2101.init().await.unwrap();
         // axp2101.disable_general_adc_channel().await.unwrap();
         // println!("[Power] AXP2101 PMIC initalized");
@@ -110,9 +118,6 @@ async fn main(_spawner: Spawner) {
         let mut rtc = Pcf85063aRtc::new(i2c.clone());
         rtc.init().await.unwrap();
         println!("[RTC] OK");
-
-        let imu = ();
-        let imu_int2 = Input::new(peripherals.GPIO21, InputConfig::default());
 
         let lpf = ph_qmi8658::LowPassFilterMode::OdrPercent14_0;
         let config = ph_qmi8658::Config {
@@ -127,6 +132,8 @@ async fn main(_spawner: Spawner) {
                 lpf: Some(lpf),
             }),
         };
+
+        let imu_int2 = Input::new(peripherals.GPIO21, InputConfig::default());
 
         let mut imu = ph_qmi8658::Qmi8658::with_i2c_config(
             i2c.clone(),
@@ -161,7 +168,7 @@ async fn main(_spawner: Spawner) {
         touch.init().await.unwrap();
         println!("[TOUCH] OK");
 
-        (axp2101, rtc, imu, touch)
+        (rtc, imu, touch)
     };
 
     let display = async {
@@ -191,22 +198,27 @@ async fn main(_spawner: Spawner) {
 
         // delay_ms_async(100).await;
 
-        let mut fb = Framebuffer::alloc();
-        fb.clear_color(Rgb888::CSS_DIM_GRAY);
-        // fb.clear_color(Rgb888::CSS_GREEN);
+        let mut fb = Framebuffer::<
+            { octowhere::drivers::framebuffer::buffer_size::<Color>() },
+            Color,
+        >::alloc();
+        fb.clear_color(Color::CSS_DIM_GRAY);
         fb.flush_vsync(&mut display).await;
         println!("[FB] OK");
         (display, fb)
     };
 
-    let ((power, mut rtc, imu, touch), (mut display, mut fb)) =
+    let ((mut rtc, imu, touch), (mut display, mut fb)) =
         embassy_futures::join::join(i2c_peripherals, display).await;
     // let (mut display, mut fb) = display.await;
     display.set_brightness(120);
 
-    let mut ticker = Ticker::every(Duration::from_secs(1));
+    let mut ticker = Ticker::every(Duration::from_millis(1000 / 30));
+    let mut frametime = Duration::MIN;
+    let mut flush = Duration::MIN;
+    let mut clear = Duration::MIN;
     loop {
-        fb.clear_color(Rgb888::BLACK);
+        let start = Instant::now();
 
         use embedded_graphics::{
             prelude::*,
@@ -216,17 +228,17 @@ async fn main(_spawner: Spawner) {
             text::{Alignment, Text},
         };
         // Create styles used by the drawing operations.
-        let thin_stroke = PrimitiveStyle::with_stroke(Rgb888::BLUE, 4);
-        let thick_stroke = PrimitiveStyle::with_stroke(Rgb888::RED, 8);
+        let thin_stroke = PrimitiveStyle::with_stroke(Color::BLUE, 4);
+        let thick_stroke = PrimitiveStyle::with_stroke(Color::RED, 8);
         let border_stroke = PrimitiveStyleBuilder::new()
-            .stroke_color(Rgb888::CSS_ORANGE)
+            .stroke_color(Color::CSS_ORANGE)
             .stroke_width(8)
             .stroke_alignment(StrokeAlignment::Inside)
             .build();
-        let fill = PrimitiveStyle::with_fill(Rgb888::CSS_GRAY);
+        let fill = PrimitiveStyle::with_fill(Color::CSS_GRAY);
         let character_style = TextStyle::new(
             &embedded_bitmap_fonts::terminus::FONT_16x32,
-            Rgb888::CSS_ORANGE,
+            Color::CSS_ORANGE,
         );
 
         let yoffset = 200;
@@ -262,8 +274,12 @@ async fn main(_spawner: Spawner) {
             .unwrap();
 
         // Draw centered text.
-        let time = rtc.get_time().await.unwrap();
-        let text = alloc::format!("{}h, {}m, {}s", time.hours, time.minutes, time.seconds);
+        let text = alloc::format!(
+            "clear: {:.1}ms\nframetime: {:.1}ms\nflush: {:.1}ms",
+            clear.as_micros() as f32 / 1_000.,
+            frametime.as_micros() as f32 / 1_000.,
+            flush.as_micros() as f32 / 1_000.
+        );
         Text::with_alignment(
             &text,
             display.bounding_box().center() + Point::new(0, 60),
@@ -273,7 +289,14 @@ async fn main(_spawner: Spawner) {
         .draw(&mut fb)
         .unwrap();
 
+        frametime = start.elapsed();
+
         fb.flush_vsync(&mut display).await;
+
+        flush = start.elapsed() - frametime;
+
+        fb.clear_color(Color::BLACK);
+        clear = start.elapsed() - flush - frametime;
         ticker.next().await;
     }
 }

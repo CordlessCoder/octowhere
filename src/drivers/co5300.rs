@@ -2,6 +2,10 @@
 // Translated from Arduino_CO5300.h/.cpp
 // Resolution: 410x502, col_offset=22, RGB565
 
+use core::marker::PhantomData;
+
+use embedded_graphics::pixelcolor::raw::ToBytes;
+use embedded_graphics::pixelcolor::{Gray8, Rgb565, Rgb888};
 use embedded_graphics_core::draw_target::DrawTarget;
 use embedded_graphics_core::geometry::{OriginDimensions, Size};
 use embedded_graphics_core::prelude::*;
@@ -12,7 +16,6 @@ use esp_hal::spi::master::{Address, Command, DataMode};
 use futures::FutureExt;
 
 use crate::board::{self, delay_ms, delay_ms_async, delay_us, delay_us_async};
-use crate::drivers::framebuffer::{BYTES_PER_PIXEL, Color};
 use crate::drivers::qspi_bus::{QSPIOperation, QspiBus};
 use crate::util::fill_buf_repeat;
 
@@ -48,7 +51,7 @@ const RST_DELAY_MS: u32 = 120;
 const SLPOUT_DELAY_MS: u32 = 120;
 const SLPIN_DELAY_MS: u32 = 120;
 
-pub struct Co5300Display<'d> {
+pub struct Co5300Display<'d, C> {
     bus: QspiBus<'d>,
     reset: Output<'d>,
     width: u16,
@@ -56,6 +59,7 @@ pub struct Co5300Display<'d> {
     col_offset: u16,
     row_offset: u16,
     te_pin: Input<'d>,
+    color: PhantomData<C>,
 }
 
 #[derive(Debug)]
@@ -78,17 +82,18 @@ static CO5300_ENTER_SLEEP: [QSPIOperation; 4] = [
     QSPIOperation::Delay(SLPIN_DELAY_MS),
 ];
 
-static CO5300_INIT: [QSPIOperation; 14] = [
+// // 16-bit RGB565
+// QSPIOperation::CommandD8(CMD_PIXFMT, 0x55),
+// // // 24-bit RGB888
+// // QSPIOperation::CommandD8(CMD_PIXFMT, 0x77),
+
+static CO5300_INIT: [QSPIOperation; 13] = [
     QSPIOperation::Command(CMD_SLPOUT),
     QSPIOperation::Delay(SLPOUT_DELAY_MS),
     // Set command page 0
     QSPIOperation::CommandD8(0xFE, 0x00),
     // SPI mode control
     QSPIOperation::CommandD8(CMD_SPIMODECTL, 0x80),
-    // // 16-bit RGB565
-    // QSPIOperation::CommandD8(CMD_PIXFMT, 0x55),
-    // 24-bit RGB888
-    QSPIOperation::CommandD8(CMD_PIXFMT, 0x77),
     // Write CTRL Display Brightness
     QSPIOperation::CommandD8(CMD_WCTRLD1, 0x20),
     // High Brightness Mode max
@@ -109,7 +114,43 @@ static CO5300_INIT: [QSPIOperation; 14] = [
     QSPIOperation::CommandD8(0x35, 0x00),
 ];
 
-impl<'d> Co5300Display<'d> {
+mod sealed {
+    pub trait Sealed {}
+}
+
+pub trait Co5300ColorMode: ToBytes + PixelColor + sealed::Sealed
+where
+    Self::Bytes: AsRef<[u8]>,
+{
+    const BYTES_PER_PIXEL: usize;
+    const MODE_BYTE: u8;
+}
+
+impl sealed::Sealed for Rgb888 {}
+
+impl Co5300ColorMode for Rgb888 {
+    const MODE_BYTE: u8 = 0x77;
+    const BYTES_PER_PIXEL: usize = 3;
+}
+
+impl sealed::Sealed for Rgb565 {}
+
+impl Co5300ColorMode for Rgb565 {
+    const MODE_BYTE: u8 = 0x55;
+    const BYTES_PER_PIXEL: usize = 2;
+}
+
+impl sealed::Sealed for Gray8 {}
+
+impl Co5300ColorMode for Gray8 {
+    const MODE_BYTE: u8 = 0x11;
+    const BYTES_PER_PIXEL: usize = 1;
+}
+
+impl<'d, C: Co5300ColorMode> Co5300Display<'d, C>
+where
+    <C as embedded_graphics::pixelcolor::raw::ToBytes>::Bytes: core::convert::AsRef<[u8]>,
+{
     pub async fn new(bus: QspiBus<'d>, reset: Output<'d>, te_pin: Input<'d>) -> Self {
         let mut disp = Self {
             bus,
@@ -119,11 +160,45 @@ impl<'d> Co5300Display<'d> {
             height: board::LCD_HEIGHT,
             col_offset: board::LCD_COL_OFFSET,
             row_offset: board::LCD_ROW_OFFSET,
+            color: PhantomData,
         };
         disp.hw_reset_async().await;
         disp.bus.batch_async(&CO5300_INIT).await;
+        disp.apply_color();
 
         disp
+    }
+    fn apply_color(&mut self) {
+        self.bus
+            .execute(&QSPIOperation::CommandD8(CMD_PIXFMT, C::MODE_BYTE));
+    }
+    pub fn with_color_format<NC>(self) -> Co5300Display<'d, NC>
+    where
+        NC: Co5300ColorMode,
+        <NC as embedded_graphics::pixelcolor::raw::ToBytes>::Bytes: core::convert::AsRef<[u8]>,
+    {
+        let Self {
+            bus,
+            reset,
+            width,
+            height,
+            col_offset,
+            row_offset,
+            te_pin,
+            color: _,
+        } = self;
+        let mut new = Co5300Display {
+            bus,
+            reset,
+            width,
+            height,
+            col_offset,
+            row_offset,
+            te_pin,
+            color: PhantomData,
+        };
+        new.apply_color();
+        new
     }
 
     pub async fn hw_reset_async(&mut self) {
@@ -161,11 +236,11 @@ impl<'d> Co5300Display<'d> {
     }
 
     /// Fill the entire screen with a single color.
-    pub fn fill_screen(&mut self, color: Color) {
+    pub fn fill_screen(&mut self, color: C) {
         let raw = color.to_be_bytes();
         self.set_addr_window(0, 0, self.width, self.height);
         let total = self.width as usize * self.height as usize;
-        self.write_repeat(&raw, total);
+        self.write_repeat(raw.as_ref(), total);
     }
 
     pub fn write_repeat(&mut self, data: &[u8], count: usize) {
@@ -190,13 +265,13 @@ impl<'d> Co5300Display<'d> {
     }
 
     /// Fill a rectangular area with a solid color.
-    pub fn write_pixels_area(&mut self, x: u16, y: u16, w: u16, h: u16, color: Color) {
+    pub fn write_pixels_area(&mut self, x: u16, y: u16, w: u16, h: u16, color: C) {
         if w == 0 || h == 0 {
             return;
         };
-        let raw = color.to_be_bytes();
+        let bytes = color.to_be_bytes();
         self.set_addr_window(x, y, w, h);
-        self.write_repeat(&raw, w as usize * h as usize);
+        self.write_repeat(bytes.as_ref(), w as usize * h as usize);
     }
 
     /// Get mutable reference to bus (for framebuffer flush).
@@ -229,7 +304,7 @@ impl<'d> Co5300Display<'d> {
         self.bus.batch_async(&CO5300_ENTER_SLEEP)
     }
 
-    pub fn begin_stream<'r>(&'r mut self) -> PixelStream<'r, 'd> {
+    pub fn begin_stream<'r>(&'r mut self) -> PixelStream<'r, 'd, C> {
         self.bus.cs.set_low();
         self.bus
             .spi
@@ -246,11 +321,17 @@ impl<'d> Co5300Display<'d> {
     }
 }
 
-pub struct PixelStream<'r, 'd> {
-    disp: &'r mut Co5300Display<'d>,
+pub struct PixelStream<'r, 'd, C: Co5300ColorMode>
+where
+    <C as embedded_graphics::pixelcolor::raw::ToBytes>::Bytes: core::convert::AsRef<[u8]>,
+{
+    disp: &'r mut Co5300Display<'d, C>,
 }
 
-impl PixelStream<'_, '_> {
+impl<C: Co5300ColorMode> PixelStream<'_, '_, C>
+where
+    <C as embedded_graphics::pixelcolor::raw::ToBytes>::Bytes: core::convert::AsRef<[u8]>,
+{
     pub fn buf(&mut self) -> &mut [u8] {
         self.disp.bus.tx.as_mut_slice()
     }
@@ -285,20 +366,29 @@ impl PixelStream<'_, '_> {
     pub fn end(self) {}
 }
 
-impl Drop for PixelStream<'_, '_> {
+impl<C: Co5300ColorMode> Drop for PixelStream<'_, '_, C>
+where
+    <C as embedded_graphics::pixelcolor::raw::ToBytes>::Bytes: core::convert::AsRef<[u8]>,
+{
     fn drop(&mut self) {
         self.disp.bus.cs.set_high();
     }
 }
 
-impl OriginDimensions for Co5300Display<'_> {
+impl<C: Co5300ColorMode> OriginDimensions for Co5300Display<'_, C>
+where
+    <C as embedded_graphics::pixelcolor::raw::ToBytes>::Bytes: core::convert::AsRef<[u8]>,
+{
     fn size(&self) -> Size {
         Size::new(self.width as u32, self.height as u32)
     }
 }
 
-impl DrawTarget for Co5300Display<'_> {
-    type Color = Color;
+impl<C: Co5300ColorMode + PixelColor> DrawTarget for Co5300Display<'_, C>
+where
+    <C as embedded_graphics::pixelcolor::raw::ToBytes>::Bytes: core::convert::AsRef<[u8]>,
+{
+    type Color = C;
     type Error = DisplayError;
 
     fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
@@ -359,7 +449,8 @@ impl DrawTarget for Co5300Display<'_> {
         for color in colors.into_iter() {
             let buf = stream.buf();
             let raw = color.to_be_bytes();
-            buf[col * BYTES_PER_PIXEL..][..BYTES_PER_PIXEL].copy_from_slice(&raw);
+            let raw = raw.as_ref();
+            buf[col * C::BYTES_PER_PIXEL..][..C::BYTES_PER_PIXEL].copy_from_slice(&raw);
             col += 1;
 
             // End of row
@@ -375,9 +466,9 @@ impl DrawTarget for Co5300Display<'_> {
         }
         // Flush remaining partial row
         if col > 0 {
-            stream.stream_pixels(col * BYTES_PER_PIXEL);
+            stream.stream_pixels(col * C::BYTES_PER_PIXEL);
             if needs_row_dup {
-                stream.stream_pixels(col * BYTES_PER_PIXEL);
+                stream.stream_pixels(col * C::BYTES_PER_PIXEL);
             }
         }
         stream.end();
