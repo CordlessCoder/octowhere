@@ -45,10 +45,14 @@ type Color = Rgb565;
 #[embassy_executor::task]
 async fn second_core(_spawner: Spawner, gpio0: esp_hal::peripherals::GPIO0<'static>) {
     let mut gpio0 = Input::new(gpio0, InputConfig::default());
-    loop {
-        gpio0.wait_for_any_edge().await;
-        println!("GPIO0: {:?}", gpio0.level());
-    }
+    let gpio0 = async {
+        loop {
+            gpio0.wait_for_any_edge().await;
+            println!("GPIO0: {:?}", gpio0.level());
+        }
+    };
+    gpio0.await;
+    // embassy_futures::join::join(gpio0, async {}).await;
 }
 
 // TODO: CST9217 touch
@@ -167,7 +171,7 @@ async fn main(_spawner: Spawner) {
 
         let touch_rst = Output::new(peripherals.GPIO40, Level::High, OutputConfig::default());
         let touch_int = Input::new(peripherals.GPIO11, InputConfig::default());
-        let mut touch = Cst9217::new(i2c.clone(), touch_rst, Some(touch_int), embassy_time::Delay);
+        let mut touch = Cst9217::new(i2c.clone(), touch_rst, touch_int, embassy_time::Delay);
         touch.init().await.unwrap();
         touch.set_config(Cst9217Config {
             mirror_x: true,
@@ -229,12 +233,10 @@ async fn main(_spawner: Spawner) {
 
     let mut ticker = Ticker::every(Duration::from_millis(1000 / 60));
     let mut prev_touch_data = TouchData::Points(heapless::Vec::new());
+    let mut touch_data = TouchData::Points(heapless::Vec::new());
     loop {
         // PERF: Sleep until we get a touch event?
         let start = Instant::now();
-        let touch_data = touch.read_touch_data().await.unwrap();
-
-        let read_touch = start.elapsed();
 
         use embedded_graphics::{
             prelude::*,
@@ -263,7 +265,7 @@ async fn main(_spawner: Spawner) {
         let bbox = display.bounding_box();
 
         display.wait_for_vsync().await;
-        let vsync_wait = start.elapsed() - read_touch;
+        let vsync_wait = start.elapsed();
 
         match &prev_touch_data {
             TouchData::Points(points) => {
@@ -296,7 +298,7 @@ async fn main(_spawner: Spawner) {
             TouchData::CoverGesture => {}
         }
 
-        let frametime = start.elapsed() - vsync_wait - read_touch;
+        let frametime = start.elapsed() - vsync_wait;
 
         match &prev_touch_data {
             TouchData::Points(points) => {
@@ -329,18 +331,23 @@ async fn main(_spawner: Spawner) {
             TouchData::CoverGesture => {}
         }
 
-        let flush = start.elapsed() - vsync_wait - frametime - read_touch;
+        let flush = start.elapsed() - vsync_wait - frametime;
 
         esp_println::println!(
-            "read touch: {:.1}ms\ndraw: {:.1}ms\nvsync: {:.1}ms\nspi: {:.1}ms",
-            read_touch.as_micros() as f32 / 1_000.,
+            "draw: {:.1}ms\nvsync: {:.1}ms\nspi: {:.1}ms",
             frametime.as_micros() as f32 / 1_000.,
             vsync_wait.as_micros() as f32 / 1_000.,
             flush.as_micros() as f32 / 1_000.,
         );
 
+        touch.wait_for_touch();
         prev_touch_data = touch_data;
-        ticker.next().await;
+        let mut timer = ticker.next();
+        loop {
+            match embassy_futures::select::select(touch.wait_for_touch(), &mut timer).await {
+                // _ => continue,
+            }
+        }
     }
 
     let mut ticker = Ticker::every(Duration::from_millis(1000 / 30));

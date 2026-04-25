@@ -1,6 +1,8 @@
 use embedded_graphics::prelude::Size;
 use embedded_hal::digital::OutputPin;
-use embedded_hal_async::i2c::I2c;
+use embedded_hal_async::{digital::Wait, i2c::I2c};
+use esp_println::dbg;
+use futures::{FutureExt, Stream, TryFutureExt, TryStream, stream::FusedStream};
 use log::{Level, log};
 
 use crate::peripherals::i2c_helper;
@@ -122,9 +124,7 @@ pub enum TouchData {
     Points(heapless::Vec<TouchPoint, 5, u8>),
 }
 
-impl<I: I2c, RST: OutputPin, INT, DELAY: embedded_hal_async::delay::DelayNs>
-    Cst9217<I, INT, RST, DELAY>
-{
+impl<I: I2c, RST, INT, DELAY> Cst9217<I, INT, RST, DELAY> {
     pub fn new(i2c: I, reset: RST, int: INT, delay: DELAY) -> Self {
         Self {
             i2c,
@@ -144,9 +144,79 @@ impl<I: I2c, RST: OutputPin, INT, DELAY: embedded_hal_async::delay::DelayNs>
     pub fn set_config(&mut self, config: Cst9217Config) {
         self.config = config;
     }
+    pub async fn sleep(&mut self) -> Result<(), I::Error> {
+        self.set_mode(Cst9217RunMode::DebugInfo).await?;
+        self.i2c
+            .write(self.addr, &REG_SLEEP_MODE.to_be_bytes())
+            .await
+    }
+    pub async fn set_mode(&mut self, mode: Cst9217RunMode) -> Result<(), I::Error> {
+        let write = match mode {
+            Cst9217RunMode::Normal => REG_NORMAL_MODE,
+            Cst9217RunMode::DebugDiff => REG_DIFF_MODE,
+            Cst9217RunMode::DebugRawdata => REG_RAW_MODE,
+            Cst9217RunMode::DebugInfo => REG_DEBUG_MODE,
+            Cst9217RunMode::Factory => REG_FACTORY_MODE,
+            _ => unimplemented!(),
+        };
+        self.i2c.write(self.addr, &write.to_be_bytes()).await
+    }
+    pub async fn read_touch_data(&mut self) -> Result<TouchData, I::Error> {
+        let mut buf = [0u8; READ_BUF_SIZE];
+        self.i2c
+            .write_read(self.addr, &REG_READ.to_be_bytes(), &mut buf)
+            .await?;
+        let ack = [
+            REG_READ.to_be_bytes()[0],
+            REG_READ.to_be_bytes()[1],
+            CST92XX_ACK,
+        ];
+        self.i2c.write(self.addr, &ack).await?;
+        // Check for cover screen gesture
+        if buf[4] >> 7 == 1 {
+            return Ok(TouchData::CoverGesture);
+        }
+        let mut points = heapless::Vec::new();
 
+        let point_count = buf[5] & 0x7F;
+        if point_count > MAX_FINGER_NUM as u8 || point_count == 0 {
+            return Ok(TouchData::Points(points));
+        }
+
+        for i in 0..point_count {
+            let data_idx = (i * 5) + if i == 0 { 0 } else { 2 };
+            let data = &buf[data_idx as usize..][..4];
+            let id = data[0] >> 4;
+            let event = data[0] & 0x0F;
+            let x = ((data[1] as u16) << 4) | (data[3] >> 4) as u16;
+            let y = ((data[2] as u16) << 4) | (data[3] & 0x0F) as u16;
+            if event == 0x06 && id < MAX_FINGER_NUM as u8 {
+                let mut point = TouchPoint { x, y };
+                self.config.apply(self.width, self.height, &mut point);
+                _ = points.push(point);
+            }
+        }
+        Ok(TouchData::Points(points))
+    }
+    pub fn resolution(&self) -> Size {
+        Size {
+            width: self.width as u32,
+            height: self.height as u32,
+        }
+    }
+}
+impl<I: I2c, RST: OutputPin, INT, DELAY: embedded_hal_async::delay::DelayNs>
+    Cst9217<I, INT, RST, DELAY>
+{
     pub async fn init(&mut self) -> Result<(), Cst9217Error<I::Error>> {
-        i2c_helper::write_wide_reg(&mut self.i2c, self.addr, REG_DEBUG_MODE, 0x01).await?;
+        if i2c_helper::write_wide_reg(&mut self.i2c, self.addr, REG_DEBUG_MODE, 0x01)
+            .await
+            .is_err()
+        {
+            // ACK failure may mean that the sensor needs a reset
+            self.reset().await.unwrap();
+            i2c_helper::write_wide_reg(&mut self.i2c, self.addr, REG_DEBUG_MODE, 0x01).await?;
+        }
         self.delay.delay_ms(10).await;
         let mut buf = [0u8; 4];
         self.i2c
@@ -202,73 +272,10 @@ impl<I: I2c, RST: OutputPin, INT, DELAY: embedded_hal_async::delay::DelayNs>
         self.delay.delay_ms(30).await;
         Ok(())
     }
-    pub async fn sleep(&mut self) -> Result<(), I::Error> {
-        self.set_mode(Cst9217RunMode::DebugInfo).await?;
-        self.i2c
-            .write(self.addr, &REG_SLEEP_MODE.to_be_bytes())
-            .await
-    }
-    pub async fn set_mode(&mut self, mode: Cst9217RunMode) -> Result<(), I::Error> {
-        let write = match mode {
-            Cst9217RunMode::Normal => REG_NORMAL_MODE,
-            Cst9217RunMode::DebugDiff => REG_DIFF_MODE,
-            Cst9217RunMode::DebugRawdata => REG_RAW_MODE,
-            Cst9217RunMode::DebugInfo => REG_DEBUG_MODE,
-            Cst9217RunMode::Factory => REG_FACTORY_MODE,
-            _ => unimplemented!(),
-        };
-        self.i2c.write(self.addr, &write.to_be_bytes()).await
-    }
+}
 
-    pub async fn read_touch_data(&mut self) -> Result<TouchData, I::Error> {
-        let mut buf = [0u8; READ_BUF_SIZE];
-        self.i2c
-            .write_read(self.addr, &REG_READ.to_be_bytes(), &mut buf)
-            .await?;
-        let ack = [
-            REG_READ.to_be_bytes()[0],
-            REG_READ.to_be_bytes()[1],
-            CST92XX_ACK,
-        ];
-        self.i2c.write(self.addr, &ack).await?;
-        // Check for cover screen gesture
-        if buf[4] >> 7 == 1 {
-            return Ok(TouchData::CoverGesture);
-        }
-        let mut points = heapless::Vec::new();
-
-        let point_count = buf[5] & 0x7F;
-        if point_count > MAX_FINGER_NUM as u8 || point_count == 0 {
-            return Ok(TouchData::Points(points));
-        }
-
-        for i in 0..point_count {
-            let data_idx = (i * 5) + if i == 0 { 0 } else { 2 };
-            let data = &buf[data_idx as usize..][..4];
-            let id = data[0] >> 4;
-            let event = data[0] & 0x0F;
-            let x = ((data[1] as u16) << 4) | (data[3] >> 4) as u16;
-            let y = ((data[2] as u16) << 4) | (data[3] & 0x0F) as u16;
-            if event == 0x06 && id < MAX_FINGER_NUM as u8 {
-                let mut point = TouchPoint { x, y };
-                self.config.apply(self.width, self.height, &mut point);
-                _ = points.push(point);
-            }
-        }
-        // NOTE: Should we care about this?
-        // Swap XY or mirroring coordinates,if set
-        // updateXY(_touchPoints);
-        Ok(TouchData::Points(points))
+impl<I: I2c, RST, INT: Wait, DELAY> Cst9217<I, INT, RST, DELAY> {
+    pub fn wait_for_touch(&mut self) -> impl Future<Output = Result<(), INT::Error>> {
+        self.int.wait_for_low()
     }
-    pub fn resolution(&self) -> Size {
-        Size {
-            width: self.width as u32,
-            height: self.height as u32,
-        }
-    }
-    // pub fn is_pressed(&self) -> bool {
-    //     todo!()
-    // }
-
-    // pub fn getSuppor
 }

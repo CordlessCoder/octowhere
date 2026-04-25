@@ -442,7 +442,7 @@ dependencies = [
 [[package]]
 name = "embedded-bitmap-fonts"
 version = "0.1.1"
-source = "git+https://github.com/CordlessCoder/embedded-bitmap-fonts#c1038735383a9aba83d489c90471d59fa4180b1d"
+source = "git+https://github.com/CordlessCoder/embedded-bitmap-fonts#f7068cf7eadef578280962ec16ad4adbe55c866f"
 dependencies = [
  "embedded-graphics",
 ]
