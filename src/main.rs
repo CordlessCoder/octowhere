@@ -61,14 +61,21 @@ async fn second_core(_spawner: Spawner, gpio0: esp_hal::peripherals::GPIO0<'stat
 async fn main(_spawner: Spawner) {
     // PERF: Figure out if we can reclaim any SRAM from the bootloader
     // Heap: 64KB SRAM + PSRAM for large allocs
-    // esp_alloc::heap_allocator!(#[ram(reclaimed)] size: 64 * 1024);
+    esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 72 * 1024);
 
     // PERF: How low can we drop the clock before running into timing issues?
     let mut peripherals =
         esp_hal::init(esp_hal::Config::default().with_cpu_clock(esp_hal::clock::CpuClock::_240MHz));
     let sw_int = SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
 
-    esp_alloc::psram_allocator!(peripherals.PSRAM, esp_hal::psram);
+    let psram_config = esp_hal::psram::PsramConfig {
+        mode: esp_hal::psram::PsramMode::OctalSpi,
+        size: esp_hal::psram::PsramSize::AutoDetect,
+        core_clock: None,
+        flash_frequency: esp_hal::psram::FlashFreq::FlashFreq80m,
+        ram_frequency: esp_hal::psram::SpiRamFreq::Freq80m,
+    };
+    esp_alloc::psram_allocator!(peripherals.PSRAM, esp_hal::psram, psram_config);
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
 
@@ -191,7 +198,8 @@ async fn main(_spawner: Spawner) {
             .with_frequency(Rate::from_mhz(80))
             .with_mode(spi::Mode::_0);
 
-        let dma_tx = dma_tx_buffer!(8000).unwrap();
+        let dma_tx = dma_tx_buffer!(4095 * 2).unwrap();
+        let dma_tx_swap = dma_tx_buffer!(4095 * 2).unwrap();
 
         let reset = Output::new(peripherals.GPIO39, Level::High, OutputConfig::default());
         let te = Input::new(peripherals.GPIO13, InputConfig::default());
@@ -207,7 +215,7 @@ async fn main(_spawner: Spawner) {
             .with_dma(peripherals.DMA_CH0)
             .into_async();
         let spi = QspiBus::new(spi, dma_tx, cs);
-        let mut display = Co5300Display::new(spi, reset, te).await;
+        let mut display = Co5300Display::new(spi, reset, te, dma_tx_swap).await;
 
         println!("[DISPLAY] OK");
 
@@ -231,124 +239,132 @@ async fn main(_spawner: Spawner) {
     fb.clear_color(Color::BLACK);
     fb.flush(&mut display).await;
 
-    let mut ticker = Ticker::every(Duration::from_millis(1000 / 60));
-    let mut prev_touch_data = TouchData::Points(heapless::Vec::new());
-    let mut touch_data = TouchData::Points(heapless::Vec::new());
-    loop {
-        // PERF: Sleep until we get a touch event?
-        let start = Instant::now();
-
-        use embedded_graphics::{
-            prelude::*,
-            primitives::{Circle, PrimitiveStyle, PrimitiveStyleBuilder, StrokeAlignment},
-        };
-        // Create styles used by the drawing operations.
-        let thin_stroke = PrimitiveStyle::with_stroke(Color::BLUE, 4);
-        let thick_stroke = PrimitiveStyle::with_stroke(Color::RED, 8);
-        let border_stroke = PrimitiveStyleBuilder::new()
-            .stroke_color(if touch_data != TouchData::CoverGesture {
-                Color::CSS_ORANGE
-            } else {
-                Color::CSS_CYAN
-            })
-            .stroke_width(8)
-            .stroke_alignment(StrokeAlignment::Inside)
-            .build();
-        let fill = PrimitiveStyle::with_fill(Color::CSS_GRAY);
-        let character_style = TextStyle::new(
-            &embedded_bitmap_fonts::terminus::FONT_16x32,
-            Color::CSS_ORANGE,
-        );
-
-        let yoffset = 200;
-
-        let bbox = display.bounding_box();
-
-        display.wait_for_vsync().await;
-        let vsync_wait = start.elapsed();
-
-        match &prev_touch_data {
-            TouchData::Points(points) => {
-                for point in points {
-                    fb.fill_rect(
-                        point.x.saturating_sub(40) as usize,
-                        point.y.saturating_sub(40) as usize,
-                        80,
-                        80,
-                        &Color::BLACK.to_be_bytes(),
-                    );
-                }
-            }
-            TouchData::CoverGesture => {}
-        }
-        match &touch_data {
-            TouchData::Points(points) => {
-                for point in points {
-                    // Draw a circle with a 3px wide stroke.
-                    Circle::new(Point::new(point.x as i32 - 40, point.y as i32 - 40), 80)
-                        .into_styled(
-                            PrimitiveStyleBuilder::new()
-                                .fill_color(Color::CSS_CYAN)
-                                .build(),
-                        )
-                        .draw(&mut fb)
-                        .unwrap();
-                }
-            }
-            TouchData::CoverGesture => {}
-        }
-
-        let frametime = start.elapsed() - vsync_wait;
-
-        match &prev_touch_data {
-            TouchData::Points(points) => {
-                for point in points {
-                    fb.flush_region(
-                        &mut display,
-                        point.x.saturating_sub(40),
-                        point.y.saturating_sub(40),
-                        80,
-                        80,
-                    )
-                    .await;
-                }
-            }
-            TouchData::CoverGesture => {}
-        }
-        match &touch_data {
-            TouchData::Points(points) => {
-                for point in points {
-                    fb.flush_region(
-                        &mut display,
-                        point.x.saturating_sub(40),
-                        point.y.saturating_sub(40),
-                        80,
-                        80,
-                    )
-                    .await;
-                }
-            }
-            TouchData::CoverGesture => {}
-        }
-
-        let flush = start.elapsed() - vsync_wait - frametime;
-
-        esp_println::println!(
-            "draw: {:.1}ms\nvsync: {:.1}ms\nspi: {:.1}ms",
-            frametime.as_micros() as f32 / 1_000.,
-            vsync_wait.as_micros() as f32 / 1_000.,
-            flush.as_micros() as f32 / 1_000.,
-        );
-
-        touch.wait_for_touch();
-        prev_touch_data = touch_data;
-        let mut timer = ticker.next();
-        loop {
-            match embassy_futures::select::select(touch.wait_for_touch(), &mut timer).await {
-                // _ => continue,
-            }
-        }
-    }
+    // let mut ticker = Ticker::every(Duration::from_millis(1000 / 60));
+    // let mut prev_touch_data = TouchData::Points(heapless::Vec::new());
+    // let mut touch_data = TouchData::Points(heapless::Vec::new());
+    // loop {
+    //     // PERF: Sleep until we get a touch event?
+    //     let start = Instant::now();
+    //
+    //     use embedded_graphics::{
+    //         prelude::*,
+    //         primitives::{Circle, PrimitiveStyle, PrimitiveStyleBuilder, StrokeAlignment},
+    //     };
+    //     // Create styles used by the drawing operations.
+    //     let thin_stroke = PrimitiveStyle::with_stroke(Color::BLUE, 4);
+    //     let thick_stroke = PrimitiveStyle::with_stroke(Color::RED, 8);
+    //     let border_stroke = PrimitiveStyleBuilder::new()
+    //         .stroke_color(if touch_data != TouchData::CoverGesture {
+    //             Color::CSS_ORANGE
+    //         } else {
+    //             Color::CSS_CYAN
+    //         })
+    //         .stroke_width(8)
+    //         .stroke_alignment(StrokeAlignment::Inside)
+    //         .build();
+    //     let fill = PrimitiveStyle::with_fill(Color::CSS_GRAY);
+    //     let character_style = TextStyle::new(
+    //         &embedded_bitmap_fonts::terminus::FONT_16x32,
+    //         Color::CSS_ORANGE,
+    //     );
+    //
+    //     let yoffset = 200;
+    //
+    //     let bbox = display.bounding_box();
+    //
+    //     display.wait_for_vsync().await;
+    //     let vsync_wait = start.elapsed();
+    //
+    //     match &prev_touch_data {
+    //         TouchData::Points(points) => {
+    //             for point in points {
+    //                 fb.fill_rect(
+    //                     point.x.saturating_sub(40) as usize,
+    //                     point.y.saturating_sub(40) as usize,
+    //                     80,
+    //                     80,
+    //                     &Color::BLACK.to_be_bytes(),
+    //                 );
+    //             }
+    //         }
+    //         TouchData::CoverGesture => {}
+    //     }
+    //     match &touch_data {
+    //         TouchData::Points(points) => {
+    //             for point in points {
+    //                 // Draw a circle with a 3px wide stroke.
+    //                 Circle::new(Point::new(point.x as i32 - 40, point.y as i32 - 40), 80)
+    //                     .into_styled(
+    //                         PrimitiveStyleBuilder::new()
+    //                             .fill_color(Color::CSS_CYAN)
+    //                             .build(),
+    //                     )
+    //                     .draw(&mut fb)
+    //                     .unwrap();
+    //             }
+    //         }
+    //         TouchData::CoverGesture => {}
+    //     }
+    //
+    //     let frametime = start.elapsed() - vsync_wait;
+    //
+    //     match &prev_touch_data {
+    //         TouchData::Points(points) => {
+    //             for point in points {
+    //                 fb.flush_region(
+    //                     &mut display,
+    //                     point.x.saturating_sub(40),
+    //                     point.y.saturating_sub(40),
+    //                     80,
+    //                     80,
+    //                 )
+    //                 .await;
+    //             }
+    //         }
+    //         TouchData::CoverGesture => {}
+    //     }
+    //     match &touch_data {
+    //         TouchData::Points(points) => {
+    //             for point in points {
+    //                 fb.flush_region(
+    //                     &mut display,
+    //                     point.x.saturating_sub(40),
+    //                     point.y.saturating_sub(40),
+    //                     80,
+    //                     80,
+    //                 )
+    //                 .await;
+    //             }
+    //         }
+    //         TouchData::CoverGesture => {}
+    //     }
+    //
+    //     let flush = start.elapsed() - vsync_wait - frametime;
+    //
+    //     esp_println::println!(
+    //         "draw: {:.1}ms\nvsync: {:.1}ms\nspi: {:.1}ms",
+    //         frametime.as_micros() as f32 / 1_000.,
+    //         vsync_wait.as_micros() as f32 / 1_000.,
+    //         flush.as_micros() as f32 / 1_000.,
+    //     );
+    //
+    //     prev_touch_data = touch_data;
+    //     touch.wait_for_touch().await;
+    //     touch_data = touch.read_touch_data().await.unwrap();
+    //     // let mut timer = ticker.next();
+    //     // loop {
+    //     //     match embassy_futures::select::select(wait, &mut timer).await {
+    //     //         embassy_futures::select::Either::First(_) => {
+    //     //             touch_data = touch.read_touch_data().await.unwrap();
+    //     //             wait = touch.wait_for_touch();
+    //     //             continue;
+    //     //         }
+    //     //         embassy_futures::select::Either::Second(_) => {
+    //     //             break;
+    //     //         }
+    //     //     }
+    //     // }
+    // }
 
     let mut ticker = Ticker::every(Duration::from_millis(1000 / 30));
     let mut frametime = Duration::MIN;
@@ -356,8 +372,8 @@ async fn main(_spawner: Spawner) {
     let mut clear = Duration::MIN;
     let mut vsync_wait = Duration::MIN;
     loop {
-        let start = Instant::now();
         let touch_data = touch.read_touch_data().await.unwrap();
+        let start = Instant::now();
 
         use embedded_graphics::{
             prelude::*,

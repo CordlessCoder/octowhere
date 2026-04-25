@@ -11,9 +11,9 @@ use embedded_graphics_core::geometry::{OriginDimensions, Size};
 use embedded_graphics_core::prelude::*;
 use embedded_graphics_core::primitives::Rectangle;
 
+use esp_hal::dma::DmaTxBuf;
 use esp_hal::gpio::{Input, Output};
 use esp_hal::spi::master::{Address, Command, DataMode};
-use futures::FutureExt;
 
 use crate::board::{self, delay_ms, delay_ms_async, delay_us, delay_us_async};
 use crate::drivers::qspi_bus::{QSPIOperation, QspiBus};
@@ -42,6 +42,8 @@ const CMD_WCTRLD1: u8 = 0x53;
 const CMD_BRIGHTNESS: u8 = 0x51;
 const CMD_BRIGHTNESS_HBM: u8 = 0x63;
 const CMD_WCE: u8 = 0x58;
+const CMD_ALLPOFF: u8 = 0x22; // All pixels off
+const CMD_ALLPON: u8 = 0x23; // All pixels on
 
 // MADCTL flags
 const MADCTL_RGB: u8 = 0x00;
@@ -52,14 +54,15 @@ const SLPOUT_DELAY_MS: u32 = 120;
 const SLPIN_DELAY_MS: u32 = 120;
 
 pub struct Co5300Display<'d, C> {
-    bus: QspiBus<'d>,
+    pub bus: QspiBus<'d>,
     reset: Output<'d>,
     width: u16,
     height: u16,
     col_offset: u16,
     row_offset: u16,
-    te_pin: Input<'d>,
+    pub te_pin: Input<'d>,
     color: PhantomData<C>,
+    swap: DmaTxBuf,
 }
 
 #[derive(Debug)]
@@ -151,7 +154,12 @@ impl<'d, C: Co5300ColorMode> Co5300Display<'d, C>
 where
     <C as embedded_graphics::pixelcolor::raw::ToBytes>::Bytes: core::convert::AsRef<[u8]>,
 {
-    pub async fn new(bus: QspiBus<'d>, reset: Output<'d>, te_pin: Input<'d>) -> Self {
+    pub async fn new(
+        bus: QspiBus<'d>,
+        reset: Output<'d>,
+        te_pin: Input<'d>,
+        swap: DmaTxBuf,
+    ) -> Self {
         let mut disp = Self {
             bus,
             reset,
@@ -160,6 +168,7 @@ where
             height: board::LCD_HEIGHT,
             col_offset: board::LCD_COL_OFFSET,
             row_offset: board::LCD_ROW_OFFSET,
+            swap,
             color: PhantomData,
         };
         disp.hw_reset_async().await;
@@ -186,6 +195,7 @@ where
             row_offset,
             te_pin,
             color: _,
+            swap,
         } = self;
         let mut new = Co5300Display {
             bus,
@@ -195,6 +205,7 @@ where
             col_offset,
             row_offset,
             te_pin,
+            swap,
             color: PhantomData,
         };
         new.apply_color();
@@ -275,21 +286,6 @@ where
         self.write_repeat(bytes.as_ref(), w as usize * h as usize);
     }
 
-    /// Get mutable reference to bus (for framebuffer flush).
-    #[inline(always)]
-    pub fn bus_mut(&mut self) -> &mut QspiBus<'d> {
-        &mut self.bus
-    }
-
-    #[inline(always)]
-    pub fn te(&self) -> &Input<'d> {
-        &self.te_pin
-    }
-    #[inline(always)]
-    pub fn te_mut(&mut self) -> &mut Input<'d> {
-        &mut self.te_pin
-    }
-
     pub fn wait_for_vsync(&mut self) -> impl Future<Output = ()> {
         self.te_pin.wait_for_high()
     }
@@ -355,19 +351,24 @@ pub struct PixelStream<'r, 'd, C: Co5300ColorMode>
 where
     <C as embedded_graphics::pixelcolor::raw::ToBytes>::Bytes: core::convert::AsRef<[u8]>,
 {
-    disp: &'r mut Co5300Display<'d, C>,
-    buffered: usize,
+    pub(crate) disp: &'r mut Co5300Display<'d, C>,
+    pub(crate) buffered: usize,
 }
 
 impl<C: Co5300ColorMode> PixelStream<'_, '_, C>
 where
     <C as embedded_graphics::pixelcolor::raw::ToBytes>::Bytes: core::convert::AsRef<[u8]>,
 {
-    pub async fn flush_if_needed_and_get_buf_async(&mut self) -> &mut [u8] {
+    pub async fn flush_if_needed_and_get_buf_async(
+        &mut self,
+        fill_buf: impl FnOnce(&mut [u8]) -> usize,
+    ) {
         if self.should_flush() {
-            self.flush_buf_async().await;
+            self.flush_buf_async(fill_buf).await;
+            return;
         }
-        self.buf_remaining()
+        let new = fill_buf(self.buf_remaining());
+        self.write(new);
     }
     pub fn flush_if_needed_and_get_buf(&mut self) -> &mut [u8] {
         if self.should_flush() {
@@ -388,24 +389,34 @@ where
     }
     #[inline(always)]
     pub fn should_flush(&self) -> bool {
-        self.buffered >= self.disp.bus.tx.len() / 2
+        self.buffered > self.disp.bus.tx.len().saturating_sub(256)
     }
-    pub fn flush_buf_async(&mut self) -> impl Future<Output = ()> {
+    pub async fn flush_buf_async(&mut self, fill_swap_with: impl FnOnce(&mut [u8]) -> usize) {
+        if self.buffered == 0 {
+            self.buffered = fill_swap_with(self.buf_remaining());
+            return;
+        }
         let Self { disp, buffered } = self;
-        disp.bus
-            .spi
-            .half_duplex_write_and_wait(
+        let mut new = 0;
+        embassy_futures::join::join(
+            disp.bus.spi.half_duplex_write_and_wait(
                 DataMode::Quad,
                 Command::None,
                 Address::None,
                 0,
                 *buffered,
                 &mut disp.bus.tx,
-            )
-            .map(|res| {
-                res.unwrap();
-                *buffered = 0
-            })
+            ),
+            async {
+                let buf = disp.swap.as_mut_slice();
+                new = fill_swap_with(buf);
+            },
+        )
+        .await
+        .0
+        .unwrap();
+        core::mem::swap(&mut self.disp.swap, &mut self.disp.bus.tx);
+        self.buffered = new;
     }
     pub fn flush_buf(&mut self) {
         if self.buffered == 0 {
@@ -448,78 +459,78 @@ where
     }
 }
 
-impl<C: Co5300ColorMode + PixelColor> DrawTarget for Co5300Display<'_, C>
-where
-    <C as embedded_graphics::pixelcolor::raw::ToBytes>::Bytes: core::convert::AsRef<[u8]>,
-{
-    type Color = C;
-    type Error = DisplayError;
-
-    fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
-    where
-        I: IntoIterator<Item = Pixel<Self::Color>>,
-    {
-        // CO5300 requires minimum 2x2 pixel writes.
-        // Draw each pixel as a 2x2 block.
-        for Pixel(coord, color) in pixels.into_iter() {
-            if coord.x >= 0
-                && coord.x < self.width as i32
-                && coord.y >= 0
-                && coord.y < self.height as i32
-            {
-                // Write 2x2 block (4 pixels)
-                self.write_pixels_area(coord.x as u16, coord.y as u16, 2, 2, color);
-            }
-        }
-        Ok(())
-    }
-
-    fn fill_contiguous<I>(&mut self, area: &Rectangle, colors: I) -> Result<(), Self::Error>
-    where
-        I: IntoIterator<Item = Self::Color>,
-    {
-        let area = area.intersection(&Rectangle::new(
-            Point::zero(),
-            Size::new(self.width as u32, self.height as u32),
-        ));
-
-        if area.size.width == 0 || area.size.height == 0 {
-            return Ok(());
-        }
-
-        self.set_addr_window(
-            area.top_left.x as u16,
-            area.top_left.y as u16,
-            area.size.width as u16,
-            area.size.height as u16,
-        );
-
-        let mut stream = self.begin_stream();
-        for color in colors.into_iter() {
-            let raw = color.to_be_bytes();
-            let raw = raw.as_ref();
-            stream.flush_if_needed_and_get_buf()[..C::BYTES_PER_PIXEL].copy_from_slice(raw);
-            stream.write(C::BYTES_PER_PIXEL);
-        }
-        stream.flush_buf();
-        stream.end();
-
-        Ok(())
-    }
-
-    fn fill_solid(&mut self, area: &Rectangle, color: Self::Color) -> Result<(), Self::Error> {
-        let area = area.intersection(&Rectangle::new(
-            Point::zero(),
-            Size::new(self.width as u32, self.height as u32),
-        ));
-
-        self.write_pixels_area(
-            area.top_left.x as u16,
-            area.top_left.y as u16,
-            area.size.width as u16,
-            area.size.height as u16,
-            color,
-        );
-        Ok(())
-    }
-}
+// impl<C: Co5300ColorMode + PixelColor> DrawTarget for Co5300Display<'_, C>
+// where
+//     <C as embedded_graphics::pixelcolor::raw::ToBytes>::Bytes: core::convert::AsRef<[u8]>,
+// {
+//     type Color = C;
+//     type Error = DisplayError;
+//
+//     fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
+//     where
+//         I: IntoIterator<Item = Pixel<Self::Color>>,
+//     {
+//         // CO5300 requires minimum 2x2 pixel writes.
+//         // Draw each pixel as a 2x2 block.
+//         for Pixel(coord, color) in pixels.into_iter() {
+//             if coord.x >= 0
+//                 && coord.x < self.width as i32
+//                 && coord.y >= 0
+//                 && coord.y < self.height as i32
+//             {
+//                 // Write 2x2 block (4 pixels)
+//                 self.write_pixels_area(coord.x as u16, coord.y as u16, 2, 2, color);
+//             }
+//         }
+//         Ok(())
+//     }
+//
+//     fn fill_contiguous<I>(&mut self, area: &Rectangle, colors: I) -> Result<(), Self::Error>
+//     where
+//         I: IntoIterator<Item = Self::Color>,
+//     {
+//         let area = area.intersection(&Rectangle::new(
+//             Point::zero(),
+//             Size::new(self.width as u32, self.height as u32),
+//         ));
+//
+//         if area.size.width == 0 || area.size.height == 0 {
+//             return Ok(());
+//         }
+//
+//         self.set_addr_window(
+//             area.top_left.x as u16,
+//             area.top_left.y as u16,
+//             area.size.width as u16,
+//             area.size.height as u16,
+//         );
+//
+//         let mut stream = self.begin_stream();
+//         for color in colors.into_iter() {
+//             let raw = color.to_be_bytes();
+//             let raw = raw.as_ref();
+//             stream.flush_if_needed_and_get_buf()[..C::BYTES_PER_PIXEL].copy_from_slice(raw);
+//             stream.write(C::BYTES_PER_PIXEL);
+//         }
+//         stream.flush_buf();
+//         stream.end();
+//
+//         Ok(())
+//     }
+//
+//     fn fill_solid(&mut self, area: &Rectangle, color: Self::Color) -> Result<(), Self::Error> {
+//         let area = area.intersection(&Rectangle::new(
+//             Point::zero(),
+//             Size::new(self.width as u32, self.height as u32),
+//         ));
+//
+//         self.write_pixels_area(
+//             area.top_left.x as u16,
+//             area.top_left.y as u16,
+//             area.size.width as u16,
+//             area.size.height as u16,
+//             color,
+//         );
+//         Ok(())
+//     }
+// }

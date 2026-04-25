@@ -96,25 +96,35 @@ where
         }
     }
 
-    /// VSync flush for watchface / menus.
-    pub async fn flush_vsync(&self, display: &mut Co5300Display<'_, C>) {
-        display.wait_for_vsync().await;
-        self.flush(display).await;
-    }
+    // /// VSync flush for watchface / menus.
+    // pub async fn flush_vsync(&self, display: &mut Co5300Display<'_, C>) {
+    //     display.wait_for_vsync().await;
+    //     self.flush(display).await;
+    // }
 
     /// Flush the entire framebuffer to the display via DMA QSPI.
     pub async fn flush(&self, display: &mut Co5300Display<'_, C>) {
         display.set_addr_window(0, 0, WIDTH as u16, HEIGHT as u16);
         let mut stream = display.begin_stream_async().await;
         let mut remaining = &self.buf[..];
+
+        let buf = stream.buf_remaining();
+        let chunk = buf.len().min(remaining.len());
+        let captured = remaining.split_off(..chunk).unwrap();
+        buf[..chunk].copy_from_slice(captured);
+        stream.write(chunk);
+
         while !remaining.is_empty() {
-            let buf = stream.buf_remaining();
-            let chunk = buf.len().min(remaining.len());
-            let captured = remaining.split_off(..chunk).unwrap();
-            buf[..chunk].copy_from_slice(captured);
-            stream.write(chunk);
-            stream.flush_buf_async().await;
+            stream
+                .flush_buf_async(|buf| {
+                    let chunk = buf.len().min(remaining.len());
+                    let captured = remaining.split_off(..chunk).unwrap();
+                    buf[..chunk].copy_from_slice(captured);
+                    chunk
+                })
+                .await;
         }
+        stream.flush_buf_async(|_| 0).await;
         stream.end();
     }
 
@@ -162,14 +172,26 @@ where
 
         display.set_addr_window(x0 as u16, y0 as u16, flush_w as u16, flush_h as u16);
         let mut stream = display.begin_stream_async().await;
-        for row in y0..(y0 + flush_h) {
+        let mut rows = (y0..y0 + flush_h).map(|row| {
             let start = row * WIDTH + x0;
             let end = start + flush_w;
-            let line = &self.buf[start * C::BYTES_PER_PIXEL..end * C::BYTES_PER_PIXEL];
-            stream.flush_if_needed_and_get_buf_async().await[..line.len()].copy_from_slice(line);
-            stream.write(line.len());
+            &self.buf[start * C::BYTES_PER_PIXEL..end * C::BYTES_PER_PIXEL]
+        });
+        let mut rem = rows.next().unwrap_or(&[]);
+        while !rem.is_empty() {
+            stream
+                .flush_if_needed_and_get_buf_async(|buf| {
+                    let chunk = buf.len().min(rem.len());
+                    let captured = rem.split_off(..chunk).unwrap();
+                    buf[..chunk].copy_from_slice(captured);
+                    chunk
+                })
+                .await;
+            if rem.is_empty() {
+                rem = rows.next().unwrap_or(&[]);
+            }
         }
-        stream.flush_buf_async().await;
+        stream.flush_buf_async(|_| 0).await;
         stream.end();
     }
 
