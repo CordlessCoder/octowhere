@@ -6,10 +6,8 @@ use core::marker::PhantomData;
 
 use embedded_graphics::pixelcolor::raw::ToBytes;
 use embedded_graphics::pixelcolor::{Gray8, Rgb565, Rgb888};
-use embedded_graphics_core::draw_target::DrawTarget;
 use embedded_graphics_core::geometry::{OriginDimensions, Size};
 use embedded_graphics_core::prelude::*;
-use embedded_graphics_core::primitives::Rectangle;
 
 use esp_hal::dma::DmaTxBuf;
 use esp_hal::gpio::{Input, Output};
@@ -18,8 +16,6 @@ use esp_hal::spi::master::{Address, Command, DataMode};
 use crate::board::{self, delay_ms, delay_ms_async, delay_us, delay_us_async};
 use crate::drivers::qspi_bus::{QSPIOperation, QspiBus};
 use crate::util::fill_buf_repeat;
-
-use embedded_graphics_core::geometry::Point;
 
 pub const X_OFFS: u16 = 6;
 pub const Y_OFFS: u16 = 0;

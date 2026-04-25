@@ -178,18 +178,28 @@ where
             &self.buf[start * C::BYTES_PER_PIXEL..end * C::BYTES_PER_PIXEL]
         });
         let mut rem = rows.next().unwrap_or(&[]);
-        while !rem.is_empty() {
+        let mut keep_going = true;
+        while keep_going {
             stream
-                .flush_if_needed_and_get_buf_async(|buf| {
-                    let chunk = buf.len().min(rem.len());
-                    let captured = rem.split_off(..chunk).unwrap();
-                    buf[..chunk].copy_from_slice(captured);
-                    chunk
+                .flush_if_needed_and_get_buf_async(|mut buf| {
+                    let mut new = 0;
+                    while !buf.is_empty() {
+                        let chunk = buf.len().min(rem.len());
+                        let captured = rem.split_off(..chunk).unwrap();
+                        let write_to = buf.split_off_mut(..chunk).unwrap();
+                        write_to.copy_from_slice(captured);
+                        new += chunk;
+                        if rem.is_empty() {
+                            let Some(next) = rows.next() else {
+                                keep_going = false;
+                                break;
+                            };
+                            rem = next;
+                        }
+                    }
+                    new
                 })
                 .await;
-            if rem.is_empty() {
-                rem = rows.next().unwrap_or(&[]);
-            }
         }
         stream.flush_buf_async(|_| 0).await;
         stream.end();

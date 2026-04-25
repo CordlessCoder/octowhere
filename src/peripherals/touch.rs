@@ -1,8 +1,6 @@
 use embedded_graphics::prelude::Size;
 use embedded_hal::digital::OutputPin;
 use embedded_hal_async::{digital::Wait, i2c::I2c};
-use esp_println::dbg;
-use futures::{FutureExt, Stream, TryFutureExt, TryStream, stream::FusedStream};
 use log::{Level, log};
 
 use crate::peripherals::i2c_helper;
