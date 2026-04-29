@@ -21,7 +21,7 @@ embassy-sync = "0.8"
 embassy-futures = "0.1"
 static_cell = { version = "2.1", features = ["nightly"] }
 
-embedded-graphics = "0.8"
+embedded-graphics = { version = "0.8", features = [] }
 embedded-graphics-core = "0.4"
 
 embedded-hal = "1.0"

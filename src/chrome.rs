@@ -8,6 +8,8 @@ pub const UPSCALE: usize = 1;
 pub const MEDIUM_FONT: &embedded_bitmap_fonts::BitmapFont<'static> = match UPSCALE {
     1 => &embedded_bitmap_fonts::terminus::FONT_16x32,
     2 => &embedded_bitmap_fonts::terminus::FONT_8x16,
+    3 => &embedded_bitmap_fonts::terminus::FONT_6x12,
+    4 => &embedded_bitmap_fonts::terminus::FONT_6x12,
     _ => todo!(),
 };
 const fn color_from_rgb(r: u8, g: u8, b: u8) -> Color {

@@ -17,6 +17,7 @@ use crate::drivers::co5300::DisplayError;
 use crate::util::{fill_buf_repeat, widening_copy};
 
 #[repr(align(32))]
+#[derive(Clone)]
 pub struct Framebuffer<
     const UPSCALE: usize,
     const N: usize,
@@ -143,7 +144,9 @@ where
                 .flush_if_needed_and_get_buf_async(|mut buf| {
                     let mut new = 0;
                     loop {
-                        let pre_scale_chunk = (buf.len() / UPSCALE / C::BYTES_PER_PIXEL * C::BYTES_PER_PIXEL).min(rem.len());
+                        let pre_scale_chunk = (buf.len() / UPSCALE / C::BYTES_PER_PIXEL
+                            * C::BYTES_PER_PIXEL)
+                            .min(rem.len());
                         if pre_scale_chunk == 0 {
                             break;
                         }

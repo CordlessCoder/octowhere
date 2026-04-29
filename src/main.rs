@@ -33,6 +33,7 @@ use octowhere::{
         rtc::Pcf85063aRtc,
         touch::{Cst9217, Cst9217Config, TouchData},
     },
+    util::Swap,
 };
 use static_cell::StaticCell;
 
@@ -41,8 +42,22 @@ use esp_backtrace as _;
 use tca9554::Tca9554;
 esp_bootloader_esp_idf::esp_app_desc!();
 
+type FB = Framebuffer<
+    UPSCALE,
+    {
+        octowhere::drivers::framebuffer::buffer_size::<Color>(
+            octowhere::board::LCD_WIDTH as usize / UPSCALE,
+            octowhere::board::LCD_HEIGHT as usize / UPSCALE,
+        )
+    },
+    { octowhere::board::LCD_WIDTH as usize / UPSCALE },
+    { octowhere::board::LCD_HEIGHT as usize / UPSCALE },
+    Color,
+>;
+
 static mut CORE1_STACK: esp_hal::system::Stack<8192> = esp_hal::system::Stack::new();
 static CORE1_EXECUTOR: StaticCell<esp_rtos::embassy::Executor> = StaticCell::new();
+static SWAP: Swap<FB, embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex> = todo!();
 
 #[embassy_executor::task]
 async fn second_core(_spawner: Spawner, gpio0: esp_hal::peripherals::GPIO0<'static>) {
@@ -96,7 +111,7 @@ impl Scalable for Circle {
 #[esp_rtos::main]
 async fn main(_spawner: Spawner) {
     esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 72 * 1024);
-    esp_alloc::heap_allocator!(size: 128 * 1024);
+    esp_alloc::heap_allocator!(size: 280 * 1024);
 
     // PERF: How low do we want to drop the clock speed?
     let mut peripherals =
@@ -156,8 +171,8 @@ async fn main(_spawner: Spawner) {
         exio.init().await.unwrap();
 
         let mut power = Axp2101Power::new(i2c.clone());
-        power.init().await.unwrap();
-        power.trim_adc_channels().await.unwrap();
+        // power.init().await.unwrap();
+        // power.trim_adc_channels().await.unwrap();
 
         let mut rtc = Pcf85063aRtc::new(i2c.clone());
         rtc.init().await.unwrap();
@@ -401,6 +416,7 @@ async fn main(_spawner: Spawner) {
     //     touch_data = touch.read_touch_data().await.unwrap();
     // }
 
+    let mut swap = fb.clone();
     let mut ticker = Ticker::every(Duration::from_millis(1000 / 30));
     let mut frametime = Duration::MIN;
     let mut flush = Duration::MIN;

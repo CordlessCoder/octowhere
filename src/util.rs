@@ -1,3 +1,7 @@
+use core::{cell::UnsafeCell, sync::atomic::AtomicBool};
+
+use embassy_sync::waitqueue::AtomicWaker;
+
 const CHUNK_SIZE: usize = 32;
 #[inline]
 pub fn fill_buf_repeat<'b>(mut buf: &'b mut [u8], mut data: &[u8], mut n: usize) -> &'b mut [u8] {
@@ -41,3 +45,67 @@ pub fn widening_copy<const FACTOR: usize>(buf: &mut [u8], data: &[u8], width: us
             });
     }
 }
+
+// Shared:
+// - Val1
+// - Val2
+pub struct Swap<T> {
+    val1: UnsafeCell<T>,
+    val2: UnsafeCell<T>,
+    thread1_wants_val2: AtomicBool,
+    thread2_wants_val1: AtomicBool,
+    waker1: AtomicWaker,
+    waker2: AtomicWaker,
+}
+
+impl<T> Swap<T> {
+    pub const fn new(val1: T, val2: T) -> Self {
+        Self {
+            val1: UnsafeCell::new(val1),
+            val2: UnsafeCell::new(val2),
+            thread1_wants_val2: AtomicBool::new(false),
+            thread2_wants_val1: AtomicBool::new(false),
+            waker1: AtomicWaker::new(),
+            waker2: AtomicWaker::new(),
+        }
+    }
+    pub fn split<'s>(&'s mut self) -> (SwapThread<'s, T>, SwapThread<'s, T>) {
+        self.thread1_wants_val2 = AtomicBool::new(false);
+        self.thread2_wants_val1 = AtomicBool::new(false);
+        (
+            SwapThread {
+                swap: self,
+                has_val1: true,
+            },
+            SwapThread {
+                swap: self,
+                has_val1: false,
+            },
+        )
+    }
+    pub fn release(self) -> (T, T) {
+        (self.val1.into_inner(), self.val2.into_inner())
+    }
+}
+
+pub struct SwapThread<'s, T> {
+    swap: &'s Swap<T>,
+    has_val1: bool,
+}
+
+impl<'s, T> SwapThread<'s, T> {
+    pub fn get(&mut self) -> &mut T {
+        let ptr = if self.has_val1 {
+            self.swap.val1.get()
+        } else {
+            self.swap.val2.get()
+        };
+        unsafe { &mut *ptr }
+    }
+    pub async fn swap(&mut self) {}
+}
+
+unsafe impl<T: Send> Send for Swap<T> {}
+unsafe impl<T: Sync> Sync for Swap<T> {}
+unsafe impl<T: Sync> Send for SwapThread<'_, T> {}
+unsafe impl<T: Sync> Sync for SwapThread<'_, T> {}
