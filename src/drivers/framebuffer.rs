@@ -14,14 +14,15 @@ use crate::board;
 use crate::drivers::co5300::Co5300ColorMode;
 use crate::drivers::co5300::Co5300Display;
 use crate::drivers::co5300::DisplayError;
-use crate::util::fill_buf_repeat;
+use crate::util::{fill_buf_repeat, widening_copy};
 
-const WIDTH: usize = board::LCD_WIDTH as usize;
-const HEIGHT: usize = board::LCD_HEIGHT as usize;
-const PIXEL_COUNT: usize = WIDTH * HEIGHT;
-
-pub struct Framebuffer<const N: usize, C: Co5300ColorMode>
-where
+pub struct Framebuffer<
+    const UPSCALE: usize,
+    const N: usize,
+    const WIDTH: usize,
+    const HEIGHT: usize,
+    C: Co5300ColorMode,
+> where
     <C as embedded_graphics::pixelcolor::raw::ToBytes>::Bytes: core::convert::AsRef<[u8]>,
 {
     buf: [u8; N],
@@ -32,18 +33,25 @@ where
 ///
 /// This function is a workaround for current limitations in Rust const generics.
 /// It can be used to calculate the `N` parameter based on the size and color type of the framebuffer.
-pub const fn buffer_size<C: Co5300ColorMode>() -> usize
+pub const fn buffer_size<C: Co5300ColorMode>(width: usize, height: usize) -> usize
 where
     <C as embedded_graphics::pixelcolor::raw::ToBytes>::Bytes: core::convert::AsRef<[u8]>,
 {
-    WIDTH * HEIGHT * C::BYTES_PER_PIXEL
+    width * height * C::BYTES_PER_PIXEL
 }
 
-impl<const N: usize, C: Co5300ColorMode> Framebuffer<N, C>
+impl<
+    const UPSCALE: usize,
+    const N: usize,
+    const WIDTH: usize,
+    const HEIGHT: usize,
+    C: Co5300ColorMode,
+> Framebuffer<UPSCALE, N, WIDTH, HEIGHT, C>
 where
     <C as embedded_graphics::pixelcolor::raw::ToBytes>::Bytes: core::convert::AsRef<[u8]>,
 {
-    const BUFFER_SIZE: usize = buffer_size::<C>();
+    const PIXEL_COUNT: usize = WIDTH * HEIGHT;
+    const BUFFER_SIZE: usize = buffer_size::<C>(WIDTH, HEIGHT);
 
     /// Static assertion that N is correct.
     // MSRV: remove N when constant generic expressions are stabilized
@@ -66,7 +74,7 @@ where
     /// Clear the entire framebuffer with a color.
     pub fn clear_color(&mut self, color: C) {
         let raw = color.to_be_bytes();
-        fill_buf_repeat(self.buf.as_mut_slice(), raw.as_ref(), PIXEL_COUNT);
+        fill_buf_repeat(self.buf.as_mut_slice(), raw.as_ref(), Self::PIXEL_COUNT);
     }
 
     /// Set a single pixel
@@ -104,23 +112,57 @@ where
 
     /// Flush the entire framebuffer to the display via DMA QSPI.
     pub async fn flush(&self, display: &mut Co5300Display<'_, C>) {
-        display.set_addr_window(0, 0, WIDTH as u16, HEIGHT as u16);
+        display.set_addr_window(0, 0, (WIDTH * UPSCALE) as u16, (HEIGHT * UPSCALE) as u16);
         let mut stream = display.begin_stream_async().await;
         let mut remaining = &self.buf[..];
 
-        let buf = stream.buf_remaining();
-        let chunk = buf.len().min(remaining.len());
-        let captured = remaining.split_off(..chunk).unwrap();
-        buf[..chunk].copy_from_slice(captured);
-        stream.write(chunk);
+        let mut rows = self
+            .buf
+            .chunks_exact(WIDTH * C::BYTES_PER_PIXEL)
+            .flat_map(|row| core::iter::repeat_n(row, UPSCALE));
 
-        while !remaining.is_empty() {
+        // while !remaining.is_empty() {
+        //         stream
+        //             .flush_buf_async(|buf| {
+        //                 let pre_scale_chunk = (buf.len() / UPSCALE).min(remaining.len());
+        //                 let captured = remaining.split_off(..pre_scale_chunk).unwrap();
+        //                 widening_copy::<UPSCALE>(
+        //                     &mut buf[..pre_scale_chunk * UPSCALE],
+        //                     captured,
+        //                     C::BYTES_PER_PIXEL,
+        //                 );
+        //                 pre_scale_chunk * UPSCALE
+        //             })
+        //             .await;
+        //     }
+        let mut rem = rows.next().unwrap_or(&[]);
+        let mut keep_going = true;
+        while keep_going {
             stream
-                .flush_buf_async(|buf| {
-                    let chunk = buf.len().min(remaining.len());
-                    let captured = remaining.split_off(..chunk).unwrap();
-                    buf[..chunk].copy_from_slice(captured);
-                    chunk
+                .flush_if_needed_and_get_buf_async(|mut buf| {
+                    let mut new = 0;
+                    loop {
+                        let pre_scale_chunk = (buf.len() / UPSCALE / C::BYTES_PER_PIXEL * C::BYTES_PER_PIXEL).min(rem.len());
+                        if pre_scale_chunk == 0 {
+                            break;
+                        }
+                        let captured = rem.split_off(..pre_scale_chunk).unwrap();
+                        widening_copy::<UPSCALE>(
+                            buf.split_off_mut(..pre_scale_chunk * UPSCALE).unwrap(),
+                            captured,
+                            C::BYTES_PER_PIXEL,
+                        );
+
+                        new += pre_scale_chunk * UPSCALE;
+                        if rem.is_empty() {
+                            let Some(next) = rows.next() else {
+                                keep_going = false;
+                                break;
+                            };
+                            rem = next;
+                        }
+                    }
+                    new
                 })
                 .await;
         }
@@ -216,7 +258,13 @@ where
     }
 }
 
-impl<const N: usize, C: Co5300ColorMode> OriginDimensions for Box<Framebuffer<N, C>>
+impl<
+    const UPSCALE: usize,
+    const N: usize,
+    const WIDTH: usize,
+    const HEIGHT: usize,
+    C: Co5300ColorMode,
+> OriginDimensions for Framebuffer<UPSCALE, N, WIDTH, HEIGHT, C>
 where
     <C as embedded_graphics::pixelcolor::raw::ToBytes>::Bytes: core::convert::AsRef<[u8]>,
 {
@@ -225,7 +273,13 @@ where
     }
 }
 
-impl<const N: usize, C: Co5300ColorMode> DrawTarget for Box<Framebuffer<N, C>>
+impl<
+    const UPSCALE: usize,
+    const N: usize,
+    const WIDTH: usize,
+    const HEIGHT: usize,
+    C: Co5300ColorMode,
+> DrawTarget for Framebuffer<UPSCALE, N, WIDTH, HEIGHT, C>
 where
     <C as embedded_graphics::pixelcolor::raw::ToBytes>::Bytes: core::convert::AsRef<[u8]>,
 {

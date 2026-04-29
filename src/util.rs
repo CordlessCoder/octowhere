@@ -9,3 +9,18 @@ pub fn fill_buf_repeat<'b>(buf: &'b mut [u8], data: &[u8], n: usize) -> &'b mut 
 
     &mut buf[..data.len() * n]
 }
+
+pub fn widening_copy<const FACTOR: usize>(buf: &mut [u8], data: &[u8], width: usize) {
+    const {
+        assert!(FACTOR != 0);
+    }
+    if const { FACTOR == 1 } {
+        buf.copy_from_slice(data);
+    } else {
+        buf.chunks_exact_mut(width * FACTOR)
+            .zip(data.chunks_exact(width))
+            .for_each(|(chunk, source)| {
+                fill_buf_repeat(chunk, source, FACTOR);
+            });
+    }
+}
