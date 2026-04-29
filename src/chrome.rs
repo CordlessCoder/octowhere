@@ -4,6 +4,12 @@ use embedded_graphics::{pixelcolor::Rgb888, prelude::RgbColor};
 // Gray8 is 3x smaller than Rgb888... but I'm not sure we love monochrome.
 pub type Color = embedded_graphics::pixelcolor::Rgb565;
 
+pub const UPSCALE: usize = 1;
+pub const MEDIUM_FONT: &embedded_bitmap_fonts::BitmapFont<'static> = match UPSCALE {
+    1 => &embedded_bitmap_fonts::terminus::FONT_16x32,
+    2 => &embedded_bitmap_fonts::terminus::FONT_8x16,
+    _ => todo!(),
+};
 const fn color_from_rgb(r: u8, g: u8, b: u8) -> Color {
     Color::new(
         (r as f64 / 255. * Color::MAX_R as f64) as u8,
@@ -36,6 +42,11 @@ const fn color_from_hex(hex: &str) -> Color {
 
 pub const LIME: Color = color_from_hex("#c0fe04");
 pub const RED: Color = color_from_hex("#f24723");
+pub const PURPLE: Color = color_from_hex("#5500e4");
+pub const ORANGE_RED: Color = color_from_hex("#f15227");
+pub const GRAY: Color = color_from_hex("#999999");
+pub const WHITE: Color = color_from_hex("#ffffff");
+
 pub const ACCENT: Color = LIME;
 // color-background: var(--color-black);
 // color-foreground: var(--color-white);

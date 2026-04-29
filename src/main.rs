@@ -26,7 +26,7 @@ use esp_hal::{
 };
 use esp_println::println;
 use octowhere::{
-    color::{self, Color},
+    chrome::{self, Color, UPSCALE},
     drivers::{co5300::Co5300Display, framebuffer::Framebuffer, qspi_bus::QspiBus},
     peripherals::{
         power::Axp2101Power,
@@ -65,7 +65,6 @@ fn bench<R>(the_thing: impl FnOnce() -> R, name: &str) -> R {
     ret
 }
 
-const UPSCALE: usize = 2;
 trait Scalable {
     fn scale(self) -> Self;
 }
@@ -265,7 +264,7 @@ async fn main(_spawner: Spawner) {
             { octowhere::board::LCD_HEIGHT as usize / UPSCALE },
             Color,
         >::alloc();
-        fb.clear_color(Color::CSS_DIM_GRAY);
+        fb.clear_color(chrome::GRAY);
         fb.flush(&mut display).await;
         println!("[FB] OK");
         (display, fb)
@@ -419,20 +418,19 @@ async fn main(_spawner: Spawner) {
             text::{Alignment, Text},
         };
         // Create styles used by the drawing operations.
-        let thin_stroke = PrimitiveStyle::with_stroke(Color::BLUE, 4 / UPSCALE as u32);
-        let thick_stroke = PrimitiveStyle::with_stroke(color::RED, 8 / UPSCALE as u32);
+        let thin_stroke = PrimitiveStyle::with_stroke(chrome::PURPLE, 4 / UPSCALE as u32);
+        let thick_stroke = PrimitiveStyle::with_stroke(chrome::RED, 8 / UPSCALE as u32);
         let border_stroke = PrimitiveStyleBuilder::new()
             .stroke_color(if touch_data != TouchData::CoverGesture {
-                color::LIME
+                chrome::LIME
             } else {
-                color::RED
+                chrome::RED
             })
             .stroke_width(8 / UPSCALE as u32)
             .stroke_alignment(StrokeAlignment::Inside)
             .build();
         let fill = PrimitiveStyle::with_fill(Color::CSS_GRAY);
-        let character_style =
-            TextStyle::new(&embedded_bitmap_fonts::terminus::FONT_8x16, color::LIME);
+        let character_style = TextStyle::new(chrome::MEDIUM_FONT, chrome::WHITE);
 
         let yoffset = 200 / UPSCALE as i32;
 
@@ -469,19 +467,26 @@ async fn main(_spawner: Spawner) {
             .draw(&mut *fb)
             .unwrap();
 
-        match touch_data {
+        match &touch_data {
             TouchData::Points(points) => {
+                let size = 64 / UPSCALE;
                 for point in points {
                     // Draw a circle with a 3px wide stroke.
-                    Circle::new(Point::new(point.x as i32, point.y as i32), 40)
-                        .scale()
-                        .into_styled(
-                            PrimitiveStyleBuilder::new()
-                                .fill_color(Color::CSS_CYAN)
-                                .build(),
+                    Circle::new(
+                        Point::new(
+                            point.x as i32 - size as i32 / 2,
+                            point.y as i32 - size as i32 / 2,
                         )
-                        .draw(&mut *fb)
-                        .unwrap();
+                        .scale(),
+                        size as u32,
+                    )
+                    .into_styled(
+                        PrimitiveStyleBuilder::new()
+                            .fill_color(Color::CSS_CYAN)
+                            .build(),
+                    )
+                    .draw(&mut *fb)
+                    .unwrap();
                 }
             }
             TouchData::CoverGesture => {}

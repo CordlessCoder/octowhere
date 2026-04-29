@@ -3,7 +3,7 @@
 extern crate alloc;
 
 pub mod board;
-pub mod color;
+pub mod chrome;
 pub mod drivers;
 pub mod peripherals;
 pub mod util;

@@ -16,6 +16,7 @@ use crate::drivers::co5300::Co5300Display;
 use crate::drivers::co5300::DisplayError;
 use crate::util::{fill_buf_repeat, widening_copy};
 
+#[repr(align(32))]
 pub struct Framebuffer<
     const UPSCALE: usize,
     const N: usize,

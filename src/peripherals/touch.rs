@@ -119,7 +119,7 @@ pub struct TouchPoint {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TouchData {
     CoverGesture,
-    Points(heapless::Vec<TouchPoint, 5, u8>),
+    Points(heapless::Vec<TouchPoint, 2, u8>),
 }
 
 impl<I: I2c, RST, INT, DELAY> Cst9217<I, INT, RST, DELAY> {
