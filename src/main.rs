@@ -1,4 +1,5 @@
 #![feature(impl_trait_in_assoc_type)]
+#![feature(type_alias_impl_trait)]
 #![no_std]
 #![no_main]
 // Now defaults to deny in Rust-2024, however abusing statics is necessary in the embedded world.
@@ -6,6 +7,7 @@
 #![expect(unused)]
 extern crate alloc;
 
+use alloc::boxed::Box;
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_executor::Spawner;
 use embassy_sync::{blocking_mutex::raw::NoopRawMutex, mutex::Mutex};
@@ -20,12 +22,13 @@ use esp_hal::{
     gpio::{Input, InputConfig, Level, Output, OutputConfig},
     i2c::master::I2c,
     interrupt::software::SoftwareInterruptControl,
-    spi,
+    peripherals, spi,
     time::Rate,
     timer::timg::TimerGroup,
 };
 use esp_println::println;
 use octowhere::{
+    board,
     chrome::{self, Color, UPSCALE},
     drivers::{co5300::Co5300Display, framebuffer::Framebuffer, qspi_bus::QspiBus},
     peripherals::{
@@ -33,7 +36,7 @@ use octowhere::{
         rtc::Pcf85063aRtc,
         touch::{Cst9217, Cst9217Config, TouchData},
     },
-    util::Swap,
+    util::{Swap, SwapThread, fill_buf_repeat},
 };
 use static_cell::StaticCell;
 
@@ -41,6 +44,20 @@ use esp_alloc as _;
 use esp_backtrace as _;
 use tca9554::Tca9554;
 esp_bootloader_esp_idf::esp_app_desc!();
+
+struct SecondCore {
+    gpio4: peripherals::GPIO4<'static>,
+    gpio5: peripherals::GPIO5<'static>,
+    gpio6: peripherals::GPIO6<'static>,
+    gpio7: peripherals::GPIO7<'static>,
+    gpio12: peripherals::GPIO12<'static>,
+    gpio13: peripherals::GPIO13<'static>,
+    gpio38: peripherals::GPIO38<'static>,
+    gpio39: peripherals::GPIO39<'static>,
+    dma_ch0: peripherals::DMA_CH0<'static>,
+    spi2: peripherals::SPI2<'static>,
+    swap: SwapThread<'static, SwapState>,
+}
 
 type FB = Framebuffer<
     UPSCALE,
@@ -57,19 +74,92 @@ type FB = Framebuffer<
 
 static mut CORE1_STACK: esp_hal::system::Stack<8192> = esp_hal::system::Stack::new();
 static CORE1_EXECUTOR: StaticCell<esp_rtos::embassy::Executor> = StaticCell::new();
-static SWAP: Swap<FB, embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex> = todo!();
+static CORE1_INT: StaticCell<esp_rtos::embassy::Executor> = StaticCell::new();
+static SWAP: StaticCell<Swap<SwapState>> = StaticCell::new();
 
 #[embassy_executor::task]
-async fn second_core(_spawner: Spawner, gpio0: esp_hal::peripherals::GPIO0<'static>) {
+async fn second_core(
+    _spawner: Spawner,
+    gpio0: esp_hal::peripherals::GPIO0<'static>,
+    io: SecondCore,
+) {
     let mut gpio0 = Input::new(gpio0, InputConfig::default());
-    let gpio0 = async {
-        loop {
-            gpio0.wait_for_any_edge().await;
-            println!("GPIO0: {:?}", gpio0.level());
-        }
-    };
-    gpio0.await;
+    // let gpio0 = async {
+    //     loop {
+    //         gpio0.wait_for_any_edge().await;
+    //         println!("GPIO0: {:?}", gpio0.level());
+    //     }
+    // };
+    // gpio0.await;
     // embassy_futures::join::join(gpio0, async {}).await;
+    let SecondCore {
+        gpio4,
+        gpio5,
+        gpio6,
+        gpio7,
+        gpio12,
+        gpio13,
+        gpio38,
+        gpio39,
+        dma_ch0,
+        spi2,
+        mut swap,
+    } = io;
+    let spi_config = spi::master::Config::default()
+        .with_frequency(Rate::from_mhz(80))
+        .with_mode(spi::Mode::_0);
+
+    let dma_tx = dma_tx_buffer!(4095 * 2).unwrap();
+    let dma_tx_swap = dma_tx_buffer!(4095 * 2).unwrap();
+
+    let reset = Output::new(gpio39, Level::High, OutputConfig::default());
+    let te = Input::new(gpio13, InputConfig::default());
+    let cs = Output::new(gpio12, Level::High, OutputConfig::default());
+
+    let spi = spi::master::Spi::new(spi2, spi_config)
+        .expect("SPI failed")
+        .with_sck(gpio38)
+        .with_sio0(gpio4)
+        .with_sio1(gpio5)
+        .with_sio2(gpio6)
+        .with_sio3(gpio7)
+        .with_dma(dma_ch0)
+        .into_async();
+    let spi = QspiBus::new(spi, dma_tx, cs);
+    let mut display = Co5300Display::new(spi, reset, te, dma_tx_swap).await;
+    display.set_brightness(120);
+
+    println!("[DISPLAY] OK");
+
+    let mut prev_swap_spi = Duration::MIN;
+    loop {
+        let state = swap.get();
+        let SwapState {
+            fb,
+            vsync_wait,
+            spi_time,
+            swap_draw,
+            swap_spi,
+        } = state;
+
+        let start = Instant::now();
+
+        display.wait_for_vsync().await;
+
+        *vsync_wait = start.elapsed();
+
+        fb.flush(&mut display, |pixels| {
+            fill_buf_repeat(pixels, &[0], pixels.len());
+        })
+        .await;
+
+        *spi_time = start.elapsed() - *vsync_wait;
+
+        *swap_spi = prev_swap_spi;
+        let before_swap = start.elapsed();
+        swap.swap().await;
+        prev_swap_spi = start.elapsed() - before_swap;
+    }
 }
 
 fn bench<R>(the_thing: impl FnOnce() -> R, name: &str) -> R {
@@ -108,6 +198,14 @@ impl Scalable for Circle {
     }
 }
 
+struct SwapState {
+    fb: Box<FB>,
+    vsync_wait: Duration,
+    spi_time: Duration,
+    swap_draw: Duration,
+    swap_spi: Duration,
+}
+
 #[esp_rtos::main]
 async fn main(_spawner: Spawner) {
     esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 72 * 1024);
@@ -116,7 +214,10 @@ async fn main(_spawner: Spawner) {
     // PERF: How low do we want to drop the clock speed?
     let mut peripherals =
         esp_hal::init(esp_hal::Config::default().with_cpu_clock(esp_hal::clock::CpuClock::_240MHz));
-    let sw_int = SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
+    // This is questionably safe, logically there should be no issue with raising interrupts
+    // accross cores.
+    let sw_int: SoftwareInterruptControl<'static> =
+        SoftwareInterruptControl::new(unsafe { peripherals.SW_INTERRUPT.clone_unchecked() });
 
     let psram_config = esp_hal::psram::PsramConfig {
         mode: esp_hal::psram::PsramMode::OctalSpi,
@@ -130,21 +231,6 @@ async fn main(_spawner: Spawner) {
     let timg0 = TimerGroup::new(peripherals.TIMG0);
 
     esp_rtos::start(timg0.timer0, sw_int.software_interrupt0);
-
-    // PERF: We want to utilize cores fairly evenly because running both uses little more power
-    // than running just one.
-    esp_rtos::start_second_core(
-        peripherals.CPU_CTRL.reborrow(),
-        sw_int.software_interrupt1,
-        // SAFETY: This static mut value must not be accessed ever again, anywhere
-        unsafe { &mut CORE1_STACK },
-        || {
-            let executor = CORE1_EXECUTOR.init_with(esp_rtos::embassy::Executor::new);
-            executor.run(|spawner| {
-                spawner.spawn(second_core(spawner, peripherals.GPIO0).unwrap());
-            })
-        },
-    );
 
     esp_println::logger::init_logger_from_env();
 
@@ -167,131 +253,73 @@ async fn main(_spawner: Spawner) {
     // this has to go :(
     let mut exio = Tca9554::new(i2c.clone(), tca9554::Address::standard());
 
-    let i2c_peripherals = async {
-        exio.init().await.unwrap();
+    exio.init().await.unwrap();
 
-        let mut power = Axp2101Power::new(i2c.clone());
-        // power.init().await.unwrap();
-        // power.trim_adc_channels().await.unwrap();
+    let mut power = Axp2101Power::new(i2c.clone());
+    // power.init().await.unwrap();
+    // power.trim_adc_channels().await.unwrap();
 
-        let mut rtc = Pcf85063aRtc::new(i2c.clone());
-        rtc.init().await.unwrap();
-        println!("[RTC] OK");
+    let mut rtc = Pcf85063aRtc::new(i2c.clone());
+    rtc.init().await.unwrap();
+    println!("[RTC] OK");
 
-        let lpf = ph_qmi8658::LowPassFilterMode::OdrPercent2_62;
-        let config = ph_qmi8658::Config {
-            accel: Some(ph_qmi8658::AccelConfig {
-                range: accel_range,
-                odr: ph_qmi8658::AccelOutputDataRate::Hz125,
-                lpf: Some(lpf),
-            }),
-            gyro: Some(ph_qmi8658::GyroConfig {
-                range: gyro_range,
-                odr: ph_qmi8658::GyroOutputDataRate::Hz125,
-                lpf: Some(lpf),
-            }),
-        };
-
-        let imu_int2 = Input::new(peripherals.GPIO21, InputConfig::default());
-
-        let mut imu = ph_qmi8658::Qmi8658::with_i2c_config(
-            i2c.clone(),
-            None::<core::convert::Infallible>,
-            Some(imu_int2),
-            config,
-            ph_qmi8658::I2cConfig::new(0x6B),
-        );
-        imu.init(&mut embassy_time::Delay).await.unwrap();
-        // imu.apply_interrupt_config(ph_qmi8658::InterruptConfig {
-        //     ctrl9_handshake_statusint: false,
-        //     motion_pin: ph_qmi8658::InterruptPin::Int2,
-        //     pedometer: false,
-        //     significant_motion: false,
-        //     no_motion: false,
-        //     any_motion: false,
-        //     tap: false,
-        // })
-        // .await
-        // .unwrap();
-        imu.set_mode_with_delay(
-            &mut embassy_time::Delay,
-            ph_qmi8658::OperatingMode::AccelGyroOnly,
-        )
-        .await
-        .unwrap();
-
-        println!("[IMU] INIT");
-
-        let touch_rst = Output::new(peripherals.GPIO40, Level::High, OutputConfig::default());
-        let touch_int = Input::new(peripherals.GPIO11, InputConfig::default());
-        let mut touch = Cst9217::new(i2c.clone(), touch_rst, touch_int, embassy_time::Delay);
-        touch.init().await.unwrap();
-        touch.set_config(Cst9217Config {
-            mirror_x: true,
-            mirror_y: true,
-            scale_x: None,
-            scale_y: None,
-            swap_xy: false,
-        });
-        let res = touch.resolution();
-        println!("[TOUCH] OK, Resolution: {res}");
-
-        (power, rtc, imu, touch)
+    let lpf = ph_qmi8658::LowPassFilterMode::OdrPercent2_62;
+    let config = ph_qmi8658::Config {
+        accel: Some(ph_qmi8658::AccelConfig {
+            range: accel_range,
+            odr: ph_qmi8658::AccelOutputDataRate::Hz125,
+            lpf: Some(lpf),
+        }),
+        gyro: Some(ph_qmi8658::GyroConfig {
+            range: gyro_range,
+            odr: ph_qmi8658::GyroOutputDataRate::Hz125,
+            lpf: Some(lpf),
+        }),
     };
 
-    let display = async {
-        let spi_config = spi::master::Config::default()
-            .with_frequency(Rate::from_mhz(80))
-            .with_mode(spi::Mode::_0);
+    let imu_int2 = Input::new(peripherals.GPIO21, InputConfig::default());
 
-        let dma_tx = dma_tx_buffer!(4095 * 2).unwrap();
-        let dma_tx_swap = dma_tx_buffer!(4095 * 2).unwrap();
+    let mut imu = ph_qmi8658::Qmi8658::with_i2c_config(
+        i2c.clone(),
+        None::<core::convert::Infallible>,
+        Some(imu_int2),
+        config,
+        ph_qmi8658::I2cConfig::new(0x6B),
+    );
+    imu.init(&mut embassy_time::Delay).await.unwrap();
+    // imu.apply_interrupt_config(ph_qmi8658::InterruptConfig {
+    //     ctrl9_handshake_statusint: false,
+    //     motion_pin: ph_qmi8658::InterruptPin::Int2,
+    //     pedometer: false,
+    //     significant_motion: false,
+    //     no_motion: false,
+    //     any_motion: false,
+    //     tap: false,
+    // })
+    // .await
+    // .unwrap();
+    imu.set_mode_with_delay(
+        &mut embassy_time::Delay,
+        ph_qmi8658::OperatingMode::AccelGyroOnly,
+    )
+    .await
+    .unwrap();
 
-        let reset = Output::new(peripherals.GPIO39, Level::High, OutputConfig::default());
-        let te = Input::new(peripherals.GPIO13, InputConfig::default());
-        let cs = Output::new(peripherals.GPIO12, Level::High, OutputConfig::default());
+    println!("[IMU] INIT");
 
-        let spi = spi::master::Spi::new(peripherals.SPI2, spi_config)
-            .expect("SPI failed")
-            .with_sck(peripherals.GPIO38)
-            .with_sio0(peripherals.GPIO4)
-            .with_sio1(peripherals.GPIO5)
-            .with_sio2(peripherals.GPIO6)
-            .with_sio3(peripherals.GPIO7)
-            .with_dma(peripherals.DMA_CH0)
-            .into_async();
-        let spi = QspiBus::new(spi, dma_tx, cs);
-        let mut display = Co5300Display::new(spi, reset, te, dma_tx_swap).await;
-
-        println!("[DISPLAY] OK");
-
-        // delay_ms_async(100).await;
-
-        let mut fb = Framebuffer::<
-            UPSCALE,
-            {
-                octowhere::drivers::framebuffer::buffer_size::<Color>(
-                    octowhere::board::LCD_WIDTH as usize / UPSCALE,
-                    octowhere::board::LCD_HEIGHT as usize / UPSCALE,
-                )
-            },
-            { octowhere::board::LCD_WIDTH as usize / UPSCALE },
-            { octowhere::board::LCD_HEIGHT as usize / UPSCALE },
-            Color,
-        >::alloc();
-        fb.clear_color(chrome::GRAY);
-        fb.flush(&mut display).await;
-        println!("[FB] OK");
-        (display, fb)
-    };
-
-    let ((power, _rtc, _imu, mut touch), (mut display, mut fb)) =
-        embassy_futures::join::join(i2c_peripherals, display).await;
-    // let (mut display, mut fb) = display.await;
-    display.set_brightness(120);
-
-    fb.clear_color(Color::BLACK);
-    fb.flush(&mut display).await;
+    let touch_rst = Output::new(peripherals.GPIO40, Level::High, OutputConfig::default());
+    let touch_int = Input::new(peripherals.GPIO11, InputConfig::default());
+    let mut touch = Cst9217::new(i2c.clone(), touch_rst, touch_int, embassy_time::Delay);
+    touch.init().await.unwrap();
+    touch.set_config(Cst9217Config {
+        mirror_x: true,
+        mirror_y: true,
+        scale_x: None,
+        scale_y: None,
+        swap_xy: false,
+    });
+    let res = touch.resolution();
+    println!("[TOUCH] OK, Resolution: {res}");
 
     // let mut ticker = Ticker::every(Duration::from_millis(1000 / 60));
     // let mut prev_touch_data = TouchData::Points(heapless::Vec::new());
@@ -416,13 +444,78 @@ async fn main(_spawner: Spawner) {
     //     touch_data = touch.read_touch_data().await.unwrap();
     // }
 
-    let mut swap = fb.clone();
+    let fb = Framebuffer::<
+        UPSCALE,
+        {
+            octowhere::drivers::framebuffer::buffer_size::<Color>(
+                octowhere::board::LCD_WIDTH as usize / UPSCALE,
+                octowhere::board::LCD_HEIGHT as usize / UPSCALE,
+            )
+        },
+        { octowhere::board::LCD_WIDTH as usize / UPSCALE },
+        { octowhere::board::LCD_HEIGHT as usize / UPSCALE },
+        Color,
+    >::alloc();
+    let swap_fb = fb.clone();
+    let swap: &'static mut Swap<SwapState> = SWAP.init_with(|| {
+        Swap::new(
+            SwapState {
+                fb: fb.clone(),
+                spi_time: Duration::MIN,
+                vsync_wait: Duration::MIN,
+                swap_draw: Duration::MIN,
+                swap_spi: Duration::MIN,
+            },
+            SwapState {
+                fb,
+                spi_time: Duration::MIN,
+                vsync_wait: Duration::MIN,
+                swap_draw: Duration::MIN,
+                swap_spi: Duration::MIN,
+            },
+        )
+    });
+    let (mut fb_st, second_core_swap) = swap.split();
+    // PERF: We want to utilize cores fairly evenly because running both uses little more power
+    // than running just one.
+    esp_rtos::start_second_core(
+        peripherals.CPU_CTRL.reborrow(),
+        sw_int.software_interrupt1,
+        // SAFETY: This static mut value must not be accessed ever again, anywhere
+        unsafe { &mut CORE1_STACK },
+        || {
+            let executor = CORE1_EXECUTOR.init_with(esp_rtos::embassy::Executor::new);
+            let io = SecondCore {
+                gpio4: peripherals.GPIO4,
+                gpio5: peripherals.GPIO5,
+                gpio6: peripherals.GPIO6,
+                gpio7: peripherals.GPIO7,
+                gpio12: peripherals.GPIO12,
+                gpio13: peripherals.GPIO13,
+                gpio38: peripherals.GPIO38,
+                gpio39: peripherals.GPIO39,
+                dma_ch0: peripherals.DMA_CH0,
+                spi2: peripherals.SPI2,
+                swap: second_core_swap,
+            };
+            executor.run(|spawner| {
+                spawner.spawn(second_core(spawner, peripherals.GPIO0, io).unwrap());
+            })
+        },
+    );
     let mut ticker = Ticker::every(Duration::from_millis(1000 / 30));
     let mut frametime = Duration::MIN;
-    let mut flush = Duration::MIN;
-    let mut clear = Duration::MIN;
-    let mut vsync_wait = Duration::MIN;
+    let mut prev_swap_draw = Duration::MIN;
     loop {
+        let state = fb_st.get();
+        let SwapState {
+            fb,
+            spi_time,
+            vsync_wait,
+            swap_spi,
+            swap_draw,
+        } = state;
+        let fb = &mut **fb;
         let touch_data = touch.read_touch_data().await.unwrap();
         let start = Instant::now();
 
@@ -450,13 +543,13 @@ async fn main(_spawner: Spawner) {
 
         let yoffset = 200 / UPSCALE as i32;
 
-        let bbox = display.bounding_box();
+        let bbox = chrome::DISPLAY_BBOX;
 
         // Draw a 3px wide outline around the display.
         Circle::new(Point::new(0, 0), bbox.size.width)
             .scale()
             .into_styled(border_stroke)
-            .draw(&mut *fb)
+            .draw(fb)
             .unwrap();
 
         // Draw a triangle.
@@ -466,21 +559,21 @@ async fn main(_spawner: Spawner) {
             Point::new(56 + 32, yoffset).scale(),
         )
         .into_styled(thin_stroke)
-        .draw(&mut *fb)
+        .draw(fb)
         .unwrap();
 
         // Draw a filled square
         Rectangle::new(Point::new(200, yoffset), Size::new(64, 64))
             .scale()
             .into_styled(fill)
-            .draw(&mut *fb)
+            .draw(fb)
             .unwrap();
 
         // Draw a circle with a 3px wide stroke.
         Circle::new(Point::new(340, yoffset), 68)
             .scale()
             .into_styled(thick_stroke)
-            .draw(&mut *fb)
+            .draw(fb)
             .unwrap();
 
         match &touch_data {
@@ -501,7 +594,7 @@ async fn main(_spawner: Spawner) {
                             .fill_color(Color::CSS_CYAN)
                             .build(),
                     )
-                    .draw(&mut *fb)
+                    .draw(fb)
                     .unwrap();
                 }
             }
@@ -510,33 +603,29 @@ async fn main(_spawner: Spawner) {
 
         // Draw centered text.
         let text = alloc::format!(
-            "fb clear: {:.1}ms\ndraw: {:.1}ms\nvsync: {:.1}ms\nspi: {:.1}ms",
-            clear.as_micros() as f32 / 1_000.,
+            "draw: {:.1}ms\nvsync: {:.1}ms\nspi+clear: {:.1}ms\nswap(draw): {:.1}ms\nswap(spi): {:.1}ms",
             frametime.as_micros() as f32 / 1_000.,
             vsync_wait.as_micros() as f32 / 1_000.,
-            flush.as_micros() as f32 / 1_000.,
+            spi_time.as_micros() as f32 / 1_000.,
+            swap_draw.as_micros() as f32 / 1_000.,
+            swap_spi.as_micros() as f32 / 1_000.,
         );
         Text::with_alignment(
             &text,
-            (display.bounding_box().center() + Point::new(100, 60)).scale(),
+            (bbox.center() + Point::new(100, 60)).scale(),
             character_style,
             Alignment::Right,
         )
-        .draw(&mut *fb)
+        .draw(fb)
         .unwrap();
 
         frametime = start.elapsed();
 
-        display.wait_for_vsync().await;
+        *swap_draw = prev_swap_draw;
+        fb_st.swap().await;
 
-        vsync_wait = start.elapsed() - frametime;
+        prev_swap_draw = start.elapsed();
 
-        fb.flush(&mut display).await;
-
-        flush = start.elapsed() - frametime - vsync_wait;
-
-        fb.clear_color(Color::BLACK);
-        clear = start.elapsed() - flush - frametime - vsync_wait;
         ticker.next().await;
     }
 }

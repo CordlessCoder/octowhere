@@ -1,8 +1,17 @@
-use embedded_graphics::{pixelcolor::Rgb888, prelude::RgbColor};
+use embedded_graphics::{
+    pixelcolor::Rgb888,
+    prelude::{Point, RgbColor, Size},
+    primitives::Rectangle,
+};
+
+use crate::board;
 
 // Rgb888 is higher quality, Rgb565 cuts the size of the framebuffer by a third.
 // Gray8 is 3x smaller than Rgb888... but I'm not sure we love monochrome.
 pub type Color = embedded_graphics::pixelcolor::Rgb565;
+
+pub const DISPLAY_SIZE: Size = Size::new(board::LCD_WIDTH as u32, board::LCD_HEIGHT as u32);
+pub const DISPLAY_BBOX: Rectangle = Rectangle::new(Point::new_equal(0), DISPLAY_SIZE);
 
 pub const UPSCALE: usize = 1;
 pub const MEDIUM_FONT: &embedded_bitmap_fonts::BitmapFont<'static> = match UPSCALE {
@@ -48,6 +57,7 @@ pub const PURPLE: Color = color_from_hex("#5500e4");
 pub const ORANGE_RED: Color = color_from_hex("#f15227");
 pub const GRAY: Color = color_from_hex("#999999");
 pub const WHITE: Color = color_from_hex("#ffffff");
+pub const BLACK: Color = color_from_hex("#000000");
 
 pub const ACCENT: Color = LIME;
 // color-background: var(--color-black);
