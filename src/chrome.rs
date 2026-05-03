@@ -13,7 +13,7 @@ pub type Color = embedded_graphics::pixelcolor::Rgb565;
 pub const DISPLAY_SIZE: Size = Size::new(board::LCD_WIDTH as u32, board::LCD_HEIGHT as u32);
 pub const DISPLAY_BBOX: Rectangle = Rectangle::new(Point::new_equal(0), DISPLAY_SIZE);
 
-pub const UPSCALE: usize = 1;
+pub const UPSCALE: usize = 2;
 pub const MEDIUM_FONT: &embedded_bitmap_fonts::BitmapFont<'static> = match UPSCALE {
     1 => &embedded_bitmap_fonts::terminus::FONT_16x32,
     2 => &embedded_bitmap_fonts::terminus::FONT_8x16,

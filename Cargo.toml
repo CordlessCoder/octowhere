@@ -36,6 +36,9 @@ ph-qmi8658 = { version = "0.1.1", features = ["fixed"] }
 tca9554 = { version = "0.1.1" }
 embedded-bitmap-fonts = "0.1.1"
 heapless = { version = "0.9.2", features = ["nightly"] }
+embedded-ttf = "0.2.2"
+u8g2-fonts = { version = "0.7.2", features = ["embedded_graphics_textstyle"] }
+rusttype = { version = "0.9.3", default-features = false, features = ["has-atomics"] }
 
 [patch.crates-io]
 esp-hal = { git = "https://github.com/CordlessCoder/esp-hal" }

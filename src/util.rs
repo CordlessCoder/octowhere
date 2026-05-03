@@ -150,6 +150,7 @@ impl<T> SwapThreadFuture<'_, '_, T> {
     fn check_for_completion_once(&mut self) -> Poll<()> {
         if self.is_swap_complete() {
             self.finish_handoff();
+            self.wake_other_thread();
             return Poll::Ready(());
         }
         if !self.is_other_thread_done() {
