@@ -8,12 +8,11 @@
 #![warn(unused_must_use)]
 extern crate alloc;
 
-use alloc::boxed::Box;
+use alloc::{boxed::Box, rc::Rc};
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_executor::Spawner;
 use embassy_sync::{blocking_mutex::raw::NoopRawMutex, mutex::Mutex};
 use embassy_time::{Duration, Instant, Ticker};
-use embedded_bitmap_fonts::TextStyle;
 use embedded_graphics::{
     prelude::*,
     primitives::{Circle, Rectangle},
@@ -30,7 +29,7 @@ use esp_hal::{
 use esp_println::println;
 use octowhere::{
     board,
-    chrome::{self, Color, UPSCALE},
+    chrome::{self, Color, FontdueRenderer, UPSCALE},
     drivers::{co5300::Co5300Display, framebuffer::Framebuffer, qspi_bus::QspiBus},
     peripherals::{
         power::Axp2101Power,
@@ -44,6 +43,7 @@ use static_cell::StaticCell;
 use esp_alloc as _;
 use esp_backtrace as _;
 use tca9554::Tca9554;
+use u8g2_fonts::FontRenderer;
 esp_bootloader_esp_idf::esp_app_desc!();
 
 struct SecondCore {
@@ -180,6 +180,9 @@ fn bench10<R>(mut the_thing: impl FnMut() -> R, name: &str) -> (R, Duration) {
     (ret, took)
 }
 
+static MARATHON_SHAPIRO_TTF_BYTES: &[u8] =
+    include_bytes!("../assets/MarathonShapiro-Wide65_subset.ttf");
+
 #[expect(clippy::too_many_arguments)]
 async fn bench_font<
     const UPSCALE: usize,
@@ -187,16 +190,14 @@ async fn bench_font<
     const WIDTH: usize,
     const HEIGHT: usize,
     C,
-    M,
 >(
     mut display: Option<&mut Co5300Display<'_, C>>,
     fb: &mut Framebuffer<UPSCALE, N, WIDTH, HEIGHT, C>,
     fg: C,
     bg: C,
     desc: &str,
-    mono_font: M,
     u8g2_renderer: u8g2_fonts::FontRenderer,
-    ttf_font: embedded_ttf::FontTextStyle<C>,
+    fontdue: FontdueRenderer<C>,
     delay: u32,
 ) where
     <C as embedded_graphics::pixelcolor::raw::ToBytes>::Bytes: core::convert::AsRef<[u8]>,
@@ -204,7 +205,6 @@ async fn bench_font<
         + From<embedded_graphics::pixelcolor::Rgb888>
         + core::fmt::Debug
         + octowhere::drivers::co5300::Co5300ColorMode,
-    M: embedded_graphics::text::renderer::TextRenderer<Color = C> + Clone,
 {
     let top_left = Point::new(10, 150);
     let test_text = "abcdefghijklmnopqrstuvwxyz\n\
@@ -214,28 +214,6 @@ async fn bench_font<
         u8g2_fonts::FontRenderer::new::<u8g2_fonts::fonts::u8g2_font_spleen12x24_mr>();
     let ext_pos = Point::new(100, 340);
     println!("{desc}");
-    fb.clear_color(bg);
-    let (_, took) = bench10(
-        || {
-            embedded_graphics::text::Text::new(test_text, top_left, mono_font.clone())
-                .draw(fb)
-                .unwrap()
-        },
-        "- mono",
-    );
-    if let Some(display) = display.as_mut() {
-        ext_renderer
-            .render(
-                format_args!("{desc}\nmono: {:.1}ms", took.as_micros() as f32 / 1_000.,),
-                ext_pos,
-                u8g2_fonts::types::VerticalPosition::Baseline,
-                u8g2_fonts::types::FontColor::Transparent(fg),
-                fb,
-            )
-            .unwrap();
-        fb.flush(display, |_| ()).await;
-        board::delay_ms_async(delay).await;
-    }
     fb.clear_color(bg);
     let (_, took) = bench10(
         || {
@@ -267,16 +245,16 @@ async fn bench_font<
     fb.clear_color(bg);
     let (_, took) = bench10(
         || {
-            embedded_graphics::text::Text::new(test_text, top_left, ttf_font.clone())
+            embedded_graphics::text::Text::new(test_text, top_left, fontdue.clone())
                 .draw(fb)
                 .unwrap()
         },
-        "- ttf",
+        "- fontdue",
     );
     if let Some(display) = display.as_mut() {
         ext_renderer
             .render(
-                format_args!("{desc}\nttf: {:.1}ms", took.as_micros() as f32 / 1_000.,),
+                format_args!("{desc}\nfontdue: {:.1}ms", took.as_micros() as f32 / 1_000.,),
                 ext_pos,
                 u8g2_fonts::types::VerticalPosition::Baseline,
                 u8g2_fonts::types::FontColor::Transparent(fg),
@@ -437,129 +415,6 @@ async fn main(_spawner: Spawner) {
     let res = touch.resolution();
     println!("[TOUCH] OK, Resolution: {res}");
 
-    // let mut ticker = Ticker::every(Duration::from_millis(1000 / 60));
-    // let mut prev_touch_data = TouchData::Points(heapless::Vec::new());
-    // let mut touch_data = TouchData::Points(heapless::Vec::new());
-    // loop {
-    //     let start = Instant::now();
-    //
-    //     use embedded_graphics::{
-    //         prelude::*,
-    //         primitives::{Circle, PrimitiveStyle, PrimitiveStyleBuilder, StrokeAlignment},
-    //     };
-    //     // Create styles used by the drawing operations.
-    //     let thin_stroke = PrimitiveStyle::with_stroke(Color::BLUE, 4);
-    //     let thick_stroke = PrimitiveStyle::with_stroke(Color::RED, 8);
-    //     let border_stroke = PrimitiveStyleBuilder::new()
-    //         .stroke_color(if touch_data != TouchData::CoverGesture {
-    //             Color::CSS_ORANGE
-    //         } else {
-    //             Color::CSS_CYAN
-    //         })
-    //         .stroke_width(8)
-    //         .stroke_alignment(StrokeAlignment::Inside)
-    //         .build();
-    //     let fill = PrimitiveStyle::with_fill(Color::CSS_GRAY);
-    //     let character_style = TextStyle::new(
-    //         &embedded_bitmap_fonts::terminus::FONT_16x32,
-    //         Color::CSS_ORANGE,
-    //     );
-    //
-    //     let yoffset = 200;
-    //
-    //     let bbox = display.bounding_box();
-    //
-    //     let size = 120;
-    //
-    //     display.wait_for_vsync().await;
-    //     let vsync_wait = start.elapsed();
-    //
-    //     match &prev_touch_data {
-    //         TouchData::Points(points) => {
-    //             for point in points {
-    //                 fb.fill_rect(
-    //                     point.x.saturating_sub(size / 2) as usize,
-    //                     point.y.saturating_sub(size / 2) as usize,
-    //                     size as usize,
-    //                     size as usize,
-    //                     &Color::BLACK.to_be_bytes(),
-    //                 );
-    //             }
-    //         }
-    //         TouchData::CoverGesture => {}
-    //     }
-    //     match &touch_data {
-    //         TouchData::Points(points) => {
-    //             for point in points {
-    //                 // Draw a circle with a 3px wide stroke.
-    //                 Circle::new(
-    //                     Point::new(
-    //                         point.x as i32 - size as i32 / 2,
-    //                         point.y as i32 - size as i32 / 2,
-    //                     ),
-    //                     size as u32,
-    //                 )
-    //                 .into_styled(
-    //                     PrimitiveStyleBuilder::new()
-    //                         .fill_color(Color::CSS_CYAN)
-    //                         .build(),
-    //                 )
-    //                 .draw(&mut fb)
-    //                 .unwrap();
-    //             }
-    //         }
-    //         TouchData::CoverGesture => {}
-    //     }
-    //
-    //     let frametime = start.elapsed() - vsync_wait;
-    //
-    //     match &prev_touch_data {
-    //         TouchData::Points(points) => {
-    //             for point in points {
-    //                 fb.flush_region(
-    //                     &mut display,
-    //                     point.x.saturating_sub(size / 2),
-    //                     point.y.saturating_sub(size / 2),
-    //                     size,
-    //                     size,
-    //                 )
-    //                 .await;
-    //             }
-    //         }
-    //         TouchData::CoverGesture => {}
-    //     }
-    //     match &touch_data {
-    //         TouchData::Points(points) => {
-    //             for point in points {
-    //                 fb.flush_region(
-    //                     &mut display,
-    //                     point.x.saturating_sub(size / 2),
-    //                     point.y.saturating_sub(size / 2),
-    //                     size,
-    //                     size,
-    //                 )
-    //                 .await;
-    //             }
-    //         }
-    //         TouchData::CoverGesture => {}
-    //     }
-    //
-    //     let flush = start.elapsed() - vsync_wait - frametime;
-    //
-    //     esp_println::println!(
-    //         "draw: {:.1}ms\nvsync: {:.1}ms\nspi: {:.1}ms",
-    //         frametime.as_micros() as f32 / 1_000.,
-    //         vsync_wait.as_micros() as f32 / 1_000.,
-    //         flush.as_micros() as f32 / 1_000.,
-    //     );
-    //
-    //     prev_touch_data = touch_data;
-    //     if !matches!(prev_touch_data, TouchData::Points(ref points) if !points.is_empty()) {
-    //         touch.wait_for_touch().await;
-    //     }
-    //     touch_data = touch.read_touch_data().await.unwrap();
-    // }
-
     // let mut fb = Framebuffer::<
     //     UPSCALE,
     //     {
@@ -604,137 +459,119 @@ async fn main(_spawner: Spawner) {
         466,
         Color,
     >::alloc();
-    let ttf_font =
-        rusttype::Font::try_from_bytes(include_bytes!("../assets/MarathonShapiro_Wide65.ttf"))
-            .unwrap();
+    let fontdue_font = fontdue::Font::from_bytes(
+        MARATHON_SHAPIRO_TTF_BYTES,
+        fontdue::FontSettings {
+            collection_index: 0,
+            scale: 20.0,
+            load_substitutions: false,
+        },
+    )
+    .unwrap();
+    let fontdue_font = Rc::new(fontdue_font);
     let test_text = "abcdefghijklmnopqrstuvwxyz'\"\n\
                            ABCDEFGHIJKLMNOPQRSTUVWXYZ,.\n\
                            1234567890`~!@#$%^&*()_+/[]";
     let bg = chrome::BLACK;
     let fg = chrome::WHITE;
-    bench_font(
-        Some(&mut display),
-        &mut fb,
-        fg,
-        bg,
-        "6x12 font, rgb565",
-        embedded_graphics::mono_font::MonoTextStyle::new(
-            &embedded_graphics::mono_font::iso_8859_1::FONT_6X12,
+    // bench_font(
+    //     Some(&mut display),
+    //     &mut fb,
+    //     fg,
+    //     bg,
+    //     "6x12 font, rgb565",
+    //     u8g2_fonts::FontRenderer::new::<u8g2_fonts::fonts::u8g2_font_6x12_tr>(),
+    //     500,
+    // )
+    // .await;
+    loop {
+        bench_font(
+            Some(&mut display),
+            &mut fb,
             fg,
-        ),
-        u8g2_fonts::FontRenderer::new::<u8g2_fonts::fonts::u8g2_font_6x12_tr>(),
-        embedded_ttf::FontTextStyleBuilder::new(ttf_font.clone())
-            .font_size(12)
-            .text_color(fg)
-            .anti_aliasing_color(bg)
-            .build(),
-        500,
-    )
-    .await;
-    bench_font(
-        Some(&mut display),
-        &mut fb,
-        fg,
-        bg,
-        "10x20 font, rgb565",
-        embedded_graphics::mono_font::MonoTextStyle::new(
-            &embedded_graphics::mono_font::iso_8859_1::FONT_10X20,
+            bg,
+            "10x20 font, rgb565",
+            u8g2_fonts::FontRenderer::new::<chrome::MarathonShapiro65_20>(),
+            FontdueRenderer {
+                font_size: 20,
+                background_color: bg,
+                text_color: fg,
+                font: fontdue_font.clone(),
+            },
+            2000,
+        )
+        .await;
+        bench_font(
+            Some(&mut display),
+            &mut fb,
             fg,
-        ),
-        u8g2_fonts::FontRenderer::new::<u8g2_fonts::fonts::u8g2_font_10x20_tr>(),
-        embedded_ttf::FontTextStyleBuilder::new(ttf_font.clone())
-            .font_size(20)
-            .text_color(fg)
-            .anti_aliasing_color(bg)
-            .build(),
-        500,
-    )
-    .await;
-    bench_font(
-        Some(&mut display),
-        &mut fb,
-        fg,
-        bg,
-        "16x32 font, rgb565",
-        embedded_bitmap_fonts::TextStyle::new(&embedded_bitmap_fonts::terminus::FONT_16x32, fg),
-        u8g2_fonts::FontRenderer::new::<u8g2_fonts::fonts::u8g2_font_spleen16x32_mr>(),
-        embedded_ttf::FontTextStyleBuilder::new(ttf_font.clone())
-            .font_size(32)
-            .text_color(fg)
-            .anti_aliasing_color(bg)
-            .build(),
-        500,
-    )
-    .await;
-    core::mem::drop(fb);
-    let mut fb = Framebuffer::<
-        1,
-        {
-            octowhere::drivers::framebuffer::buffer_size::<embedded_graphics::pixelcolor::Rgb888>(
-                466, 466,
-            )
-        },
-        466,
-        466,
-        embedded_graphics::pixelcolor::Rgb888,
-    >::alloc();
-    let mut display = display.with_color_format::<embedded_graphics::pixelcolor::Rgb888>();
-    let bg = embedded_graphics::pixelcolor::Rgb888::BLACK;
-    let fg = embedded_graphics::pixelcolor::Rgb888::WHITE;
-    bench_font(
-        Some(&mut display),
-        &mut fb,
-        fg,
-        bg,
-        "6x12 font, rgb888",
-        embedded_graphics::mono_font::MonoTextStyle::new(
-            &embedded_graphics::mono_font::iso_8859_1::FONT_6X12,
-            fg,
-        ),
-        u8g2_fonts::FontRenderer::new::<u8g2_fonts::fonts::u8g2_font_6x12_tr>(),
-        embedded_ttf::FontTextStyleBuilder::new(ttf_font.clone())
-            .font_size(12)
-            .text_color(fg)
-            .anti_aliasing_color(bg)
-            .build(),
-        500,
-    )
-    .await;
-    bench_font(
-        Some(&mut display),
-        &mut fb,
-        fg,
-        bg,
-        "10x20 font, rgb888",
-        embedded_graphics::mono_font::MonoTextStyle::new(
-            &embedded_graphics::mono_font::iso_8859_1::FONT_10X20,
-            fg,
-        ),
-        u8g2_fonts::FontRenderer::new::<u8g2_fonts::fonts::u8g2_font_10x20_tr>(),
-        embedded_ttf::FontTextStyleBuilder::new(ttf_font.clone())
-            .font_size(20)
-            .text_color(fg)
-            .anti_aliasing_color(bg)
-            .build(),
-        500,
-    )
-    .await;
-    bench_font(
-        Some(&mut display),
-        &mut fb,
-        fg,
-        bg,
-        "16x32 font, rgb888",
-        embedded_bitmap_fonts::TextStyle::new(&embedded_bitmap_fonts::terminus::FONT_16x32, fg),
-        u8g2_fonts::FontRenderer::new::<u8g2_fonts::fonts::u8g2_font_spleen16x32_mr>(),
-        embedded_ttf::FontTextStyleBuilder::new(ttf_font.clone())
-            .font_size(32)
-            .text_color(fg)
-            .anti_aliasing_color(bg)
-            .build(),
-        500,
-    )
-    .await;
+            bg,
+            "16x32 font, rgb565",
+            u8g2_fonts::FontRenderer::new::<chrome::MarathonShapiro65_32>(),
+            FontdueRenderer {
+                font_size: 32,
+                background_color: bg,
+                text_color: fg,
+                font: fontdue_font.clone(),
+            },
+            2000,
+        )
+        .await;
+    }
+    // core::mem::drop(fb);
+    // let mut fb = Framebuffer::<
+    //     1,
+    //     {
+    //         octowhere::drivers::framebuffer::buffer_size::<embedded_graphics::pixelcolor::Rgb888>(
+    //             466, 466,
+    //         )
+    //     },
+    //     466,
+    //     466,
+    //     embedded_graphics::pixelcolor::Rgb888,
+    // >::alloc();
+    // let mut display = display.with_color_format::<embedded_graphics::pixelcolor::Rgb888>();
+    // let bg = embedded_graphics::pixelcolor::Rgb888::BLACK;
+    // let fg = embedded_graphics::pixelcolor::Rgb888::WHITE;
+    // bench_font(
+    //     Some(&mut display),
+    //     &mut fb,
+    //     fg,
+    //     bg,
+    //     "6x12 font, rgb888",
+    //     embedded_graphics::mono_font::MonoTextStyle::new(
+    //         &embedded_graphics::mono_font::iso_8859_1::FONT_6X12,
+    //         fg,
+    //     ),
+    //     u8g2_fonts::FontRenderer::new::<u8g2_fonts::fonts::u8g2_font_6x12_tr>(),
+    //     500,
+    // )
+    // .await;
+    // bench_font(
+    //     Some(&mut display),
+    //     &mut fb,
+    //     fg,
+    //     bg,
+    //     "10x20 font, rgb888",
+    //     embedded_graphics::mono_font::MonoTextStyle::new(
+    //         &embedded_graphics::mono_font::iso_8859_1::FONT_10X20,
+    //         fg,
+    //     ),
+    //     u8g2_fonts::FontRenderer::new::<u8g2_fonts::fonts::u8g2_font_10x20_tr>(),
+    //     500,
+    // )
+    // .await;
+    // bench_font(
+    //     Some(&mut display),
+    //     &mut fb,
+    //     fg,
+    //     bg,
+    //     "16x32 font, rgb888",
+    //     embedded_bitmap_fonts::TextStyle::new(&embedded_bitmap_fonts::marathon_shapiro::FONT_52x48, fg),
+    //     u8g2_fonts::FontRenderer::new::<u8g2_fonts::fonts::u8g2_font_spleen16x32_mr>(),
+    //     500,
+    // )
+    // .await;
     return;
     // let swap_fb = fb.clone();
     // let swap: &'static mut Swap<SwapState> = SWAP.init_with(|| {

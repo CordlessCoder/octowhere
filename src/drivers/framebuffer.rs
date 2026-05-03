@@ -87,8 +87,12 @@ where
     pub fn set_pixel(&mut self, x: usize, y: usize, color: C) {
         if x < WIDTH && y < HEIGHT {
             let idx = y * WIDTH + x;
-            self.buf[idx * C::BYTES_PER_PIXEL..][..C::BYTES_PER_PIXEL]
-                .copy_from_slice(color.to_be_bytes().as_ref());
+            unsafe {
+                self.buf
+                    .get_unchecked_mut(idx * C::BYTES_PER_PIXEL..)
+                    .get_unchecked_mut(..C::BYTES_PER_PIXEL)
+                    .copy_from_slice(color.to_be_bytes().as_ref());
+            }
         }
     }
 
@@ -295,9 +299,7 @@ where
         I: IntoIterator<Item = Pixel<Self::Color>>,
     {
         for Pixel(coord, color) in pixels.into_iter() {
-            if coord.x >= 0 && coord.x < WIDTH as i32 && coord.y >= 0 && coord.y < HEIGHT as i32 {
-                self.set_pixel(coord.x as usize, coord.y as usize, color);
-            }
+            self.set_pixel(coord.x as usize, coord.y as usize, color);
         }
         Ok(())
     }
@@ -306,30 +308,31 @@ where
     where
         I: IntoIterator<Item = Self::Color>,
     {
-        let area = area.intersection(&Rectangle::new(
-            Point::zero(),
-            Size::new(WIDTH as u32, HEIGHT as u32),
-        ));
-        if area.size.width == 0 || area.size.height == 0 {
+        let visible = self.bounding_box().intersection(area);
+        if visible.size.width == 0 || visible.size.height == 0 {
             return Ok(());
         }
 
         let x = area.top_left.x as usize;
         let y = area.top_left.y as usize;
-        let w = area.size.width as usize;
+        let w = x + area.size.width as usize;
         let mut row = y;
-        let mut col = 0;
+        let mut col = x;
 
         for color in colors.into_iter() {
-            if col < w && row < HEIGHT {
+            if col < WIDTH && row < HEIGHT {
                 let raw = color.to_be_bytes();
-                let idx = row * WIDTH + x + col;
-                self.buf[idx * C::BYTES_PER_PIXEL..][..C::BYTES_PER_PIXEL]
-                    .copy_from_slice(raw.as_ref());
+                let idx = row * WIDTH + col;
+                unsafe {
+                    self.buf
+                        .get_unchecked_mut(idx * C::BYTES_PER_PIXEL..)
+                        .get_unchecked_mut(..C::BYTES_PER_PIXEL)
+                        .copy_from_slice(raw.as_ref());
+                }
             }
             col += 1;
             if col >= w {
-                col = 0;
+                col = x;
                 row += 1;
             }
         }

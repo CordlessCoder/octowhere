@@ -14,6 +14,7 @@ use esp_hal::gpio::{Input, Output};
 use esp_hal::spi::master::{Address, Command, DataMode};
 
 use crate::board::{self, delay_ms, delay_ms_async, delay_us, delay_us_async};
+use crate::chrome::RgbColorExt;
 use crate::drivers::qspi_bus::{QSPIOperation, QspiBus};
 use crate::util::fill_buf_repeat;
 
@@ -117,7 +118,7 @@ mod sealed {
     pub trait Sealed {}
 }
 
-pub trait Co5300ColorMode: ToBytes + PixelColor + sealed::Sealed
+pub trait Co5300ColorMode: ToBytes + PixelColor + sealed::Sealed + RgbColorExt
 where
     Self::Bytes: AsRef<[u8]>,
 {
