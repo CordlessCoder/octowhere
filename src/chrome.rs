@@ -1,3 +1,5 @@
+use core::cell::{Cell, RefCell};
+
 use alloc::rc::Rc;
 use embedded_graphics::{
     Pixel,
@@ -6,6 +8,8 @@ use embedded_graphics::{
     primitives::Rectangle,
     text::renderer::TextMetrics,
 };
+use fontdue::layout::Layout;
+use ph_qmi8658::SelfTestError;
 
 use crate::board;
 
@@ -24,6 +28,9 @@ pub const MEDIUM_FONT: u8g2_fonts::FontRenderer = match UPSCALE {
     4 => u8g2_fonts::FontRenderer::new::<u8g2_fonts::fonts::u8g2_font_spleen5x8_mr>(),
     _ => todo!(),
 };
+
+pub static MARATHON_SHAPIRO_TTF_BYTES: &[u8] =
+    include_bytes!("../assets/MarathonShapiro-Wide65_subset.ttf");
 const fn color_from_rgb(r: u8, g: u8, b: u8) -> Color {
     Color::new(
         (r as f64 / 255. * Color::MAX_R as f64) as u8,
@@ -112,6 +119,47 @@ impl RgbColorExt for Gray8 {
     }
 }
 
+pub struct FontdueRendererCtx {
+    layout: fontdue::layout::Layout,
+    canvas: fontdue::raster::Raster,
+}
+
+impl Default for FontdueRendererCtx {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl FontdueRendererCtx {
+    #[inline]
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            layout: Layout::new(fontdue::layout::CoordinateSystem::PositiveYDown),
+            canvas: fontdue::raster::Raster::empty(),
+        }
+    }
+    #[inline]
+    #[must_use]
+    pub fn new_rc() -> Rc<RefCell<Self>> {
+        Rc::new(RefCell::new(Self::new()))
+    }
+
+    fn reset_layout(&mut self) {
+        self.layout.reset(&fontdue::layout::LayoutSettings {
+            x: 0.,
+            y: 0.,
+            max_width: None,
+            max_height: None,
+            horizontal_align: fontdue::layout::HorizontalAlign::Left,
+            vertical_align: fontdue::layout::VerticalAlign::Bottom,
+            line_height: 1.0,
+            wrap_style: fontdue::layout::WrapStyle::Letter,
+            wrap_hard_breaks: true,
+        });
+    }
+}
+
 #[derive(Clone)]
 pub struct FontdueRenderer<C> {
     /// Text color.
@@ -120,18 +168,40 @@ pub struct FontdueRenderer<C> {
     /// Background color.
     pub background_color: C,
 
-    // /// How to apply antialiasing.
-    // pub anti_aliasing: AntiAliasing<C>,
-    //
     // /// Underline color.
     // pub underline_color: DecorationColor<C>,
     //
     // /// Strikethrough color.
     // pub strikethrough_color: DecorationColor<C>,
-    pub font: Rc<fontdue::Font>,
     pub font_size: u32,
+    pub ctx: Rc<RefCell<FontdueRendererCtx>>,
+    pub font: Rc<fontdue::Font>,
 }
 impl<C: PixelColor> FontdueRenderer<C> {
+    #[must_use]
+    pub fn new(
+        ctx: Rc<RefCell<FontdueRendererCtx>>,
+        font: Rc<fontdue::Font>,
+        font_size: u32,
+        text_color: C,
+        background_color: C,
+    ) -> Self {
+        Self {
+            text_color,
+            background_color,
+            ctx,
+            font,
+            font_size,
+        }
+    }
+    #[must_use]
+    #[inline]
+    fn borrow_ctx(&self) -> core::cell::RefMut<'_, FontdueRendererCtx> {
+        let mut ctx = self.ctx.borrow_mut();
+        ctx.layout.clear();
+        ctx
+    }
+
     fn draw_background<D>(
         &self,
         width: u32,
@@ -153,6 +223,68 @@ impl<C: PixelColor> FontdueRenderer<C> {
         Ok(())
     }
 }
+impl<C: PixelColor + RgbColorExt> FontdueRenderer<C> {
+    fn render<D: DrawTarget<Color = C>>(
+        &self,
+        layout_cb: impl FnOnce(&mut Layout<()>),
+        position: Point,
+        target: &mut D,
+    ) -> Result<(), D::Error> {
+        let bbox = target.bounding_box();
+        let usable_width = bbox.size.width.saturating_sub_signed(position.x);
+        if usable_width == 0 {
+            return Ok(());
+        }
+        let line_metrics = self
+            .font
+            .horizontal_line_metrics(self.font_size as f32)
+            .expect("Cannot draw non-horizontal text");
+
+        let mut ctx = &mut *self.borrow_ctx();
+        ctx.reset_layout();
+        let fonts = core::slice::from_ref(&self.font);
+        layout_cb(&mut ctx.layout);
+        ctx.layout
+            .glyphs()
+            .iter()
+            .filter(|g| g.x < usable_width as f32 && g.char_data.rasterize())
+            .try_for_each(|g| {
+                let c = g.parent;
+                let (metrics, bitmap) =
+                    self.font
+                        .rasterize(&mut ctx.canvas, c, self.font_size as f32);
+                let x_off = g.x as i32;
+                let y_off = g.y as i32;
+
+                let coverage_to_color =
+                    |coverage: u8| self.background_color.lerp(&self.text_color, coverage);
+
+                let width = metrics.width;
+                let area = Rectangle::new(
+                    position + Point::new(x_off, y_off),
+                    Size::new(width as u32, metrics.height as u32),
+                );
+                // let pixels = bitmap.enumerate().filter(|&(_, c)| c != 0).map(|(idx, c)| {
+                //     let y = idx / width;
+                //     let x = idx % width;
+                //     Pixel(
+                //         position + Point::new(x_off + x as i32, y_off + y as i32),
+                //         coverage_to_color(c),
+                //     )
+                // });
+                let colors = bitmap.map(coverage_to_color);
+                target.fill_contiguous(&area, colors)
+                // target.draw_iter(pixels)
+            })?;
+        // self.draw_background(width as u32, position, target)?;
+        // target.draw_iter(pixels)?;
+        // self.draw_strikethrough(width as u32, position, target)?;
+        // self.draw_underline(width as u32, position, target)?;
+
+        Ok(())
+    }
+}
+
 impl<C: PixelColor + RgbColorExt> embedded_graphics::text::renderer::TextRenderer
     for FontdueRenderer<C>
 {
@@ -168,64 +300,27 @@ impl<C: PixelColor + RgbColorExt> embedded_graphics::text::renderer::TextRendere
     where
         D: DrawTarget<Color = Self::Color>,
     {
-        let line_metrics = self
-            .font
-            .horizontal_line_metrics(self.font_size as f32)
-            .expect("Cannot draw non-horizontal text");
-
-        let mut layout =
-            fontdue::layout::Layout::new(fontdue::layout::CoordinateSystem::PositiveYDown);
-        let fonts = core::slice::from_ref(&*self.font);
-        layout.append(
-            fonts,
-            &fontdue::layout::TextStyle::new(text, self.font_size as f32, 0),
-        );
-        layout
-            .glyphs()
-            .iter()
-            .filter(|g| g.char_data.rasterize())
-            .try_for_each(|g| {
-                let c = g.parent;
-                let (metrics, bitmap) = self.font.rasterize(c, self.font_size as f32);
-                let x_off = g.x as i32;
-                let y_off = g.y as i32;
-
-                let coverage_to_color =
-                    |coverage: u8| self.background_color.lerp(&self.text_color, coverage);
-
-                let width = metrics.width;
-                let area = Rectangle::new(
-                    position + Point::new(x_off, y_off),
-                    Size::new(width as u32, metrics.height as u32),
+        let fonts = core::slice::from_ref(&self.font);
+        self.render(
+            |layout| {
+                layout.append(
+                    fonts,
+                    &fontdue::layout::TextStyle::new(text, self.font_size as f32, 0),
                 );
-                let pixels = bitmap
-                    .iter()
-                    .copied()
-                    .enumerate()
-                    .filter(|&(_, c)| c != 0)
-                    .map(|(idx, c)| {
-                        let y = idx / width;
-                        let x = idx % width;
-                        Pixel(
-                            position + Point::new(x_off + x as i32, y_off + y as i32),
-                            coverage_to_color(c),
-                        )
-                    });
-                // let colors = bitmap.iter().copied().map(coverage_to_color);
-                // target.fill_contiguous(&area, colors)
-                target.draw_iter(pixels)
-            })?;
-        // self.draw_background(width as u32, position, target)?;
-        // target.draw_iter(pixels)?;
-        // self.draw_strikethrough(width as u32, position, target)?;
-        // self.draw_underline(width as u32, position, target)?;
-
-        Ok(position
-            + layout
+            },
+            position,
+            target,
+        )?;
+        let ctx = self.borrow_ctx();
+        let pos = position
+            + ctx
+                .layout
                 .glyphs()
                 .last()
                 .map(|g| Point::new(g.x as i32 + g.width as i32, g.y as i32 + g.height as i32))
-                .unwrap_or(Point::zero()))
+                .unwrap_or(Point::zero());
+
+        Ok(pos)
     }
 
     fn measure_string(
@@ -234,20 +329,19 @@ impl<C: PixelColor + RgbColorExt> embedded_graphics::text::renderer::TextRendere
         position: Point,
         baseline: embedded_graphics::text::Baseline,
     ) -> embedded_graphics::text::renderer::TextMetrics {
-        let mut layout =
-            fontdue::layout::Layout::new(fontdue::layout::CoordinateSystem::PositiveYDown);
-        let fonts = core::slice::from_ref(&*self.font);
-        layout.append(
+        let mut ctx = self.borrow_ctx();
+        let fonts = core::slice::from_ref(&self.font);
+        ctx.reset_layout();
+        ctx.layout.append(
             fonts,
             &fontdue::layout::TextStyle::new(text, self.font_size as f32, 0),
         );
-        let size = layout
+        let size = ctx
+            .layout
             .glyphs()
             .last()
-            .map(|g| (g.x as u32 + g.width as u32, g.y as u32 + g.height as u32))
-            .unwrap_or((0, 0));
-
-        let size = Size::new(size.0, size.1);
+            .map(|g| Size::new(g.x as u32 + g.width as u32, g.y as u32 + g.height as u32))
+            .unwrap_or(Size::zero());
 
         TextMetrics {
             bounding_box: Rectangle::new(position, size),

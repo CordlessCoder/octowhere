@@ -47,6 +47,7 @@ esp-bootloader-esp-idf = { git = "https://github.com/CordlessCoder/esp-hal" }
 esp-println = { git = "https://github.com/CordlessCoder/esp-hal" } 
 esp-backtrace = { git = "https://github.com/CordlessCoder/esp-hal" } 
 tca9554 = { git = "https://github.com/CordlessCoder/tca9554-rs" } 
+fontdue = { git = "https://github.com/CordlessCoder/fontdue" } 
 
 [profile.dev]
 opt-level = "s"

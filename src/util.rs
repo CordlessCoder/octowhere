@@ -65,6 +65,7 @@ pub struct Swap<T> {
 }
 
 impl<T> Swap<T> {
+    #[must_use]
     pub const fn new(val1: T, val2: T) -> Self {
         Self {
             val1: UnsafeCell::new(val1),
@@ -76,6 +77,7 @@ impl<T> Swap<T> {
             waker2: AtomicWaker::new(),
         }
     }
+    #[must_use]
     pub fn split<'s>(&'s mut self) -> (SwapThread<'s, T>, SwapThread<'s, T>) {
         self.thread1_has_val1 = AtomicBool::new(true);
         self.thread1_wants_val1 = AtomicBool::new(true);
@@ -95,6 +97,7 @@ impl<T> Swap<T> {
             },
         )
     }
+    #[must_use]
     pub fn release(self) -> (T, T) {
         (self.val1.into_inner(), self.val2.into_inner())
     }

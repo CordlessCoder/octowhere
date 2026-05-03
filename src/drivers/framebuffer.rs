@@ -304,6 +304,7 @@ where
         Ok(())
     }
 
+    #[inline]
     fn fill_contiguous<I>(&mut self, area: &Rectangle, colors: I) -> Result<(), Self::Error>
     where
         I: IntoIterator<Item = Self::Color>,
@@ -320,16 +321,7 @@ where
         let mut col = x;
 
         for color in colors.into_iter() {
-            if col < WIDTH && row < HEIGHT {
-                let raw = color.to_be_bytes();
-                let idx = row * WIDTH + col;
-                unsafe {
-                    self.buf
-                        .get_unchecked_mut(idx * C::BYTES_PER_PIXEL..)
-                        .get_unchecked_mut(..C::BYTES_PER_PIXEL)
-                        .copy_from_slice(raw.as_ref());
-                }
-            }
+            self.set_pixel(col, row, color);
             col += 1;
             if col >= w {
                 col = x;

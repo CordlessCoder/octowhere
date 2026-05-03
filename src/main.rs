@@ -29,7 +29,7 @@ use esp_hal::{
 use esp_println::println;
 use octowhere::{
     board,
-    chrome::{self, Color, FontdueRenderer, UPSCALE},
+    chrome::{self, Color, FontdueRenderer, FontdueRendererCtx, MARATHON_SHAPIRO_TTF_BYTES, UPSCALE},
     drivers::{co5300::Co5300Display, framebuffer::Framebuffer, qspi_bus::QspiBus},
     peripherals::{
         power::Axp2101Power,
@@ -179,9 +179,6 @@ fn bench10<R>(mut the_thing: impl FnMut() -> R, name: &str) -> (R, Duration) {
     println!("{name}: {:.1}ms", took.as_micros() as f32 / 1_000.,);
     (ret, took)
 }
-
-static MARATHON_SHAPIRO_TTF_BYTES: &[u8] =
-    include_bytes!("../assets/MarathonShapiro-Wide65_subset.ttf");
 
 #[expect(clippy::too_many_arguments)]
 async fn bench_font<
@@ -463,12 +460,13 @@ async fn main(_spawner: Spawner) {
         MARATHON_SHAPIRO_TTF_BYTES,
         fontdue::FontSettings {
             collection_index: 0,
-            scale: 20.0,
+            scale: 32.0,
             load_substitutions: false,
         },
     )
     .unwrap();
     let fontdue_font = Rc::new(fontdue_font);
+    let fontdue_ctx = FontdueRendererCtx::new_rc();
     let test_text = "abcdefghijklmnopqrstuvwxyz'\"\n\
                            ABCDEFGHIJKLMNOPQRSTUVWXYZ,.\n\
                            1234567890`~!@#$%^&*()_+/[]";
@@ -492,12 +490,13 @@ async fn main(_spawner: Spawner) {
             bg,
             "10x20 font, rgb565",
             u8g2_fonts::FontRenderer::new::<chrome::MarathonShapiro65_20>(),
-            FontdueRenderer {
-                font_size: 20,
-                background_color: bg,
-                text_color: fg,
-                font: fontdue_font.clone(),
-            },
+            FontdueRenderer::new(
+                Rc::clone(&fontdue_ctx),
+                Rc::clone(&fontdue_font),
+                20,
+                fg,
+                bg,
+            ),
             2000,
         )
         .await;
@@ -508,12 +507,13 @@ async fn main(_spawner: Spawner) {
             bg,
             "16x32 font, rgb565",
             u8g2_fonts::FontRenderer::new::<chrome::MarathonShapiro65_32>(),
-            FontdueRenderer {
-                font_size: 32,
-                background_color: bg,
-                text_color: fg,
-                font: fontdue_font.clone(),
-            },
+            FontdueRenderer::new(
+                Rc::clone(&fontdue_ctx),
+                Rc::clone(&fontdue_font),
+                32,
+                fg,
+                bg,
+            ),
             2000,
         )
         .await;

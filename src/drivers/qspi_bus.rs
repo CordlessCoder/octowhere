@@ -23,6 +23,7 @@ pub enum QSPIOperation {
 
 // PERF: Should our DMA writes be async or blocking?
 impl<'d> QspiBus<'d> {
+    #[must_use]
     pub fn new(spi: SpiDma<'d, Async>, tx: DmaTxBuf, cs: Output<'d>) -> Self {
         Self { spi, tx, cs }
     }

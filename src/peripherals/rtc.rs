@@ -31,6 +31,7 @@ pub struct DateTime {
 }
 
 impl DateTime {
+    #[must_use]
     pub fn new(year: u8, month: u8, day: u8, hours: u8, minutes: u8, seconds: u8) -> Self {
         Self {
             seconds,

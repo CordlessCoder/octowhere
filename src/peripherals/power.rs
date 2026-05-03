@@ -35,6 +35,7 @@ pub struct Axp2101Power<I> {
 }
 
 impl<I: I2c> Axp2101Power<I> {
+    #[must_use]
     pub fn new(i2c: I) -> Self {
         Self { i2c }
     }

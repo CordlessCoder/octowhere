@@ -123,6 +123,7 @@ pub enum TouchData {
 }
 
 impl<I: I2c, RST, INT, DELAY> Cst9217<I, INT, RST, DELAY> {
+    #[must_use]
     pub fn new(i2c: I, reset: RST, int: INT, delay: DELAY) -> Self {
         Self {
             i2c,
