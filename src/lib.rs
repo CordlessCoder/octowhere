@@ -1,4 +1,5 @@
 #![no_std]
+#![feature(allocator_api)]
 #![expect(unused)]
 extern crate alloc;
 

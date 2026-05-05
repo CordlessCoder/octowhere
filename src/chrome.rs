@@ -21,7 +21,14 @@ pub const DISPLAY_SIZE: Size = Size::new(board::LCD_WIDTH as u32, board::LCD_HEI
 pub const DISPLAY_BBOX: Rectangle = Rectangle::new(Point::new_equal(0), DISPLAY_SIZE);
 
 pub const UPSCALE: usize = 1;
-pub const MEDIUM_FONT: u8g2_fonts::FontRenderer = match UPSCALE {
+pub const HEADING_FONT_FAST: u8g2_fonts::FontRenderer = match UPSCALE {
+    1 => u8g2_fonts::FontRenderer::new::<MarathonShapiro65_32>(),
+    2 => u8g2_fonts::FontRenderer::new::<u8g2_fonts::fonts::u8g2_font_spleen8x16_mr>(),
+    3 => u8g2_fonts::FontRenderer::new::<u8g2_fonts::fonts::u8g2_font_spleen6x12_mr>(),
+    4 => u8g2_fonts::FontRenderer::new::<u8g2_fonts::fonts::u8g2_font_spleen5x8_mr>(),
+    _ => todo!(),
+};
+pub const MEDIUM_FONT_FAST: u8g2_fonts::FontRenderer = match UPSCALE {
     1 => u8g2_fonts::FontRenderer::new::<MarathonShapiro65_32>(),
     2 => u8g2_fonts::FontRenderer::new::<u8g2_fonts::fonts::u8g2_font_spleen8x16_mr>(),
     3 => u8g2_fonts::FontRenderer::new::<u8g2_fonts::fonts::u8g2_font_spleen6x12_mr>(),

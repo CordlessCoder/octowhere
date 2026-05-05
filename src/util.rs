@@ -51,9 +51,6 @@ pub fn widening_copy<const FACTOR: usize>(buf: &mut [u8], data: &[u8], width: us
     }
 }
 
-// Shared:
-// - Val1
-// - Val2
 pub struct Swap<T> {
     val1: UnsafeCell<T>,
     val2: UnsafeCell<T>,

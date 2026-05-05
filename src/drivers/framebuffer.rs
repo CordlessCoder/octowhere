@@ -4,6 +4,7 @@
 
 use core::marker::PhantomData;
 
+use alloc::alloc::Allocator;
 use alloc::boxed::Box;
 use embedded_graphics_core::draw_target::DrawTarget;
 use embedded_graphics_core::geometry::{OriginDimensions, Size};
@@ -65,10 +66,10 @@ where
     );
 
     #[must_use]
-    pub fn alloc() -> Box<Self> {
+    pub fn alloc<A: Allocator>(alloc: A) -> Box<Self, A> {
         unsafe {
             // Initialize in-place on the heap
-            let mut alloc = Box::new_uninit();
+            let mut alloc = Box::new_uninit_in(alloc);
             core::ptr::write_bytes(alloc.as_mut_ptr(), 0, 1);
             alloc.assume_init()
         }

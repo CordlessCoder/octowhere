@@ -311,8 +311,8 @@ where
             .spi
             .half_duplex_write_and_wait(
                 DataMode::Quad,
-                Command::_8Bit(0x32, DataMode::Single),
-                Address::_24Bit(0x003C00, DataMode::Single),
+                Command::_8Bit(0x12, DataMode::Single),
+                Address::_24Bit(0x003C00, DataMode::Quad),
                 0,
                 0,
                 &mut self.bus.tx,
@@ -330,8 +330,8 @@ where
             .spi
             .half_duplex_write_and_block(
                 DataMode::Quad,
-                Command::_8Bit(0x32, DataMode::Single),
-                Address::_24Bit(0x003C00, DataMode::Single),
+                Command::_8Bit(0x12, DataMode::Single),
+                Address::_24Bit(0x003C00, DataMode::Quad),
                 0,
                 0,
                 &mut self.bus.tx,
