@@ -8,7 +8,7 @@ use embedded_graphics::{
     primitives::Rectangle,
     text::renderer::TextMetrics,
 };
-use fontdue::layout::Layout;
+use fontdue::{FontRepr, layout::Layout};
 use ph_qmi8658::SelfTestError;
 
 use crate::board;
@@ -29,8 +29,14 @@ pub const MEDIUM_FONT: u8g2_fonts::FontRenderer = match UPSCALE {
     _ => todo!(),
 };
 
-pub static MARATHON_SHAPIRO_TTF_BYTES: &[u8] =
-    include_bytes!("../assets/MarathonShapiro-Wide65_subset.ttf");
+fontdue_macros::fontdue_font_from_file!(
+    MarathonShapiroFont,
+    "../assets/MarathonShapiro-Wide65_subset.ttf",
+    // Picked with some trial and effort to offer some of the lowest flash usage while looking
+    // great. Making it lower makes rendering it faster!
+    scale: 2.1
+);
+
 const fn color_from_rgb(r: u8, g: u8, b: u8) -> Color {
     Color::new(
         (r as f64 / 255. * Color::MAX_R as f64) as u8,
@@ -161,7 +167,7 @@ impl FontdueRendererCtx {
 }
 
 #[derive(Clone)]
-pub struct FontdueRenderer<C> {
+pub struct FontdueRenderer<C, F: FontRepr> {
     /// Text color.
     pub text_color: C,
 
@@ -175,13 +181,13 @@ pub struct FontdueRenderer<C> {
     // pub strikethrough_color: DecorationColor<C>,
     pub font_size: u32,
     pub ctx: Rc<RefCell<FontdueRendererCtx>>,
-    pub font: Rc<fontdue::Font>,
+    pub font: F,
 }
-impl<C: PixelColor> FontdueRenderer<C> {
+impl<C: PixelColor, F: FontRepr> FontdueRenderer<C, F> {
     #[must_use]
     pub fn new(
         ctx: Rc<RefCell<FontdueRendererCtx>>,
-        font: Rc<fontdue::Font>,
+        font: F,
         font_size: u32,
         text_color: C,
         background_color: C,
@@ -223,10 +229,10 @@ impl<C: PixelColor> FontdueRenderer<C> {
         Ok(())
     }
 }
-impl<C: PixelColor + RgbColorExt> FontdueRenderer<C> {
-    fn render<D: DrawTarget<Color = C>>(
+impl<C: PixelColor + RgbColorExt, F: FontRepr> FontdueRenderer<C, F> {
+    fn render_layout<D: DrawTarget<Color = C>>(
         &self,
-        layout_cb: impl FnOnce(&mut Layout<()>),
+        ctx: &mut FontdueRendererCtx,
         position: Point,
         target: &mut D,
     ) -> Result<(), D::Error> {
@@ -239,11 +245,7 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<C> {
             .font
             .horizontal_line_metrics(self.font_size as f32)
             .expect("Cannot draw non-horizontal text");
-
-        let mut ctx = &mut *self.borrow_ctx();
-        ctx.reset_layout();
         let fonts = core::slice::from_ref(&self.font);
-        layout_cb(&mut ctx.layout);
         ctx.layout
             .glyphs()
             .iter()
@@ -280,13 +282,24 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<C> {
         // target.draw_iter(pixels)?;
         // self.draw_strikethrough(width as u32, position, target)?;
         // self.draw_underline(width as u32, position, target)?;
-
         Ok(())
+    }
+    #[inline]
+    fn render<D: DrawTarget<Color = C>>(
+        &self,
+        layout_cb: impl FnOnce(&mut Layout<()>),
+        position: Point,
+        target: &mut D,
+    ) -> Result<(), D::Error> {
+        let mut ctx = &mut *self.borrow_ctx();
+        ctx.reset_layout();
+        layout_cb(&mut ctx.layout);
+        self.render_layout(ctx, position, target)
     }
 }
 
-impl<C: PixelColor + RgbColorExt> embedded_graphics::text::renderer::TextRenderer
-    for FontdueRenderer<C>
+impl<C: PixelColor + RgbColorExt, F: FontRepr> embedded_graphics::text::renderer::TextRenderer
+    for FontdueRenderer<C, F>
 {
     type Color = C;
 

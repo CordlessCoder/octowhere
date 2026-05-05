@@ -27,9 +27,10 @@ use esp_hal::{
     timer::timg::TimerGroup,
 };
 use esp_println::println;
+use fontdue::FontRepr;
 use octowhere::{
     board,
-    chrome::{self, Color, FontdueRenderer, FontdueRendererCtx, MARATHON_SHAPIRO_TTF_BYTES, UPSCALE},
+    chrome::{self, Color, FontdueRenderer, FontdueRendererCtx, MarathonShapiroFont, UPSCALE},
     drivers::{co5300::Co5300Display, framebuffer::Framebuffer, qspi_bus::QspiBus},
     peripherals::{
         power::Axp2101Power,
@@ -187,6 +188,7 @@ async fn bench_font<
     const WIDTH: usize,
     const HEIGHT: usize,
     C,
+    F: FontRepr + Clone,
 >(
     mut display: Option<&mut Co5300Display<'_, C>>,
     fb: &mut Framebuffer<UPSCALE, N, WIDTH, HEIGHT, C>,
@@ -194,7 +196,7 @@ async fn bench_font<
     bg: C,
     desc: &str,
     u8g2_renderer: u8g2_fonts::FontRenderer,
-    fontdue: FontdueRenderer<C>,
+    fontdue: FontdueRenderer<C, F>,
     delay: u32,
 ) where
     <C as embedded_graphics::pixelcolor::raw::ToBytes>::Bytes: core::convert::AsRef<[u8]>,
@@ -456,16 +458,6 @@ async fn main(_spawner: Spawner) {
         466,
         Color,
     >::alloc();
-    let fontdue_font = fontdue::Font::from_bytes(
-        MARATHON_SHAPIRO_TTF_BYTES,
-        fontdue::FontSettings {
-            collection_index: 0,
-            scale: 32.0,
-            load_substitutions: false,
-        },
-    )
-    .unwrap();
-    let fontdue_font = Rc::new(fontdue_font);
     let fontdue_ctx = FontdueRendererCtx::new_rc();
     let test_text = "abcdefghijklmnopqrstuvwxyz'\"\n\
                            ABCDEFGHIJKLMNOPQRSTUVWXYZ,.\n\
@@ -490,13 +482,7 @@ async fn main(_spawner: Spawner) {
             bg,
             "10x20 font, rgb565",
             u8g2_fonts::FontRenderer::new::<chrome::MarathonShapiro65_20>(),
-            FontdueRenderer::new(
-                Rc::clone(&fontdue_ctx),
-                Rc::clone(&fontdue_font),
-                20,
-                fg,
-                bg,
-            ),
+            FontdueRenderer::new(Rc::clone(&fontdue_ctx), MarathonShapiroFont, 20, fg, bg),
             2000,
         )
         .await;
@@ -507,13 +493,7 @@ async fn main(_spawner: Spawner) {
             bg,
             "16x32 font, rgb565",
             u8g2_fonts::FontRenderer::new::<chrome::MarathonShapiro65_32>(),
-            FontdueRenderer::new(
-                Rc::clone(&fontdue_ctx),
-                Rc::clone(&fontdue_font),
-                32,
-                fg,
-                bg,
-            ),
+            FontdueRenderer::new(Rc::clone(&fontdue_ctx), MarathonShapiroFont, 32, fg, bg),
             2000,
         )
         .await;
