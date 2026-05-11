@@ -14,3 +14,5 @@ build-std-features = ["optimize_for_size"]
 # when the network runner task tries to send DHCP DISCOVER before the radio
 # is started. Set back to "info" or "warn" for debugging.
 ESP_LOG = "error"
+# Can slightly speed up SPI, if necessary.
+# ESP_HAL_CONFIG_PLACE_SPI_MASTER_DRIVER_IN_RAM = "true"

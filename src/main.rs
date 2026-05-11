@@ -32,8 +32,8 @@ use fontdue::FontRepr;
 use octowhere::{
     board,
     chrome::{
-        self, Color, FontdueRenderer, FontdueRendererCtx, HEADING_FONT_FAST, MarathonShapiroFont,
-        UPSCALE,
+        self, Color, FontdueRenderer, FontdueRendererCtx, FraktionMonoRegularFont,
+        HEADING_FONT_FAST, MEDIUM_FONT_FAST, MarathonShapiroFont, UPSCALE,
     },
     drivers::{co5300::Co5300Display, framebuffer::Framebuffer, qspi_bus::QspiBus},
     peripherals::{
@@ -41,6 +41,7 @@ use octowhere::{
         rtc::Pcf85063aRtc,
         touch::{Cst9217, Cst9217Config, TouchData},
     },
+    ui::dirty::DirtyAreas,
     util::{Swap, SwapThread, fill_buf_repeat},
 };
 use static_cell::StaticCell;
@@ -64,6 +65,9 @@ struct SecondCore<A: Allocator + 'static = alloc::alloc::Global> {
     spi2: peripherals::SPI2<'static>,
     swap: SwapThread<'static, SwapState<A>>,
 }
+
+const SCALED_WIDTH: usize = octowhere::board::LCD_WIDTH as usize / UPSCALE;
+const SCALED_HEIGHT: usize = octowhere::board::LCD_HEIGHT as usize / UPSCALE;
 
 type FB = Framebuffer<
     UPSCALE,
@@ -143,22 +147,45 @@ async fn second_core(
         let state = swap.get();
         let SwapState {
             fb,
-            vsync_wait,
-            spi_time,
-            swap_draw,
-            swap_spi,
+            timings:
+                Timings {
+                    vsync_wait,
+                    spi_time,
+                    swap_draw,
+                    swap_spi,
+                    frametime,
+                },
+            dirty,
+            needs_full_redraw,
         } = state;
 
         let start = Instant::now();
 
-        // display.wait_for_vsync().await;
+        display.wait_for_vsync().await;
 
         *vsync_wait = start.elapsed();
 
-        fb.flush(&mut display, |pixels| {
-            fill_buf_repeat(pixels, &[0], pixels.len());
-        })
-        .await;
+        if dirty.is_full() {
+            fb.flush(&mut display, |pixels| {
+                // fill_buf_repeat(pixels, &[0], pixels.len());
+            })
+            .await;
+        } else {
+            for region in dirty.iter() {
+                fb.flush_region(
+                    &mut display,
+                    region.top_left.x as u16,
+                    region.top_left.y as u16,
+                    region.size.width as u16,
+                    region.size.height as u16,
+                    |pixels| {
+                        // fill_buf_repeat(pixels, &[0], pixels.len());
+                    },
+                )
+                .await;
+            }
+            // fb.clear_color(chrome::BLACK);
+        };
 
         *spi_time = start.elapsed() - *vsync_wait;
 
@@ -193,7 +220,6 @@ async fn bench_font<
     const WIDTH: usize,
     const HEIGHT: usize,
     C,
-    F: FontRepr + Clone,
 >(
     mut display: Option<&mut Co5300Display<'_, C>>,
     fb: &mut Framebuffer<UPSCALE, N, WIDTH, HEIGHT, C>,
@@ -201,7 +227,7 @@ async fn bench_font<
     bg: C,
     desc: &str,
     u8g2_renderer: u8g2_fonts::FontRenderer,
-    fontdue: FontdueRenderer<C, F>,
+    fontdue: FontdueRenderer<'_, C>,
     delay: u32,
 ) where
     <C as embedded_graphics::pixelcolor::raw::ToBytes>::Bytes: core::convert::AsRef<[u8]>,
@@ -270,6 +296,213 @@ async fn bench_font<
     }
 }
 
+struct DrawCtx {
+    touch_data: TouchData,
+    bounding_box: Rectangle,
+}
+
+#[derive(Debug, Default)]
+struct Timings {
+    vsync_wait: Duration,
+    spi_time: Duration,
+    swap_draw: Duration,
+    swap_spi: Duration,
+    frametime: Duration,
+}
+
+fn update_text<D>(ctx: &DrawCtx, timings: &Timings, target: &mut D) -> Dirty
+where
+    D: DrawTarget,
+    D: DrawTarget<Color = Color>,
+    D::Error: core::fmt::Debug,
+{
+    let mut dirty = Dirty::new();
+    let Timings {
+        vsync_wait,
+        spi_time,
+        swap_draw,
+        swap_spi,
+        frametime,
+    } = timings;
+    let text = format_args!(
+        // let text = alloc::format!(
+        "draw: {:.1}ms\nvsync: {:.1}ms\nspi+clear: {:.1}ms\nswap(draw): {:.1}ms\nswap(spi): {:.1}ms",
+        frametime.as_micros() as f32 / 1_000.,
+        vsync_wait.as_micros() as f32 / 1_000.,
+        spi_time.as_micros() as f32 / 1_000.,
+        swap_draw.as_micros() as f32 / 1_000.,
+        swap_spi.as_micros() as f32 / 1_000.,
+    );
+    let dim = HEADING_FONT_FAST
+        .render(
+            "Statistics",
+            (ctx.bounding_box.center() + Point::new(-100, 60)).scale(),
+            u8g2_fonts::types::VerticalPosition::Bottom,
+            FontColor::Transparent(chrome::WHITE),
+            target,
+        )
+        .unwrap();
+    _ = dim.bounding_box.map(|rect| dirty.add(rect));
+    let dim = MEDIUM_FONT_FAST
+        .render(
+            text,
+            (ctx.bounding_box.center() + Point::new(-100, 60)).scale(),
+            u8g2_fonts::types::VerticalPosition::Top,
+            FontColor::Transparent(chrome::WHITE),
+            target,
+        )
+        .unwrap();
+    _ = dim.bounding_box.map(|rect| dirty.add(rect));
+    // fontdue_renderer
+    //     .render(
+    //         |layout, fonts| {
+    //             layout.append(
+    //                 fonts,
+    //                 &fontdue::layout::TextStyle::new("Statistics\n", 32.0, 0),
+    //             );
+    //             layout.append(fonts, &fontdue::layout::TextStyle::new(&text, 24.0, 1));
+    //         },
+    //         (bbox.center() + Point::new(-100, 10)).scale(),
+    //         fb,
+    //     )
+    //     .unwrap();
+    dirty
+}
+
+fn update_touch<D>(ctx: &DrawCtx, target: &mut D) -> Dirty
+where
+    D: DrawTarget<Color = Color>,
+    D: DrawTarget,
+    D::Error: core::fmt::Debug,
+{
+    use embedded_graphics::{
+        prelude::*,
+        primitives::{
+            Circle, PrimitiveStyle, PrimitiveStyleBuilder, Rectangle, StrokeAlignment, Triangle,
+        },
+        text::{Alignment, Text},
+    };
+    let mut dirty = Dirty::new();
+
+    // Create styles used by the drawing operations.
+    let thin_stroke = PrimitiveStyle::with_stroke(chrome::PURPLE, 4 / UPSCALE as u32);
+    let thick_stroke = PrimitiveStyle::with_stroke(chrome::RED, 8 / UPSCALE as u32);
+    let border_stroke = PrimitiveStyleBuilder::new()
+        .stroke_color(if ctx.touch_data != TouchData::CoverGesture {
+            chrome::LIME
+        } else {
+            chrome::RED
+        })
+        .stroke_width(8 / UPSCALE as u32)
+        .stroke_alignment(StrokeAlignment::Inside)
+        .build();
+    let fill = PrimitiveStyle::with_fill(Color::CSS_GRAY);
+
+    let yoffset = 140 / UPSCALE as i32;
+
+    match &ctx.touch_data {
+        TouchData::Points(points) => {
+            let size = 64 / UPSCALE;
+            for point in points {
+                let prim = Circle::with_center(
+                    Point::new(point.x as i32, point.y as i32).scale(),
+                    size as u32,
+                )
+                .into_styled(
+                    PrimitiveStyleBuilder::new()
+                        .fill_color(Color::CSS_CYAN)
+                        .build(),
+                );
+                prim.draw(target).unwrap();
+                dirty.add(prim.bounding_box());
+            }
+        }
+        TouchData::CoverGesture => {}
+    }
+    dirty
+}
+
+fn draw<D>(ctx: &mut DrawCtx, timings: &Timings, target: &mut D) -> Dirty
+where
+    D: DrawTarget<Color = Color>,
+    D: DrawTarget,
+    D::Error: core::fmt::Debug,
+{
+    let mut dirty = Dirty::new();
+    use embedded_graphics::{
+        prelude::*,
+        primitives::{
+            Circle, PrimitiveStyle, PrimitiveStyleBuilder, Rectangle, StrokeAlignment, Triangle,
+        },
+        text::{Alignment, Text},
+    };
+
+    target
+        .fill_solid(&target.bounding_box(), chrome::BLACK)
+        .unwrap();
+    dirty.add(target.bounding_box());
+
+    let Timings {
+        vsync_wait,
+        spi_time,
+        swap_draw,
+        swap_spi,
+        frametime,
+    } = timings;
+
+    // Create styles used by the drawing operations.
+    let thin_stroke = PrimitiveStyle::with_stroke(chrome::PURPLE, 4 / UPSCALE as u32);
+    let thick_stroke = PrimitiveStyle::with_stroke(chrome::RED, 8 / UPSCALE as u32);
+    let border_stroke = PrimitiveStyleBuilder::new()
+        .stroke_color(if ctx.touch_data != TouchData::CoverGesture {
+            chrome::LIME
+        } else {
+            chrome::RED
+        })
+        .stroke_width(8 / UPSCALE as u32)
+        .stroke_alignment(StrokeAlignment::Inside)
+        .build();
+    let fill = PrimitiveStyle::with_fill(Color::CSS_GRAY);
+
+    let yoffset = 140 / UPSCALE as i32;
+
+    // // Draw a 3px wide outline around the display.
+    // Circle::new(Point::new(0, 0), ctx.bounding_box.size.width)
+    //     .scale()
+    //     .into_styled(border_stroke)
+    //     .draw(target)
+    //     .unwrap();
+
+    // PERF: Currently, embedded_graphics primitives completely ignore the target's bounding box,
+    // attempting to draw even if it would go out of bounds, wasting compute.
+
+    // // Draw a triangle.
+    // Triangle::new(
+    //     Point::new(56, 64 + yoffset).scale(),
+    //     Point::new(56 + 64, 64 + yoffset).scale(),
+    //     Point::new(56 + 32, yoffset).scale(),
+    // )
+    // .into_styled(thin_stroke)
+    // .draw(target)
+    // .unwrap();
+
+    // // Draw a filled square
+    // Rectangle::new(Point::new(200, yoffset), Size::new(64, 64))
+    //     .scale()
+    //     .into_styled(fill)
+    //     .draw(target)
+    //     .unwrap();
+    //
+    // // Draw a circle with a 3px wide stroke.
+    // Circle::new(Point::new(340, yoffset), 68)
+    //     .scale()
+    //     .into_styled(thick_stroke)
+    //     .draw(target)
+    //     .unwrap();
+
+    dirty
+}
+
 trait Scalable {
     fn scale(self) -> Self;
 }
@@ -298,12 +531,12 @@ impl Scalable for Circle {
     }
 }
 
+type Dirty = DirtyAreas<SCALED_WIDTH, SCALED_HEIGHT, 2, 2, { 2 * 2 }>;
 struct SwapState<A: Allocator = alloc::alloc::Global> {
     fb: Box<FB, A>,
-    vsync_wait: Duration,
-    spi_time: Duration,
-    swap_draw: Duration,
-    swap_spi: Duration,
+    dirty: Dirty,
+    needs_full_redraw: Dirty,
+    timings: Timings,
 }
 
 #[esp_rtos::main]
@@ -324,15 +557,15 @@ async fn main(_spawner: Spawner) {
         flash_frequency: esp_hal::psram::FlashFreq::FlashFreq80m,
         ram_frequency: esp_hal::psram::SpiRamFreq::Freq80m,
     };
-    let psram = esp_hal::psram::Psram::new(peripherals.PSRAM, psram_config);
     unsafe {
+        let psram = esp_hal::psram::Psram::new(peripherals.PSRAM, psram_config);
+        let (start, size) = psram.raw_parts();
         PSRAM_HEAP.add_region(esp_alloc::HeapRegion::new(
-            psram.raw_parts().0,
-            psram.raw_parts().1,
+            start,
+            size,
             esp_alloc::MemoryCapability::External.into(),
         ));
     }
-    // esp_alloc::psram_allocator!(peripherals.PSRAM, esp_hal::psram, psram_config);
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
 
@@ -457,22 +690,19 @@ async fn main(_spawner: Spawner) {
         466,
         Color,
     >::alloc(&PSRAM_HEAP);
-    let swap_fb = fb.clone();
     let swap: &'static mut Swap<SwapState<_>> = SWAP.init_with(|| {
         Swap::new(
             SwapState {
-                fb: fb.clone(),
-                spi_time: Duration::MIN,
-                vsync_wait: Duration::MIN,
-                swap_draw: Duration::MIN,
-                swap_spi: Duration::MIN,
+                fb: Box::clone(&fb),
+                dirty: DirtyAreas::new(),
+                needs_full_redraw: DirtyAreas::new_full(),
+                timings: Timings::default(),
             },
             SwapState {
                 fb,
-                spi_time: Duration::MIN,
-                vsync_wait: Duration::MIN,
-                swap_draw: Duration::MIN,
-                swap_spi: Duration::MIN,
+                dirty: DirtyAreas::new(),
+                needs_full_redraw: DirtyAreas::new_full(),
+                timings: Timings::default(),
             },
         )
     });
@@ -504,129 +734,57 @@ async fn main(_spawner: Spawner) {
             })
         },
     );
-    let mut ticker = Ticker::every(Duration::from_millis(1000 / 60));
-    let mut frametime = Duration::MIN;
+
+    // let fontdue_ctx = FontdueRendererCtx::new_rc();
+    // let fontdue_renderer = FontdueRenderer::new(
+    //     fontdue_ctx,
+    //     32,
+    //     chrome::WHITE,
+    //     chrome::BLACK,
+    //     &[&MarathonShapiroFont, &FraktionMonoRegularFont],
+    // );
+    let mut draw_ctx = DrawCtx {
+        touch_data: TouchData::default(),
+        bounding_box: chrome::DISPLAY_BBOX,
+    };
+    let mut prev_swap_draw = Duration::MIN;
     let mut prev_swap_draw = Duration::MIN;
     loop {
-        let state = fb_st.get();
-        let SwapState {
-            fb,
-            spi_time,
-            vsync_wait,
-            swap_spi,
-            swap_draw,
-        } = state;
-        let fb = &mut **fb;
-        let touch_data = touch.read_touch_data().await.unwrap();
         let start = Instant::now();
+        {
+            let state = fb_st.get();
+            let SwapState {
+                fb,
+                dirty,
+                timings,
+                needs_full_redraw,
+            } = state;
+            let fb = &mut **fb;
+            draw_ctx.touch_data = touch.read_touch_data().await.unwrap();
+            dirty.clear();
 
-        use embedded_graphics::{
-            prelude::*,
-            primitives::{
-                Circle, PrimitiveStyle, PrimitiveStyleBuilder, Rectangle, StrokeAlignment, Triangle,
-            },
-            text::{Alignment, Text},
-        };
-        // Create styles used by the drawing operations.
-        let thin_stroke = PrimitiveStyle::with_stroke(chrome::PURPLE, 4 / UPSCALE as u32);
-        let thick_stroke = PrimitiveStyle::with_stroke(chrome::RED, 8 / UPSCALE as u32);
-        let border_stroke = PrimitiveStyleBuilder::new()
-            .stroke_color(if touch_data != TouchData::CoverGesture {
-                chrome::LIME
+            // esp_println::dbg!(&needs_full_redraw);
+            if needs_full_redraw.is_full() {
+                draw(&mut draw_ctx, timings, fb);
+                dirty.make_full();
             } else {
-                chrome::RED
-            })
-            .stroke_width(8 / UPSCALE as u32)
-            .stroke_alignment(StrokeAlignment::Inside)
-            .build();
-        let fill = PrimitiveStyle::with_fill(Color::CSS_GRAY);
-
-        let yoffset = 200 / UPSCALE as i32;
-
-        let bbox = chrome::DISPLAY_BBOX;
-
-        // Draw a 3px wide outline around the display.
-        Circle::new(Point::new(0, 0), bbox.size.width)
-            .scale()
-            .into_styled(border_stroke)
-            .draw(fb)
-            .unwrap();
-
-        // Draw a triangle.
-        Triangle::new(
-            Point::new(56, 64 + yoffset).scale(),
-            Point::new(56 + 64, 64 + yoffset).scale(),
-            Point::new(56 + 32, yoffset).scale(),
-        )
-        .into_styled(thin_stroke)
-        .draw(fb)
-        .unwrap();
-
-        // Draw a filled square
-        Rectangle::new(Point::new(200, yoffset), Size::new(64, 64))
-            .scale()
-            .into_styled(fill)
-            .draw(fb)
-            .unwrap();
-
-        // Draw a circle with a 3px wide stroke.
-        Circle::new(Point::new(340, yoffset), 68)
-            .scale()
-            .into_styled(thick_stroke)
-            .draw(fb)
-            .unwrap();
-
-        match &touch_data {
-            TouchData::Points(points) => {
-                let size = 64 / UPSCALE;
-                for point in points {
-                    // Draw a circle with a 3px wide stroke.
-                    Circle::new(
-                        Point::new(
-                            point.x as i32 - size as i32 / 2,
-                            point.y as i32 - size as i32 / 2,
-                        )
-                        .scale(),
-                        size as u32,
-                    )
-                    .into_styled(
-                        PrimitiveStyleBuilder::new()
-                            .fill_color(Color::CSS_CYAN)
-                            .build(),
-                    )
-                    .draw(fb)
-                    .unwrap();
+                for area in needs_full_redraw.iter() {
+                    let mut clipped = fb.clipped(&area);
+                    dirty.extend(&draw(&mut draw_ctx, timings, &mut clipped));
                 }
             }
-            TouchData::CoverGesture => {}
+            dirty.extend(needs_full_redraw);
+            *needs_full_redraw = update_text(&draw_ctx, timings, fb);
+            needs_full_redraw.extend(&update_touch(&draw_ctx, fb));
+
+            dirty.extend(needs_full_redraw);
+
+            timings.frametime = start.elapsed();
+            timings.swap_draw = prev_swap_draw;
         }
 
-        // Draw centered text.
-        let text = format_args!(
-            "draw: {:.1}ms\nvsync: {:.1}ms\nspi+clear: {:.1}ms\nswap(draw): {:.1}ms\nswap(spi): {:.1}ms",
-            frametime.as_micros() as f32 / 1_000.,
-            vsync_wait.as_micros() as f32 / 1_000.,
-            spi_time.as_micros() as f32 / 1_000.,
-            swap_draw.as_micros() as f32 / 1_000.,
-            swap_spi.as_micros() as f32 / 1_000.,
-        );
-        u8g2_fonts::FontRenderer::new::<chrome::MarathonShapiro65_20>()
-            .render(
-                text,
-                (bbox.center() + Point::new(-100, 60)).scale(),
-                u8g2_fonts::types::VerticalPosition::Top,
-                FontColor::Transparent(chrome::WHITE),
-                fb,
-            )
-            .unwrap();
-
-        frametime = start.elapsed();
-
-        *swap_draw = prev_swap_draw;
+        let start = Instant::now();
         fb_st.swap().await;
-
-        prev_swap_draw = start.elapsed() - frametime;
-
-        ticker.next().await;
+        prev_swap_draw = start.elapsed();
     }
 }

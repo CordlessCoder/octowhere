@@ -29,7 +29,7 @@ pub const HEADING_FONT_FAST: u8g2_fonts::FontRenderer = match UPSCALE {
     _ => todo!(),
 };
 pub const MEDIUM_FONT_FAST: u8g2_fonts::FontRenderer = match UPSCALE {
-    1 => u8g2_fonts::FontRenderer::new::<MarathonShapiro65_32>(),
+    1 => u8g2_fonts::FontRenderer::new::<FraktionMono24>(),
     2 => u8g2_fonts::FontRenderer::new::<u8g2_fonts::fonts::u8g2_font_spleen8x16_mr>(),
     3 => u8g2_fonts::FontRenderer::new::<u8g2_fonts::fonts::u8g2_font_spleen6x12_mr>(),
     4 => u8g2_fonts::FontRenderer::new::<u8g2_fonts::fonts::u8g2_font_spleen5x8_mr>(),
@@ -42,6 +42,12 @@ fontdue_macros::fontdue_font_from_file!(
     // Picked with some trial and effort to offer some of the lowest flash usage while looking
     // great. Making it lower makes rendering it faster!
     scale: 2.1
+);
+
+fontdue_macros::fontdue_font_from_file!(
+    FraktionMonoRegularFont,
+    "../assets/PPFraktion-Free for personal use v1.1/Mono/PPFraktionMono-Regular-subset.ttf",
+    scale: 2.2
 );
 
 const fn color_from_rgb(r: u8, g: u8, b: u8) -> Color {
@@ -100,6 +106,25 @@ impl u8g2_fonts::Font for MarathonShapiro65_32 {
 pub struct MarathonShapiro65_20;
 impl u8g2_fonts::Font for MarathonShapiro65_20 {
     const DATA: &'static [u8] = include_bytes!("../assets/marathon_shapiro_20.u8g2");
+}
+
+pub struct FraktionMono28;
+impl u8g2_fonts::Font for FraktionMono28 {
+    const DATA: &'static [u8] = include_bytes!(
+        "../assets/PPFraktion-Free for personal use v1.1/Mono/ppfraktionmono_regular_28.u8g2"
+    );
+}
+pub struct FraktionMono24;
+impl u8g2_fonts::Font for FraktionMono24 {
+    const DATA: &'static [u8] = include_bytes!(
+        "../assets/PPFraktion-Free for personal use v1.1/Mono/ppfraktionmono_regular_24.u8g2"
+    );
+}
+pub struct FraktionMono20;
+impl u8g2_fonts::Font for FraktionMono20 {
+    const DATA: &'static [u8] = include_bytes!(
+        "../assets/PPFraktion-Free for personal use v1.1/Mono/ppfraktionmono_regular_20.u8g2"
+    );
 }
 
 pub trait RgbColorExt {
@@ -174,7 +199,7 @@ impl FontdueRendererCtx {
 }
 
 #[derive(Clone)]
-pub struct FontdueRenderer<C, F: FontRepr> {
+pub struct FontdueRenderer<'f, C> {
     /// Text color.
     pub text_color: C,
 
@@ -188,23 +213,23 @@ pub struct FontdueRenderer<C, F: FontRepr> {
     // pub strikethrough_color: DecorationColor<C>,
     pub font_size: u32,
     pub ctx: Rc<RefCell<FontdueRendererCtx>>,
-    pub font: F,
+    pub fonts: &'f [&'f dyn FontRepr],
 }
-impl<C: PixelColor, F: FontRepr> FontdueRenderer<C, F> {
+impl<'f, C: PixelColor> FontdueRenderer<'f, C> {
     #[must_use]
     pub fn new(
         ctx: Rc<RefCell<FontdueRendererCtx>>,
-        font: F,
         font_size: u32,
         text_color: C,
         background_color: C,
+        fonts: &'f [&'f dyn FontRepr],
     ) -> Self {
         Self {
             text_color,
             background_color,
             ctx,
-            font,
             font_size,
+            fonts,
         }
     }
     #[must_use]
@@ -236,7 +261,7 @@ impl<C: PixelColor, F: FontRepr> FontdueRenderer<C, F> {
         Ok(())
     }
 }
-impl<C: PixelColor + RgbColorExt, F: FontRepr> FontdueRenderer<C, F> {
+impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
     fn render_layout<D: DrawTarget<Color = C>>(
         &self,
         ctx: &mut FontdueRendererCtx,
@@ -248,20 +273,17 @@ impl<C: PixelColor + RgbColorExt, F: FontRepr> FontdueRenderer<C, F> {
         if usable_width == 0 {
             return Ok(());
         }
-        let line_metrics = self
-            .font
-            .horizontal_line_metrics(self.font_size as f32)
-            .expect("Cannot draw non-horizontal text");
-        let fonts = core::slice::from_ref(&self.font);
         ctx.layout
             .glyphs()
             .iter()
             .filter(|g| g.x < usable_width as f32 && g.char_data.rasterize())
             .try_for_each(|g| {
                 let c = g.parent;
-                let (metrics, bitmap) =
-                    self.font
-                        .rasterize(&mut ctx.canvas, c, self.font_size as f32);
+                let (metrics, bitmap) = self.fonts[g.font_index].rasterize_indexed(
+                    &mut ctx.canvas,
+                    g.key.glyph_index,
+                    g.key.px,
+                );
                 let x_off = g.x as i32;
                 let y_off = g.y as i32;
 
@@ -273,17 +295,15 @@ impl<C: PixelColor + RgbColorExt, F: FontRepr> FontdueRenderer<C, F> {
                     position + Point::new(x_off, y_off),
                     Size::new(width as u32, metrics.height as u32),
                 );
-                // let pixels = bitmap.enumerate().filter(|&(_, c)| c != 0).map(|(idx, c)| {
-                //     let y = idx / width;
-                //     let x = idx % width;
-                //     Pixel(
-                //         position + Point::new(x_off + x as i32, y_off + y as i32),
-                //         coverage_to_color(c),
-                //     )
-                // });
-                let colors = bitmap.map(coverage_to_color);
-                target.fill_contiguous(&area, colors)
-                // target.draw_iter(pixels)
+                let pixels = bitmap.enumerate().filter(|&(_, c)| c != 0).map(|(idx, c)| {
+                    let y = idx / width;
+                    let x = idx % width;
+                    Pixel(
+                        position + Point::new(x_off + x as i32, y_off + y as i32),
+                        coverage_to_color(c),
+                    )
+                });
+                target.draw_iter(pixels)
             })?;
         // self.draw_background(width as u32, position, target)?;
         // target.draw_iter(pixels)?;
@@ -292,21 +312,21 @@ impl<C: PixelColor + RgbColorExt, F: FontRepr> FontdueRenderer<C, F> {
         Ok(())
     }
     #[inline]
-    fn render<D: DrawTarget<Color = C>>(
+    pub fn render<D: DrawTarget<Color = C>>(
         &self,
-        layout_cb: impl FnOnce(&mut Layout<()>),
+        layout_cb: impl FnOnce(&mut Layout<()>, &[&dyn FontRepr]),
         position: Point,
         target: &mut D,
     ) -> Result<(), D::Error> {
         let mut ctx = &mut *self.borrow_ctx();
         ctx.reset_layout();
-        layout_cb(&mut ctx.layout);
+        layout_cb(&mut ctx.layout, self.fonts);
         self.render_layout(ctx, position, target)
     }
 }
 
-impl<C: PixelColor + RgbColorExt, F: FontRepr> embedded_graphics::text::renderer::TextRenderer
-    for FontdueRenderer<C, F>
+impl<C: PixelColor + RgbColorExt> embedded_graphics::text::renderer::TextRenderer
+    for FontdueRenderer<'_, C>
 {
     type Color = C;
 
@@ -320,9 +340,8 @@ impl<C: PixelColor + RgbColorExt, F: FontRepr> embedded_graphics::text::renderer
     where
         D: DrawTarget<Color = Self::Color>,
     {
-        let fonts = core::slice::from_ref(&self.font);
         self.render(
-            |layout| {
+            |layout, fonts| {
                 layout.append(
                     fonts,
                     &fontdue::layout::TextStyle::new(text, self.font_size as f32, 0),
@@ -350,10 +369,9 @@ impl<C: PixelColor + RgbColorExt, F: FontRepr> embedded_graphics::text::renderer
         baseline: embedded_graphics::text::Baseline,
     ) -> embedded_graphics::text::renderer::TextMetrics {
         let mut ctx = self.borrow_ctx();
-        let fonts = core::slice::from_ref(&self.font);
         ctx.reset_layout();
         ctx.layout.append(
-            fonts,
+            self.fonts,
             &fontdue::layout::TextStyle::new(text, self.font_size as f32, 0),
         );
         let size = ctx

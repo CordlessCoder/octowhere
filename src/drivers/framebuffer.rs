@@ -181,12 +181,13 @@ where
 
     /// Flush only a rectangular region (dirty rect optimization).
     pub async fn flush_region(
-        &self,
+        &mut self,
         display: &mut Co5300Display<'_, C>,
         x: u16,
         y: u16,
         w: u16,
         h: u16,
+        mut post_write: impl FnMut(&mut [u8]),
     ) {
         if w == 0 || h == 0 {
             return;
@@ -223,29 +224,51 @@ where
 
         display.set_addr_window(x0 as u16, y0 as u16, flush_w as u16, flush_h as u16);
         let mut stream = display.begin_stream_async().await;
-        let mut rows = (y0..y0 + flush_h).map(|row| {
-            let start = row * WIDTH + x0;
-            let end = start + flush_w;
-            &self.buf[start * C::BYTES_PER_PIXEL..end * C::BYTES_PER_PIXEL]
-        });
-        let mut rem = rows.next().unwrap_or(&[]);
+        let mut rows = self
+            .buf
+            .chunks_exact_mut(WIDTH * C::BYTES_PER_PIXEL)
+            .skip(y0)
+            .take(flush_h)
+            .map(|row| &mut row[x0 * C::BYTES_PER_PIXEL..(x0 + flush_w) * C::BYTES_PER_PIXEL]);
+        let mut row = rows.next().unwrap_or(&mut []);
+        let mut repetition = 0;
+        let mut skip = 0;
         let mut keep_going = true;
         while keep_going {
             stream
                 .flush_if_needed_and_get_buf_async(|mut buf| {
                     let mut new = 0;
-                    while !buf.is_empty() {
-                        let chunk = buf.len().min(rem.len());
-                        let captured = rem.split_off(..chunk).unwrap();
-                        let write_to = buf.split_off_mut(..chunk).unwrap();
-                        write_to.copy_from_slice(captured);
-                        new += chunk;
+                    loop {
+                        let mut rem = &mut row[skip..];
+                        let pre_scale_chunk = (buf.len() / UPSCALE / C::BYTES_PER_PIXEL
+                            * C::BYTES_PER_PIXEL)
+                            .min(rem.len());
+                        skip += pre_scale_chunk;
+                        if pre_scale_chunk == 0 {
+                            break;
+                        }
+                        let captured = rem.split_off_mut(..pre_scale_chunk).unwrap();
+                        widening_copy::<UPSCALE>(
+                            buf.split_off_mut(..pre_scale_chunk * UPSCALE).unwrap(),
+                            captured,
+                            C::BYTES_PER_PIXEL,
+                        );
+                        if repetition == const { UPSCALE - 1 } {
+                            post_write(captured);
+                        }
+
+                        new += pre_scale_chunk * UPSCALE;
                         if rem.is_empty() {
-                            let Some(next) = rows.next() else {
-                                keep_going = false;
-                                break;
-                            };
-                            rem = next;
+                            skip = 0;
+                            repetition += 1;
+                            if repetition >= UPSCALE {
+                                let Some(next_row) = rows.next() else {
+                                    keep_going = false;
+                                    break;
+                                };
+                                row = next_row;
+                                repetition = 0;
+                            }
                         }
                     }
                     new

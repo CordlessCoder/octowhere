@@ -8,3 +8,4 @@ pub mod chrome;
 pub mod drivers;
 pub mod peripherals;
 pub mod util;
+pub mod ui;

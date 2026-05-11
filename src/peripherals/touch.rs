@@ -121,6 +121,11 @@ pub enum TouchData {
     CoverGesture,
     Points(heapless::Vec<TouchPoint, 2, u8>),
 }
+impl Default for TouchData {
+    fn default() -> Self {
+        TouchData::Points(heapless::Vec::new())
+    }
+}
 
 impl<I: I2c, RST, INT, DELAY> Cst9217<I, INT, RST, DELAY> {
     #[must_use]
