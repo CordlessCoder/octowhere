@@ -1,6 +1,5 @@
 use core::{
     cell::UnsafeCell,
-    iter::FusedIterator,
     sync::atomic::{AtomicBool, Ordering},
     task::{Poll, Waker},
 };
@@ -9,7 +8,7 @@ use embassy_sync::waitqueue::AtomicWaker;
 
 const CHUNK_SIZE: usize = 32;
 #[inline]
-pub fn fill_buf_repeat<'b>(mut buf: &'b mut [u8], mut data: &[u8], mut n: usize) -> &'b mut [u8] {
+pub fn fill_buf_repeat<'b>(mut buf: &'b mut [u8], data: &[u8], mut n: usize) -> &'b mut [u8] {
     if n == 0 {
         return &mut [];
     }
@@ -51,6 +50,7 @@ pub fn widening_copy<const FACTOR: usize>(buf: &mut [u8], data: &[u8], width: us
     }
 }
 
+/// Allows for efficiently implementing double-buffering accross tasks and even cores.
 pub struct Swap<T> {
     val1: UnsafeCell<T>,
     val2: UnsafeCell<T>,
@@ -104,6 +104,8 @@ pub struct SwapThread<'s, T> {
     swap: &'s Swap<T>,
     has_val1: bool,
     is_thread1: bool,
+    // Indicates a SwapThreadFuture was dropped or forgotten, leaving the inter-thread
+    // synchronization logic in a possibly invalid state.
     poisoned: bool,
 }
 

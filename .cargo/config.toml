@@ -16,3 +16,6 @@ build-std-features = ["optimize_for_size"]
 ESP_LOG = "error"
 # Can slightly speed up SPI, if necessary.
 # ESP_HAL_CONFIG_PLACE_SPI_MASTER_DRIVER_IN_RAM = "true"
+# These should be tuned carefully as they have a +- 15% perf impact on drawing and SPI flush.
+ESP_HAL_CONFIG_DATA_CACHE_SIZE="64KB"
+ESP_HAL_CONFIG_DATA_CACHE_LINE_SIZE="64B"

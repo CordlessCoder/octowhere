@@ -39,8 +39,8 @@ const CMD_WCTRLD1: u8 = 0x53;
 const CMD_BRIGHTNESS: u8 = 0x51;
 const CMD_BRIGHTNESS_HBM: u8 = 0x63;
 const CMD_WCE: u8 = 0x58;
-const CMD_ALLPOFF: u8 = 0x22; // All pixels off
-const CMD_ALLPON: u8 = 0x23; // All pixels on
+// const CMD_ALLPOFF: u8 = 0x22; // All pixels off
+// const CMD_ALLPON: u8 = 0x23; // All pixels on
 
 // MADCTL flags
 const MADCTL_RGB: u8 = 0x00;

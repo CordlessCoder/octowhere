@@ -2,21 +2,17 @@
 // 466x466 RGB565 = 434.312 kB
 // Draws to RAM, then flushes entire screen via DMA QSPI
 
-use core::marker::PhantomData;
-
-use alloc::alloc::Allocator;
-use alloc::boxed::Box;
-use embedded_graphics_core::draw_target::DrawTarget;
-use embedded_graphics_core::geometry::{OriginDimensions, Size};
-use embedded_graphics_core::prelude::*;
-use embedded_graphics_core::primitives::Rectangle;
-
-use crate::board;
-use crate::chrome::UPSCALE;
 use crate::drivers::co5300::Co5300ColorMode;
 use crate::drivers::co5300::Co5300Display;
 use crate::drivers::co5300::DisplayError;
 use crate::util::{fill_buf_repeat, widening_copy};
+use alloc::alloc::Allocator;
+use alloc::boxed::Box;
+use core::marker::PhantomData;
+use embedded_graphics_core::draw_target::DrawTarget;
+use embedded_graphics_core::geometry::{OriginDimensions, Size};
+use embedded_graphics_core::prelude::*;
+use embedded_graphics_core::primitives::Rectangle;
 
 #[repr(align(32))]
 #[derive(Clone)]
@@ -126,10 +122,8 @@ where
     ) {
         display.set_addr_window(0, 0, (WIDTH * UPSCALE) as u16, (HEIGHT * UPSCALE) as u16);
         let mut stream = display.begin_stream_async().await;
-        let mut remaining = &self.buf[..];
 
         let mut rows = self.buf.chunks_exact_mut(WIDTH * C::BYTES_PER_PIXEL);
-
         let mut row = rows.next().unwrap_or(&mut []);
         let mut repetition = 0;
         let mut skip = 0;

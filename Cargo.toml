@@ -6,7 +6,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-esp-hal = { version = "1.1.0-rc.0", default-features = true, features = ["esp32s3", "requires-unstable", "unstable"] }
+esp-hal = { version = "1.1.0", default-features = true, features = ["esp32s3", "requires-unstable", "unstable"] }
 esp-rtos = { version = "0.3.0", features = ["esp32s3", "embassy", "esp-alloc"] }
 esp-alloc = { version = "0.10.0", features = ["nightly"] }
 esp-println = { version = "0.17.0", features = ["esp32s3", "log-04"] }
@@ -37,7 +37,7 @@ tca9554 = { version = "0.1.1" }
 heapless = { version = "0.9.2", features = ["nightly"] }
 u8g2-fonts = { version = "0.7.2", features = ["embedded_graphics_textstyle"] }
 fontdue = { version = "0.9.3", default-features = false, features = ["hashbrown"] }
-fontdue-macros = { version = "0.9.3" }
+fontdue-macros = "0.9.3"
 
 [patch.crates-io]
 esp-hal = { git = "https://github.com/CordlessCoder/esp-hal" }

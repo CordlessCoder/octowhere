@@ -1,4 +1,4 @@
-use core::cell::{Cell, RefCell};
+use core::cell::RefCell;
 
 use alloc::rc::Rc;
 use embedded_graphics::{
@@ -9,7 +9,6 @@ use embedded_graphics::{
     text::renderer::TextMetrics,
 };
 use fontdue::{FontRepr, layout::Layout};
-use ph_qmi8658::SelfTestError;
 
 use crate::board;
 
@@ -36,11 +35,24 @@ pub const MEDIUM_FONT_FAST: u8g2_fonts::FontRenderer = match UPSCALE {
     _ => todo!(),
 };
 
+pub type FB = crate::drivers::framebuffer::Framebuffer<
+    UPSCALE,
+    {
+        crate::drivers::framebuffer::buffer_size::<Color>(
+            board::LCD_WIDTH as usize / UPSCALE,
+            board::LCD_HEIGHT as usize / UPSCALE,
+        )
+    },
+    { board::LCD_WIDTH as usize / UPSCALE },
+    { board::LCD_HEIGHT as usize / UPSCALE },
+    Color,
+>;
+
 fontdue_macros::fontdue_font_from_file!(
     MarathonShapiroFont,
     "../assets/MarathonShapiro-Wide65_subset.ttf",
     // Picked with some trial and effort to offer some of the lowest flash usage while looking
-    // great. Making it lower makes rendering it faster!
+    // great. Making it lower makes rendering faster, at the cost of quality.
     scale: 2.1
 );
 
@@ -278,7 +290,6 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
             .iter()
             .filter(|g| g.x < usable_width as f32 && g.char_data.rasterize())
             .try_for_each(|g| {
-                let c = g.parent;
                 let (metrics, bitmap) = self.fonts[g.font_index].rasterize_indexed(
                     &mut ctx.canvas,
                     g.key.glyph_index,
@@ -291,10 +302,6 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
                     |coverage: u8| self.background_color.lerp(&self.text_color, coverage);
 
                 let width = metrics.width;
-                let area = Rectangle::new(
-                    position + Point::new(x_off, y_off),
-                    Size::new(width as u32, metrics.height as u32),
-                );
                 let pixels = bitmap.enumerate().filter(|&(_, c)| c != 0).map(|(idx, c)| {
                     let y = idx / width;
                     let x = idx % width;
@@ -318,7 +325,7 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
         position: Point,
         target: &mut D,
     ) -> Result<(), D::Error> {
-        let mut ctx = &mut *self.borrow_ctx();
+        let ctx = &mut *self.borrow_ctx();
         ctx.reset_layout();
         layout_cb(&mut ctx.layout, self.fonts);
         self.render_layout(ctx, position, target)
@@ -334,7 +341,7 @@ impl<C: PixelColor + RgbColorExt> embedded_graphics::text::renderer::TextRendere
         &self,
         text: &str,
         position: Point,
-        baseline: embedded_graphics::text::Baseline,
+        _baseline: embedded_graphics::text::Baseline,
         target: &mut D,
     ) -> Result<Point, D::Error>
     where
@@ -366,7 +373,7 @@ impl<C: PixelColor + RgbColorExt> embedded_graphics::text::renderer::TextRendere
         &self,
         text: &str,
         position: Point,
-        baseline: embedded_graphics::text::Baseline,
+        _baseline: embedded_graphics::text::Baseline,
     ) -> embedded_graphics::text::renderer::TextMetrics {
         let mut ctx = self.borrow_ctx();
         ctx.reset_layout();
@@ -391,7 +398,7 @@ impl<C: PixelColor + RgbColorExt> embedded_graphics::text::renderer::TextRendere
         &self,
         width: u32,
         position: Point,
-        baseline: embedded_graphics::text::Baseline,
+        _baseline: embedded_graphics::text::Baseline,
         target: &mut D,
     ) -> Result<Point, D::Error>
     where

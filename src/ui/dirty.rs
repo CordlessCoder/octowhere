@@ -2,7 +2,6 @@ use embedded_graphics::{
     prelude::{Point, Size},
     primitives::Rectangle,
 };
-use esp_println::dbg;
 
 // TODO: Coalesce full grid entries during iteration
 
@@ -29,11 +28,7 @@ fn bounding_box(a: &Rectangle, b: &Rectangle) -> Rectangle {
     };
     let top_left = a.top_left.component_min(b.top_left);
     let bottom_right = bottom_right_b.component_max(bottom_right_a);
-    let size = Size::new(
-        (bottom_right.x - top_left.x + 1) as u32,
-        (bottom_right.y - top_left.y + 1) as u32,
-    );
-    Rectangle::new(top_left, size)
+    Rectangle::with_corners(top_left, bottom_right)
 }
 
 impl<
@@ -104,26 +99,7 @@ impl<
         &mut self.grid[(y * CELLS_Y as u32 + x) as usize]
     }
 
-    #[inline]
-    fn get(&self, x: u32, y: u32) -> Rectangle {
-        assert!(x < CELLS_X as u32 && y < CELLS_Y as u32);
-        self.grid[(y * CELLS_Y as u32 + x) as usize]
-    }
-
-    #[inline]
-    fn is_rect_full(rect: &Rectangle) -> bool {
-        rect.size.width == Self::CELL_WIDTH && rect.size.height == Self::CELL_HEIGHT
-    }
-
     pub fn add(&mut self, rect: Rectangle) {
-        let mut log = false;
-
-        // if rect.top_left.x < 0 || rect.top_left.y < 0 {
-        //     log = true;
-        // }
-        if log {
-            esp_println::println!("Adding {rect:?} to {self:?}");
-        }
         if self.is_full() {
             return;
         }
@@ -140,9 +116,6 @@ impl<
 
         let x_range = x_start..=x_end.min(CELLS_X as u32 - 1);
         let y_range = y_start..=y_end.min(CELLS_Y as u32 - 1);
-        if log {
-            dbg!(&x_range, &y_range);
-        }
         for x in x_range {
             for y in y_range.clone() {
                 let current = self.get_mut(x, y);
@@ -150,14 +123,8 @@ impl<
                 let cell_box = Self::cell(x, y);
 
                 let within_cell = rect.intersection(&cell_box);
-                if log {
-                    dbg!(x, y, cell_box, within_cell);
-                }
                 *current = bounding_box(&within_cell, current);
             }
-        }
-        if log {
-            esp_println::println!("After: {self:?}");
         }
     }
 

@@ -6,14 +6,15 @@
 // Now defaults to deny in Rust-2024, however abusing statics is necessary in the embedded world.
 #![expect(static_mut_refs)]
 #![expect(unused)]
+#![deny(clippy::mem_forget)]
 #![warn(unused_must_use)]
 extern crate alloc;
 
-use alloc::{alloc::Allocator, boxed::Box, rc::Rc};
+use alloc::{alloc::Allocator, boxed::Box};
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_executor::Spawner;
 use embassy_sync::{blocking_mutex::raw::NoopRawMutex, mutex::Mutex};
-use embassy_time::{Duration, Instant, Ticker};
+use embassy_time::{Duration, Instant};
 use embedded_graphics::{
     prelude::*,
     primitives::{Circle, Rectangle},
@@ -28,28 +29,23 @@ use esp_hal::{
     timer::timg::TimerGroup,
 };
 use esp_println::println;
-use fontdue::FontRepr;
 use octowhere::{
     board,
-    chrome::{
-        self, Color, FontdueRenderer, FontdueRendererCtx, FraktionMonoRegularFont,
-        HEADING_FONT_FAST, MEDIUM_FONT_FAST, MarathonShapiroFont, UPSCALE,
-    },
+    chrome::{self, Color, FontdueRenderer, HEADING_FONT_FAST, MEDIUM_FONT_FAST, UPSCALE},
     drivers::{co5300::Co5300Display, framebuffer::Framebuffer, qspi_bus::QspiBus},
     peripherals::{
-        power::Axp2101Power,
         rtc::Pcf85063aRtc,
         touch::{Cst9217, Cst9217Config, TouchData},
     },
     ui::dirty::DirtyAreas,
-    util::{Swap, SwapThread, fill_buf_repeat},
+    util::{Swap, SwapThread},
 };
 use static_cell::StaticCell;
+use tca9554::Tca9554;
+use u8g2_fonts::types::FontColor;
 
 use esp_alloc as _;
 use esp_backtrace as _;
-use tca9554::Tca9554;
-use u8g2_fonts::{FontRenderer, types::FontColor};
 esp_bootloader_esp_idf::esp_app_desc!();
 
 struct SecondCore<A: Allocator + 'static = alloc::alloc::Global> {
@@ -69,32 +65,20 @@ struct SecondCore<A: Allocator + 'static = alloc::alloc::Global> {
 const SCALED_WIDTH: usize = octowhere::board::LCD_WIDTH as usize / UPSCALE;
 const SCALED_HEIGHT: usize = octowhere::board::LCD_HEIGHT as usize / UPSCALE;
 
-type FB = Framebuffer<
-    UPSCALE,
-    {
-        octowhere::drivers::framebuffer::buffer_size::<Color>(
-            octowhere::board::LCD_WIDTH as usize / UPSCALE,
-            octowhere::board::LCD_HEIGHT as usize / UPSCALE,
-        )
-    },
-    { octowhere::board::LCD_WIDTH as usize / UPSCALE },
-    { octowhere::board::LCD_HEIGHT as usize / UPSCALE },
-    Color,
->;
-
 static mut CORE1_STACK: esp_hal::system::Stack<8192> = esp_hal::system::Stack::new();
 static CORE1_EXECUTOR: StaticCell<esp_rtos::embassy::Executor> = StaticCell::new();
-static CORE1_INT: StaticCell<esp_rtos::embassy::Executor> = StaticCell::new();
 static SWAP: StaticCell<Swap<SwapState<&esp_alloc::EspHeap>>> = StaticCell::new();
 pub static PSRAM_HEAP: esp_alloc::EspHeap = esp_alloc::EspHeap::empty();
 
+// PERF: The unit of scheduling for embassy is a task, not an async Future - it may be beneficial to
+// move some Futures into their own tasks.
 #[embassy_executor::task]
 async fn second_core(
     _spawner: Spawner,
     gpio0: esp_hal::peripherals::GPIO0<'static>,
     io: SecondCore<&'static esp_alloc::EspHeap>,
 ) {
-    let mut gpio0 = Input::new(gpio0, InputConfig::default());
+    // let mut gpio0 = Input::new(gpio0, InputConfig::default());
     // let gpio0 = async {
     //     loop {
     //         gpio0.wait_for_any_edge().await;
@@ -151,12 +135,11 @@ async fn second_core(
                 Timings {
                     vsync_wait,
                     spi_time,
-                    swap_draw,
                     swap_spi,
-                    frametime,
+                    ..
                 },
             dirty,
-            needs_full_redraw,
+            needs_full_redraw: _,
         } = state;
 
         let start = Instant::now();
@@ -166,10 +149,7 @@ async fn second_core(
         *vsync_wait = start.elapsed();
 
         if dirty.is_full() {
-            fb.flush(&mut display, |pixels| {
-                // fill_buf_repeat(pixels, &[0], pixels.len());
-            })
-            .await;
+            fb.flush(&mut display, |_| ()).await;
         } else {
             for region in dirty.iter() {
                 fb.flush_region(
@@ -178,9 +158,7 @@ async fn second_core(
                     region.top_left.y as u16,
                     region.size.width as u16,
                     region.size.height as u16,
-                    |pixels| {
-                        // fill_buf_repeat(pixels, &[0], pixels.len());
-                    },
+                    |_| (),
                 )
                 .await;
             }
@@ -326,7 +304,7 @@ where
     } = timings;
     let text = format_args!(
         // let text = alloc::format!(
-        "draw: {:.1}ms\nvsync: {:.1}ms\nspi+clear: {:.1}ms\nswap(draw): {:.1}ms\nswap(spi): {:.1}ms",
+        "draw: {:.1}ms\nvsync: {:.1}ms\nspi: {:.1}ms\nswap(draw): {:.1}ms\nswap(spi): {:.1}ms",
         frametime.as_micros() as f32 / 1_000.,
         vsync_wait.as_micros() as f32 / 1_000.,
         spi_time.as_micros() as f32 / 1_000.,
@@ -377,28 +355,9 @@ where
 {
     use embedded_graphics::{
         prelude::*,
-        primitives::{
-            Circle, PrimitiveStyle, PrimitiveStyleBuilder, Rectangle, StrokeAlignment, Triangle,
-        },
-        text::{Alignment, Text},
+        primitives::{Circle, PrimitiveStyleBuilder},
     };
     let mut dirty = Dirty::new();
-
-    // Create styles used by the drawing operations.
-    let thin_stroke = PrimitiveStyle::with_stroke(chrome::PURPLE, 4 / UPSCALE as u32);
-    let thick_stroke = PrimitiveStyle::with_stroke(chrome::RED, 8 / UPSCALE as u32);
-    let border_stroke = PrimitiveStyleBuilder::new()
-        .stroke_color(if ctx.touch_data != TouchData::CoverGesture {
-            chrome::LIME
-        } else {
-            chrome::RED
-        })
-        .stroke_width(8 / UPSCALE as u32)
-        .stroke_alignment(StrokeAlignment::Inside)
-        .build();
-    let fill = PrimitiveStyle::with_fill(Color::CSS_GRAY);
-
-    let yoffset = 140 / UPSCALE as i32;
 
     match &ctx.touch_data {
         TouchData::Points(points) => {
@@ -422,33 +381,37 @@ where
     dirty
 }
 
-fn draw<D>(ctx: &mut DrawCtx, timings: &Timings, target: &mut D) -> Dirty
+fn draw_if_in_bounds<C, D, T>(target: &mut D, dirty: &mut Dirty, thing: T) -> Result<(), D::Error>
+where
+    T: Drawable<Color = C>,
+    T: Dimensions,
+    D: DrawTarget<Color = C>,
+    D::Error: core::fmt::Debug,
+{
+    let bbox = thing.bounding_box();
+    if bbox.intersection(&target.bounding_box()).is_zero_sized() {
+        return Ok(());
+    }
+    thing.draw(target)?;
+    dirty.add(bbox);
+    Ok(())
+}
+
+fn draw<D>(ctx: &mut DrawCtx, target: &mut D) -> Dirty
 where
     D: DrawTarget<Color = Color>,
-    D: DrawTarget,
     D::Error: core::fmt::Debug,
 {
     let mut dirty = Dirty::new();
     use embedded_graphics::{
         prelude::*,
-        primitives::{
-            Circle, PrimitiveStyle, PrimitiveStyleBuilder, Rectangle, StrokeAlignment, Triangle,
-        },
-        text::{Alignment, Text},
+        primitives::{Circle, PrimitiveStyle, PrimitiveStyleBuilder, Rectangle, StrokeAlignment},
     };
 
     target
         .fill_solid(&target.bounding_box(), chrome::BLACK)
         .unwrap();
     dirty.add(target.bounding_box());
-
-    let Timings {
-        vsync_wait,
-        spi_time,
-        swap_draw,
-        swap_spi,
-        frametime,
-    } = timings;
 
     // Create styles used by the drawing operations.
     let thin_stroke = PrimitiveStyle::with_stroke(chrome::PURPLE, 4 / UPSCALE as u32);
@@ -476,29 +439,25 @@ where
     // PERF: Currently, embedded_graphics primitives completely ignore the target's bounding box,
     // attempting to draw even if it would go out of bounds, wasting compute.
 
-    // // Draw a triangle.
-    // Triangle::new(
-    //     Point::new(56, 64 + yoffset).scale(),
-    //     Point::new(56 + 64, 64 + yoffset).scale(),
-    //     Point::new(56 + 32, yoffset).scale(),
-    // )
-    // .into_styled(thin_stroke)
-    // .draw(target)
-    // .unwrap();
+    // Draw a filled square
+    draw_if_in_bounds(
+        target,
+        &mut dirty,
+        Rectangle::new(Point::new(200, yoffset), Size::new(64, 64))
+            .scale()
+            .into_styled(fill),
+    )
+    .unwrap();
 
-    // // Draw a filled square
-    // Rectangle::new(Point::new(200, yoffset), Size::new(64, 64))
-    //     .scale()
-    //     .into_styled(fill)
-    //     .draw(target)
-    //     .unwrap();
-    //
-    // // Draw a circle with a 3px wide stroke.
-    // Circle::new(Point::new(340, yoffset), 68)
-    //     .scale()
-    //     .into_styled(thick_stroke)
-    //     .draw(target)
-    //     .unwrap();
+    // Draw a circle with a 3px wide stroke.
+    draw_if_in_bounds(
+        target,
+        &mut dirty,
+        Circle::new(Point::new(340, yoffset), 68)
+            .scale()
+            .into_styled(thick_stroke),
+    )
+    .unwrap();
 
     dirty
 }
@@ -533,7 +492,7 @@ impl Scalable for Circle {
 
 type Dirty = DirtyAreas<SCALED_WIDTH, SCALED_HEIGHT, 2, 2, { 2 * 2 }>;
 struct SwapState<A: Allocator = alloc::alloc::Global> {
-    fb: Box<FB, A>,
+    fb: Box<chrome::FB, A>,
     dirty: Dirty,
     needs_full_redraw: Dirty,
     timings: Timings,
@@ -592,7 +551,7 @@ async fn main(_spawner: Spawner) {
 
     exio.init().await.unwrap();
 
-    let mut power = Axp2101Power::new(i2c.clone());
+    // let mut power = Axp2101Power::new(i2c.clone());
     // power.init().await.unwrap();
     // power.trim_adc_channels().await.unwrap();
 
@@ -683,7 +642,7 @@ async fn main(_spawner: Spawner) {
     // display.set_brightness(120);
     // display.fill_screen(chrome::BLACK);
 
-    let mut fb = Framebuffer::<
+    let fb = Framebuffer::<
         1,
         { octowhere::drivers::framebuffer::buffer_size::<Color>(466, 466) },
         466,
@@ -748,7 +707,6 @@ async fn main(_spawner: Spawner) {
         bounding_box: chrome::DISPLAY_BBOX,
     };
     let mut prev_swap_draw = Duration::MIN;
-    let mut prev_swap_draw = Duration::MIN;
     loop {
         let start = Instant::now();
         {
@@ -765,12 +723,12 @@ async fn main(_spawner: Spawner) {
 
             // esp_println::dbg!(&needs_full_redraw);
             if needs_full_redraw.is_full() {
-                draw(&mut draw_ctx, timings, fb);
+                draw(&mut draw_ctx, fb);
                 dirty.make_full();
             } else {
                 for area in needs_full_redraw.iter() {
                     let mut clipped = fb.clipped(&area);
-                    dirty.extend(&draw(&mut draw_ctx, timings, &mut clipped));
+                    dirty.extend(&draw(&mut draw_ctx, &mut clipped));
                 }
             }
             dirty.extend(needs_full_redraw);
@@ -778,6 +736,7 @@ async fn main(_spawner: Spawner) {
             needs_full_redraw.extend(&update_touch(&draw_ctx, fb));
 
             dirty.extend(needs_full_redraw);
+            dirty.make_full();
 
             timings.frametime = start.elapsed();
             timings.swap_draw = prev_swap_draw;
