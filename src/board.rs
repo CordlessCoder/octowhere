@@ -3,6 +3,8 @@
 
 use embedded_hal::delay::DelayNs;
 
+pub const CACHE_LINE: usize = 64;
+
 // Display, CO5300
 pub const LCD_SDIO0: u8 = 4;
 pub const LCD_SDIO1: u8 = 5;

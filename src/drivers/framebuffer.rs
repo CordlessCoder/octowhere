@@ -2,6 +2,7 @@
 // 466x466 RGB565 = 434.312 kB
 // Draws to RAM, then flushes entire screen via DMA QSPI
 
+use crate::board::CACHE_LINE;
 use crate::drivers::co5300::Co5300ColorMode;
 use crate::drivers::co5300::Co5300Display;
 use crate::drivers::co5300::DisplayError;
@@ -13,16 +14,15 @@ use embedded_graphics_core::draw_target::DrawTarget;
 use embedded_graphics_core::geometry::{OriginDimensions, Size};
 use embedded_graphics_core::prelude::*;
 use embedded_graphics_core::primitives::Rectangle;
+use esp_hal::dma::DmaDescriptor;
+use esp_hal::dma::scoped::ScopedDmaTxBuf;
+use esp_println::dbg;
 
-#[repr(align(32))]
+#[repr(align(64))]
+#[repr(C)]
 #[derive(Clone)]
-pub struct Framebuffer<
-    const UPSCALE: usize,
-    const N: usize,
-    const WIDTH: usize,
-    const HEIGHT: usize,
-    C: Co5300ColorMode,
-> where
+pub struct Framebuffer<const N: usize, const WIDTH: usize, const HEIGHT: usize, C: Co5300ColorMode>
+where
     <C as embedded_graphics::pixelcolor::raw::ToBytes>::Bytes: core::convert::AsRef<[u8]>,
 {
     buf: [u8; N],
@@ -40,13 +40,8 @@ where
     width * height * C::BYTES_PER_PIXEL
 }
 
-impl<
-    const UPSCALE: usize,
-    const N: usize,
-    const WIDTH: usize,
-    const HEIGHT: usize,
-    C: Co5300ColorMode,
-> Framebuffer<UPSCALE, N, WIDTH, HEIGHT, C>
+impl<const N: usize, const WIDTH: usize, const HEIGHT: usize, C: Co5300ColorMode>
+    Framebuffer<N, WIDTH, HEIGHT, C>
 where
     <C as embedded_graphics::pixelcolor::raw::ToBytes>::Bytes: core::convert::AsRef<[u8]>,
 {
@@ -65,8 +60,7 @@ where
     pub fn alloc<A: Allocator>(alloc: A) -> Box<Self, A> {
         unsafe {
             // Initialize in-place on the heap
-            let mut alloc = Box::new_uninit_in(alloc);
-            core::ptr::write_bytes(alloc.as_mut_ptr(), 0, 1);
+            let mut alloc = Box::new_zeroed_in(alloc);
             alloc.assume_init()
         }
     }
@@ -120,52 +114,18 @@ where
         display: &mut Co5300Display<'_, C>,
         mut post_write: impl FnMut(&mut [u8]),
     ) {
-        display.set_addr_window(0, 0, (WIDTH * UPSCALE) as u16, (HEIGHT * UPSCALE) as u16);
+        display.set_addr_window(0, 0, WIDTH as u16, HEIGHT as u16);
         let mut stream = display.begin_stream_async().await;
+        let mut remaining = &mut self.buf[..];
 
-        let mut rows = self.buf.chunks_exact_mut(WIDTH * C::BYTES_PER_PIXEL);
-        let mut row = rows.next().unwrap_or(&mut []);
-        let mut repetition = 0;
-        let mut skip = 0;
-        let mut keep_going = true;
-        while keep_going {
+        while !remaining.is_empty() {
             stream
                 .flush_if_needed_and_get_buf_async(|mut buf| {
-                    let mut new = 0;
-                    loop {
-                        let mut rem = &mut row[skip..];
-                        let pre_scale_chunk = (buf.len() / UPSCALE / C::BYTES_PER_PIXEL
-                            * C::BYTES_PER_PIXEL)
-                            .min(rem.len());
-                        skip += pre_scale_chunk;
-                        if pre_scale_chunk == 0 {
-                            break;
-                        }
-                        let captured = rem.split_off_mut(..pre_scale_chunk).unwrap();
-                        widening_copy::<UPSCALE>(
-                            buf.split_off_mut(..pre_scale_chunk * UPSCALE).unwrap(),
-                            captured,
-                            C::BYTES_PER_PIXEL,
-                        );
-                        if repetition == const { UPSCALE - 1 } {
-                            post_write(captured);
-                        }
-
-                        new += pre_scale_chunk * UPSCALE;
-                        if rem.is_empty() {
-                            skip = 0;
-                            repetition += 1;
-                            if repetition >= UPSCALE {
-                                let Some(next_row) = rows.next() else {
-                                    keep_going = false;
-                                    break;
-                                };
-                                row = next_row;
-                                repetition = 0;
-                            }
-                        }
-                    }
-                    new
+                    let chunk = buf.len().min(remaining.len());
+                    let captured = remaining.split_off_mut(..chunk).unwrap();
+                    buf[..chunk].copy_from_slice(captured);
+                    post_write(captured);
+                    chunk
                 })
                 .await;
         }
@@ -225,44 +185,30 @@ where
             .take(flush_h)
             .map(|row| &mut row[x0 * C::BYTES_PER_PIXEL..(x0 + flush_w) * C::BYTES_PER_PIXEL]);
         let mut row = rows.next().unwrap_or(&mut []);
-        let mut repetition = 0;
-        let mut skip = 0;
         let mut keep_going = true;
         while keep_going {
             stream
                 .flush_if_needed_and_get_buf_async(|mut buf| {
                     let mut new = 0;
                     loop {
-                        let mut rem = &mut row[skip..];
-                        let pre_scale_chunk = (buf.len() / UPSCALE / C::BYTES_PER_PIXEL
-                            * C::BYTES_PER_PIXEL)
-                            .min(rem.len());
-                        skip += pre_scale_chunk;
+                        let pre_scale_chunk =
+                            (buf.len() / C::BYTES_PER_PIXEL * C::BYTES_PER_PIXEL).min(row.len());
                         if pre_scale_chunk == 0 {
                             break;
                         }
-                        let captured = rem.split_off_mut(..pre_scale_chunk).unwrap();
-                        widening_copy::<UPSCALE>(
-                            buf.split_off_mut(..pre_scale_chunk * UPSCALE).unwrap(),
-                            captured,
-                            C::BYTES_PER_PIXEL,
-                        );
-                        if repetition == const { UPSCALE - 1 } {
-                            post_write(captured);
-                        }
+                        let captured = row.split_off_mut(..pre_scale_chunk).unwrap();
+                        buf.split_off_mut(..pre_scale_chunk)
+                            .unwrap()
+                            .copy_from_slice(captured);
+                        post_write(captured);
 
-                        new += pre_scale_chunk * UPSCALE;
-                        if rem.is_empty() {
-                            skip = 0;
-                            repetition += 1;
-                            if repetition >= UPSCALE {
-                                let Some(next_row) = rows.next() else {
-                                    keep_going = false;
-                                    break;
-                                };
-                                row = next_row;
-                                repetition = 0;
-                            }
+                        new += pre_scale_chunk;
+                        if row.is_empty() {
+                            let Some(next_row) = rows.next() else {
+                                keep_going = false;
+                                break;
+                            };
+                            row = next_row;
                         }
                     }
                     new
@@ -284,13 +230,8 @@ where
     }
 }
 
-impl<
-    const UPSCALE: usize,
-    const N: usize,
-    const WIDTH: usize,
-    const HEIGHT: usize,
-    C: Co5300ColorMode,
-> OriginDimensions for Framebuffer<UPSCALE, N, WIDTH, HEIGHT, C>
+impl<const N: usize, const WIDTH: usize, const HEIGHT: usize, C: Co5300ColorMode> OriginDimensions
+    for Framebuffer<N, WIDTH, HEIGHT, C>
 where
     <C as embedded_graphics::pixelcolor::raw::ToBytes>::Bytes: core::convert::AsRef<[u8]>,
 {
@@ -299,13 +240,8 @@ where
     }
 }
 
-impl<
-    const UPSCALE: usize,
-    const N: usize,
-    const WIDTH: usize,
-    const HEIGHT: usize,
-    C: Co5300ColorMode,
-> DrawTarget for Framebuffer<UPSCALE, N, WIDTH, HEIGHT, C>
+impl<const N: usize, const WIDTH: usize, const HEIGHT: usize, C: Co5300ColorMode> DrawTarget
+    for Framebuffer<N, WIDTH, HEIGHT, C>
 where
     <C as embedded_graphics::pixelcolor::raw::ToBytes>::Bytes: core::convert::AsRef<[u8]>,
 {

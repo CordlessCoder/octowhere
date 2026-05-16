@@ -50,10 +50,12 @@ esp-backtrace = { git = "https://github.com/CordlessCoder/esp-hal" }
 tca9554 = { git = "https://github.com/CordlessCoder/tca9554-rs" } 
 fontdue = { git = "https://github.com/CordlessCoder/fontdue" } 
 fontdue-macros = { git = "https://github.com/CordlessCoder/fontdue" } 
-u8g2-fonts = { git = "https://github.com/CordlessCoder/u8g2-fonts" }
+# u8g2-fonts = { git = "https://github.com/CordlessCoder/u8g2-fonts" }
+u8g2-fonts = { git = "https://github.com/iriswebb/u8g2-fonts" }
 
 [profile.dev]
 opt-level = "s"
+lto = "thin"
 
 [profile.release]
 opt-level = "s"

@@ -31,7 +31,7 @@ use esp_hal::{
 use esp_println::println;
 use octowhere::{
     board,
-    chrome::{self, Color, FontdueRenderer, HEADING_FONT_FAST, MEDIUM_FONT_FAST, UPSCALE},
+    chrome::{self, Color, Dirty, FB, FontdueRenderer, HEADING_FONT_FAST, MEDIUM_FONT_FAST},
     drivers::{co5300::Co5300Display, framebuffer::Framebuffer, qspi_bus::QspiBus},
     peripherals::{
         rtc::Pcf85063aRtc,
@@ -57,13 +57,10 @@ struct SecondCore<A: Allocator + 'static = alloc::alloc::Global> {
     gpio13: peripherals::GPIO13<'static>,
     gpio38: peripherals::GPIO38<'static>,
     gpio39: peripherals::GPIO39<'static>,
-    dma_ch0: peripherals::DMA_CH0<'static>,
+    dma_ch0: peripherals::DMA_CH2<'static>,
     spi2: peripherals::SPI2<'static>,
     swap: SwapThread<'static, SwapState<A>>,
 }
-
-const SCALED_WIDTH: usize = octowhere::board::LCD_WIDTH as usize / UPSCALE;
-const SCALED_HEIGHT: usize = octowhere::board::LCD_HEIGHT as usize / UPSCALE;
 
 static mut CORE1_STACK: esp_hal::system::Stack<8192> = esp_hal::system::Stack::new();
 static CORE1_EXECUTOR: StaticCell<esp_rtos::embassy::Executor> = StaticCell::new();
@@ -104,8 +101,14 @@ async fn second_core(
         .with_frequency(Rate::from_mhz(80))
         .with_mode(spi::Mode::_0);
 
-    let dma_tx = dma_tx_buffer!(4095 * 2).unwrap();
-    let dma_tx_swap = dma_tx_buffer!(4095 * 2).unwrap();
+    let mut dma_tx = dma_tx_buffer!(4095 * 2).unwrap();
+    let mut dma_tx_swap = dma_tx_buffer!(4095 * 2).unwrap();
+    let dma_burst = esp_hal::dma::BurstConfig {
+        external_memory: esp_hal::dma::ExternalBurstConfig::Size64,
+        internal_memory: esp_hal::dma::InternalBurstConfig::Enabled,
+    };
+    dma_tx.set_burst_config(dma_burst).unwrap();
+    dma_tx_swap.set_burst_config(dma_burst).unwrap();
 
     let reset = Output::new(gpio39, Level::High, OutputConfig::default());
     let te = Input::new(gpio13, InputConfig::default());
@@ -191,89 +194,6 @@ fn bench10<R>(mut the_thing: impl FnMut() -> R, name: &str) -> (R, Duration) {
     (ret, took)
 }
 
-#[expect(clippy::too_many_arguments)]
-async fn bench_font<
-    const UPSCALE: usize,
-    const N: usize,
-    const WIDTH: usize,
-    const HEIGHT: usize,
-    C,
->(
-    mut display: Option<&mut Co5300Display<'_, C>>,
-    fb: &mut Framebuffer<UPSCALE, N, WIDTH, HEIGHT, C>,
-    fg: C,
-    bg: C,
-    desc: &str,
-    u8g2_renderer: u8g2_fonts::FontRenderer,
-    fontdue: FontdueRenderer<'_, C>,
-    delay: u32,
-) where
-    <C as embedded_graphics::pixelcolor::raw::ToBytes>::Bytes: core::convert::AsRef<[u8]>,
-    C: Into<embedded_graphics::pixelcolor::Rgb888>
-        + From<embedded_graphics::pixelcolor::Rgb888>
-        + core::fmt::Debug
-        + octowhere::drivers::co5300::Co5300ColorMode,
-{
-    let top_left = Point::new(10, 150);
-    let test_text = "abcdefghijklmnopqrstuvwxyz\n\
-                           ABCDEFGHIJKLMNOPQRSTUVWXYZ\n\
-                           1234567890`~!@#$%^&*()_+/[]";
-    let ext_renderer =
-        u8g2_fonts::FontRenderer::new::<u8g2_fonts::fonts::u8g2_font_spleen12x24_mr>();
-    let ext_pos = Point::new(100, 340);
-    println!("{desc}");
-    fb.clear_color(bg);
-    let (_, took) = bench10(
-        || {
-            u8g2_renderer
-                .render(
-                    test_text,
-                    top_left,
-                    u8g2_fonts::types::VerticalPosition::Top,
-                    u8g2_fonts::types::FontColor::Transparent(fg),
-                    fb,
-                )
-                .unwrap()
-        },
-        "- u8g2",
-    );
-    if let Some(display) = display.as_mut() {
-        ext_renderer
-            .render(
-                format_args!("{desc}\nu8g2: {:.1}ms", took.as_micros() as f32 / 1_000.,),
-                ext_pos,
-                u8g2_fonts::types::VerticalPosition::Top,
-                u8g2_fonts::types::FontColor::Transparent(fg),
-                fb,
-            )
-            .unwrap();
-        fb.flush(display, |_| ()).await;
-        board::delay_ms_async(delay).await;
-    }
-    fb.clear_color(bg);
-    let (_, took) = bench10(
-        || {
-            embedded_graphics::text::Text::new(test_text, top_left, fontdue.clone())
-                .draw(fb)
-                .unwrap()
-        },
-        "- fontdue",
-    );
-    if let Some(display) = display.as_mut() {
-        ext_renderer
-            .render(
-                format_args!("{desc}\nfontdue: {:.1}ms", took.as_micros() as f32 / 1_000.,),
-                ext_pos,
-                u8g2_fonts::types::VerticalPosition::Top,
-                u8g2_fonts::types::FontColor::Transparent(fg),
-                fb,
-            )
-            .unwrap();
-        fb.flush(display, |_| ()).await;
-        board::delay_ms_async(delay).await;
-    }
-}
-
 struct DrawCtx {
     touch_data: TouchData,
     bounding_box: Rectangle,
@@ -314,7 +234,7 @@ where
     let dim = HEADING_FONT_FAST
         .render(
             "Statistics",
-            (ctx.bounding_box.center() + Point::new(-100, 60)).scale(),
+            (ctx.bounding_box.center() + Point::new(-100, 60)),
             u8g2_fonts::types::VerticalPosition::Bottom,
             FontColor::Transparent(chrome::WHITE),
             target,
@@ -324,7 +244,7 @@ where
     let dim = MEDIUM_FONT_FAST
         .render(
             text,
-            (ctx.bounding_box.center() + Point::new(-100, 60)).scale(),
+            (ctx.bounding_box.center() + Point::new(-100, 60)),
             u8g2_fonts::types::VerticalPosition::Top,
             FontColor::Transparent(chrome::WHITE),
             target,
@@ -340,7 +260,7 @@ where
     //             );
     //             layout.append(fonts, &fontdue::layout::TextStyle::new(&text, 24.0, 1));
     //         },
-    //         (bbox.center() + Point::new(-100, 10)).scale(),
+    //         (bbox.center() + Point::new(-100, 10)),
     //         fb,
     //     )
     //     .unwrap();
@@ -361,17 +281,15 @@ where
 
     match &ctx.touch_data {
         TouchData::Points(points) => {
-            let size = 64 / UPSCALE;
+            let size = 64;
             for point in points {
-                let prim = Circle::with_center(
-                    Point::new(point.x as i32, point.y as i32).scale(),
-                    size as u32,
-                )
-                .into_styled(
-                    PrimitiveStyleBuilder::new()
-                        .fill_color(Color::CSS_CYAN)
-                        .build(),
-                );
+                let prim =
+                    Circle::with_center(Point::new(point.x as i32, point.y as i32), size as u32)
+                        .into_styled(
+                            PrimitiveStyleBuilder::new()
+                                .fill_color(Color::CSS_CYAN)
+                                .build(),
+                        );
                 prim.draw(target).unwrap();
                 dirty.add(prim.bounding_box());
             }
@@ -414,24 +332,24 @@ where
     dirty.add(target.bounding_box());
 
     // Create styles used by the drawing operations.
-    let thin_stroke = PrimitiveStyle::with_stroke(chrome::PURPLE, 4 / UPSCALE as u32);
-    let thick_stroke = PrimitiveStyle::with_stroke(chrome::RED, 8 / UPSCALE as u32);
+    let thin_stroke = PrimitiveStyle::with_stroke(chrome::PURPLE, 4);
+    let thick_stroke = PrimitiveStyle::with_stroke(chrome::RED, 8);
     let border_stroke = PrimitiveStyleBuilder::new()
         .stroke_color(if ctx.touch_data != TouchData::CoverGesture {
             chrome::LIME
         } else {
             chrome::RED
         })
-        .stroke_width(8 / UPSCALE as u32)
+        .stroke_width(8)
         .stroke_alignment(StrokeAlignment::Inside)
         .build();
     let fill = PrimitiveStyle::with_fill(Color::CSS_GRAY);
 
-    let yoffset = 140 / UPSCALE as i32;
+    let yoffset = 140;
 
     // // Draw a 3px wide outline around the display.
     // Circle::new(Point::new(0, 0), ctx.bounding_box.size.width)
-    //     .scale()
+    //
     //     .into_styled(border_stroke)
     //     .draw(target)
     //     .unwrap();
@@ -443,9 +361,7 @@ where
     draw_if_in_bounds(
         target,
         &mut dirty,
-        Rectangle::new(Point::new(200, yoffset), Size::new(64, 64))
-            .scale()
-            .into_styled(fill),
+        Rectangle::new(Point::new(200, yoffset), Size::new(64, 64)).into_styled(fill),
     )
     .unwrap();
 
@@ -453,44 +369,13 @@ where
     draw_if_in_bounds(
         target,
         &mut dirty,
-        Circle::new(Point::new(340, yoffset), 68)
-            .scale()
-            .into_styled(thick_stroke),
+        Circle::new(Point::new(340, yoffset), 68).into_styled(thick_stroke),
     )
     .unwrap();
 
     dirty
 }
 
-trait Scalable {
-    fn scale(self) -> Self;
-}
-impl Scalable for Point {
-    fn scale(self) -> Self {
-        self.component_div(Point::new_equal(UPSCALE as i32))
-    }
-}
-impl Scalable for Size {
-    fn scale(self) -> Self {
-        self.component_div(Size::new_equal(UPSCALE as u32))
-    }
-}
-impl Scalable for Rectangle {
-    fn scale(self) -> Self {
-        let top_left = self.top_left.scale();
-        let size = self.size.scale();
-        Rectangle::new(top_left, size)
-    }
-}
-impl Scalable for Circle {
-    fn scale(self) -> Self {
-        let top_left = self.top_left.scale();
-        let diameter = self.diameter / UPSCALE as u32;
-        Circle::new(top_left, diameter)
-    }
-}
-
-type Dirty = DirtyAreas<SCALED_WIDTH, SCALED_HEIGHT, 2, 2, { 2 * 2 }>;
 struct SwapState<A: Allocator = alloc::alloc::Global> {
     fb: Box<chrome::FB, A>,
     dirty: Dirty,
@@ -501,7 +386,7 @@ struct SwapState<A: Allocator = alloc::alloc::Global> {
 #[esp_rtos::main]
 async fn main(_spawner: Spawner) {
     esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 72 * 1024);
-    esp_alloc::heap_allocator!(size: 280 * 1024);
+    esp_alloc::heap_allocator!(size: 260 * 1024);
 
     // PERF: How low do we want to drop the clock speed?
     let mut peripherals =
@@ -642,23 +527,16 @@ async fn main(_spawner: Spawner) {
     // display.set_brightness(120);
     // display.fill_screen(chrome::BLACK);
 
-    let fb = Framebuffer::<
-        1,
-        { octowhere::drivers::framebuffer::buffer_size::<Color>(466, 466) },
-        466,
-        466,
-        Color,
-    >::alloc(&PSRAM_HEAP);
     let swap: &'static mut Swap<SwapState<_>> = SWAP.init_with(|| {
         Swap::new(
             SwapState {
-                fb: Box::clone(&fb),
+                fb: FB::alloc(&PSRAM_HEAP),
                 dirty: DirtyAreas::new(),
                 needs_full_redraw: DirtyAreas::new_full(),
                 timings: Timings::default(),
             },
             SwapState {
-                fb,
+                fb: FB::alloc(&PSRAM_HEAP),
                 dirty: DirtyAreas::new(),
                 needs_full_redraw: DirtyAreas::new_full(),
                 timings: Timings::default(),
@@ -668,6 +546,7 @@ async fn main(_spawner: Spawner) {
     let (mut fb_st, second_core_swap) = swap.split();
     // PERF: We want to utilize cores fairly evenly because running both uses little more power
     // than running just one.
+
     esp_rtos::start_second_core(
         peripherals.CPU_CTRL.reborrow(),
         sw_int.software_interrupt1,
@@ -684,7 +563,7 @@ async fn main(_spawner: Spawner) {
                 gpio13: peripherals.GPIO13,
                 gpio38: peripherals.GPIO38,
                 gpio39: peripherals.GPIO39,
-                dma_ch0: peripherals.DMA_CH0,
+                dma_ch0: peripherals.DMA_CH2,
                 spi2: peripherals.SPI2,
                 swap: second_core_swap,
             };
@@ -720,6 +599,7 @@ async fn main(_spawner: Spawner) {
             let fb = &mut **fb;
             draw_ctx.touch_data = touch.read_touch_data().await.unwrap();
             dirty.clear();
+            dirty.make_full();
 
             // esp_println::dbg!(&needs_full_redraw);
             if needs_full_redraw.is_full() {
@@ -736,7 +616,6 @@ async fn main(_spawner: Spawner) {
             needs_full_redraw.extend(&update_touch(&draw_ctx, fb));
 
             dirty.extend(needs_full_redraw);
-            dirty.make_full();
 
             timings.frametime = start.elapsed();
             timings.swap_draw = prev_swap_draw;

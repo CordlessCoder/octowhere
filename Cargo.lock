@@ -602,7 +602,7 @@ checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 [[package]]
 name = "esp-alloc"
 version = "0.10.0"
-source = "git+https://github.com/CordlessCoder/esp-hal#0b6a92c7dd2d390ff89227171da4d4133c70e68c"
+source = "git+https://github.com/CordlessCoder/esp-hal#c9f3c1d35618605d881c34c2490454f6929fe689"
 dependencies = [
  "allocator-api2 0.3.1",
  "cfg-if",
@@ -617,7 +617,7 @@ dependencies = [
 [[package]]
 name = "esp-backtrace"
 version = "0.19.0"
-source = "git+https://github.com/CordlessCoder/esp-hal#0b6a92c7dd2d390ff89227171da4d4133c70e68c"
+source = "git+https://github.com/CordlessCoder/esp-hal#c9f3c1d35618605d881c34c2490454f6929fe689"
 dependencies = [
  "cfg-if",
  "document-features",
@@ -633,7 +633,7 @@ dependencies = [
 [[package]]
 name = "esp-bootloader-esp-idf"
 version = "0.5.0"
-source = "git+https://github.com/CordlessCoder/esp-hal#0b6a92c7dd2d390ff89227171da4d4133c70e68c"
+source = "git+https://github.com/CordlessCoder/esp-hal#c9f3c1d35618605d881c34c2490454f6929fe689"
 dependencies = [
  "cfg-if",
  "document-features",
@@ -649,7 +649,7 @@ dependencies = [
 [[package]]
 name = "esp-config"
 version = "0.7.0"
-source = "git+https://github.com/CordlessCoder/esp-hal#0b6a92c7dd2d390ff89227171da4d4133c70e68c"
+source = "git+https://github.com/CordlessCoder/esp-hal#c9f3c1d35618605d881c34c2490454f6929fe689"
 dependencies = [
  "document-features",
  "esp-metadata-generated",
@@ -661,7 +661,7 @@ dependencies = [
 [[package]]
 name = "esp-hal"
 version = "1.1.0"
-source = "git+https://github.com/CordlessCoder/esp-hal#0b6a92c7dd2d390ff89227171da4d4133c70e68c"
+source = "git+https://github.com/CordlessCoder/esp-hal#c9f3c1d35618605d881c34c2490454f6929fe689"
 dependencies = [
  "bitfield",
  "bitflags",
@@ -717,7 +717,7 @@ dependencies = [
 [[package]]
 name = "esp-hal-procmacros"
 version = "0.22.0"
-source = "git+https://github.com/CordlessCoder/esp-hal#0b6a92c7dd2d390ff89227171da4d4133c70e68c"
+source = "git+https://github.com/CordlessCoder/esp-hal#c9f3c1d35618605d881c34c2490454f6929fe689"
 dependencies = [
  "document-features",
  "object",
@@ -731,12 +731,12 @@ dependencies = [
 [[package]]
 name = "esp-metadata-generated"
 version = "0.4.0"
-source = "git+https://github.com/CordlessCoder/esp-hal#0b6a92c7dd2d390ff89227171da4d4133c70e68c"
+source = "git+https://github.com/CordlessCoder/esp-hal#c9f3c1d35618605d881c34c2490454f6929fe689"
 
 [[package]]
 name = "esp-println"
 version = "0.17.0"
-source = "git+https://github.com/CordlessCoder/esp-hal#0b6a92c7dd2d390ff89227171da4d4133c70e68c"
+source = "git+https://github.com/CordlessCoder/esp-hal#c9f3c1d35618605d881c34c2490454f6929fe689"
 dependencies = [
  "document-features",
  "esp-metadata-generated",
@@ -748,7 +748,7 @@ dependencies = [
 [[package]]
 name = "esp-radio-rtos-driver"
 version = "0.3.0"
-source = "git+https://github.com/CordlessCoder/esp-hal#0b6a92c7dd2d390ff89227171da4d4133c70e68c"
+source = "git+https://github.com/CordlessCoder/esp-hal#c9f3c1d35618605d881c34c2490454f6929fe689"
 dependencies = [
  "cfg-if",
  "esp-sync",
@@ -758,7 +758,7 @@ dependencies = [
 [[package]]
 name = "esp-riscv-rt"
 version = "0.14.0"
-source = "git+https://github.com/CordlessCoder/esp-hal#0b6a92c7dd2d390ff89227171da4d4133c70e68c"
+source = "git+https://github.com/CordlessCoder/esp-hal#c9f3c1d35618605d881c34c2490454f6929fe689"
 dependencies = [
  "document-features",
  "riscv",
@@ -768,7 +768,7 @@ dependencies = [
 [[package]]
 name = "esp-rom-sys"
 version = "0.1.4"
-source = "git+https://github.com/CordlessCoder/esp-hal#0b6a92c7dd2d390ff89227171da4d4133c70e68c"
+source = "git+https://github.com/CordlessCoder/esp-hal#c9f3c1d35618605d881c34c2490454f6929fe689"
 dependencies = [
  "cfg-if",
  "document-features",
@@ -779,7 +779,7 @@ dependencies = [
 [[package]]
 name = "esp-rtos"
 version = "0.3.0"
-source = "git+https://github.com/CordlessCoder/esp-hal#0b6a92c7dd2d390ff89227171da4d4133c70e68c"
+source = "git+https://github.com/CordlessCoder/esp-hal#c9f3c1d35618605d881c34c2490454f6929fe689"
 dependencies = [
  "allocator-api2 0.3.1",
  "cfg-if",
@@ -804,7 +804,7 @@ dependencies = [
 [[package]]
 name = "esp-sync"
 version = "0.2.1"
-source = "git+https://github.com/CordlessCoder/esp-hal#0b6a92c7dd2d390ff89227171da4d4133c70e68c"
+source = "git+https://github.com/CordlessCoder/esp-hal#c9f3c1d35618605d881c34c2490454f6929fe689"
 dependencies = [
  "cfg-if",
  "document-features",
@@ -1840,7 +1840,7 @@ checksum = "40ce102ab67701b8526c123c1bab5cbe42d7040ccfd0f64af1a385808d2f43de"
 [[package]]
 name = "u8g2-fonts"
 version = "0.7.2"
-source = "git+https://github.com/CordlessCoder/u8g2-fonts#bf6de09ad286b29288bd85f582ad7f532daf1803"
+source = "git+https://github.com/iriswebb/u8g2-fonts#232c7198339fdf40e2afa33a38e0c2a3053b4fca"
 dependencies = [
  "embedded-graphics",
  "embedded-graphics-core",
@@ -1939,9 +1939,9 @@ dependencies = [
 
 [[package]]
 name = "winnow"
-version = "1.0.2"
+version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ee1708bef14716a11bae175f579062d4554d95be2c6829f518df847b7b3fdd0"
+checksum = "0592e1c9d151f854e6fd382574c3a0855250e1d9b2f99d9281c6e6391af352f1"
 dependencies = [
  "memchr",
 ]
@@ -1949,7 +1949,7 @@ dependencies = [
 [[package]]
 name = "xtensa-lx"
 version = "0.13.0"
-source = "git+https://github.com/CordlessCoder/esp-hal#0b6a92c7dd2d390ff89227171da4d4133c70e68c"
+source = "git+https://github.com/CordlessCoder/esp-hal#c9f3c1d35618605d881c34c2490454f6929fe689"
 dependencies = [
  "critical-section",
 ]
@@ -1957,7 +1957,7 @@ dependencies = [
 [[package]]
 name = "xtensa-lx-rt"
 version = "0.22.0"
-source = "git+https://github.com/CordlessCoder/esp-hal#0b6a92c7dd2d390ff89227171da4d4133c70e68c"
+source = "git+https://github.com/CordlessCoder/esp-hal#c9f3c1d35618605d881c34c2490454f6929fe689"
 dependencies = [
  "document-features",
  "xtensa-lx",
@@ -1967,7 +1967,7 @@ dependencies = [
 [[package]]
 name = "xtensa-lx-rt-proc-macros"
 version = "0.5.0"
-source = "git+https://github.com/CordlessCoder/esp-hal#0b6a92c7dd2d390ff89227171da4d4133c70e68c"
+source = "git+https://github.com/CordlessCoder/esp-hal#c9f3c1d35618605d881c34c2490454f6929fe689"
 dependencies = [
  "proc-macro2",
  "quote",

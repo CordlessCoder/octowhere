@@ -9,7 +9,7 @@ use embedded_graphics::pixelcolor::{Gray8, Rgb565, Rgb888};
 use embedded_graphics_core::geometry::{OriginDimensions, Size};
 use embedded_graphics_core::prelude::*;
 
-use esp_hal::dma::DmaTxBuf;
+use esp_hal::dma::{DmaTxBuf, DmaTxBuffer};
 use esp_hal::gpio::{Input, Output};
 use esp_hal::spi::master::{Address, Command, DataMode};
 
@@ -324,6 +324,7 @@ where
             buffered: 0,
         }
     }
+
     pub fn begin_stream<'r>(&'r mut self) -> PixelStream<'r, 'd, C> {
         self.bus.cs.set_low();
         self.bus
@@ -387,6 +388,20 @@ where
     #[inline(always)]
     pub fn should_flush(&self) -> bool {
         self.buffered > self.disp.bus.tx.len().saturating_sub(256)
+    }
+    pub fn flush_external_buf_async(
+        &mut self,
+        buf: &mut impl DmaTxBuffer,
+        len: usize,
+    ) -> impl Future<Output = Result<(), esp_hal::spi::Error>> {
+        self.disp.bus.spi.half_duplex_write_and_wait(
+            DataMode::Quad,
+            Command::None,
+            Address::None,
+            0,
+            len,
+            buf,
+        )
     }
     pub async fn flush_buf_async(&mut self, fill_swap_with: impl FnOnce(&mut [u8]) -> usize) {
         if self.buffered == 0 {

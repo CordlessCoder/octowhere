@@ -10,7 +10,7 @@ use embedded_graphics::{
 };
 use fontdue::{FontRepr, layout::Layout};
 
-use crate::board;
+use crate::{board, ui::dirty::DirtyAreas};
 
 // Rgb888 is higher quality, Rgb565 cuts the size of the framebuffer by a third.
 // Gray8 is 3x smaller than Rgb888... but I'm not sure we love monochrome.
@@ -19,34 +19,22 @@ pub type Color = embedded_graphics::pixelcolor::Rgb565;
 pub const DISPLAY_SIZE: Size = Size::new(board::LCD_WIDTH as u32, board::LCD_HEIGHT as u32);
 pub const DISPLAY_BBOX: Rectangle = Rectangle::new(Point::new_equal(0), DISPLAY_SIZE);
 
-pub const UPSCALE: usize = 1;
-pub const HEADING_FONT_FAST: u8g2_fonts::FontRenderer = match UPSCALE {
-    1 => u8g2_fonts::FontRenderer::new::<MarathonShapiro65_32>(),
-    2 => u8g2_fonts::FontRenderer::new::<u8g2_fonts::fonts::u8g2_font_spleen8x16_mr>(),
-    3 => u8g2_fonts::FontRenderer::new::<u8g2_fonts::fonts::u8g2_font_spleen6x12_mr>(),
-    4 => u8g2_fonts::FontRenderer::new::<u8g2_fonts::fonts::u8g2_font_spleen5x8_mr>(),
-    _ => todo!(),
-};
-pub const MEDIUM_FONT_FAST: u8g2_fonts::FontRenderer = match UPSCALE {
-    1 => u8g2_fonts::FontRenderer::new::<FraktionMono24>(),
-    2 => u8g2_fonts::FontRenderer::new::<u8g2_fonts::fonts::u8g2_font_spleen8x16_mr>(),
-    3 => u8g2_fonts::FontRenderer::new::<u8g2_fonts::fonts::u8g2_font_spleen6x12_mr>(),
-    4 => u8g2_fonts::FontRenderer::new::<u8g2_fonts::fonts::u8g2_font_spleen5x8_mr>(),
-    _ => todo!(),
-};
+pub const HEADING_FONT_FAST: &u8g2_fonts::Font = &MARATHON_SHAPIRO65_32;
+pub const MEDIUM_FONT_FAST: &u8g2_fonts::Font = &FRAKTION_MONO24;
 
 pub type FB = crate::drivers::framebuffer::Framebuffer<
-    UPSCALE,
     {
         crate::drivers::framebuffer::buffer_size::<Color>(
-            board::LCD_WIDTH as usize / UPSCALE,
-            board::LCD_HEIGHT as usize / UPSCALE,
+            board::LCD_WIDTH as usize,
+            board::LCD_HEIGHT as usize,
         )
     },
-    { board::LCD_WIDTH as usize / UPSCALE },
-    { board::LCD_HEIGHT as usize / UPSCALE },
+    { board::LCD_WIDTH as usize },
+    { board::LCD_HEIGHT as usize },
     Color,
 >;
+pub type Dirty =
+    DirtyAreas<{ board::LCD_WIDTH as usize }, { board::LCD_HEIGHT as usize }, 2, 2, { 2 * 2 }>;
 
 fontdue_macros::fontdue_font_from_file!(
     MarathonShapiroFont,
@@ -111,33 +99,20 @@ pub const fn lerp_u8(a: u8, b: u8, factor: u8) -> u8 {
     ((a as u16 * (u8::MAX - factor) as u16 + b as u16 * factor as u16 + u8::MAX as u16) >> 8) as u8
 }
 
-pub struct MarathonShapiro65_32;
-impl u8g2_fonts::Font for MarathonShapiro65_32 {
-    const DATA: &'static [u8] = include_bytes!("../assets/marathon_shapiro_32.u8g2");
-}
-pub struct MarathonShapiro65_20;
-impl u8g2_fonts::Font for MarathonShapiro65_20 {
-    const DATA: &'static [u8] = include_bytes!("../assets/marathon_shapiro_20.u8g2");
-}
+pub static MARATHON_SHAPIRO65_32: u8g2_fonts::Font =
+    u8g2_fonts::Font::new(include_bytes!("../assets/marathon_shapiro_32.u8g2"));
+pub static MARATHON_SHAPIRO65_20: u8g2_fonts::Font =
+    u8g2_fonts::Font::new(include_bytes!("../assets/marathon_shapiro_20.u8g2"));
 
-pub struct FraktionMono28;
-impl u8g2_fonts::Font for FraktionMono28 {
-    const DATA: &'static [u8] = include_bytes!(
-        "../assets/PPFraktion-Free for personal use v1.1/Mono/ppfraktionmono_regular_28.u8g2"
-    );
-}
-pub struct FraktionMono24;
-impl u8g2_fonts::Font for FraktionMono24 {
-    const DATA: &'static [u8] = include_bytes!(
-        "../assets/PPFraktion-Free for personal use v1.1/Mono/ppfraktionmono_regular_24.u8g2"
-    );
-}
-pub struct FraktionMono20;
-impl u8g2_fonts::Font for FraktionMono20 {
-    const DATA: &'static [u8] = include_bytes!(
-        "../assets/PPFraktion-Free for personal use v1.1/Mono/ppfraktionmono_regular_20.u8g2"
-    );
-}
+pub static FRAKTION_MONO28: u8g2_fonts::Font = u8g2_fonts::Font::new(include_bytes!(
+    "../assets/PPFraktion-Free for personal use v1.1/Mono/ppfraktionmono_regular_28.u8g2"
+));
+pub static FRAKTION_MONO24: u8g2_fonts::Font = u8g2_fonts::Font::new(include_bytes!(
+    "../assets/PPFraktion-Free for personal use v1.1/Mono/ppfraktionmono_regular_24.u8g2"
+));
+pub static FRAKTION_MONO20: u8g2_fonts::Font = u8g2_fonts::Font::new(include_bytes!(
+    "../assets/PPFraktion-Free for personal use v1.1/Mono/ppfraktionmono_regular_20.u8g2"
+));
 
 pub trait RgbColorExt {
     fn lerp(&self, other: &Self, factor: u8) -> Self;
