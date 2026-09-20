@@ -70,10 +70,10 @@ pub enum DisplayError {
 /// Turn display on (exit sleep + display ON).
 /// MIPI DCS order: SLPOUT -> 120ms -> DISPON -> 20ms.
 static CO5300_EXIT_SLEEP: [QSPIOperation; 4] = [
-    QSPIOperation::Command(CMD_DISPON),
-    QSPIOperation::Delay(20),
     QSPIOperation::Command(CMD_SLPOUT),
     QSPIOperation::Delay(SLPOUT_DELAY_MS),
+    QSPIOperation::Command(CMD_DISPON),
+    QSPIOperation::Delay(20),
 ];
 static CO5300_ENTER_SLEEP: [QSPIOperation; 4] = [
     QSPIOperation::Command(CMD_DISPOFF),
@@ -231,6 +231,7 @@ where
 
     /// Set the address window for pixel writes.
     pub fn set_addr_window(&mut self, x: u16, y: u16, w: u16, h: u16) {
+        let (x, y, w, h) = self.even_window(x, y, w, h);
         let x_start = x + self.col_offset;
         let x_end = x_start + w - 1;
         let y_start = y + self.row_offset;
@@ -241,6 +242,33 @@ where
             QSPIOperation::CommandD16D16(CMD_PASET, y_start, y_end),
             QSPIOperation::Command(CMD_RAMWR),
         ]);
+    }
+
+    fn even_window(&self, x: u16, y: u16, w: u16, h: u16) -> (u16, u16, u16, u16) {
+        let mut x0 = (x as usize).min(self.width.saturating_sub(1) as usize) & !1;
+        let mut y0 = (y as usize).min(self.height.saturating_sub(1) as usize) & !1;
+        let mut x1 = (x as usize).saturating_add(w as usize).min(self.width as usize);
+        let mut y1 = (y as usize).saturating_add(h as usize).min(self.height as usize);
+
+        if x1 & 1 != 0 && x1 < self.width as usize {
+            x1 += 1;
+        }
+        if y1 & 1 != 0 && y1 < self.height as usize {
+            y1 += 1;
+        }
+        if x1 <= x0 {
+            x1 = (x0 + 2).min(self.width as usize);
+        }
+        if y1 <= y0 {
+            y1 = (y0 + 2).min(self.height as usize);
+        }
+
+        (
+            x0 as u16,
+            y0 as u16,
+            (x1 - x0) as u16,
+            (y1 - y0) as u16,
+        )
     }
 
     /// Fill the entire screen with a single color.
@@ -279,6 +307,7 @@ where
             return;
         };
         let bytes = color.to_be_bytes();
+        let (x, y, w, h) = self.even_window(x, y, w, h);
         self.set_addr_window(x, y, w, h);
         self.write_repeat(bytes.as_ref(), w as usize * h as usize);
     }
