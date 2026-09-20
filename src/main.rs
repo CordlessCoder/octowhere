@@ -149,6 +149,8 @@ async fn second_core(
             needs_full_redraw: _,
             #[cfg(feature = "damage-debug")]
             debug_repaint,
+            #[cfg(feature = "damage-debug")]
+            debug_damage,
         } = state;
 
         let start = Instant::now();
@@ -165,14 +167,21 @@ async fn second_core(
         let flush_damage = dirty.clone();
 
         if flush_damage.is_full() {
+            #[cfg(feature = "damage-debug")]
+            let debug_full = debug_damage.is_full();
+            #[cfg(not(feature = "damage-debug"))]
+            let debug_full = false;
             fb.flush(
                 &mut display,
-                cfg!(feature = "damage-debug") && dirty.is_full(),
+                debug_full,
             )
             .await;
         } else {
             #[cfg(feature = "damage-debug")]
-            for (region, overlay) in dirty.iter_merged(&previous_debug) {
+            for (region, overlay) in dirty.iter_merged_with_overlay(
+                debug_damage,
+                &previous_debug,
+            ) {
                 fb.flush_region(
                     &mut display,
                     region.top_left.x as u16,
@@ -432,6 +441,8 @@ struct SwapState<A: Allocator = alloc::alloc::Global> {
     needs_full_redraw: Dirty,
     #[cfg(feature = "damage-debug")]
     debug_repaint: Dirty,
+    #[cfg(feature = "damage-debug")]
+    debug_damage: Dirty,
     timings: Timings,
 }
 
@@ -585,6 +596,8 @@ async fn main(_spawner: Spawner) {
                 needs_full_redraw: DirtyAreas::new_full(),
                 #[cfg(feature = "damage-debug")]
                 debug_repaint: DirtyAreas::new(),
+                #[cfg(feature = "damage-debug")]
+                debug_damage: DirtyAreas::new(),
                 timings: Timings::default(),
             },
             SwapState {
@@ -593,6 +606,8 @@ async fn main(_spawner: Spawner) {
                 needs_full_redraw: DirtyAreas::new_full(),
                 #[cfg(feature = "damage-debug")]
                 debug_repaint: DirtyAreas::new(),
+                #[cfg(feature = "damage-debug")]
+                debug_damage: DirtyAreas::new(),
                 timings: Timings::default(),
             },
         )
@@ -684,6 +699,8 @@ async fn main(_spawner: Spawner) {
                 needs_full_redraw,
                 #[cfg(feature = "damage-debug")]
                 debug_repaint,
+                #[cfg(feature = "damage-debug")]
+                debug_damage,
             } = state;
             let fb = &mut **fb;
             draw_ctx.touch_data = touch.read_touch_data().await.unwrap();
@@ -711,6 +728,10 @@ async fn main(_spawner: Spawner) {
             next_needs_full_redraw.extend(&update_touch(&draw_ctx, fb));
             dirty.extend(&next_needs_full_redraw);
 
+            #[cfg(feature = "damage-debug")]
+            {
+                *debug_damage = next_needs_full_redraw.clone();
+            }
             *needs_full_redraw = next_needs_full_redraw;
 
             timings.frametime = start.elapsed();

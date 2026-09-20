@@ -143,12 +143,21 @@ impl<
         &'a self,
         other: &'a Self,
     ) -> impl Iterator<Item = (Rectangle, Rectangle)> + 'a {
+        self.iter_merged_with_overlay(self, other)
+    }
+
+    pub fn iter_merged_with_overlay<'a>(
+        &'a self,
+        overlay: &'a Self,
+        other: &'a Self,
+    ) -> impl Iterator<Item = (Rectangle, Rectangle)> + 'a {
         self.grid
             .iter()
+            .zip(overlay.grid.iter())
             .zip(other.grid.iter())
-            .filter_map(|(current, previous)| {
+            .filter_map(|((current, overlay), previous)| {
                 let merged = bounding_box(current, previous);
-                (!merged.is_zero_sized()).then_some((merged, *current))
+                (!merged.is_zero_sized()).then_some((merged, *overlay))
             })
     }
 
