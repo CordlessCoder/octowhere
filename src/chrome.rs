@@ -22,6 +22,14 @@ pub const DISPLAY_BBOX: Rectangle = Rectangle::new(Point::new_equal(0), DISPLAY_
 pub const HEADING_FONT_FAST: &u8g2_fonts::Font = &MARATHON_SHAPIRO65_32;
 pub const MEDIUM_FONT_FAST: &u8g2_fonts::Font = &FRAKTION_MONO24;
 
+#[cfg(feature = "femtofont")]
+pub static MARATHON_SHAPIRO_FONT_BYTES: &[u8] =
+    include_bytes!("../assets/MarathonShapiro-Wide65_subset.ttf");
+#[cfg(feature = "femtofont")]
+pub static FRAKTION_MONO_FONT_BYTES: &[u8] = include_bytes!(
+    "../assets/PPFraktion-Free for personal use v1.1/Mono/PPFraktionMono-Regular-subset.ttf"
+);
+
 pub type FB = crate::drivers::framebuffer::Framebuffer<
     {
         crate::drivers::framebuffer::buffer_size::<Color>(
@@ -277,14 +285,19 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
                     |coverage: u8| self.background_color.lerp(&self.text_color, coverage);
 
                 let width = metrics.width;
-                let pixels = bitmap.enumerate().filter(|&(_, c)| c != 0).map(|(idx, c)| {
-                    let y = idx / width;
-                    let x = idx % width;
-                    Pixel(
-                        position + Point::new(x_off + x as i32, y_off + y as i32),
-                        coverage_to_color(c),
-                    )
-                });
+                let pixels =
+                    bitmap
+                        .into_iter()
+                        .enumerate()
+                        .filter(|&(_, c)| c != 0)
+                        .map(|(idx, c)| {
+                            let y = idx / width;
+                            let x = idx % width;
+                            Pixel(
+                                position + Point::new(x_off + x as i32, y_off + y as i32),
+                                coverage_to_color(c),
+                            )
+                        });
                 target.draw_iter(pixels)
             })?;
         // self.draw_background(width as u32, position, target)?;
@@ -301,6 +314,124 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
         target: &mut D,
     ) -> Result<(), D::Error> {
         let ctx = &mut *self.borrow_ctx();
+        ctx.reset_layout();
+        layout_cb(&mut ctx.layout, self.fonts);
+        self.render_layout(ctx, position, target)
+    }
+}
+
+#[cfg(feature = "femtofont")]
+pub struct FemtoFontRendererCtx {
+    layout: femtofont::layout::Layout,
+}
+
+#[cfg(feature = "femtofont")]
+impl FemtoFontRendererCtx {
+    #[must_use]
+    pub fn new_rc() -> Rc<RefCell<Self>> {
+        Rc::new(RefCell::new(Self {
+            layout: femtofont::layout::Layout::new(
+                femtofont::layout::CoordinateSystem::PositiveYDown,
+            ),
+        }))
+    }
+
+    fn reset_layout(&mut self) {
+        self.layout.reset(&femtofont::layout::LayoutSettings {
+            x: 0.,
+            y: 0.,
+            max_width: None,
+            max_height: None,
+            horizontal_align: femtofont::layout::HorizontalAlign::Left,
+            vertical_align: femtofont::layout::VerticalAlign::Bottom,
+            line_height: 1.0,
+            wrap_style: femtofont::layout::WrapStyle::Letter,
+            wrap_hard_breaks: true,
+        });
+    }
+}
+
+#[cfg(feature = "femtofont")]
+pub struct FemtoFontRenderer<'f, C> {
+    pub text_color: C,
+    pub background_color: C,
+    pub font_size: u32,
+    pub ctx: Rc<RefCell<FemtoFontRendererCtx>>,
+    pub fonts: &'f [femtofont::Font<'f>],
+}
+
+#[cfg(feature = "femtofont")]
+impl<'f, C: PixelColor> FemtoFontRenderer<'f, C> {
+    #[must_use]
+    pub fn new(
+        ctx: Rc<RefCell<FemtoFontRendererCtx>>,
+        font_size: u32,
+        text_color: C,
+        background_color: C,
+        fonts: &'f [femtofont::Font<'f>],
+    ) -> Self {
+        Self {
+            text_color,
+            background_color,
+            font_size,
+            ctx,
+            fonts,
+        }
+    }
+}
+
+#[cfg(feature = "femtofont")]
+impl<C: PixelColor + RgbColorExt> FemtoFontRenderer<'_, C> {
+    fn render_layout<D: DrawTarget<Color = C>>(
+        &self,
+        ctx: &mut FemtoFontRendererCtx,
+        position: Point,
+        target: &mut D,
+    ) -> Result<(), D::Error> {
+        let bbox = target.bounding_box();
+        let usable_width = bbox.size.width.saturating_sub_signed(position.x);
+        if usable_width == 0 {
+            return Ok(());
+        }
+
+        ctx.layout
+            .glyphs()
+            .iter()
+            .filter(|g| g.x < usable_width as f32 && g.char_data.rasterize())
+            .try_for_each(|g| {
+                let (metrics, bitmap) =
+                    self.fonts[g.font_index].rasterize_indexed(g.key.glyph_index, g.key.px);
+                let x_off = g.x as i32;
+                let y_off = g.y as i32;
+                let coverage_to_color =
+                    |coverage: u8| self.background_color.lerp(&self.text_color, coverage);
+                let width = metrics.width;
+                let pixels =
+                    bitmap
+                        .into_iter()
+                        .enumerate()
+                        .filter(|&(_, c)| c != 0)
+                        .map(|(idx, c)| {
+                            let y = idx / width;
+                            let x = idx % width;
+                            Pixel(
+                                position + Point::new(x_off + x as i32, y_off + y as i32),
+                                coverage_to_color(c),
+                            )
+                        });
+                target.draw_iter(pixels)
+            })?;
+        Ok(())
+    }
+
+    #[inline]
+    pub fn render<D: DrawTarget<Color = C>>(
+        &self,
+        layout_cb: impl FnOnce(&mut femtofont::layout::Layout, &[femtofont::Font<'_>]),
+        position: Point,
+        target: &mut D,
+    ) -> Result<(), D::Error> {
+        let ctx = &mut *self.ctx.borrow_mut();
         ctx.reset_layout();
         layout_cb(&mut ctx.layout, self.fonts);
         self.render_layout(ctx, position, target)

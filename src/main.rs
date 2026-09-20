@@ -31,7 +31,7 @@ use esp_hal::{
 use esp_println::println;
 use octowhere::{
     board,
-    chrome::{self, Color, Dirty, FB, FontdueRenderer, HEADING_FONT_FAST, MEDIUM_FONT_FAST},
+    chrome::{self, Color, Dirty, FB},
     drivers::{co5300::Co5300Display, framebuffer::Framebuffer, qspi_bus::QspiBus},
     peripherals::{
         rtc::Pcf85063aRtc,
@@ -42,7 +42,9 @@ use octowhere::{
 };
 use static_cell::StaticCell;
 use tca9554::Tca9554;
-use u8g2_fonts::types::FontColor;
+
+#[cfg(not(feature = "femtofont"))]
+use octowhere::chrome::{FontdueRenderer, FontdueRendererCtx};
 
 use esp_alloc as _;
 use esp_backtrace as _;
@@ -197,6 +199,10 @@ fn bench_repeat<R>(mut the_thing: impl FnMut() -> R, name: &str) -> (R, Duration
 struct DrawCtx {
     touch_data: TouchData,
     bounding_box: Rectangle,
+    #[cfg(feature = "femtofont")]
+    font_renderer: chrome::FemtoFontRenderer<'static, Color>,
+    #[cfg(not(feature = "femtofont"))]
+    font_renderer: FontdueRenderer<'static, Color>,
 }
 
 #[derive(Debug, Default)]
@@ -214,7 +220,6 @@ where
     D: DrawTarget<Color = Color>,
     D::Error: core::fmt::Debug,
 {
-    let fg = chrome::LIME;
     let mut dirty = Dirty::new();
     let Timings {
         vsync_wait,
@@ -223,8 +228,7 @@ where
         swap_spi,
         frametime,
     } = timings;
-    let text = format_args!(
-        // let text = alloc::format!(
+    let text = alloc::format!(
         "draw: {:.1}ms\nvsync: {:.1}ms\nspi: {:.1}ms\nswap(draw): {:.1}ms\nswap(spi): {:.1}ms",
         frametime.as_micros() as f32 / 1_000.,
         vsync_wait.as_micros() as f32 / 1_000.,
@@ -232,39 +236,40 @@ where
         swap_draw.as_micros() as f32 / 1_000.,
         swap_spi.as_micros() as f32 / 1_000.,
     );
-    let dim = HEADING_FONT_FAST
+    let font_start = Instant::now();
+    #[cfg(feature = "femtofont")]
+    ctx.font_renderer
         .render(
-            "Statistics",
-            (ctx.bounding_box.center() + Point::new(-100, 60)),
-            u8g2_fonts::types::VerticalPosition::Bottom,
-            FontColor::Transparent(fg),
+            |layout, fonts| {
+                layout.append(
+                    fonts,
+                    &femtofont::layout::TextStyle::new("Statistics\n", 32.0, 0),
+                );
+                layout.append(fonts, &femtofont::layout::TextStyle::new(&text, 24.0, 1));
+            },
+            ctx.bounding_box.center() + Point::new(-100, 10),
             target,
         )
         .unwrap();
-    _ = dim.bounding_box.map(|rect| dirty.add(rect));
-    let dim = MEDIUM_FONT_FAST
+    #[cfg(not(feature = "femtofont"))]
+    ctx.font_renderer
         .render(
-            text,
-            (ctx.bounding_box.center() + Point::new(-100, 60)),
-            u8g2_fonts::types::VerticalPosition::Top,
-            FontColor::Transparent(fg),
+            |layout, fonts| {
+                layout.append(
+                    fonts,
+                    &fontdue::layout::TextStyle::new("Statistics\n", 32.0, 0),
+                );
+                layout.append(fonts, &fontdue::layout::TextStyle::new(&text, 24.0, 1));
+            },
+            ctx.bounding_box.center() + Point::new(-100, 10),
             target,
         )
         .unwrap();
-    _ = dim.bounding_box.map(|rect| dirty.add(rect));
-    // fontdue_renderer
-    //     .render(
-    //         |layout, fonts| {
-    //             layout.append(
-    //                 fonts,
-    //                 &fontdue::layout::TextStyle::new("Statistics\n", 32.0, 0),
-    //             );
-    //             layout.append(fonts, &fontdue::layout::TextStyle::new(&text, 24.0, 1));
-    //         },
-    //         (bbox.center() + Point::new(-100, 10)),
-    //         fb,
-    //     )
-    //     .unwrap();
+    let font_elapsed = font_start.elapsed();
+    #[cfg(feature = "femtofont")]
+    defmt::info!("font-draw femtofont: {} us", font_elapsed.as_micros());
+    #[cfg(not(feature = "femtofont"))]
+    defmt::info!("font-draw fontdue: {} us", font_elapsed.as_micros());
     dirty
 }
 
@@ -415,8 +420,6 @@ async fn main(_spawner: Spawner) {
     let timg0 = TimerGroup::new(peripherals.TIMG0);
 
     esp_rtos::start(timg0.timer0, sw_int.software_interrupt0);
-
-    esp_println::logger::init_logger_from_env();
 
     let i2c = I2c::new(
         peripherals.I2C0,
@@ -574,17 +577,45 @@ async fn main(_spawner: Spawner) {
         },
     );
 
-    // let fontdue_ctx = FontdueRendererCtx::new_rc();
-    // let fontdue_renderer = FontdueRenderer::new(
-    //     fontdue_ctx,
-    //     32,
-    //     chrome::WHITE,
-    //     chrome::BLACK,
-    //     &[&MarathonShapiroFont, &FraktionMonoRegularFont],
-    // );
+    #[cfg(feature = "femtofont")]
+    let font_renderer = {
+        let settings = femtofont::FontSettings {
+            scale: 40.0,
+            cachesize: 0,
+            ..femtofont::FontSettings::default()
+        };
+        let fonts = Box::leak(Box::new([
+            femtofont::Font::from_bytes(chrome::MARATHON_SHAPIRO_FONT_BYTES, settings)
+                .expect("Marathon Shapiro font"),
+            femtofont::Font::from_bytes(chrome::FRAKTION_MONO_FONT_BYTES, settings)
+                .expect("PP Fraktion font"),
+        ]));
+        chrome::FemtoFontRenderer::new(
+            chrome::FemtoFontRendererCtx::new_rc(),
+            32,
+            chrome::WHITE,
+            chrome::BLACK,
+            fonts,
+        )
+    };
+    #[cfg(not(feature = "femtofont"))]
+    let font_renderer = {
+        let fonts = Box::leak(Box::new([
+            &chrome::MarathonShapiroFont as &dyn fontdue::FontRepr,
+            &chrome::FraktionMonoRegularFont as &dyn fontdue::FontRepr,
+        ]));
+        FontdueRenderer::new(
+            FontdueRendererCtx::new_rc(),
+            32,
+            chrome::WHITE,
+            chrome::BLACK,
+            fonts,
+        )
+    };
     let mut draw_ctx = DrawCtx {
         touch_data: TouchData::default(),
         bounding_box: chrome::DISPLAY_BBOX,
+        font_renderer,
     };
     let mut prev_swap_draw = Duration::MIN;
     loop {
