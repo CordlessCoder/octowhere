@@ -45,6 +45,7 @@ femtofont = { git = "https://github.com/iriswebb/femtofont", rev = "ffb120f0a2e1
 default = []
 femtofont = []
 damage-debug = []
+timing-log = []
 
 [patch.crates-io]
 tca9554 = { git = "https://github.com/CordlessCoder/tca9554-rs" } 

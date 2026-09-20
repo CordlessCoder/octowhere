@@ -42,9 +42,6 @@ use octowhere::{
 use static_cell::StaticCell;
 use tca9554::Tca9554;
 
-#[cfg(not(feature = "femtofont"))]
-use octowhere::chrome::{FontdueRenderer, FontdueRendererCtx};
-
 use esp_alloc as _;
 use esp_backtrace as _;
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -139,13 +136,7 @@ async fn second_core(
         let state = swap.get();
         let SwapState {
             fb,
-            timings:
-                Timings {
-                    vsync_wait,
-                    spi_time,
-                    swap_spi,
-                    ..
-                },
+            timings,
             dirty,
             needs_full_redraw: _,
             #[cfg(feature = "damage-debug")]
@@ -158,7 +149,7 @@ async fn second_core(
 
         display.wait_for_vsync().await;
 
-        *vsync_wait = start.elapsed();
+        timings.vsync_wait = start.elapsed();
 
         #[cfg(feature = "damage-debug")]
         let mut flush_damage = dirty.clone();
@@ -213,9 +204,18 @@ async fn second_core(
             *debug_repaint = current_debug;
         }
 
-        *spi_time = start.elapsed() - *vsync_wait;
+        timings.spi_time = start.elapsed() - timings.vsync_wait;
 
-        *swap_spi = prev_swap_spi;
+        timings.swap_spi = prev_swap_spi;
+
+        #[cfg(feature = "timing-log")]
+        defmt::info!(
+            "timing spi: vsync={}us flush={}us swap={}us",
+            timings.vsync_wait.as_micros(),
+            timings.spi_time.as_micros(),
+            timings.swap_spi.as_micros(),
+        );
+
         let before_swap = start.elapsed();
         swap.swap().await;
         prev_swap_spi = start.elapsed() - before_swap;
@@ -241,15 +241,7 @@ fn bench_repeat<R>(mut the_thing: impl FnMut() -> R, name: &str) -> (R, Duration
 
 struct DrawCtx {
     touch_data: TouchData,
-    bounding_box: Rectangle,
-    statistics_text_bbox: Rectangle,
-    #[cfg(feature = "femtofont")]
-    font_renderer: chrome::FemtoFontRenderer<'static, Color>,
-    #[cfg(not(feature = "femtofont"))]
-    font_renderer: FontdueRenderer<'static, Color>,
 }
-
-const STATISTICS_BBOX: Rectangle = Rectangle::new(Point::new(110, 225), Size::new(300, 220));
 
 #[derive(Debug, Default)]
 struct Timings {
@@ -258,73 +250,6 @@ struct Timings {
     swap_draw: Duration,
     swap_spi: Duration,
     frametime: Duration,
-}
-
-fn update_text<D>(ctx: &mut DrawCtx, timings: &Timings, target: &mut D) -> Dirty
-where
-    D: DrawTarget,
-    D: DrawTarget<Color = Color>,
-    D::Error: core::fmt::Debug,
-{
-    let mut dirty = Dirty::new();
-    target
-        .fill_solid(&ctx.statistics_text_bbox, chrome::BLACK)
-        .unwrap();
-    dirty.add(ctx.statistics_text_bbox);
-    let Timings {
-        vsync_wait,
-        spi_time,
-        swap_draw,
-        swap_spi,
-        frametime,
-    } = timings;
-    let text = alloc::format!(
-        "draw: {:.1}ms\nvsync: {:.1}ms\nspi: {:.1}ms\nswap(draw): {:.1}ms\nswap(spi): {:.1}ms",
-        frametime.as_micros() as f32 / 1_000.,
-        vsync_wait.as_micros() as f32 / 1_000.,
-        spi_time.as_micros() as f32 / 1_000.,
-        swap_draw.as_micros() as f32 / 1_000.,
-        swap_spi.as_micros() as f32 / 1_000.,
-    );
-    let font_start = Instant::now();
-    #[cfg(feature = "femtofont")]
-    let text_bbox = ctx
-        .font_renderer
-        .render(
-            |layout, fonts| {
-                layout.append(
-                    fonts,
-                    &femtofont::layout::TextStyle::new("Statistics\n", 32.0, 0),
-                );
-                layout.append(fonts, &femtofont::layout::TextStyle::new(&text, 24.0, 1));
-            },
-            ctx.bounding_box.center() + Point::new(-100, 10),
-            target,
-        )
-        .unwrap();
-    #[cfg(not(feature = "femtofont"))]
-    let text_bbox = ctx
-        .font_renderer
-        .render(
-            |layout, fonts| {
-                layout.append(
-                    fonts,
-                    &fontdue::layout::TextStyle::new("Statistics\n", 32.0, 0),
-                );
-                layout.append(fonts, &fontdue::layout::TextStyle::new(&text, 24.0, 1));
-            },
-            ctx.bounding_box.center() + Point::new(-100, 10),
-            target,
-        )
-        .unwrap();
-    dirty.add(text_bbox);
-    ctx.statistics_text_bbox = text_bbox;
-    let font_elapsed = font_start.elapsed();
-    #[cfg(feature = "femtofont")]
-    defmt::info!("font-draw femtofont: {} us", font_elapsed.as_micros());
-    #[cfg(not(feature = "femtofont"))]
-    defmt::info!("font-draw fontdue: {} us", font_elapsed.as_micros());
-    dirty
 }
 
 fn update_touch<D>(ctx: &DrawCtx, target: &mut D) -> Dirty
@@ -380,60 +305,14 @@ where
     D: DrawTarget<Color = Color>,
     D::Error: core::fmt::Debug,
 {
-    let mut dirty = Dirty::new();
-    use embedded_graphics::{
-        prelude::*,
-        primitives::{Circle, PrimitiveStyle, PrimitiveStyleBuilder, Rectangle, StrokeAlignment},
-    };
-
-    target
-        .fill_solid(&target.bounding_box(), chrome::BLACK)
-        .unwrap();
-    dirty.add(target.bounding_box());
-
-    // Create styles used by the drawing operations.
-    let thin_stroke = PrimitiveStyle::with_stroke(chrome::PURPLE, 4);
-    let thick_stroke = PrimitiveStyle::with_stroke(chrome::RED, 8);
-    let border_stroke = PrimitiveStyleBuilder::new()
-        .stroke_color(if ctx.touch_data != TouchData::CoverGesture {
-            chrome::LIME
-        } else {
-            chrome::RED
-        })
-        .stroke_width(8)
-        .stroke_alignment(StrokeAlignment::Inside)
-        .build();
-    let fill = PrimitiveStyle::with_fill(chrome::PURPLE);
-
-    let yoffset = 140;
-
-    // // Draw a 3px wide outline around the display.
-    // Circle::new(Point::new(0, 0), ctx.bounding_box.size.width)
-    //
-    //     .into_styled(border_stroke)
-    //     .draw(target)
-    //     .unwrap();
-
-    // PERF: Currently, embedded_graphics primitives completely ignore the target's bounding box,
-    // attempting to draw even if it would go out of bounds, wasting compute.
-
-    // Draw a filled square
-    draw_if_in_bounds(
+    octowhere::ui::prototypes::render(
+        octowhere::ui::prototypes::ACTIVE_ARCHITECTURE,
+        octowhere::ui::prototypes::State {
+            touch_active: ctx.touch_data != TouchData::CoverGesture,
+        },
         target,
-        &mut dirty,
-        Rectangle::new(Point::new(200, yoffset), Size::new(64, 64)).into_styled(fill),
     )
-    .unwrap();
-
-    // Draw a circle with a 3px wide stroke.
-    draw_if_in_bounds(
-        target,
-        &mut dirty,
-        Circle::new(Point::new(340, yoffset), 68).into_styled(thick_stroke),
-    )
-    .unwrap();
-
-    dirty
+    .expect("prototype renderer failed")
 }
 
 struct SwapState<A: Allocator = alloc::alloc::Global> {
@@ -640,46 +519,8 @@ async fn main(_spawner: Spawner) {
         },
     );
 
-    #[cfg(feature = "femtofont")]
-    let font_renderer = {
-        let settings = femtofont::FontSettings {
-            scale: 40.0,
-            cachesize: 40,
-            ..femtofont::FontSettings::default()
-        };
-        let fonts = Box::leak(Box::new([
-            femtofont::Font::from_bytes(chrome::MARATHON_SHAPIRO_FONT_BYTES, settings)
-                .expect("Marathon Shapiro font"),
-            femtofont::Font::from_bytes(chrome::FRAKTION_MONO_FONT_BYTES, settings)
-                .expect("PP Fraktion font"),
-        ]));
-        chrome::FemtoFontRenderer::new(
-            chrome::FemtoFontRendererCtx::new_rc(),
-            32,
-            chrome::WHITE,
-            chrome::BLACK,
-            fonts,
-        )
-    };
-    #[cfg(not(feature = "femtofont"))]
-    let font_renderer = {
-        let fonts = Box::leak(Box::new([
-            &chrome::MarathonShapiroFont as &dyn fontdue::FontRepr,
-            &chrome::FraktionMonoRegularFont as &dyn fontdue::FontRepr,
-        ]));
-        FontdueRenderer::new(
-            FontdueRendererCtx::new_rc(),
-            32,
-            chrome::WHITE,
-            chrome::BLACK,
-            fonts,
-        )
-    };
     let mut draw_ctx = DrawCtx {
         touch_data: TouchData::default(),
-        bounding_box: chrome::DISPLAY_BBOX,
-        statistics_text_bbox: STATISTICS_BBOX,
-        font_renderer,
     };
     println!(
         "[MEM] internal_used={} psram_used={}",
@@ -723,8 +564,7 @@ async fn main(_spawner: Spawner) {
                 }
             }
             dirty.extend(&repaint);
-            let mut next_needs_full_redraw = update_text(&mut draw_ctx, timings, fb);
-            next_needs_full_redraw.extend(&update_touch(&draw_ctx, fb));
+            let mut next_needs_full_redraw = update_touch(&draw_ctx, fb);
             dirty.extend(&next_needs_full_redraw);
 
             #[cfg(feature = "damage-debug")]
@@ -735,6 +575,13 @@ async fn main(_spawner: Spawner) {
 
             timings.frametime = start.elapsed();
             timings.swap_draw = prev_swap_draw;
+
+            #[cfg(feature = "timing-log")]
+            defmt::info!(
+                "timing draw: frame={}us swap={}us",
+                timings.frametime.as_micros(),
+                timings.swap_draw.as_micros(),
+            );
         }
 
         let start = Instant::now();
