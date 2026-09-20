@@ -126,7 +126,7 @@ where
     )?;
     text(
         "FIELD MAP",
-        Point::new(114, 54),
+        Point::new(114, 60),
         chrome::WHITE,
         &chrome::MARATHON_SHAPIRO65_20,
         target,
@@ -148,7 +148,7 @@ where
     )?;
     text(
         "01 / 04",
-        Point::new(310, 58),
+        Point::new(310, 64),
         chrome::BLACK,
         &chrome::FRAKTION_MONO20,
         target,
@@ -202,7 +202,7 @@ where
                 2 => "NODE 02",
                 _ => "NODE 03",
             },
-            Point::new(225, 310),
+            Point::new(216, 310),
             chrome::BLACK,
             &chrome::FRAKTION_MONO20,
             target,
@@ -210,7 +210,7 @@ where
     }
     text(
         "N 51.898",
-        Point::new(64, 126),
+        Point::new(64, 134),
         chrome::GRAY,
         &chrome::FRAKTION_MONO20,
         target,
@@ -253,7 +253,7 @@ where
     )?;
     text(
         "SYNC  12:42",
-        Point::new(284, 384),
+        Point::new(274, 384),
         chrome::WHITE,
         &chrome::FRAKTION_MONO20,
         target,
