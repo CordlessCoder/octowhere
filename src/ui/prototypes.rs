@@ -148,7 +148,7 @@ where
     )?;
     text(
         "01 / 04",
-        Point::new(310, 64),
+        Point::new(286, 64),
         chrome::BLACK,
         &chrome::FRAKTION_MONO20,
         target,
