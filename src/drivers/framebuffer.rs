@@ -15,8 +15,6 @@ use embedded_graphics_core::draw_target::DrawTarget;
 use embedded_graphics_core::geometry::{OriginDimensions, Size};
 use embedded_graphics_core::prelude::*;
 use embedded_graphics_core::primitives::Rectangle;
-use esp_hal::dma::DmaDescriptor;
-use esp_hal::dma::scoped::ScopedDmaTxBuf;
 use esp_println::dbg;
 
 #[repr(align(64))]
@@ -110,11 +108,7 @@ where
     // }
 
     /// Flush the entire framebuffer to the display via DMA QSPI.
-    pub async fn flush(
-        &mut self,
-        display: &mut Co5300Display<'_, C>,
-        debug_damage: bool,
-    ) {
+    pub async fn flush(&mut self, display: &mut Co5300Display<'_, C>, debug_damage: bool) {
         display.set_addr_window(0, 0, WIDTH as u16, HEIGHT as u16);
         let mut stream = display.begin_stream_async().await;
         let mut remaining = &mut self.buf[..];
@@ -255,8 +249,7 @@ where
 fn debug_full_chunk<C: Co5300ColorMode, const WIDTH: usize, const HEIGHT: usize>(
     pixels: &mut [u8],
     offset: usize,
-)
-where
+) where
     C::Bytes: AsRef<[u8]>,
 {
     let bpp = C::BYTES_PER_PIXEL;
@@ -280,8 +273,7 @@ fn debug_region_chunk<C: Co5300ColorMode>(
     region_y: usize,
     region_w: usize,
     region_h: usize,
-)
-where
+) where
     C::Bytes: AsRef<[u8]>,
 {
     let bpp = C::BYTES_PER_PIXEL;

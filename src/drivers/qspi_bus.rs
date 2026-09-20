@@ -2,15 +2,15 @@
 // Uses SpiDmaBus for large transfers via DMA
 
 use esp_hal::Async;
-use esp_hal::dma::DmaTxBuf;
+use esp_hal::dma::{DmaTxBuf, EmptyBuf};
 use esp_hal::gpio::Output;
 use esp_hal::spi::master::{Address, Command, DataMode, SpiDma};
 
 use crate::board::{delay_ms, delay_ms_async};
 
 pub struct QspiBus<'d> {
-    pub(crate) spi: SpiDma<'d, Async>,
-    pub(crate) tx: DmaTxBuf,
+    pub(crate) spi: Option<SpiDma<'d, Async>>,
+    tx: Option<DmaTxBuf>,
     pub(crate) cs: Output<'d>,
 }
 
@@ -25,7 +25,11 @@ pub enum QSPIOperation {
 impl<'d> QspiBus<'d> {
     #[must_use]
     pub fn new(spi: SpiDma<'d, Async>, tx: DmaTxBuf, cs: Output<'d>) -> Self {
-        Self { spi, tx, cs }
+        Self {
+            spi: Some(spi),
+            tx: Some(tx),
+            cs,
+        }
     }
 
     #[inline]
@@ -36,12 +40,12 @@ impl<'d> QspiBus<'d> {
             }
             &QSPIOperation::Command(cmd) => (cmd, 0),
             &QSPIOperation::CommandD8(cmd, byte) => (cmd, {
-                self.tx.as_mut_slice()[0] = byte;
+                self.tx.as_mut().unwrap().as_mut_slice()[0] = byte;
                 1
             }),
             &QSPIOperation::CommandD16D16(cmd, d1, d2) => {
                 let data = [(d1 >> 8) as u8, d1 as u8, (d2 >> 8) as u8, d2 as u8];
-                self.tx.as_mut_slice()[..data.len()].copy_from_slice(&data);
+                self.tx.as_mut().unwrap().as_mut_slice()[..data.len()].copy_from_slice(&data);
                 (cmd, data.len())
             }
         }
@@ -58,17 +62,38 @@ impl<'d> QspiBus<'d> {
             | QSPIOperation::CommandD16D16(..) => self.command_to_bytes(op),
         };
         self.cs_low();
-        self.spi
-            .half_duplex_write_and_wait(
-                DataMode::Single,
-                Command::_8Bit(0x02, DataMode::Single),
-                Address::_24Bit((cmd as u32) << 8, DataMode::Single),
-                0,
-                bytes,
-                &mut self.tx,
-            )
-            .await
-            .unwrap();
+        let spi = self.spi.take().unwrap();
+        if bytes == 0 {
+            let mut transfer = spi
+                .half_duplex_write_buffer(
+                    DataMode::Single,
+                    Command::_8Bit(0x02, DataMode::Single),
+                    Address::_24Bit((cmd as u32) << 8, DataMode::Single),
+                    0,
+                    0,
+                    EmptyBuf,
+                )
+                .unwrap_or_else(|_| panic!("failed to start empty SPI write"));
+            transfer.wait_for_done().await;
+            let (spi, _) = transfer.wait();
+            self.spi = Some(spi);
+        } else {
+            let tx = self.tx.take().unwrap();
+            let mut transfer = spi
+                .half_duplex_write_buffer(
+                    DataMode::Single,
+                    Command::_8Bit(0x02, DataMode::Single),
+                    Address::_24Bit((cmd as u32) << 8, DataMode::Single),
+                    0,
+                    bytes,
+                    tx,
+                )
+                .unwrap();
+            transfer.wait_for_done().await;
+            let (spi, tx) = transfer.wait();
+            self.spi = Some(spi);
+            self.tx = Some(tx);
+        }
         self.cs_high();
     }
 
@@ -89,16 +114,36 @@ impl<'d> QspiBus<'d> {
             | QSPIOperation::CommandD16D16(..) => self.command_to_bytes(op),
         };
         self.cs_low();
-        self.spi
-            .half_duplex_write_and_block(
-                DataMode::Single,
-                Command::_8Bit(0x02, DataMode::Single),
-                Address::_24Bit((cmd as u32) << 8, DataMode::Single),
-                0,
-                bytes,
-                &mut self.tx,
-            )
-            .unwrap();
+        let spi = self.spi.take().unwrap();
+        if bytes == 0 {
+            let transfer = spi
+                .half_duplex_write_buffer(
+                    DataMode::Single,
+                    Command::_8Bit(0x02, DataMode::Single),
+                    Address::_24Bit((cmd as u32) << 8, DataMode::Single),
+                    0,
+                    0,
+                    EmptyBuf,
+                )
+                .unwrap_or_else(|_| panic!("failed to start empty SPI write"));
+            let (spi, _) = transfer.wait();
+            self.spi = Some(spi);
+        } else {
+            let tx = self.tx.take().unwrap();
+            let transfer = spi
+                .half_duplex_write_buffer(
+                    DataMode::Single,
+                    Command::_8Bit(0x02, DataMode::Single),
+                    Address::_24Bit((cmd as u32) << 8, DataMode::Single),
+                    0,
+                    bytes,
+                    tx,
+                )
+                .unwrap();
+            let (spi, tx) = transfer.wait();
+            self.spi = Some(spi);
+            self.tx = Some(tx);
+        }
         self.cs_high();
     }
 
@@ -115,5 +160,40 @@ impl<'d> QspiBus<'d> {
     #[inline]
     fn cs_high(&mut self) {
         self.cs.set_high();
+    }
+
+    pub(crate) async fn begin_quad_write_async(&mut self) {
+        self.cs_low();
+        let spi = self.spi.take().unwrap();
+        let mut transfer = spi
+            .half_duplex_write_buffer(
+                DataMode::Quad,
+                Command::_8Bit(0x12, DataMode::Single),
+                Address::_24Bit(0x003C00, DataMode::Quad),
+                0,
+                0,
+                EmptyBuf,
+            )
+            .unwrap_or_else(|_| panic!("failed to start empty SPI write"));
+        transfer.wait_for_done().await;
+        let (spi, _) = transfer.wait();
+        self.spi = Some(spi);
+    }
+
+    pub(crate) fn begin_quad_write(&mut self) {
+        self.cs_low();
+        let spi = self.spi.take().unwrap();
+        let transfer = spi
+            .half_duplex_write_buffer(
+                DataMode::Quad,
+                Command::_8Bit(0x12, DataMode::Single),
+                Address::_24Bit(0x003C00, DataMode::Quad),
+                0,
+                0,
+                EmptyBuf,
+            )
+            .unwrap_or_else(|_| panic!("failed to start empty SPI write"));
+        let (spi, _) = transfer.wait();
+        self.spi = Some(spi);
     }
 }

@@ -23,7 +23,6 @@ use esp_hal::{
     dma_tx_buffer,
     gpio::{Input, InputConfig, Level, Output, OutputConfig},
     i2c::master::I2c,
-    interrupt::software::SoftwareInterruptControl,
     peripherals, spi,
     time::Rate,
     timer::timg::TimerGroup,
@@ -103,12 +102,14 @@ async fn second_core(
         .with_frequency(Rate::from_mhz(80))
         .with_mode(spi::Mode::_0);
 
+    let mut dma_tx_command = dma_tx_buffer!(64).unwrap();
     let mut dma_tx = dma_tx_buffer!(4095 * 2).unwrap();
     let mut dma_tx_swap = dma_tx_buffer!(4095 * 2).unwrap();
     let dma_burst = esp_hal::dma::BurstConfig {
         external_memory: esp_hal::dma::ExternalBurstConfig::Size64,
         internal_memory: esp_hal::dma::InternalBurstConfig::Enabled,
     };
+    dma_tx_command.set_burst_config(dma_burst).unwrap();
     dma_tx.set_burst_config(dma_burst).unwrap();
     dma_tx_swap.set_burst_config(dma_burst).unwrap();
 
@@ -125,8 +126,8 @@ async fn second_core(
         .with_sio3(gpio7)
         .with_dma(dma_ch0)
         .into_async();
-    let spi = QspiBus::new(spi, dma_tx, cs);
-    let mut display = Co5300Display::new(spi, reset, te, dma_tx_swap).await;
+    let spi = QspiBus::new(spi, dma_tx_command, cs);
+    let mut display = Co5300Display::new(spi, reset, te, dma_tx, dma_tx_swap).await;
     display.set_brightness(120);
 
     println!("[DISPLAY] OK");
@@ -144,7 +145,7 @@ async fn second_core(
                     spi_time,
                     swap_spi,
                     ..
-            },
+                },
             dirty,
             needs_full_redraw: _,
             #[cfg(feature = "damage-debug")]
@@ -171,17 +172,10 @@ async fn second_core(
             let debug_full = debug_damage.is_full();
             #[cfg(not(feature = "damage-debug"))]
             let debug_full = false;
-            fb.flush(
-                &mut display,
-                debug_full,
-            )
-            .await;
+            fb.flush(&mut display, debug_full).await;
         } else {
             #[cfg(feature = "damage-debug")]
-            for (region, overlay) in dirty.iter_merged_with_overlay(
-                debug_damage,
-                &previous_debug,
-            ) {
+            for (region, overlay) in dirty.iter_merged_with_overlay(debug_damage, &previous_debug) {
                 fb.flush_region(
                     &mut display,
                     region.top_left.x as u16,
@@ -461,9 +455,6 @@ async fn main(_spawner: Spawner) {
     // PERF: How low do we want to drop the clock speed?
     let mut peripherals =
         esp_hal::init(esp_hal::Config::default().with_cpu_clock(esp_hal::clock::CpuClock::_240MHz));
-    let sw_int: SoftwareInterruptControl<'static> =
-        SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
-
     let psram_config = esp_hal::psram::PsramConfig {
         mode: esp_hal::psram::PsramMode::OctalSpi,
         size: esp_hal::psram::PsramSize::AutoDetect,
@@ -483,7 +474,7 @@ async fn main(_spawner: Spawner) {
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
 
-    esp_rtos::start(timg0.timer0, sw_int.software_interrupt0);
+    esp_rtos::start(timg0.timer0, peripherals.FROM_CPU_INTR0);
 
     let i2c = I2c::new(
         peripherals.I2C0,
@@ -625,7 +616,7 @@ async fn main(_spawner: Spawner) {
 
     esp_rtos::start_second_core(
         peripherals.CPU_CTRL.reborrow(),
-        sw_int.software_interrupt1,
+        peripherals.FROM_CPU_INTR1,
         // SAFETY: This static mut value must not be accessed ever again, anywhere
         unsafe { &mut CORE1_STACK },
         || {

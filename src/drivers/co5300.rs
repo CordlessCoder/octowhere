@@ -9,7 +9,7 @@ use embedded_graphics::pixelcolor::{Gray8, Rgb565, Rgb888};
 use embedded_graphics_core::geometry::{OriginDimensions, Size};
 use embedded_graphics_core::prelude::*;
 
-use esp_hal::dma::{DmaTxBuf, DmaTxBuffer};
+use esp_hal::dma::DmaTxBuf;
 use esp_hal::gpio::{Input, Output};
 use esp_hal::spi::master::{Address, Command, DataMode};
 
@@ -59,7 +59,8 @@ pub struct Co5300Display<'d, C> {
     row_offset: u16,
     pub te_pin: Input<'d>,
     color: PhantomData<C>,
-    swap: DmaTxBuf,
+    stream: Option<DmaTxBuf>,
+    swap: Option<DmaTxBuf>,
 }
 
 #[derive(Debug)]
@@ -155,6 +156,7 @@ where
         bus: QspiBus<'d>,
         reset: Output<'d>,
         te_pin: Input<'d>,
+        stream: DmaTxBuf,
         swap: DmaTxBuf,
     ) -> Self {
         let mut disp = Self {
@@ -165,7 +167,8 @@ where
             height: board::LCD_HEIGHT,
             col_offset: board::LCD_COL_OFFSET,
             row_offset: board::LCD_ROW_OFFSET,
-            swap,
+            stream: Some(stream),
+            swap: Some(swap),
             color: PhantomData,
         };
         disp.hw_reset_async().await;
@@ -192,6 +195,7 @@ where
             row_offset,
             te_pin,
             color: _,
+            stream,
             swap,
         } = self;
         let mut new = Co5300Display {
@@ -202,6 +206,7 @@ where
             col_offset,
             row_offset,
             te_pin,
+            stream,
             swap,
             color: PhantomData,
         };
@@ -247,8 +252,12 @@ where
     fn even_window(&self, x: u16, y: u16, w: u16, h: u16) -> (u16, u16, u16, u16) {
         let mut x0 = (x as usize).min(self.width.saturating_sub(1) as usize) & !1;
         let mut y0 = (y as usize).min(self.height.saturating_sub(1) as usize) & !1;
-        let mut x1 = (x as usize).saturating_add(w as usize).min(self.width as usize);
-        let mut y1 = (y as usize).saturating_add(h as usize).min(self.height as usize);
+        let mut x1 = (x as usize)
+            .saturating_add(w as usize)
+            .min(self.width as usize);
+        let mut y1 = (y as usize)
+            .saturating_add(h as usize)
+            .min(self.height as usize);
 
         if x1 & 1 != 0 && x1 < self.width as usize {
             x1 += 1;
@@ -263,12 +272,7 @@ where
             y1 = (y0 + 2).min(self.height as usize);
         }
 
-        (
-            x0 as u16,
-            y0 as u16,
-            (x1 - x0) as u16,
-            (y1 - y0) as u16,
-        )
+        (x0 as u16, y0 as u16, (x1 - x0) as u16, (y1 - y0) as u16)
     }
 
     /// Fill the entire screen with a single color.
@@ -335,40 +339,25 @@ where
     }
 
     pub async fn begin_stream_async<'r>(&'r mut self) -> PixelStream<'r, 'd, C> {
-        self.bus.cs.set_low();
-        self.bus
-            .spi
-            .half_duplex_write_and_wait(
-                DataMode::Quad,
-                Command::_8Bit(0x12, DataMode::Single),
-                Address::_24Bit(0x003C00, DataMode::Quad),
-                0,
-                0,
-                &mut self.bus.tx,
-            )
-            .await
-            .unwrap();
+        self.bus.begin_quad_write_async().await;
+        let active = self.stream.take();
+        let swap = self.swap.take();
         PixelStream {
             disp: self,
+            active,
+            swap,
             buffered: 0,
         }
     }
 
     pub fn begin_stream<'r>(&'r mut self) -> PixelStream<'r, 'd, C> {
-        self.bus.cs.set_low();
-        self.bus
-            .spi
-            .half_duplex_write_and_block(
-                DataMode::Quad,
-                Command::_8Bit(0x12, DataMode::Single),
-                Address::_24Bit(0x003C00, DataMode::Quad),
-                0,
-                0,
-                &mut self.bus.tx,
-            )
-            .unwrap();
+        self.bus.begin_quad_write();
+        let active = self.stream.take();
+        let swap = self.swap.take();
         PixelStream {
             disp: self,
+            active,
+            swap,
             buffered: 0,
         }
     }
@@ -379,6 +368,8 @@ where
     <C as embedded_graphics::pixelcolor::raw::ToBytes>::Bytes: core::convert::AsRef<[u8]>,
 {
     pub(crate) disp: &'r mut Co5300Display<'d, C>,
+    active: Option<DmaTxBuf>,
+    swap: Option<DmaTxBuf>,
     pub(crate) buffered: usize,
 }
 
@@ -404,7 +395,7 @@ where
         self.buf_remaining()
     }
     pub fn buf_remaining(&mut self) -> &mut [u8] {
-        &mut self.disp.bus.tx.as_mut_slice()[self.buffered..]
+        &mut self.active.as_mut().unwrap().as_mut_slice()[self.buffered..]
     }
     #[inline(always)]
     pub fn write(&mut self, bytes: usize) {
@@ -416,65 +407,54 @@ where
     }
     #[inline(always)]
     pub fn should_flush(&self) -> bool {
-        self.buffered > self.disp.bus.tx.len().saturating_sub(256)
-    }
-    pub fn flush_external_buf_async(
-        &mut self,
-        buf: &mut impl DmaTxBuffer,
-        len: usize,
-    ) -> impl Future<Output = Result<(), esp_hal::spi::Error>> {
-        self.disp.bus.spi.half_duplex_write_and_wait(
-            DataMode::Quad,
-            Command::None,
-            Address::None,
-            0,
-            len,
-            buf,
-        )
+        self.buffered > self.active.as_ref().unwrap().len().saturating_sub(256)
     }
     pub async fn flush_buf_async(&mut self, fill_swap_with: impl FnOnce(&mut [u8]) -> usize) {
         if self.buffered == 0 {
-            self.buffered = fill_swap_with(self.buf_remaining());
+            self.buffered = fill_swap_with(self.active.as_mut().unwrap().as_mut_slice());
             return;
         }
-        let Self { disp, buffered } = self;
-        let mut new = 0;
-        embassy_futures::join::join(
-            disp.bus.spi.half_duplex_write_and_wait(
+        let buffered = self.buffered;
+        let active = self.active.take().unwrap();
+        let mut swap = self.swap.take().unwrap();
+        let spi = self.disp.bus.spi.take().unwrap();
+        let mut transfer = spi
+            .half_duplex_write_buffer(
                 DataMode::Quad,
                 Command::None,
                 Address::None,
                 0,
-                *buffered,
-                &mut disp.bus.tx,
-            ),
-            async {
-                let buf = disp.swap.as_mut_slice();
-                new = fill_swap_with(buf);
-            },
-        )
-        .await
-        .0
-        .unwrap();
-        core::mem::swap(&mut self.disp.swap, &mut self.disp.bus.tx);
+                buffered,
+                active,
+            )
+            .unwrap();
+        let new = fill_swap_with(swap.as_mut_slice());
+        transfer.wait_for_done().await;
+        let (spi, active) = transfer.wait();
+        self.disp.bus.spi = Some(spi);
+        self.active = Some(swap);
+        self.swap = Some(active);
         self.buffered = new;
     }
     pub fn flush_buf(&mut self) {
         if self.buffered == 0 {
             return;
         }
-        self.disp
-            .bus
-            .spi
-            .half_duplex_write_and_block(
+        let active = self.active.take().unwrap();
+        let spi = self.disp.bus.spi.take().unwrap();
+        let transfer = spi
+            .half_duplex_write_buffer(
                 DataMode::Quad,
                 Command::None,
                 Address::None,
                 0,
                 self.buffered,
-                &mut self.disp.bus.tx,
+                active,
             )
             .unwrap();
+        let (spi, active) = transfer.wait();
+        self.disp.bus.spi = Some(spi);
+        self.active = Some(active);
         self.buffered = 0;
     }
     pub fn end(mut self) {
@@ -487,6 +467,8 @@ where
     <C as embedded_graphics::pixelcolor::raw::ToBytes>::Bytes: core::convert::AsRef<[u8]>,
 {
     fn drop(&mut self) {
+        self.disp.stream = self.active.take();
+        self.disp.swap = self.swap.take();
         self.disp.bus.cs.set_high();
     }
 }
