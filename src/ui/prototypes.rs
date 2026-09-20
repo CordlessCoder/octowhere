@@ -22,7 +22,7 @@ pub const ACTIVE_ARCHITECTURE: Architecture = Architecture::Immediate;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct State {
-    pub touch_active: bool,
+    pub selected_node: Option<u8>,
 }
 
 const HEADER: Rectangle = Rectangle::new(Point::new(92, 48), Size::new(282, 50));
@@ -132,13 +132,13 @@ where
         target,
     )?;
     text(
-        if state.touch_active {
+        if state.selected_node.is_some() {
             "TRACKING"
         } else {
             "STANDBY"
         },
         Point::new(114, 76),
-        if state.touch_active {
+        if state.selected_node.is_some() {
             chrome::LIME
         } else {
             chrome::GRAY
@@ -173,17 +173,36 @@ where
     }
 
     // Block-built symbols keep the map readable and avoid decorative geometry.
-    marker(Point::new(132, 178), chrome::LIME, target)?;
-    marker(Point::new(294, 238), chrome::ORANGE_RED, target)?;
-    marker(Point::new(354, 316), chrome::WHITE, target)?;
-    if state.touch_active {
+    marker(
+        Point::new(132, 178),
+        chrome::LIME,
+        state.selected_node == Some(1),
+        target,
+    )?;
+    marker(
+        Point::new(294, 238),
+        chrome::ORANGE_RED,
+        state.selected_node == Some(2),
+        target,
+    )?;
+    marker(
+        Point::new(354, 316),
+        chrome::WHITE,
+        state.selected_node == Some(3),
+        target,
+    )?;
+    if let Some(node) = state.selected_node {
         target.fill_solid(
             &Rectangle::new(Point::new(214, 294), Size::new(92, 34)),
             chrome::LIME,
         )?;
         text(
-            "LOCKED",
-            Point::new(225, 302),
+            match node {
+                1 => "NODE 01",
+                2 => "NODE 02",
+                _ => "NODE 03",
+            },
+            Point::new(225, 310),
             chrome::BLACK,
             &chrome::FRAKTION_MONO20,
             target,
@@ -211,15 +230,15 @@ where
 {
     target.fill_solid(
         &Rectangle::new(Point::new(92, 368), Size::new(178, 50)),
-        if state.touch_active {
+        if state.selected_node.is_some() {
             chrome::LIME
         } else {
             chrome::ORANGE_RED
         },
     )?;
     text(
-        if state.touch_active {
-            "HOLD TO PIN"
+        if state.selected_node.is_some() {
+            "PIN SELECTED"
         } else {
             "TAP A NODE"
         },
@@ -241,13 +260,19 @@ where
     )
 }
 
-fn marker<D>(center: Point, color: Color, target: &mut D) -> Result<(), D::Error>
+fn marker<D>(center: Point, color: Color, selected: bool, target: &mut D) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = Color>,
 {
+    if selected {
+        target.fill_solid(
+            &Rectangle::new(center - Point::new(16, 16), Size::new(32, 32)),
+            chrome::WHITE,
+        )?;
+    }
     target.fill_solid(
         &Rectangle::new(center - Point::new(12, 12), Size::new(24, 24)),
-        color,
+        if selected { chrome::LIME } else { color },
     )?;
     target.fill_solid(
         &Rectangle::new(center - Point::new(4, 4), Size::new(8, 8)),

@@ -23,6 +23,9 @@ The layout keeps its visible geometry inside a conservative inscribed region of
 the circular panel. The square framebuffer remains the drawing surface; the
 panel naturally hides anything outside its aperture.
 
+Touching a map marker selects it. The selection persists after release and
+updates the marker, node callout, header status, and primary action.
+
 Timing statistics are no longer part of the display composition. Enable the
 `timing-log` Cargo feature to emit draw, vsync, flush, and swap timings through
 defmt.

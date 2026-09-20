@@ -241,6 +241,7 @@ fn bench_repeat<R>(mut the_thing: impl FnMut() -> R, name: &str) -> (R, Duration
 
 struct DrawCtx {
     touch_data: TouchData,
+    selected_node: Option<u8>,
 }
 
 #[derive(Debug, Default)]
@@ -252,36 +253,23 @@ struct Timings {
     frametime: Duration,
 }
 
-fn update_touch<D>(ctx: &DrawCtx, target: &mut D) -> Dirty
-where
-    D: DrawTarget<Color = Color>,
-    D: DrawTarget,
-    D::Error: core::fmt::Debug,
-{
-    use embedded_graphics::{
-        prelude::*,
-        primitives::{Circle, PrimitiveStyleBuilder},
+fn selected_node(touch_data: &TouchData) -> Option<u8> {
+    let TouchData::Points(points) = touch_data else {
+        return None;
     };
-    let mut dirty = Dirty::new();
-
-    match &ctx.touch_data {
-        TouchData::Points(points) => {
-            let size = 64;
-            for point in points {
-                let prim =
-                    Circle::with_center(Point::new(point.x as i32, point.y as i32), size as u32)
-                        .into_styled(
-                            PrimitiveStyleBuilder::new()
-                                .fill_color(chrome::ORANGE_RED)
-                                .build(),
-                        );
-                prim.draw(target).unwrap();
-                dirty.add(prim.bounding_box());
-            }
+    points.iter().find_map(|point| {
+        let x = point.x as i32;
+        let y = point.y as i32;
+        if (100..=164).contains(&x) && (146..=210).contains(&y) {
+            Some(1)
+        } else if (262..=326).contains(&x) && (206..=270).contains(&y) {
+            Some(2)
+        } else if (322..=386).contains(&x) && (284..=348).contains(&y) {
+            Some(3)
+        } else {
+            None
         }
-        TouchData::CoverGesture => {}
-    }
-    dirty
+    })
 }
 
 fn draw_if_in_bounds<C, D, T>(target: &mut D, dirty: &mut Dirty, thing: T) -> Result<(), D::Error>
@@ -308,7 +296,7 @@ where
     octowhere::ui::prototypes::render(
         octowhere::ui::prototypes::ACTIVE_ARCHITECTURE,
         octowhere::ui::prototypes::State {
-            touch_active: ctx.touch_data != TouchData::CoverGesture,
+            selected_node: ctx.selected_node,
         },
         target,
     )
@@ -521,6 +509,7 @@ async fn main(_spawner: Spawner) {
 
     let mut draw_ctx = DrawCtx {
         touch_data: TouchData::default(),
+        selected_node: None,
     };
     println!(
         "[MEM] internal_used={} psram_used={}",
@@ -544,6 +533,13 @@ async fn main(_spawner: Spawner) {
             } = state;
             let fb = &mut **fb;
             draw_ctx.touch_data = touch.read_touch_data().await.unwrap();
+            let previous_selected_node = draw_ctx.selected_node;
+            if let Some(node) = selected_node(&draw_ctx.touch_data) {
+                draw_ctx.selected_node = Some(node);
+            }
+            if draw_ctx.selected_node != previous_selected_node {
+                needs_full_redraw.make_full();
+            }
             dirty.clear();
 
             let mut repaint = needs_full_redraw.clone();
@@ -564,7 +560,7 @@ async fn main(_spawner: Spawner) {
                 }
             }
             dirty.extend(&repaint);
-            let mut next_needs_full_redraw = update_touch(&draw_ctx, fb);
+            let mut next_needs_full_redraw = Dirty::new();
             dirty.extend(&next_needs_full_redraw);
 
             #[cfg(feature = "damage-debug")]
