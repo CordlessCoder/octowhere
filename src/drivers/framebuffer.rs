@@ -285,11 +285,15 @@ where
     C::Bytes: AsRef<[u8]>,
 {
     let bpp = C::BYTES_PER_PIXEL;
-    let right = region_x + region_w - 1;
-    let bottom = region_y + region_h - 1;
+    let right = region_x + region_w;
+    let bottom = region_y + region_h;
     for (index, pixel) in pixels.chunks_exact_mut(bpp).enumerate() {
         let x = start_x + index;
-        if x == region_x || x == right || y == region_y || y == bottom {
+        let in_x = region_x <= x && x < right;
+        let in_y = region_y <= y && y < bottom;
+        let horizontal = in_x && (y == region_y || y == bottom - 1);
+        let vertical = in_y && (x == region_x || x == right - 1);
+        if horizontal || vertical {
             pixel.fill(u8::MAX);
         }
     }
