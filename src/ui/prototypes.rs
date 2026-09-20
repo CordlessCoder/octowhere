@@ -1,7 +1,6 @@
 use embedded_graphics::{
-    Pixel,
     draw_target::DrawTarget,
-    prelude::{Dimensions, Drawable, Point, Primitive, Size},
+    prelude::{Drawable, Point, Primitive, Size},
     primitives::{Line, PrimitiveStyle, Rectangle},
     text::Text,
 };
@@ -21,45 +20,14 @@ pub enum Architecture {
 
 pub const ACTIVE_ARCHITECTURE: Architecture = Architecture::Immediate;
 
-const DISPLAY_CENTER: Point = Point::new(233, 233);
-const DISPLAY_RADIUS: i32 = 233;
-
-struct CircularTarget<'a, D> {
-    inner: &'a mut D,
-    bounds: Rectangle,
-}
-
-impl<D: DrawTarget> Dimensions for CircularTarget<'_, D> {
-    fn bounding_box(&self) -> Rectangle {
-        self.bounds
-    }
-}
-
-impl<D: DrawTarget> DrawTarget for CircularTarget<'_, D> {
-    type Color = D::Color;
-    type Error = D::Error;
-
-    fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
-    where
-        I: IntoIterator<Item = Pixel<Self::Color>>,
-    {
-        self.inner
-            .draw_iter(pixels.into_iter().filter(|Pixel(point, _)| {
-                let dx = point.x - DISPLAY_CENTER.x;
-                let dy = point.y - DISPLAY_CENTER.y;
-                dx * dx + dy * dy <= DISPLAY_RADIUS * DISPLAY_RADIUS
-            }))
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct State {
     pub touch_active: bool,
 }
 
-const HEADER: Rectangle = Rectangle::new(Point::new(28, 24), Size::new(410, 64));
-const MAP: Rectangle = Rectangle::new(Point::new(28, 104), Size::new(410, 260));
-const FOOTER: Rectangle = Rectangle::new(Point::new(28, 384), Size::new(410, 58));
+const HEADER: Rectangle = Rectangle::new(Point::new(92, 48), Size::new(282, 50));
+const MAP: Rectangle = Rectangle::new(Point::new(48, 112), Size::new(370, 242));
+const FOOTER: Rectangle = Rectangle::new(Point::new(92, 368), Size::new(282, 50));
 
 pub fn render<D>(
     architecture: Architecture,
@@ -71,16 +39,12 @@ where
 {
     let mut dirty = Dirty::new();
     let bounds = target.bounding_box();
-    let mut target = CircularTarget {
-        inner: target,
-        bounds,
-    };
     target.fill_solid(&bounds, chrome::BLACK)?;
 
     match architecture {
-        Architecture::Immediate => render_immediate(state, &mut target)?,
-        Architecture::Retained => render_retained(state, &mut target)?,
-        Architecture::Tiled => render_tiled(state, &mut target)?,
+        Architecture::Immediate => render_immediate(state, target)?,
+        Architecture::Retained => render_retained(state, target)?,
+        Architecture::Tiled => render_tiled(state, target)?,
     }
 
     dirty.add(bounds);
@@ -157,12 +121,12 @@ where
 {
     target.fill_solid(&HEADER, chrome::PURPLE)?;
     target.fill_solid(
-        &Rectangle::new(Point::new(28, 24), Size::new(14, 64)),
+        &Rectangle::new(Point::new(92, 48), Size::new(14, 50)),
         chrome::LIME,
     )?;
     text(
         "FIELD MAP",
-        Point::new(112, 50),
+        Point::new(114, 54),
         chrome::WHITE,
         &chrome::MARATHON_SHAPIRO65_20,
         target,
@@ -173,7 +137,7 @@ where
         } else {
             "STANDBY"
         },
-        Point::new(112, 76),
+        Point::new(114, 76),
         if state.touch_active {
             chrome::LIME
         } else {
@@ -184,7 +148,7 @@ where
     )?;
     text(
         "01 / 04",
-        Point::new(318, 56),
+        Point::new(310, 58),
         chrome::BLACK,
         &chrome::FRAKTION_MONO20,
         target,
@@ -197,29 +161,29 @@ where
 {
     let frame = PrimitiveStyle::with_stroke(chrome::GRAY, 2);
     MAP.into_styled(frame).draw(target)?;
-    for x in [70, 145, 220, 295, 370] {
-        Line::new(Point::new(x, 104), Point::new(x, 364))
+    for x in [122, 196, 270, 344] {
+        Line::new(Point::new(x, 112), Point::new(x, 354))
             .into_styled(frame)
             .draw(target)?;
     }
-    for y in [144, 204, 264, 324] {
-        Line::new(Point::new(28, y), Point::new(438, y))
+    for y in [160, 208, 256, 304, 336] {
+        Line::new(Point::new(48, y), Point::new(418, y))
             .into_styled(frame)
             .draw(target)?;
     }
 
     // Block-built symbols keep the map readable and avoid decorative geometry.
-    marker(Point::new(118, 178), chrome::LIME, target)?;
-    marker(Point::new(300, 238), chrome::ORANGE_RED, target)?;
-    marker(Point::new(365, 318), chrome::WHITE, target)?;
+    marker(Point::new(132, 178), chrome::LIME, target)?;
+    marker(Point::new(294, 238), chrome::ORANGE_RED, target)?;
+    marker(Point::new(354, 316), chrome::WHITE, target)?;
     if state.touch_active {
         target.fill_solid(
-            &Rectangle::new(Point::new(218, 300), Size::new(92, 34)),
+            &Rectangle::new(Point::new(214, 294), Size::new(92, 34)),
             chrome::LIME,
         )?;
         text(
             "LOCKED",
-            Point::new(229, 308),
+            Point::new(225, 302),
             chrome::BLACK,
             &chrome::FRAKTION_MONO20,
             target,
@@ -227,14 +191,14 @@ where
     }
     text(
         "N 51.898",
-        Point::new(42, 120),
+        Point::new(64, 126),
         chrome::GRAY,
         &chrome::FRAKTION_MONO20,
         target,
     )?;
     text(
         "E  -8.475",
-        Point::new(42, 340),
+        Point::new(64, 326),
         chrome::GRAY,
         &chrome::FRAKTION_MONO20,
         target,
@@ -246,7 +210,7 @@ where
     D: DrawTarget<Color = Color>,
 {
     target.fill_solid(
-        &Rectangle::new(Point::new(28, 384), Size::new(250, 58)),
+        &Rectangle::new(Point::new(92, 368), Size::new(178, 50)),
         if state.touch_active {
             chrome::LIME
         } else {
@@ -259,18 +223,18 @@ where
         } else {
             "TAP A NODE"
         },
-        Point::new(96, 383),
+        Point::new(104, 384),
         chrome::BLACK,
         &chrome::FRAKTION_MONO20,
         target,
     )?;
     target.fill_solid(
-        &Rectangle::new(Point::new(294, 384), Size::new(144, 58)),
+        &Rectangle::new(Point::new(278, 368), Size::new(96, 50)),
         chrome::BLACK,
     )?;
     text(
         "SYNC  12:42",
-        Point::new(286, 383),
+        Point::new(284, 384),
         chrome::WHITE,
         &chrome::FRAKTION_MONO20,
         target,

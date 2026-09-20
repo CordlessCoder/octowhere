@@ -19,8 +19,9 @@ The first implementation is deliberately fixed-size and heap-free. It is a
 probe for screen composition, dirty-region behavior, and the cost of the
 architecture. It is not yet the application navigation model.
 
-The renderer clips pixels to the circular panel aperture. Layout may still use
-the square framebuffer, but content in the four physical corners is discarded.
+The layout keeps its visible geometry inside a conservative inscribed region of
+the circular panel. The square framebuffer remains the drawing surface; the
+panel naturally hides anything outside its aperture.
 
 Timing statistics are no longer part of the display composition. Enable the
 `timing-log` Cargo feature to emit draw, vsync, flush, and swap timings through
