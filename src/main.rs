@@ -132,6 +132,8 @@ async fn second_core(
     println!("[DISPLAY] OK");
 
     let mut prev_swap_spi = Duration::MIN;
+    #[cfg(feature = "damage-debug")]
+    let mut previous_debug = Dirty::new();
     loop {
         let state = swap.get();
         let SwapState {
@@ -153,9 +155,34 @@ async fn second_core(
 
         *vsync_wait = start.elapsed();
 
-        if dirty.is_full() {
-            fb.flush(&mut display, cfg!(feature = "damage-debug")).await;
+        #[cfg(feature = "damage-debug")]
+        let mut flush_damage = dirty.clone();
+        #[cfg(feature = "damage-debug")]
+        flush_damage.extend(&previous_debug);
+        #[cfg(not(feature = "damage-debug"))]
+        let flush_damage = dirty.clone();
+
+        if flush_damage.is_full() {
+            fb.flush(
+                &mut display,
+                cfg!(feature = "damage-debug") && dirty.is_full(),
+            )
+            .await;
         } else {
+            #[cfg(feature = "damage-debug")]
+            for (region, overlay) in dirty.iter_merged(&previous_debug) {
+                fb.flush_region(
+                    &mut display,
+                    region.top_left.x as u16,
+                    region.top_left.y as u16,
+                    region.size.width as u16,
+                    region.size.height as u16,
+                    (!overlay.is_zero_sized()).then_some(overlay),
+                )
+                .await;
+            }
+
+            #[cfg(not(feature = "damage-debug"))]
             for region in dirty.iter() {
                 fb.flush_region(
                     &mut display,
@@ -163,12 +190,16 @@ async fn second_core(
                     region.top_left.y as u16,
                     region.size.width as u16,
                     region.size.height as u16,
-                    cfg!(feature = "damage-debug"),
+                    None,
                 )
                 .await;
             }
-            // fb.clear_color(chrome::BLACK);
         };
+
+        #[cfg(feature = "damage-debug")]
+        {
+            previous_debug = dirty.clone();
+        }
 
         *spi_time = start.elapsed() - *vsync_wait;
 

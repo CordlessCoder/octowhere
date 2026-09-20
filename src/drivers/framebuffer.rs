@@ -147,7 +147,7 @@ where
         y: u16,
         w: u16,
         h: u16,
-        debug_damage: bool,
+        debug_overlay: Option<Rectangle>,
     ) {
         if w == 0 || h == 0 {
             return;
@@ -208,15 +208,15 @@ where
                         let dma_chunk = buf.split_off_mut(..pre_scale_chunk).unwrap();
                         dma_chunk.copy_from_slice(captured);
                         #[cfg(feature = "damage-debug")]
-                        if debug_damage {
+                        if let Some(overlay) = debug_overlay {
                             debug_region_chunk::<C>(
                                 dma_chunk,
                                 row_x,
                                 row_y,
-                                x0,
-                                y0,
-                                flush_w,
-                                flush_h,
+                                overlay.top_left.x as usize,
+                                overlay.top_left.y as usize,
+                                overlay.size.width as usize,
+                                overlay.size.height as usize,
                             );
                         }
 

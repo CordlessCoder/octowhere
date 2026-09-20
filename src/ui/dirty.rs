@@ -139,6 +139,19 @@ impl<
             .filter(|rect| !rect.is_zero_sized())
     }
 
+    pub fn iter_merged<'a>(
+        &'a self,
+        other: &'a Self,
+    ) -> impl Iterator<Item = (Rectangle, Rectangle)> + 'a {
+        self.grid
+            .iter()
+            .zip(other.grid.iter())
+            .filter_map(|(current, previous)| {
+                let merged = bounding_box(current, previous);
+                (!merged.is_zero_sized()).then_some((merged, *current))
+            })
+    }
+
     #[inline(always)]
     pub fn is_full(&self) -> bool {
         self.full
