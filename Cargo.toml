@@ -44,6 +44,7 @@ femtofont = { git = "https://github.com/iriswebb/femtofont", rev = "ffb120f0a2e1
 [features]
 default = []
 femtofont = []
+damage-debug = []
 
 [patch.crates-io]
 esp-hal = { git = "https://github.com/CordlessCoder/esp-hal" }
