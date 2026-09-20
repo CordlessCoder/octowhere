@@ -254,7 +254,7 @@ struct DrawCtx {
     font_renderer: FontdueRenderer<'static, Color>,
 }
 
-const STATISTICS_BBOX: Rectangle = Rectangle::new(Point::new(110, 225), Size::new(300, 190));
+const STATISTICS_BBOX: Rectangle = Rectangle::new(Point::new(110, 225), Size::new(300, 220));
 
 #[derive(Debug, Default)]
 struct Timings {
