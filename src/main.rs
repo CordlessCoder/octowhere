@@ -142,11 +142,9 @@ async fn second_core(
                     spi_time,
                     swap_spi,
                     ..
-                },
+            },
             dirty,
             needs_full_redraw: _,
-            #[cfg(feature = "damage-debug")]
-            debug_overlay: _,
         } = state;
 
         let start = Instant::now();
@@ -156,7 +154,7 @@ async fn second_core(
         *vsync_wait = start.elapsed();
 
         if dirty.is_full() {
-            fb.flush(&mut display, |_| ()).await;
+            fb.flush(&mut display, cfg!(feature = "damage-debug")).await;
         } else {
             for region in dirty.iter() {
                 fb.flush_region(
@@ -165,7 +163,7 @@ async fn second_core(
                     region.top_left.y as u16,
                     region.size.width as u16,
                     region.size.height as u16,
-                    |_| (),
+                    cfg!(feature = "damage-debug"),
                 )
                 .await;
             }
@@ -277,29 +275,6 @@ where
     #[cfg(not(feature = "femtofont"))]
     defmt::info!("font-draw fontdue: {} us", font_elapsed.as_micros());
     dirty
-}
-
-#[cfg(feature = "damage-debug")]
-fn draw_damage_debug<D>(damage: &Dirty, target: &mut D) -> Dirty
-where
-    D: DrawTarget<Color = Color>,
-    D::Error: core::fmt::Debug,
-{
-    use embedded_graphics::primitives::{PrimitiveStyle, StyledDrawable};
-
-    let mut debug_dirty = Dirty::new();
-    let style = PrimitiveStyle::with_stroke(chrome::WHITE, 2);
-    if damage.is_full() {
-        let bbox = target.bounding_box();
-        bbox.into_styled(style).draw(target).unwrap();
-        debug_dirty.add(bbox);
-    } else {
-        for region in damage.iter() {
-            region.into_styled(style).draw(target).unwrap();
-            debug_dirty.add(region);
-        }
-    }
-    debug_dirty
 }
 
 fn update_touch<D>(ctx: &DrawCtx, target: &mut D) -> Dirty
@@ -416,8 +391,6 @@ struct SwapState<A: Allocator = alloc::alloc::Global> {
     dirty: Dirty,
     needs_full_redraw: Dirty,
     timings: Timings,
-    #[cfg(feature = "damage-debug")]
-    debug_overlay: Dirty,
 }
 
 #[esp_rtos::main]
@@ -569,16 +542,12 @@ async fn main(_spawner: Spawner) {
                 dirty: DirtyAreas::new(),
                 needs_full_redraw: DirtyAreas::new_full(),
                 timings: Timings::default(),
-                #[cfg(feature = "damage-debug")]
-                debug_overlay: DirtyAreas::new(),
             },
             SwapState {
                 fb: FB::alloc(&PSRAM_HEAP),
                 dirty: DirtyAreas::new(),
                 needs_full_redraw: DirtyAreas::new_full(),
                 timings: Timings::default(),
-                #[cfg(feature = "damage-debug")]
-                debug_overlay: DirtyAreas::new(),
             },
         )
     });
@@ -667,40 +636,25 @@ async fn main(_spawner: Spawner) {
                 dirty,
                 timings,
                 needs_full_redraw,
-                #[cfg(feature = "damage-debug")]
-                debug_overlay,
             } = state;
             let fb = &mut **fb;
             draw_ctx.touch_data = touch.read_touch_data().await.unwrap();
             dirty.clear();
 
-            let mut repaint = needs_full_redraw.clone();
-            #[cfg(feature = "damage-debug")]
-            repaint.extend(debug_overlay);
-
-            let mut application_damage = needs_full_redraw.clone();
             // esp_println::dbg!(&needs_full_redraw);
-            if repaint.is_full() {
+            if needs_full_redraw.is_full() {
                 draw(&mut draw_ctx, fb);
                 dirty.make_full();
             } else {
-                for area in repaint.iter() {
+                for area in needs_full_redraw.iter() {
                     let mut clipped = fb.clipped(&area);
                     dirty.extend(&draw(&mut draw_ctx, &mut clipped));
                 }
             }
-            dirty.extend(&repaint);
+            dirty.extend(needs_full_redraw);
             let mut next_needs_full_redraw = update_text(&draw_ctx, timings, fb);
             next_needs_full_redraw.extend(&update_touch(&draw_ctx, fb));
             dirty.extend(&next_needs_full_redraw);
-            application_damage.extend(&next_needs_full_redraw);
-
-            #[cfg(feature = "damage-debug")]
-            {
-                let debug_dirty = draw_damage_debug(&application_damage, fb);
-                dirty.extend(&debug_dirty);
-                *debug_overlay = debug_dirty;
-            }
 
             *needs_full_redraw = next_needs_full_redraw;
 

@@ -113,11 +113,12 @@ where
     pub async fn flush(
         &mut self,
         display: &mut Co5300Display<'_, C>,
-        mut post_write: impl FnMut(&mut [u8]),
+        debug_damage: bool,
     ) {
         display.set_addr_window(0, 0, WIDTH as u16, HEIGHT as u16);
         let mut stream = display.begin_stream_async().await;
         let mut remaining = &mut self.buf[..];
+        let mut offset = 0;
 
         while !remaining.is_empty() {
             stream
@@ -125,7 +126,11 @@ where
                     let chunk = buf.len().min(remaining.len());
                     let captured = remaining.split_off_mut(..chunk).unwrap();
                     buf[..chunk].copy_from_slice(captured);
-                    post_write(captured);
+                    #[cfg(feature = "damage-debug")]
+                    if debug_damage {
+                        debug_full_chunk::<C, WIDTH, HEIGHT>(&mut buf[..chunk], offset);
+                    }
+                    offset += chunk;
                     chunk
                 })
                 .await;
@@ -142,7 +147,7 @@ where
         y: u16,
         w: u16,
         h: u16,
-        mut post_write: impl FnMut(&mut [u8]),
+        debug_damage: bool,
     ) {
         if w == 0 || h == 0 {
             return;
@@ -186,6 +191,8 @@ where
             .take(flush_h)
             .map(|row| &mut row[x0 * C::BYTES_PER_PIXEL..(x0 + flush_w) * C::BYTES_PER_PIXEL]);
         let mut row = rows.next().unwrap_or(&mut []);
+        let mut row_x = x0;
+        let mut row_y = y0;
         let mut keep_going = true;
         while keep_going {
             stream
@@ -198,18 +205,31 @@ where
                             break;
                         }
                         let captured = row.split_off_mut(..pre_scale_chunk).unwrap();
-                        buf.split_off_mut(..pre_scale_chunk)
-                            .unwrap()
-                            .copy_from_slice(captured);
-                        post_write(captured);
+                        let dma_chunk = buf.split_off_mut(..pre_scale_chunk).unwrap();
+                        dma_chunk.copy_from_slice(captured);
+                        #[cfg(feature = "damage-debug")]
+                        if debug_damage {
+                            debug_region_chunk::<C>(
+                                dma_chunk,
+                                row_x,
+                                row_y,
+                                x0,
+                                y0,
+                                flush_w,
+                                flush_h,
+                            );
+                        }
 
                         new += pre_scale_chunk;
+                        row_x += pre_scale_chunk / C::BYTES_PER_PIXEL;
                         if row.is_empty() {
                             let Some(next_row) = rows.next() else {
                                 keep_going = false;
                                 break;
                             };
                             row = next_row;
+                            row_x = x0;
+                            row_y += 1;
                         }
                     }
                     new
@@ -228,6 +248,50 @@ where
     /// Get mutable raw buffer for direct access (snapshot restore).
     pub fn buffer_mut(&mut self) -> &mut [u8] {
         &mut self.buf
+    }
+}
+
+#[cfg(feature = "damage-debug")]
+fn debug_full_chunk<C: Co5300ColorMode, const WIDTH: usize, const HEIGHT: usize>(
+    pixels: &mut [u8],
+    offset: usize,
+)
+where
+    C::Bytes: AsRef<[u8]>,
+{
+    let bpp = C::BYTES_PER_PIXEL;
+    let first_pixel = offset / bpp;
+    for (index, pixel) in pixels.chunks_exact_mut(bpp).enumerate() {
+        let position = first_pixel + index;
+        let x = position % WIDTH;
+        let y = position / WIDTH;
+        if x == 0 || x == WIDTH - 1 || y == 0 || y == HEIGHT - 1 {
+            pixel.fill(u8::MAX);
+        }
+    }
+}
+
+#[cfg(feature = "damage-debug")]
+fn debug_region_chunk<C: Co5300ColorMode>(
+    pixels: &mut [u8],
+    start_x: usize,
+    y: usize,
+    region_x: usize,
+    region_y: usize,
+    region_w: usize,
+    region_h: usize,
+)
+where
+    C::Bytes: AsRef<[u8]>,
+{
+    let bpp = C::BYTES_PER_PIXEL;
+    let right = region_x + region_w - 1;
+    let bottom = region_y + region_h - 1;
+    for (index, pixel) in pixels.chunks_exact_mut(bpp).enumerate() {
+        let x = start_x + index;
+        if x == region_x || x == right || y == region_y || y == bottom {
+            pixel.fill(u8::MAX);
+        }
     }
 }
 
