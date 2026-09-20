@@ -177,7 +177,7 @@ async fn second_core(
     }
 }
 
-fn bench10<R>(mut the_thing: impl FnMut() -> R, name: &str) -> (R, Duration) {
+fn bench_repeat<R>(mut the_thing: impl FnMut() -> R, name: &str) -> (R, Duration) {
     const ITERS: u32 = 10;
     let start = Instant::now();
     let mut ret;
@@ -214,6 +214,7 @@ where
     D: DrawTarget<Color = Color>,
     D::Error: core::fmt::Debug,
 {
+    let fg = chrome::LIME;
     let mut dirty = Dirty::new();
     let Timings {
         vsync_wait,
@@ -236,7 +237,7 @@ where
             "Statistics",
             (ctx.bounding_box.center() + Point::new(-100, 60)),
             u8g2_fonts::types::VerticalPosition::Bottom,
-            FontColor::Transparent(chrome::WHITE),
+            FontColor::Transparent(fg),
             target,
         )
         .unwrap();
@@ -246,7 +247,7 @@ where
             text,
             (ctx.bounding_box.center() + Point::new(-100, 60)),
             u8g2_fonts::types::VerticalPosition::Top,
-            FontColor::Transparent(chrome::WHITE),
+            FontColor::Transparent(fg),
             target,
         )
         .unwrap();
@@ -287,7 +288,7 @@ where
                     Circle::with_center(Point::new(point.x as i32, point.y as i32), size as u32)
                         .into_styled(
                             PrimitiveStyleBuilder::new()
-                                .fill_color(Color::CSS_CYAN)
+                                .fill_color(chrome::ORANGE_RED)
                                 .build(),
                         );
                 prim.draw(target).unwrap();
@@ -343,7 +344,7 @@ where
         .stroke_width(8)
         .stroke_alignment(StrokeAlignment::Inside)
         .build();
-    let fill = PrimitiveStyle::with_fill(Color::CSS_GRAY);
+    let fill = PrimitiveStyle::with_fill(chrome::PURPLE);
 
     let yoffset = 140;
 

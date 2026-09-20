@@ -245,6 +245,96 @@ impl<'s, T> SwapThread<'s, T> {
 }
 
 unsafe impl<T: Send> Send for Swap<T> {}
-unsafe impl<T: Sync> Sync for Swap<T> {}
-unsafe impl<T: Sync> Send for SwapThread<'_, T> {}
-unsafe impl<T: Sync> Sync for SwapThread<'_, T> {}
+unsafe impl<T: Send> Sync for Swap<T> {}
+// Each handoff transfers exclusive access to T across threads.
+unsafe impl<T: Send> Send for SwapThread<'_, T> {}
+unsafe impl<T: Send> Sync for SwapThread<'_, T> {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::{cell::Cell, pin::Pin, task::Context};
+
+    fn assert_send_sync<T: Send + Sync>() {}
+
+    #[test]
+    fn swap_accepts_send_values_that_are_not_sync() {
+        assert_send_sync::<Swap<Cell<u8>>>();
+        assert_send_sync::<SwapThread<'static, Cell<u8>>>();
+    }
+
+    #[test]
+    fn handoff_repeats_between_both_threads() {
+        let mut swap = Swap::new(1, 2);
+        let (mut first, mut second) = swap.split();
+        let waker = Waker::noop();
+        let mut cx = Context::from_waker(waker);
+
+        let mut first_swap = first.swap();
+        let mut second_swap = second.swap();
+        assert!(Pin::new(&mut first_swap).poll(&mut cx).is_pending());
+        assert!(Pin::new(&mut second_swap).poll(&mut cx).is_ready());
+        assert!(Pin::new(&mut first_swap).poll(&mut cx).is_ready());
+        drop((first_swap, second_swap));
+        assert_eq!(*first.get(), 2);
+        assert_eq!(*second.get(), 1);
+
+        let mut first_swap = first.swap();
+        let mut second_swap = second.swap();
+        assert!(Pin::new(&mut second_swap).poll(&mut cx).is_pending());
+        assert!(Pin::new(&mut first_swap).poll(&mut cx).is_ready());
+        assert!(Pin::new(&mut second_swap).poll(&mut cx).is_ready());
+        drop((first_swap, second_swap));
+        assert_eq!(*first.get(), 1);
+        assert_eq!(*second.get(), 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "poisoned SwapThread")]
+    fn cancelling_a_started_handoff_poisoned_thread() {
+        let mut swap = Swap::new(1, 2);
+        let (mut first, _second) = swap.split();
+        let waker = Waker::noop();
+        let mut cx = Context::from_waker(waker);
+        let mut handoff = first.swap();
+        assert!(Pin::new(&mut handoff).poll(&mut cx).is_pending());
+        drop(handoff);
+        let _ = first.get();
+    }
+
+    #[test]
+    fn scoped_threads_exchange_repeatedly() {
+        let mut swap = Swap::new(0u32, 100u32);
+        let (mut first, mut second) = swap.split();
+        std::thread::scope(|scope| {
+            scope.spawn(move || {
+                for _ in 0..16 {
+                    *first.get() += 1;
+                    let mut handoff = first.swap();
+                    let waker = Waker::noop();
+                    let mut cx = Context::from_waker(waker);
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                    while Pin::new(&mut handoff).poll(&mut cx).is_pending() {
+                        assert!(std::time::Instant::now() < deadline, "handoff stalled");
+                        std::thread::yield_now();
+                    }
+                }
+                assert_eq!(*first.get(), 16);
+            });
+            scope.spawn(move || {
+                for _ in 0..16 {
+                    *second.get() += 1;
+                    let mut handoff = second.swap();
+                    let waker = Waker::noop();
+                    let mut cx = Context::from_waker(waker);
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                    while Pin::new(&mut handoff).poll(&mut cx).is_pending() {
+                        assert!(std::time::Instant::now() < deadline, "handoff stalled");
+                        std::thread::yield_now();
+                    }
+                }
+                assert_eq!(*second.get(), 116);
+            });
+        });
+    }
+}

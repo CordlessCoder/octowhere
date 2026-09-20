@@ -74,14 +74,16 @@ impl Cst9217Config {
         if let Some(scale) = self.scale_y {
             point.y = (point.y as f32 * scale) as u16;
         }
+        let max_x = width.saturating_sub(1);
+        let max_y = height.saturating_sub(1);
         if self.mirror_x {
-            point.x = width.saturating_sub(point.x);
+            point.x = max_x.saturating_sub(point.x);
         }
         if self.mirror_y {
-            point.y = height.saturating_sub(point.y);
+            point.y = max_y.saturating_sub(point.y);
         }
-        point.x = point.x.min(width);
-        point.y = point.y.min(width);
+        point.x = point.x.min(max_x);
+        point.y = point.y.min(max_y);
     }
 }
 
@@ -97,14 +99,15 @@ pub struct Cst9217<I, INT, RST, DELAY> {
 }
 
 #[derive(Debug)]
-pub enum Cst9217Error<I2CError> {
+pub enum Cst9217Error<I2CError, ResetError = I2CError> {
     I2CError(I2CError),
+    ResetError(ResetError),
     IDMismatch,
     NoFirmware,
     InvalidCheckcode,
 }
 
-impl<I2CError> From<I2CError> for Cst9217Error<I2CError> {
+impl<I2CError, ResetError> From<I2CError> for Cst9217Error<I2CError, ResetError> {
     fn from(value: I2CError) -> Self {
         Cst9217Error::I2CError(value)
     }
@@ -212,13 +215,13 @@ impl<I: I2c, RST, INT, DELAY> Cst9217<I, INT, RST, DELAY> {
 impl<I: I2c, RST: OutputPin, INT, DELAY: embedded_hal_async::delay::DelayNs>
     Cst9217<I, INT, RST, DELAY>
 {
-    pub async fn init(&mut self) -> Result<(), Cst9217Error<I::Error>> {
+    pub async fn init(&mut self) -> Result<(), Cst9217Error<I::Error, RST::Error>> {
         if i2c_helper::write_wide_reg(&mut self.i2c, self.addr, REG_DEBUG_MODE, 0x01)
             .await
             .is_err()
         {
             // ACK failure may mean that the sensor needs a reset
-            self.reset().await.unwrap();
+            self.reset().await.map_err(Cst9217Error::ResetError)?;
             i2c_helper::write_wide_reg(&mut self.i2c, self.addr, REG_DEBUG_MODE, 0x01).await?;
         }
         self.delay.delay_ms(10).await;
@@ -240,8 +243,7 @@ impl<I: I2c, RST: OutputPin, INT, DELAY: embedded_hal_async::delay::DelayNs>
 
         self.i2c
             .write_read(self.addr, &REG_PROJECT_ID.to_be_bytes(), &mut buf)
-            .await
-            .unwrap();
+            .await?;
         let _touch_project_id = u16::from_le_bytes(buf[0..2].try_into().unwrap());
         let chip_id = u16::from_le_bytes(buf[2..4].try_into().unwrap());
         if chip_id != CST9217_CHIP_ID {
@@ -281,5 +283,170 @@ impl<I: I2c, RST: OutputPin, INT, DELAY: embedded_hal_async::delay::DelayNs>
 impl<I: I2c, RST, INT: Wait, DELAY> Cst9217<I, INT, RST, DELAY> {
     pub fn wait_for_touch(&mut self) -> impl Future<Output = Result<(), INT::Error>> {
         self.int.wait_for_low()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Cst9217Config, TouchPoint};
+    use embedded_hal::digital::OutputPin;
+    use embedded_hal_async::{
+        delay::DelayNs,
+        i2c::{ErrorKind, ErrorType, I2c, Operation},
+    };
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum FakeError {
+        Bus,
+        Reset,
+    }
+
+    impl embedded_hal::i2c::Error for FakeError {
+        fn kind(&self) -> ErrorKind {
+            ErrorKind::Other
+        }
+    }
+
+    impl embedded_hal::digital::Error for FakeError {
+        fn kind(&self) -> embedded_hal::digital::ErrorKind {
+            embedded_hal::digital::ErrorKind::Other
+        }
+    }
+
+    struct FakeI2c {
+        fail_project: bool,
+        fail_first_write: bool,
+    }
+
+    impl ErrorType for FakeI2c {
+        type Error = FakeError;
+    }
+
+    impl I2c for FakeI2c {
+        async fn transaction(
+            &mut self,
+            _address: u8,
+            operations: &mut [Operation<'_>],
+        ) -> Result<(), Self::Error> {
+            let Some(operation) = operations.first_mut() else {
+                return Ok(());
+            };
+            match operation {
+                Operation::Write(bytes) if *bytes == [0xD1, 0x01, 0x01] => {
+                    if self.fail_first_write {
+                        self.fail_first_write = false;
+                        return Err(FakeError::Bus);
+                    }
+                }
+                Operation::Read(_) => {}
+                Operation::Write(_) => {}
+            }
+            if let [Operation::Write(write), Operation::Read(read)] = operations {
+                match write {
+                    [0xD1, 0xFC] => read.copy_from_slice(&[1, 0, 0xCA, 0xCA]),
+                    [0xD1, 0xF8] => read.copy_from_slice(&[0xD2, 0x01, 0x2C, 0x01]),
+                    [0xD2, 0x04] if self.fail_project => return Err(FakeError::Bus),
+                    [0xD2, 0x04] => read.fill(0),
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
+    }
+
+    struct FakeReset {
+        fail_low: bool,
+    }
+
+    impl embedded_hal::digital::ErrorType for FakeReset {
+        type Error = FakeError;
+    }
+
+    impl OutputPin for FakeReset {
+        fn set_low(&mut self) -> Result<(), Self::Error> {
+            if self.fail_low {
+                Err(FakeError::Reset)
+            } else {
+                Ok(())
+            }
+        }
+
+        fn set_high(&mut self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+    }
+
+    struct FakeDelay;
+
+    impl DelayNs for FakeDelay {
+        async fn delay_ns(&mut self, _ns: u32) {}
+    }
+
+    fn block_on<F: Future>(future: F) -> F::Output {
+        let waker = std::task::Waker::noop();
+        let mut context = std::task::Context::from_waker(waker);
+        let mut future = core::pin::pin!(future);
+        loop {
+            match Future::poll(future.as_mut(), &mut context) {
+                core::task::Poll::Ready(value) => return value,
+                core::task::Poll::Pending => std::thread::yield_now(),
+            }
+        }
+    }
+
+    #[test]
+    fn clamps_points_to_the_last_pixel() {
+        let config = Cst9217Config::default();
+        let mut point = TouchPoint { x: 500, y: 500 };
+        config.apply(466, 300, &mut point);
+        assert_eq!(point, TouchPoint { x: 465, y: 299 });
+    }
+
+    #[test]
+    fn mirrors_around_the_pixel_range() {
+        let config = Cst9217Config {
+            mirror_x: true,
+            mirror_y: true,
+            ..Default::default()
+        };
+        let mut point = TouchPoint { x: 0, y: 0 };
+        config.apply(466, 300, &mut point);
+        assert_eq!(point, TouchPoint { x: 465, y: 299 });
+    }
+
+    #[test]
+    fn init_returns_project_id_bus_failure() {
+        let mut touch = super::Cst9217::new(
+            FakeI2c {
+                fail_project: true,
+                fail_first_write: false,
+            },
+            FakeReset { fail_low: false },
+            (),
+            FakeDelay,
+        );
+        let error = block_on(touch.init()).unwrap_err();
+        assert!(matches!(
+            error,
+            super::Cst9217Error::I2CError(FakeError::Bus)
+        ));
+    }
+
+    #[test]
+    fn init_returns_reset_failure_after_ack_error() {
+        let mut touch = super::Cst9217::new(
+            FakeI2c {
+                fail_project: false,
+                fail_first_write: true,
+            },
+            FakeReset { fail_low: true },
+            (),
+            FakeDelay,
+        );
+        let error = block_on(touch.init()).unwrap_err();
+        assert!(matches!(
+            error,
+            super::Cst9217Error::ResetError(FakeError::Reset)
+        ));
     }
 }

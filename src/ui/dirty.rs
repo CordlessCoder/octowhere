@@ -52,6 +52,8 @@ impl<
 
     #[must_use]
     pub const fn new() -> Self {
+        let _: () = Self::_CHECK_CELL;
+        let _: () = Self::_CHECK_N;
         Self {
             full: false,
             grid: [Rectangle::zero(); N],
@@ -60,6 +62,8 @@ impl<
 
     #[must_use]
     pub const fn new_full() -> Self {
+        let _: () = Self::_CHECK_CELL;
+        let _: () = Self::_CHECK_N;
         Self {
             full: true,
             grid: [Rectangle::zero(); N],
@@ -96,7 +100,7 @@ impl<
     #[inline]
     fn get_mut(&mut self, x: u32, y: u32) -> &mut Rectangle {
         assert!(x < CELLS_X as u32 && y < CELLS_Y as u32);
-        &mut self.grid[(y * CELLS_Y as u32 + x) as usize]
+        &mut self.grid[(y * CELLS_X as u32 + x) as usize]
     }
 
     pub fn add(&mut self, rect: Rectangle) {
@@ -106,11 +110,11 @@ impl<
         let Some(bottom_right) = rect.bottom_right() else {
             return;
         };
-        if bottom_right.x <= 0 || bottom_right.y <= 0 {
+        if bottom_right.x < 0 || bottom_right.y < 0 {
             return;
         }
-        let x_start = rect.top_left.x.max(0) as u32 / Self::CELL_WIDTH;
-        let y_start = rect.top_left.y.max(0) as u32 / Self::CELL_HEIGHT;
+        let x_start = (rect.top_left.x.max(0) as u32 / Self::CELL_WIDTH).min(CELLS_X as u32 - 1);
+        let y_start = (rect.top_left.y.max(0) as u32 / Self::CELL_HEIGHT).min(CELLS_Y as u32 - 1);
         let x_end = bottom_right.x as u32 / Self::CELL_WIDTH;
         let y_end = bottom_right.y as u32 / Self::CELL_HEIGHT;
 

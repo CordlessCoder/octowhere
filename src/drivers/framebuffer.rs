@@ -6,6 +6,7 @@ use crate::board::CACHE_LINE;
 use crate::drivers::co5300::Co5300ColorMode;
 use crate::drivers::co5300::Co5300Display;
 use crate::drivers::co5300::DisplayError;
+use crate::ui::geometry::for_each_visible_color;
 use crate::util::{fill_buf_repeat, widening_copy};
 use alloc::alloc::Allocator;
 use alloc::boxed::Box;
@@ -50,7 +51,6 @@ where
 
     /// Static assertion that N is correct.
     // MSRV: remove N when constant generic expressions are stabilized
-    #[expect(unused)]
     const CHECK_N: () = assert!(
         N == Self::BUFFER_SIZE,
         "Invalid N: it must be equal to the output of buffer_size for the given width and height"
@@ -58,6 +58,7 @@ where
 
     #[must_use]
     pub fn alloc<A: Allocator>(alloc: A) -> Box<Self, A> {
+        let _: () = Self::CHECK_N;
         unsafe {
             // Initialize in-place on the heap
             let mut alloc = Box::new_zeroed_in(alloc);
@@ -263,25 +264,12 @@ where
     where
         I: IntoIterator<Item = Self::Color>,
     {
-        let visible = self.bounding_box().intersection(area);
-        if visible.size.width == 0 || visible.size.height == 0 {
-            return Ok(());
-        }
-
-        let x = area.top_left.x as usize;
-        let y = area.top_left.y as usize;
-        let w = x + area.size.width as usize;
-        let mut row = y;
-        let mut col = x;
-
-        for color in colors.into_iter() {
-            self.set_pixel(col, row, color);
-            col += 1;
-            if col >= w {
-                col = x;
-                row += 1;
-            }
-        }
+        for_each_visible_color(
+            Size::new(WIDTH as u32, HEIGHT as u32),
+            *area,
+            colors,
+            |x, y, color| self.set_pixel(x, y, color),
+        );
         Ok(())
     }
 

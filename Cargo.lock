@@ -574,9 +574,9 @@ dependencies = [
 
 [[package]]
 name = "enumset"
-version = "1.1.12"
+version = "1.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f96a4a12fe60ac746ae295a1a4ecb5bb02debc20856506c8635288065f142de"
+checksum = "839c4174b41e75c8f7306110b2c51996a293b8d1d850edd529011841d9fede7d"
 dependencies = [
  "enumset_derive",
 ]
@@ -602,7 +602,7 @@ checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 [[package]]
 name = "esp-alloc"
 version = "0.10.0"
-source = "git+https://github.com/CordlessCoder/esp-hal#c9f3c1d35618605d881c34c2490454f6929fe689"
+source = "git+https://github.com/CordlessCoder/esp-hal#94f7b9985222bd287422ceb8feddfe4e17d49c96"
 dependencies = [
  "allocator-api2 0.3.1",
  "cfg-if",
@@ -617,7 +617,7 @@ dependencies = [
 [[package]]
 name = "esp-backtrace"
 version = "0.19.0"
-source = "git+https://github.com/CordlessCoder/esp-hal#c9f3c1d35618605d881c34c2490454f6929fe689"
+source = "git+https://github.com/CordlessCoder/esp-hal#94f7b9985222bd287422ceb8feddfe4e17d49c96"
 dependencies = [
  "cfg-if",
  "document-features",
@@ -633,7 +633,7 @@ dependencies = [
 [[package]]
 name = "esp-bootloader-esp-idf"
 version = "0.5.0"
-source = "git+https://github.com/CordlessCoder/esp-hal#c9f3c1d35618605d881c34c2490454f6929fe689"
+source = "git+https://github.com/CordlessCoder/esp-hal#94f7b9985222bd287422ceb8feddfe4e17d49c96"
 dependencies = [
  "cfg-if",
  "document-features",
@@ -649,7 +649,7 @@ dependencies = [
 [[package]]
 name = "esp-config"
 version = "0.7.0"
-source = "git+https://github.com/CordlessCoder/esp-hal#c9f3c1d35618605d881c34c2490454f6929fe689"
+source = "git+https://github.com/CordlessCoder/esp-hal#94f7b9985222bd287422ceb8feddfe4e17d49c96"
 dependencies = [
  "document-features",
  "esp-metadata-generated",
@@ -661,7 +661,7 @@ dependencies = [
 [[package]]
 name = "esp-hal"
 version = "1.1.0"
-source = "git+https://github.com/CordlessCoder/esp-hal#c9f3c1d35618605d881c34c2490454f6929fe689"
+source = "git+https://github.com/CordlessCoder/esp-hal#94f7b9985222bd287422ceb8feddfe4e17d49c96"
 dependencies = [
  "bitfield",
  "bitflags",
@@ -690,7 +690,6 @@ dependencies = [
  "esp-riscv-rt",
  "esp-rom-sys",
  "esp-sync",
- "esp-synopsys-usb-otg",
  "esp32",
  "esp32c2",
  "esp32c3",
@@ -698,7 +697,7 @@ dependencies = [
  "esp32h2",
  "esp32p4",
  "esp32s2",
- "esp32s3",
+ "esp32s3 0.35.2 (git+https://github.com/esp-rs/esp-pacs?rev=0f4c316adbdbddb2479f50a5b931776b9655b23f)",
  "fugit",
  "instability",
  "nb 1.1.0",
@@ -717,7 +716,7 @@ dependencies = [
 [[package]]
 name = "esp-hal-procmacros"
 version = "0.22.0"
-source = "git+https://github.com/CordlessCoder/esp-hal#c9f3c1d35618605d881c34c2490454f6929fe689"
+source = "git+https://github.com/CordlessCoder/esp-hal#94f7b9985222bd287422ceb8feddfe4e17d49c96"
 dependencies = [
  "document-features",
  "object",
@@ -731,12 +730,12 @@ dependencies = [
 [[package]]
 name = "esp-metadata-generated"
 version = "0.4.0"
-source = "git+https://github.com/CordlessCoder/esp-hal#c9f3c1d35618605d881c34c2490454f6929fe689"
+source = "git+https://github.com/CordlessCoder/esp-hal#94f7b9985222bd287422ceb8feddfe4e17d49c96"
 
 [[package]]
 name = "esp-println"
 version = "0.17.0"
-source = "git+https://github.com/CordlessCoder/esp-hal#c9f3c1d35618605d881c34c2490454f6929fe689"
+source = "git+https://github.com/CordlessCoder/esp-hal#94f7b9985222bd287422ceb8feddfe4e17d49c96"
 dependencies = [
  "document-features",
  "esp-metadata-generated",
@@ -748,7 +747,7 @@ dependencies = [
 [[package]]
 name = "esp-radio-rtos-driver"
 version = "0.3.0"
-source = "git+https://github.com/CordlessCoder/esp-hal#c9f3c1d35618605d881c34c2490454f6929fe689"
+source = "git+https://github.com/CordlessCoder/esp-hal#94f7b9985222bd287422ceb8feddfe4e17d49c96"
 dependencies = [
  "cfg-if",
  "esp-sync",
@@ -758,7 +757,7 @@ dependencies = [
 [[package]]
 name = "esp-riscv-rt"
 version = "0.14.0"
-source = "git+https://github.com/CordlessCoder/esp-hal#c9f3c1d35618605d881c34c2490454f6929fe689"
+source = "git+https://github.com/CordlessCoder/esp-hal#94f7b9985222bd287422ceb8feddfe4e17d49c96"
 dependencies = [
  "document-features",
  "riscv",
@@ -768,18 +767,18 @@ dependencies = [
 [[package]]
 name = "esp-rom-sys"
 version = "0.1.4"
-source = "git+https://github.com/CordlessCoder/esp-hal#c9f3c1d35618605d881c34c2490454f6929fe689"
+source = "git+https://github.com/CordlessCoder/esp-hal#94f7b9985222bd287422ceb8feddfe4e17d49c96"
 dependencies = [
  "cfg-if",
  "document-features",
  "esp-metadata-generated",
- "esp32s3",
+ "esp32s3 0.35.2 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
 name = "esp-rtos"
 version = "0.3.0"
-source = "git+https://github.com/CordlessCoder/esp-hal#c9f3c1d35618605d881c34c2490454f6929fe689"
+source = "git+https://github.com/CordlessCoder/esp-hal#94f7b9985222bd287422ceb8feddfe4e17d49c96"
 dependencies = [
  "allocator-api2 0.3.1",
  "cfg-if",
@@ -804,7 +803,7 @@ dependencies = [
 [[package]]
 name = "esp-sync"
 version = "0.2.1"
-source = "git+https://github.com/CordlessCoder/esp-hal#c9f3c1d35618605d881c34c2490454f6929fe689"
+source = "git+https://github.com/CordlessCoder/esp-hal#94f7b9985222bd287422ceb8feddfe4e17d49c96"
 dependencies = [
  "cfg-if",
  "document-features",
@@ -817,23 +816,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "esp-synopsys-usb-otg"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8938451cb19032f13365328ea66ab38c8d16deecdf322067442297110eb74468"
-dependencies = [
- "critical-section",
- "embedded-hal 0.2.7",
- "ral-registers",
- "usb-device",
- "vcell",
-]
-
-[[package]]
 name = "esp32"
 version = "0.40.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5726e07689249d1a2cb7c492077bc424837fb68a64f7eb5d46569325352e9428"
+source = "git+https://github.com/esp-rs/esp-pacs?rev=0f4c316adbdbddb2479f50a5b931776b9655b23f#0f4c316adbdbddb2479f50a5b931776b9655b23f"
 dependencies = [
  "vcell",
 ]
@@ -877,7 +862,7 @@ dependencies = [
 [[package]]
 name = "esp32p4"
 version = "0.2.0"
-source = "git+https://github.com/esp-rs/esp-pacs?rev=c4a5792c462c32116eb4a367a37c2d167ae94a40#c4a5792c462c32116eb4a367a37c2d167ae94a40"
+source = "git+https://github.com/esp-rs/esp-pacs?rev=0f4c316adbdbddb2479f50a5b931776b9655b23f#0f4c316adbdbddb2479f50a5b931776b9655b23f"
 dependencies = [
  "critical-section",
  "vcell",
@@ -886,8 +871,7 @@ dependencies = [
 [[package]]
 name = "esp32s2"
 version = "0.31.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d0ad6f21cdf6ec7b06b7f7e0fbe51f0d975fd6a5fa67c3f8a5a910d3981af531"
+source = "git+https://github.com/esp-rs/esp-pacs?rev=0f4c316adbdbddb2479f50a5b931776b9655b23f#0f4c316adbdbddb2479f50a5b931776b9655b23f"
 dependencies = [
  "vcell",
 ]
@@ -897,6 +881,14 @@ name = "esp32s3"
 version = "0.35.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b4b8c4e4d9f187553ecdb7173edec7b2deb2beea106eedefecdb1654b8ee25a"
+dependencies = [
+ "vcell",
+]
+
+[[package]]
+name = "esp32s3"
+version = "0.35.2"
+source = "git+https://github.com/esp-rs/esp-pacs?rev=0f4c316adbdbddb2479f50a5b931776b9655b23f#0f4c316adbdbddb2479f50a5b931776b9655b23f"
 dependencies = [
  "vcell",
 ]
@@ -1412,12 +1404,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ral-registers"
-version = "0.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "46b71a9d9206e8b46714c74255adcaea8b11e0350c1d8456165073c3f75fc81a"
-
-[[package]]
 name = "rand_core"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1871,16 +1857,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "673aac59facbab8a9007c7f6108d11f63b603f7cabff99fabf650fea5c32b861"
 
 [[package]]
-name = "usb-device"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "98816b1accafbb09085168b90f27e93d790b4bfa19d883466b5e53315b5f06a6"
-dependencies = [
- "heapless 0.8.0",
- "portable-atomic",
-]
-
-[[package]]
 name = "valuable"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1949,7 +1925,7 @@ dependencies = [
 [[package]]
 name = "xtensa-lx"
 version = "0.13.0"
-source = "git+https://github.com/CordlessCoder/esp-hal#c9f3c1d35618605d881c34c2490454f6929fe689"
+source = "git+https://github.com/CordlessCoder/esp-hal#94f7b9985222bd287422ceb8feddfe4e17d49c96"
 dependencies = [
  "critical-section",
 ]
@@ -1957,7 +1933,7 @@ dependencies = [
 [[package]]
 name = "xtensa-lx-rt"
 version = "0.22.0"
-source = "git+https://github.com/CordlessCoder/esp-hal#c9f3c1d35618605d881c34c2490454f6929fe689"
+source = "git+https://github.com/CordlessCoder/esp-hal#94f7b9985222bd287422ceb8feddfe4e17d49c96"
 dependencies = [
  "document-features",
  "xtensa-lx",
@@ -1967,7 +1943,7 @@ dependencies = [
 [[package]]
 name = "xtensa-lx-rt-proc-macros"
 version = "0.5.0"
-source = "git+https://github.com/CordlessCoder/esp-hal#c9f3c1d35618605d881c34c2490454f6929fe689"
+source = "git+https://github.com/CordlessCoder/esp-hal#94f7b9985222bd287422ceb8feddfe4e17d49c96"
 dependencies = [
  "proc-macro2",
  "quote",
