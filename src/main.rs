@@ -683,7 +683,9 @@ async fn main(_spawner: Spawner) {
             {
                 let debug_dirty = draw_damage_debug(&dirty, fb);
                 dirty.extend(&debug_dirty);
-                next_needs_full_redraw.extend(&debug_dirty);
+                if !dirty.is_full() {
+                    next_needs_full_redraw.extend(&debug_dirty);
+                }
             }
 
             *needs_full_redraw = next_needs_full_redraw;
