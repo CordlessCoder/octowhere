@@ -617,6 +617,11 @@ async fn main(_spawner: Spawner) {
         bounding_box: chrome::DISPLAY_BBOX,
         font_renderer,
     };
+    println!(
+        "[MEM] internal_used={} psram_used={}",
+        esp_alloc::HEAP.used(),
+        PSRAM_HEAP.used(),
+    );
     let mut prev_swap_draw = Duration::MIN;
     loop {
         let start = Instant::now();
