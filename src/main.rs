@@ -581,7 +581,7 @@ async fn main(_spawner: Spawner) {
     let font_renderer = {
         let settings = femtofont::FontSettings {
             scale: 40.0,
-            cachesize: 0,
+            cachesize: 40,
             ..femtofont::FontSettings::default()
         };
         let fonts = Box::leak(Box::new([
