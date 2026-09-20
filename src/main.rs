@@ -248,6 +248,7 @@ fn bench_repeat<R>(mut the_thing: impl FnMut() -> R, name: &str) -> (R, Duration
 struct DrawCtx {
     touch_data: TouchData,
     bounding_box: Rectangle,
+    statistics_text_bbox: Rectangle,
     #[cfg(feature = "femtofont")]
     font_renderer: chrome::FemtoFontRenderer<'static, Color>,
     #[cfg(not(feature = "femtofont"))]
@@ -265,15 +266,17 @@ struct Timings {
     frametime: Duration,
 }
 
-fn update_text<D>(ctx: &DrawCtx, timings: &Timings, target: &mut D) -> Dirty
+fn update_text<D>(ctx: &mut DrawCtx, timings: &Timings, target: &mut D) -> Dirty
 where
     D: DrawTarget,
     D: DrawTarget<Color = Color>,
     D::Error: core::fmt::Debug,
 {
     let mut dirty = Dirty::new();
-    target.fill_solid(&STATISTICS_BBOX, chrome::BLACK).unwrap();
-    dirty.add(STATISTICS_BBOX);
+    target
+        .fill_solid(&ctx.statistics_text_bbox, chrome::BLACK)
+        .unwrap();
+    dirty.add(ctx.statistics_text_bbox);
     let Timings {
         vsync_wait,
         spi_time,
@@ -291,7 +294,8 @@ where
     );
     let font_start = Instant::now();
     #[cfg(feature = "femtofont")]
-    ctx.font_renderer
+    let text_bbox = ctx
+        .font_renderer
         .render(
             |layout, fonts| {
                 layout.append(
@@ -305,7 +309,8 @@ where
         )
         .unwrap();
     #[cfg(not(feature = "femtofont"))]
-    ctx.font_renderer
+    let text_bbox = ctx
+        .font_renderer
         .render(
             |layout, fonts| {
                 layout.append(
@@ -318,6 +323,8 @@ where
             target,
         )
         .unwrap();
+    dirty.add(text_bbox);
+    ctx.statistics_text_bbox = text_bbox;
     let font_elapsed = font_start.elapsed();
     #[cfg(feature = "femtofont")]
     defmt::info!("font-draw femtofont: {} us", font_elapsed.as_micros());
@@ -680,6 +687,7 @@ async fn main(_spawner: Spawner) {
     let mut draw_ctx = DrawCtx {
         touch_data: TouchData::default(),
         bounding_box: chrome::DISPLAY_BBOX,
+        statistics_text_bbox: STATISTICS_BBOX,
         font_renderer,
     };
     println!(
@@ -724,7 +732,7 @@ async fn main(_spawner: Spawner) {
                 }
             }
             dirty.extend(&repaint);
-            let mut next_needs_full_redraw = update_text(&draw_ctx, timings, fb);
+            let mut next_needs_full_redraw = update_text(&mut draw_ctx, timings, fb);
             next_needs_full_redraw.extend(&update_touch(&draw_ctx, fb));
             dirty.extend(&next_needs_full_redraw);
 

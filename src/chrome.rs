@@ -257,17 +257,33 @@ impl<'f, C: PixelColor> FontdueRenderer<'f, C> {
     }
 }
 impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
+    fn union_rect(a: Rectangle, b: Rectangle) -> Rectangle {
+        if a.is_zero_sized() {
+            return b;
+        }
+        if b.is_zero_sized() {
+            return a;
+        }
+        Rectangle::with_corners(
+            a.top_left.component_min(b.top_left),
+            a.bottom_right()
+                .unwrap()
+                .component_max(b.bottom_right().unwrap()),
+        )
+    }
+
     fn render_layout<D: DrawTarget<Color = C>>(
         &self,
         ctx: &mut FontdueRendererCtx,
         position: Point,
         target: &mut D,
-    ) -> Result<(), D::Error> {
+    ) -> Result<Rectangle, D::Error> {
         let bbox = target.bounding_box();
         let usable_width = bbox.size.width.saturating_sub_signed(position.x);
         if usable_width == 0 {
-            return Ok(());
+            return Ok(Rectangle::zero());
         }
+        let mut rendered = Rectangle::zero();
         ctx.layout
             .glyphs()
             .iter()
@@ -280,6 +296,13 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
                 );
                 let x_off = g.x as i32;
                 let y_off = g.y as i32;
+                rendered = Self::union_rect(
+                    rendered,
+                    Rectangle::new(
+                        position + Point::new(x_off, y_off),
+                        Size::new(metrics.width as u32, metrics.height as u32),
+                    ),
+                );
 
                 let coverage_to_color =
                     |coverage: u8| self.background_color.lerp(&self.text_color, coverage);
@@ -304,7 +327,7 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
         // target.draw_iter(pixels)?;
         // self.draw_strikethrough(width as u32, position, target)?;
         // self.draw_underline(width as u32, position, target)?;
-        Ok(())
+        Ok(rendered)
     }
     #[inline]
     pub fn render<D: DrawTarget<Color = C>>(
@@ -312,7 +335,7 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
         layout_cb: impl FnOnce(&mut Layout<()>, &[&dyn FontRepr]),
         position: Point,
         target: &mut D,
-    ) -> Result<(), D::Error> {
+    ) -> Result<Rectangle, D::Error> {
         let ctx = &mut *self.borrow_ctx();
         ctx.reset_layout();
         layout_cb(&mut ctx.layout, self.fonts);
@@ -382,18 +405,34 @@ impl<'f, C: PixelColor> FemtoFontRenderer<'f, C> {
 
 #[cfg(feature = "femtofont")]
 impl<C: PixelColor + RgbColorExt> FemtoFontRenderer<'_, C> {
+    fn union_rect(a: Rectangle, b: Rectangle) -> Rectangle {
+        if a.is_zero_sized() {
+            return b;
+        }
+        if b.is_zero_sized() {
+            return a;
+        }
+        Rectangle::with_corners(
+            a.top_left.component_min(b.top_left),
+            a.bottom_right()
+                .unwrap()
+                .component_max(b.bottom_right().unwrap()),
+        )
+    }
+
     fn render_layout<D: DrawTarget<Color = C>>(
         &self,
         ctx: &mut FemtoFontRendererCtx,
         position: Point,
         target: &mut D,
-    ) -> Result<(), D::Error> {
+    ) -> Result<Rectangle, D::Error> {
         let bbox = target.bounding_box();
         let usable_width = bbox.size.width.saturating_sub_signed(position.x);
         if usable_width == 0 {
-            return Ok(());
+            return Ok(Rectangle::zero());
         }
 
+        let mut rendered = Rectangle::zero();
         ctx.layout
             .glyphs()
             .iter()
@@ -403,6 +442,13 @@ impl<C: PixelColor + RgbColorExt> FemtoFontRenderer<'_, C> {
                     self.fonts[g.font_index].rasterize_indexed(g.key.glyph_index, g.key.px);
                 let x_off = g.x as i32;
                 let y_off = g.y as i32;
+                rendered = Self::union_rect(
+                    rendered,
+                    Rectangle::new(
+                        position + Point::new(x_off, y_off),
+                        Size::new(metrics.width as u32, metrics.height as u32),
+                    ),
+                );
                 let coverage_to_color =
                     |coverage: u8| self.background_color.lerp(&self.text_color, coverage);
                 let width = metrics.width;
@@ -421,7 +467,7 @@ impl<C: PixelColor + RgbColorExt> FemtoFontRenderer<'_, C> {
                         });
                 target.draw_iter(pixels)
             })?;
-        Ok(())
+        Ok(rendered)
     }
 
     #[inline]
@@ -430,7 +476,7 @@ impl<C: PixelColor + RgbColorExt> FemtoFontRenderer<'_, C> {
         layout_cb: impl FnOnce(&mut femtofont::layout::Layout, &[femtofont::Font<'_>]),
         position: Point,
         target: &mut D,
-    ) -> Result<(), D::Error> {
+    ) -> Result<Rectangle, D::Error> {
         let ctx = &mut *self.ctx.borrow_mut();
         ctx.reset_layout();
         layout_cb(&mut ctx.layout, self.fonts);
