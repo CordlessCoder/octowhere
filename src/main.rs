@@ -200,8 +200,14 @@ async fn second_core(
 
         #[cfg(feature = "damage-debug")]
         {
-            previous_debug = dirty.clone();
-            *debug_repaint = dirty.clone();
+            // Full-screen transfers do not leave a region-specific overlay to clear.
+            let current_debug = if dirty.is_full() {
+                Dirty::new()
+            } else {
+                dirty.clone()
+            };
+            previous_debug = current_debug.clone();
+            *debug_repaint = current_debug;
         }
 
         *spi_time = start.elapsed() - *vsync_wait;
