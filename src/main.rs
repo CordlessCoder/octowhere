@@ -147,6 +147,8 @@ async fn second_core(
             },
             dirty,
             needs_full_redraw: _,
+            #[cfg(feature = "damage-debug")]
+            debug_repaint,
         } = state;
 
         let start = Instant::now();
@@ -199,6 +201,7 @@ async fn second_core(
         #[cfg(feature = "damage-debug")]
         {
             previous_debug = dirty.clone();
+            *debug_repaint = dirty.clone();
         }
 
         *spi_time = start.elapsed() - *vsync_wait;
@@ -421,6 +424,8 @@ struct SwapState<A: Allocator = alloc::alloc::Global> {
     fb: Box<chrome::FB, A>,
     dirty: Dirty,
     needs_full_redraw: Dirty,
+    #[cfg(feature = "damage-debug")]
+    debug_repaint: Dirty,
     timings: Timings,
 }
 
@@ -572,12 +577,16 @@ async fn main(_spawner: Spawner) {
                 fb: FB::alloc(&PSRAM_HEAP),
                 dirty: DirtyAreas::new(),
                 needs_full_redraw: DirtyAreas::new_full(),
+                #[cfg(feature = "damage-debug")]
+                debug_repaint: DirtyAreas::new(),
                 timings: Timings::default(),
             },
             SwapState {
                 fb: FB::alloc(&PSRAM_HEAP),
                 dirty: DirtyAreas::new(),
                 needs_full_redraw: DirtyAreas::new_full(),
+                #[cfg(feature = "damage-debug")]
+                debug_repaint: DirtyAreas::new(),
                 timings: Timings::default(),
             },
         )
@@ -667,22 +676,31 @@ async fn main(_spawner: Spawner) {
                 dirty,
                 timings,
                 needs_full_redraw,
+                #[cfg(feature = "damage-debug")]
+                debug_repaint,
             } = state;
             let fb = &mut **fb;
             draw_ctx.touch_data = touch.read_touch_data().await.unwrap();
             dirty.clear();
 
+            let mut repaint = needs_full_redraw.clone();
+            #[cfg(feature = "damage-debug")]
+            {
+                repaint.extend(debug_repaint);
+                debug_repaint.clear();
+            }
+
             // esp_println::dbg!(&needs_full_redraw);
-            if needs_full_redraw.is_full() {
+            if repaint.is_full() {
                 draw(&mut draw_ctx, fb);
                 dirty.make_full();
             } else {
-                for area in needs_full_redraw.iter() {
+                for area in repaint.iter() {
                     let mut clipped = fb.clipped(&area);
                     dirty.extend(&draw(&mut draw_ctx, &mut clipped));
                 }
             }
-            dirty.extend(needs_full_redraw);
+            dirty.extend(&repaint);
             let mut next_needs_full_redraw = update_text(&draw_ctx, timings, fb);
             next_needs_full_redraw.extend(&update_touch(&draw_ctx, fb));
             dirty.extend(&next_needs_full_redraw);
