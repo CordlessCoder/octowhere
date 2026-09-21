@@ -30,12 +30,12 @@ use esp_hal::{
     timer::timg::TimerGroup,
 };
 use esp_println::println;
+use lc76g::{GnssError, GnssOperation, Lc76g, NmeaParser};
 use octowhere::{
     board,
     chrome::{self, Color, Dirty, FB, FontdueRenderer, FontdueRendererCtx},
     drivers::{co5300::Co5300Display, framebuffer::Framebuffer, qspi_bus::QspiBus},
     peripherals::{
-        gnss::{GnssError, GnssOperation, Lc76g, NmeaParser},
         lora::{LoraError, Sx1272},
         magnetometer::Bmm350,
         power::Axp2101Power,
@@ -101,7 +101,7 @@ struct SensorSnapshot {
 struct SensorTask {
     power: Axp2101Power<SharedI2cDevice>,
     lora: SensorLora,
-    gnss: Lc76g<SharedI2cDevice>,
+    gnss: Lc76g<SharedI2cDevice, embassy_time::Delay>,
     nmea: [u8; 64],
     rtc: Pcf85063aRtc<SharedI2cDevice>,
     magnetometer: Bmm350<SharedI2cDevice>,
@@ -700,7 +700,11 @@ async fn async_main(spawner: Spawner) {
     println!("[TCA9554] direction=0x{exio_direction:02X}");
     Timer::after(Duration::from_secs(1)).await;
 
-    let mut gnss = Lc76g::new(i2c.clone());
+    let mut gnss = Lc76g::new(i2c.clone(), embassy_time::Delay);
+    match gnss.enable_alp_mode().await {
+        Ok(()) => println!("[GNSS] ALP_ENABLE_SENT"),
+        Err(_) => println!("[GNSS] ALP_ENABLE_FAILED"),
+    }
     let mut nmea = [0u8; 512];
     let mut gnss_parse_ok = false;
     match gnss.read_nmea_chunk(&mut nmea).await {
@@ -709,7 +713,9 @@ async fn async_main(spawner: Spawner) {
             let mut parser = NmeaParser::<128>::new();
             let mut valid_sentence = false;
             for &byte in data {
-                if let Ok(Some(_)) = parser.push(byte) {
+                if let Ok(Some(sentence)) = parser.push(byte)
+                    && sentence.get(1) != Some(&b'P')
+                {
                     valid_sentence = true;
                 }
             }

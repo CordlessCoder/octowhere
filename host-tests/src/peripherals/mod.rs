@@ -1,7 +1,5 @@
 #[path = "../../../src/peripherals/i2c_helper.rs"]
 pub mod i2c_helper;
-#[path = "../../../src/peripherals/gnss.rs"]
-pub mod gnss;
 #[path = "../../../src/peripherals/lora.rs"]
 pub mod lora;
 #[path = "../../../src/peripherals/magnetometer.rs"]

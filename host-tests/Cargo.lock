@@ -244,6 +244,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "lc76g"
+version = "0.1.0"
+dependencies = [
+ "embedded-hal-async",
+]
+
+[[package]]
 name = "litrs"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -298,6 +305,7 @@ dependencies = [
  "embedded-hal-async",
  "futures",
  "heapless",
+ "lc76g",
  "log",
 ]
 

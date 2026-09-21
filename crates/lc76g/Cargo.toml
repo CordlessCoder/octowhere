@@ -1,0 +1,11 @@
+[package]
+name = "lc76g"
+version = "0.1.0"
+edition = "2024"
+description = "Async I2C driver and NMEA framing support for the Quectel LC76G"
+license = "MIT OR Apache-2.0"
+
+[workspace]
+
+[dependencies]
+embedded-hal-async = "1.0.0"

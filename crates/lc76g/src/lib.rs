@@ -1,5 +1,6 @@
-use embassy_time::{Duration, Timer};
-use embedded_hal_async::i2c::I2c;
+#![no_std]
+
+use embedded_hal_async::{delay::DelayNs, i2c::I2c};
 
 const CONFIG_ADDRESS: u8 = 0x50;
 const DATA_ADDRESS: u8 = 0x54;
@@ -9,8 +10,11 @@ const CONFIG_READ_DATA: u32 = 0xAA51_2000;
 const CONFIG_WRITE_NMEA: u32 = 0xAA53_1000;
 const CONFIG_READ_FREE_LENGTH: u32 = 0xAA51_0004;
 const NMEA_LENGTH_BYTES: usize = 4;
-const INTER_COMMAND_DELAY: Duration = Duration::from_millis(10);
+const INTER_COMMAND_DELAY_MS: u32 = 10;
 const MAX_I2C_RETRIES: usize = 20;
+
+const ALP_ENABLE: &[u8] = b"$PAIR732,1*21\r\n";
+const ALP_DISABLE: &[u8] = b"$PAIR732,0*20\r\n";
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum GnssOperation {
@@ -32,6 +36,7 @@ pub enum NmeaError {
     InvalidChecksum,
 }
 
+/// Incrementally validates complete NMEA lines without allocating.
 pub struct NmeaParser<const N: usize> {
     line: [u8; N],
     len: usize,
@@ -106,15 +111,32 @@ fn hex_digit(byte: u8) -> Option<u8> {
     }
 }
 
-pub struct Lc76g<I> {
+pub struct Lc76g<I, D> {
     i2c: I,
+    delay: D,
 }
 
-impl<I: I2c> Lc76g<I> {
-    pub fn new(i2c: I) -> Self {
-        Self { i2c }
+impl<I, D> Lc76g<I, D>
+where
+    I: I2c,
+    D: DelayNs,
+{
+    /// Creates a driver with an async I²C device and an injected delay source.
+    pub fn new(i2c: I, delay: D) -> Self {
+        Self { i2c, delay }
     }
 
+    /// Requests the module's adaptive low-power mode.
+    pub async fn enable_alp_mode(&mut self) -> Result<(), GnssError<I::Error>> {
+        self.write_nmea(ALP_ENABLE).await
+    }
+
+    /// Requests normal continuous tracking mode.
+    pub async fn disable_alp_mode(&mut self) -> Result<(), GnssError<I::Error>> {
+        self.write_nmea(ALP_DISABLE).await
+    }
+
+    /// Reads all currently buffered NMEA data into `buffer`.
     pub async fn read_nmea<'a>(
         &mut self,
         buffer: &'a mut [u8],
@@ -132,11 +154,12 @@ impl<I: I2c> Lc76g<I> {
 
         self.write_config(CONFIG_READ_DATA, available as u32)
             .await?;
-        Timer::after(INTER_COMMAND_DELAY).await;
+        self.command_delay().await;
         self.read_data(&mut buffer[..available]).await?;
         Ok(&buffer[..available])
     }
 
+    /// Reads at most `buffer.len()` bytes of currently buffered NMEA data.
     pub async fn read_nmea_chunk<'a>(
         &mut self,
         buffer: &'a mut [u8],
@@ -148,7 +171,7 @@ impl<I: I2c> Lc76g<I> {
         }
 
         self.write_config(CONFIG_READ_DATA, read_len as u32).await?;
-        Timer::after(INTER_COMMAND_DELAY).await;
+        self.command_delay().await;
         self.read_data(&mut buffer[..read_len]).await?;
         Ok(&buffer[..read_len])
     }
@@ -164,7 +187,7 @@ impl<I: I2c> Lc76g<I> {
 
         self.write_config(CONFIG_WRITE_NMEA, data.len() as u32)
             .await?;
-        Timer::after(INTER_COMMAND_DELAY).await;
+        self.command_delay().await;
         for attempt in 0..MAX_I2C_RETRIES {
             match self.i2c.write(WRITE_DATA_ADDRESS, data).await {
                 Ok(()) => return Ok(()),
@@ -174,7 +197,7 @@ impl<I: I2c> Lc76g<I> {
                         error,
                     });
                 }
-                Err(_) => Timer::after(INTER_COMMAND_DELAY).await,
+                Err(_) => self.command_delay().await,
             }
         }
         unreachable!()
@@ -186,7 +209,7 @@ impl<I: I2c> Lc76g<I> {
 
     async fn read_buffer_length(&mut self, command: u32) -> Result<usize, GnssError<I::Error>> {
         self.write_config(command, NMEA_LENGTH_BYTES as u32).await?;
-        Timer::after(INTER_COMMAND_DELAY).await;
+        self.command_delay().await;
         let mut length = [0; NMEA_LENGTH_BYTES];
         self.read_data(&mut length).await?;
         Ok(u32::from_le_bytes(length) as usize)
@@ -206,7 +229,7 @@ impl<I: I2c> Lc76g<I> {
                         error,
                     });
                 }
-                Err(_) => Timer::after(INTER_COMMAND_DELAY).await,
+                Err(_) => self.command_delay().await,
             }
         }
         unreachable!()
@@ -225,21 +248,26 @@ impl<I: I2c> Lc76g<I> {
                         error,
                     });
                 }
-                Err(_) => Timer::after(INTER_COMMAND_DELAY).await,
+                Err(_) => self.command_delay().await,
             }
         }
         unreachable!()
+    }
+
+    async fn command_delay(&mut self) {
+        self.delay.delay_ms(INTER_COMMAND_DELAY_MS).await;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        CONFIG_READ_DATA, CONFIG_READ_FREE_LENGTH, CONFIG_READ_NMEA_LENGTH, NmeaError, NmeaParser,
+        ALP_DISABLE, ALP_ENABLE, CONFIG_READ_DATA, CONFIG_READ_FREE_LENGTH,
+        CONFIG_READ_NMEA_LENGTH, NmeaError, NmeaParser,
     };
 
     #[test]
-    fn commands_match_quectel_i2c_protocol() {
+    fn commands_match_quectel_protocol() {
         assert_eq!(
             CONFIG_READ_NMEA_LENGTH.to_le_bytes(),
             [0x08, 0x00, 0x51, 0xAA]
@@ -249,6 +277,8 @@ mod tests {
             CONFIG_READ_FREE_LENGTH.to_le_bytes(),
             [0x04, 0x00, 0x51, 0xAA]
         );
+        assert_eq!(ALP_ENABLE, b"$PAIR732,1*21\r\n");
+        assert_eq!(ALP_DISABLE, b"$PAIR732,0*20\r\n");
     }
 
     #[test]

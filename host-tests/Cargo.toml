@@ -16,3 +16,4 @@ embedded-hal-async = "1.0"
 futures = { version = "0.3.32", default-features = false, features = ["async-await"] }
 heapless = "0.9.2"
 log = "0.4"
+lc76g = { path = "../crates/lc76g" }

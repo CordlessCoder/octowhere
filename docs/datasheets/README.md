@@ -11,6 +11,8 @@ for revisions before designing new hardware around a component.
 | `PCF85063A.pdf` | NXP PCF85063A RTC | [Waveshare mirror](https://files.waveshare.com/wiki/common/PCF85063A.pdf) |
 | `LC76G_Series_GNSS_Specification_V1.1.pdf` | Quectel LC76G GNSS module | [Quectel](https://quectel.com/content/uploads/2024/03/Quectel_LC76G_Series_GNSS_Specification_V1.1-1-1.pdf) |
 | `LC76G_I2C_Application_Note_V1.0.pdf` | Quectel LC76G I²C protocol | [Quectel](https://www.quectel.com/content/uploads/2024/02/Quectel_LC26GABLC76G_Series_I2C_Application_Note_V1.0.pdf) |
+| `LC76G_Low_Power_Mode_Application_Note_V1.0.pdf` | Quectel LC76G low-power modes | [Quectel](https://quectel.com/content/uploads/2024/02/Quectel_LC26GLC76GLC86G_Series_Low_Power_Mode_Application_Note_V1.0.pdf) |
+| `LC76G_GNSS_Protocol_Specification_V1.1.pdf` | Quectel LC76G command protocol | [Quectel](https://quectel.com/content/uploads/2024/02/Quectel_LC26GABLC76GLC86G_Series_GNSS_Protocol_Specification_V1.1.pdf) |
 | `BMM350_DS001.pdf` | Bosch BMM350 magnetometer | [Bosch Sensortec](https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bmm350-ds001.pdf) |
 | `RF-LORA-868-SO.pdf` | RF Solutions RF-LORA-868-SO, SX1272-based module | [DigiKey datasheet mirror](https://mm.digikey.com/Volume0/opasdata/d220001/medias/docus/1028/RF-LORA.pdf) |
 | `SX1272_Datasheet.pdf` | Semtech SX1272/73 LoRa transceiver | [Semtech product page](https://www.semtech.com/products/wireless-rf/lora-connect/sx1272) |

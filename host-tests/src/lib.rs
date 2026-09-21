@@ -24,6 +24,9 @@ pub const SWAP_SEND_BOUND: () = ();
 #[path = "peripherals/mod.rs"]
 pub mod peripherals;
 
+#[cfg(test)]
+mod gnss;
+
 #[path = "../../src/ui/dirty.rs"]
 pub mod dirty;
 #[path = "../../src/ui/geometry.rs"]
