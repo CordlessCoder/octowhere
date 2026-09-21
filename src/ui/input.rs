@@ -11,6 +11,7 @@ pub struct Button {
     active_samples: u8,
     inactive_samples: u8,
     contact_active: bool,
+    contact_inactive_samples: u8,
     captured: bool,
 }
 
@@ -45,12 +46,20 @@ impl Button {
     }
 
     pub fn update_touch(&mut self, contact_active: bool, hit: bool) -> ButtonEvent {
-        if contact_active && !self.contact_active {
-            self.captured = hit;
-        } else if !contact_active {
-            self.captured = false;
+        if contact_active {
+            if !self.contact_active {
+                self.captured = hit;
+                self.contact_active = true;
+            }
+            self.contact_inactive_samples = 0;
+        } else if self.contact_active {
+            self.contact_inactive_samples = self.contact_inactive_samples.saturating_add(1);
+            if self.contact_inactive_samples >= Self::DEBOUNCE_SAMPLES {
+                self.contact_active = false;
+                self.contact_inactive_samples = 0;
+                self.captured = false;
+            }
         }
-        self.contact_active = contact_active;
         self.update(contact_active && self.captured)
     }
 }
@@ -92,5 +101,15 @@ mod tests {
         assert_eq!(button.update_touch(false, false), ButtonEvent::None);
         assert_eq!(button.update_touch(false, false), ButtonEvent::None);
         assert_eq!(button.update_touch(false, false), ButtonEvent::None);
+    }
+
+    #[test]
+    fn contact_gaps_do_not_rearm_a_drag() {
+        let mut button = Button::default();
+        assert_eq!(button.update_touch(true, false), ButtonEvent::None);
+        assert_eq!(button.update_touch(false, false), ButtonEvent::None);
+        assert_eq!(button.update_touch(true, true), ButtonEvent::None);
+        assert_eq!(button.update_touch(false, false), ButtonEvent::None);
+        assert_eq!(button.update_touch(true, true), ButtonEvent::None);
     }
 }
