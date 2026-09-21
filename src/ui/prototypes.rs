@@ -31,8 +31,13 @@ pub struct State {
 }
 
 const HEADER: Rectangle = Rectangle::new(Point::new(92, 48), Size::new(282, 50));
+const HEADER_CONTENT: Rectangle = Rectangle::new(Point::new(108, 48), Size::new(258, 50));
 const MAP: Rectangle = Rectangle::new(Point::new(48, 112), Size::new(370, 242));
 const FOOTER: Rectangle = Rectangle::new(Point::new(92, 368), Size::new(282, 50));
+const FOOTER_PIN: Rectangle = Rectangle::new(Point::new(92, 368), Size::new(178, 50));
+const FOOTER_PIN_CONTENT: Rectangle = Rectangle::new(Point::new(100, 368), Size::new(162, 50));
+const FOOTER_SYNC: Rectangle = Rectangle::new(Point::new(278, 368), Size::new(96, 50));
+const FOOTER_SYNC_CONTENT: Rectangle = Rectangle::new(Point::new(282, 368), Size::new(88, 50));
 
 pub fn render<D>(
     architecture: Architecture,
@@ -193,15 +198,15 @@ where
     LinearLayout::vertical(Views::new(&mut labels))
         .with_spacing(FixedMargin(1))
         .arrange()
-        .align_to(&HEADER, horizontal::Left, vertical::Center)
+        .align_to(&HEADER_CONTENT, horizontal::Left, vertical::Center)
         .draw(target)?;
     aligned_text(
         "01 / 04",
-        &HEADER,
+        &HEADER_CONTENT,
         font,
         chrome::BLACK,
         chrome::PURPLE,
-        20,
+        16,
         1,
         horizontal::Right,
         vertical::Center,
@@ -224,7 +229,7 @@ where
             .into_styled(frame)
             .draw(target)?;
     }
-    for y in [160, 208, 256, 304, 336] {
+    for y in [160, 208, 256, 304] {
         Line::new(Point::new(48, y), Point::new(418, y))
             .into_styled(frame)
             .draw(target)?;
@@ -264,7 +269,7 @@ where
             font,
             chrome::BLACK,
             chrome::LIME,
-            20,
+            16,
             1,
             horizontal::Center,
             vertical::Center,
@@ -277,7 +282,7 @@ where
         font,
         chrome::GRAY,
         chrome::BLACK,
-        20,
+        16,
         1,
         horizontal::Left,
         vertical::Center,
@@ -289,7 +294,7 @@ where
         font,
         chrome::GRAY,
         chrome::BLACK,
-        20,
+        16,
         1,
         horizontal::Left,
         vertical::Center,
@@ -306,7 +311,7 @@ where
     D: DrawTarget<Color = Color>,
 {
     target.fill_solid(
-        &Rectangle::new(Point::new(92, 368), Size::new(178, 50)),
+        &FOOTER_PIN,
         if state.selected_node.is_some() {
             chrome::LIME
         } else {
@@ -319,7 +324,7 @@ where
         } else {
             "TAP A NODE"
         },
-        &Rectangle::new(Point::new(92, 368), Size::new(178, 50)),
+        &FOOTER_PIN_CONTENT,
         font,
         chrome::BLACK,
         if state.selected_node.is_some() {
@@ -327,23 +332,20 @@ where
         } else {
             chrome::ORANGE_RED
         },
-        20,
+        16,
         1,
         horizontal::Center,
         vertical::Center,
         target,
     )?;
-    target.fill_solid(
-        &Rectangle::new(Point::new(278, 368), Size::new(96, 50)),
-        chrome::BLACK,
-    )?;
+    target.fill_solid(&FOOTER_SYNC, chrome::BLACK)?;
     aligned_text(
         "SYNC  12:42",
-        &Rectangle::new(Point::new(278, 368), Size::new(96, 50)),
+        &FOOTER_SYNC_CONTENT,
         font,
         chrome::WHITE,
         chrome::BLACK,
-        20,
+        16,
         1,
         horizontal::Center,
         vertical::Center,

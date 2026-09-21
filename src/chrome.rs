@@ -313,6 +313,21 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
         // self.draw_underline(width as u32, position, target)?;
         Ok(rendered)
     }
+
+    fn layout_bounds(ctx: &FontdueRendererCtx, position: Point) -> Rectangle {
+        ctx.layout
+            .glyphs()
+            .iter()
+            .fold(Rectangle::zero(), |bounds, glyph| {
+                Self::union_rect(
+                    bounds,
+                    Rectangle::new(
+                        position + Point::new(glyph.x as i32, glyph.y as i32),
+                        Size::new(glyph.width as u32, glyph.height as u32),
+                    ),
+                )
+            })
+    }
     #[inline]
     pub fn render<D: DrawTarget<Color = C>>(
         &self,
@@ -517,16 +532,17 @@ impl<C: PixelColor + RgbColorExt> embedded_graphics::text::renderer::TextRendere
             self.fonts,
             &fontdue::layout::TextStyle::new(text, self.font_size as f32, self.font_index),
         );
-        let size = ctx
+        let bounding_box = Self::layout_bounds(&ctx, position);
+        let next_position = ctx
             .layout
             .glyphs()
             .last()
-            .map(|g| Size::new(g.x as u32 + g.width as u32, g.y as u32 + g.height as u32))
-            .unwrap_or(Size::zero());
+            .map(|g| position + Point::new(g.x as i32 + g.width as i32, 0))
+            .unwrap_or(position);
 
         TextMetrics {
-            bounding_box: Rectangle::new(position, size),
-            next_position: position + size,
+            bounding_box,
+            next_position,
         }
     }
 
