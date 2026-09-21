@@ -4,6 +4,11 @@ use embedded_graphics::{
     primitives::{Line, PrimitiveStyle, Rectangle},
     text::Text,
 };
+use embedded_layout::{
+    align::{Align, horizontal, vertical},
+    layout::linear::{LinearLayout, spacing::FixedMargin},
+    prelude::Views,
+};
 
 use crate::chrome::{self, Color, Dirty};
 
@@ -32,6 +37,7 @@ const FOOTER: Rectangle = Rectangle::new(Point::new(92, 368), Size::new(282, 50)
 pub fn render<D>(
     architecture: Architecture,
     state: State,
+    font: &chrome::FontdueRenderer<'static, Color>,
     target: &mut D,
 ) -> Result<Dirty, D::Error>
 where
@@ -42,22 +48,26 @@ where
     target.fill_solid(&bounds, chrome::BLACK)?;
 
     match architecture {
-        Architecture::Immediate => render_immediate(state, target)?,
-        Architecture::Retained => render_retained(state, target)?,
-        Architecture::Tiled => render_tiled(state, target)?,
+        Architecture::Immediate => render_immediate(state, font, target)?,
+        Architecture::Retained => render_retained(state, font, target)?,
+        Architecture::Tiled => render_tiled(state, font, target)?,
     }
 
     dirty.add(bounds);
     Ok(dirty)
 }
 
-fn render_immediate<D>(state: State, target: &mut D) -> Result<(), D::Error>
+fn render_immediate<D>(
+    state: State,
+    font: &chrome::FontdueRenderer<'static, Color>,
+    target: &mut D,
+) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = Color>,
 {
-    draw_header(state, target)?;
-    draw_map(state, target)?;
-    draw_footer(state, target)
+    draw_header(state, font, target)?;
+    draw_map(state, font, target)?;
+    draw_footer(state, font, target)
 }
 
 #[derive(Clone, Copy)]
@@ -67,7 +77,11 @@ enum Node {
     Footer,
 }
 
-fn render_retained<D>(state: State, target: &mut D) -> Result<(), D::Error>
+fn render_retained<D>(
+    state: State,
+    font: &chrome::FontdueRenderer<'static, Color>,
+    target: &mut D,
+) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = Color>,
 {
@@ -82,16 +96,20 @@ where
         };
         if !bounds.intersection(&target.bounding_box()).is_zero_sized() {
             match node {
-                Node::Header => draw_header(state, target)?,
-                Node::Map => draw_map(state, target)?,
-                Node::Footer => draw_footer(state, target)?,
+                Node::Header => draw_header(state, font, target)?,
+                Node::Map => draw_map(state, font, target)?,
+                Node::Footer => draw_footer(state, font, target)?,
             }
         }
     }
     Ok(())
 }
 
-fn render_tiled<D>(state: State, target: &mut D) -> Result<(), D::Error>
+fn render_tiled<D>(
+    state: State,
+    font: &chrome::FontdueRenderer<'static, Color>,
+    target: &mut D,
+) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = Color>,
 {
@@ -100,22 +118,44 @@ where
     for (bounds, draw) in [
         (
             HEADER,
-            draw_header as fn(State, &mut D) -> Result<(), D::Error>,
+            draw_header
+                as fn(
+                    State,
+                    &chrome::FontdueRenderer<'static, Color>,
+                    &mut D,
+                ) -> Result<(), D::Error>,
         ),
-        (MAP, draw_map as fn(State, &mut D) -> Result<(), D::Error>),
+        (
+            MAP,
+            draw_map
+                as fn(
+                    State,
+                    &chrome::FontdueRenderer<'static, Color>,
+                    &mut D,
+                ) -> Result<(), D::Error>,
+        ),
         (
             FOOTER,
-            draw_footer as fn(State, &mut D) -> Result<(), D::Error>,
+            draw_footer
+                as fn(
+                    State,
+                    &chrome::FontdueRenderer<'static, Color>,
+                    &mut D,
+                ) -> Result<(), D::Error>,
         ),
     ] {
         if !bounds.intersection(&target.bounding_box()).is_zero_sized() {
-            draw(state, target)?;
+            draw(state, font, target)?;
         }
     }
     Ok(())
 }
 
-fn draw_header<D>(state: State, target: &mut D) -> Result<(), D::Error>
+fn draw_header<D>(
+    state: State,
+    font: &chrome::FontdueRenderer<'static, Color>,
+    target: &mut D,
+) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = Color>,
 {
@@ -124,38 +164,54 @@ where
         &Rectangle::new(Point::new(92, 48), Size::new(14, 50)),
         chrome::LIME,
     )?;
-    text(
-        "FIELD MAP",
-        Point::new(114, 60),
-        chrome::WHITE,
-        &chrome::MARATHON_SHAPIRO65_20,
-        target,
-    )?;
-    text(
-        if state.selected_node.is_some() {
-            "TRACKING"
-        } else {
-            "STANDBY"
-        },
-        Point::new(114, 76),
-        if state.selected_node.is_some() {
-            chrome::LIME
-        } else {
-            chrome::GRAY
-        },
-        &chrome::FRAKTION_MONO20,
-        target,
-    )?;
-    text(
+    let mut labels = [
+        Text::new(
+            "FIELD MAP",
+            Point::zero(),
+            font_style(font, chrome::WHITE, chrome::PURPLE, 20),
+        ),
+        Text::new(
+            if state.selected_node.is_some() {
+                "TRACKING"
+            } else {
+                "STANDBY"
+            },
+            Point::zero(),
+            font_style(
+                font,
+                if state.selected_node.is_some() {
+                    chrome::LIME
+                } else {
+                    chrome::GRAY
+                },
+                chrome::PURPLE,
+                20,
+            ),
+        ),
+    ];
+    LinearLayout::vertical(Views::new(&mut labels))
+        .with_spacing(FixedMargin(1))
+        .arrange()
+        .align_to(&HEADER, horizontal::Left, vertical::Center)
+        .draw(target)?;
+    aligned_text(
         "01 / 04",
-        Point::new(286, 64),
+        &HEADER,
+        font,
         chrome::BLACK,
-        &chrome::FRAKTION_MONO20,
+        chrome::PURPLE,
+        20,
+        horizontal::Right,
+        vertical::Center,
         target,
     )
 }
 
-fn draw_map<D>(state: State, target: &mut D) -> Result<(), D::Error>
+fn draw_map<D>(
+    state: State,
+    font: &chrome::FontdueRenderer<'static, Color>,
+    target: &mut D,
+) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = Color>,
 {
@@ -196,35 +252,51 @@ where
             &Rectangle::new(Point::new(214, 294), Size::new(92, 34)),
             chrome::LIME,
         )?;
-        text(
+        aligned_text(
             match node {
                 1 => "NODE 01",
                 2 => "NODE 02",
                 _ => "NODE 03",
             },
-            Point::new(216, 310),
+            &Rectangle::new(Point::new(214, 294), Size::new(92, 34)),
+            font,
             chrome::BLACK,
-            &chrome::FRAKTION_MONO20,
+            chrome::LIME,
+            20,
+            horizontal::Center,
+            vertical::Center,
             target,
         )?;
     }
-    text(
+    aligned_text(
         "N 51.898",
-        Point::new(64, 134),
+        &Rectangle::new(Point::new(64, 124), Size::new(140, 30)),
+        font,
         chrome::GRAY,
-        &chrome::FRAKTION_MONO20,
+        chrome::BLACK,
+        20,
+        horizontal::Left,
+        vertical::Center,
         target,
     )?;
-    text(
+    aligned_text(
         "E  -8.475",
-        Point::new(64, 326),
+        &Rectangle::new(Point::new(64, 316), Size::new(140, 30)),
+        font,
         chrome::GRAY,
-        &chrome::FRAKTION_MONO20,
+        chrome::BLACK,
+        20,
+        horizontal::Left,
+        vertical::Center,
         target,
     )
 }
 
-fn draw_footer<D>(state: State, target: &mut D) -> Result<(), D::Error>
+fn draw_footer<D>(
+    state: State,
+    font: &chrome::FontdueRenderer<'static, Color>,
+    target: &mut D,
+) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = Color>,
 {
@@ -236,26 +308,38 @@ where
             chrome::ORANGE_RED
         },
     )?;
-    text(
+    aligned_text(
         if state.selected_node.is_some() {
             "PIN SELECTED"
         } else {
             "TAP A NODE"
         },
-        Point::new(104, 384),
+        &Rectangle::new(Point::new(92, 368), Size::new(178, 50)),
+        font,
         chrome::BLACK,
-        &chrome::FRAKTION_MONO20,
+        if state.selected_node.is_some() {
+            chrome::LIME
+        } else {
+            chrome::ORANGE_RED
+        },
+        20,
+        horizontal::Center,
+        vertical::Center,
         target,
     )?;
     target.fill_solid(
         &Rectangle::new(Point::new(278, 368), Size::new(96, 50)),
         chrome::BLACK,
     )?;
-    text(
+    aligned_text(
         "SYNC  12:42",
-        Point::new(274, 384),
+        &Rectangle::new(Point::new(278, 368), Size::new(96, 50)),
+        font,
         chrome::WHITE,
-        &chrome::FRAKTION_MONO20,
+        chrome::BLACK,
+        20,
+        horizontal::Center,
+        vertical::Center,
         target,
     )
 }
@@ -280,16 +364,42 @@ where
     )
 }
 
-fn text<D>(
+#[allow(clippy::too_many_arguments)]
+fn aligned_text<D, H, V>(
     value: &str,
-    position: Point,
+    region: &Rectangle,
+    font: &chrome::FontdueRenderer<'static, Color>,
     color: Color,
-    font: &u8g2_fonts::Font,
+    background: Color,
+    size: u32,
+    horizontal: H,
+    vertical: V,
     target: &mut D,
 ) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = Color>,
+    H: embedded_layout::align::HorizontalAlignment,
+    V: embedded_layout::align::VerticalAlignment,
 {
-    let style = u8g2_fonts::U8g2TextStyle::new(font.clone(), color);
-    Text::new(value, position, style).draw(target).map(|_| ())
+    Text::new(
+        value,
+        Point::zero(),
+        font_style(font, color, background, size),
+    )
+    .align_to(region, horizontal, vertical)
+    .draw(target)
+    .map(|_| ())
+}
+
+fn font_style(
+    font: &chrome::FontdueRenderer<'static, Color>,
+    color: Color,
+    background: Color,
+    size: u32,
+) -> chrome::FontdueRenderer<'static, Color> {
+    let mut style = font.clone();
+    style.text_color = color;
+    style.background_color = background;
+    style.font_size = size;
+    style
 }

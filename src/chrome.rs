@@ -19,9 +19,6 @@ pub type Color = embedded_graphics::pixelcolor::Rgb565;
 pub const DISPLAY_SIZE: Size = Size::new(board::LCD_WIDTH as u32, board::LCD_HEIGHT as u32);
 pub const DISPLAY_BBOX: Rectangle = Rectangle::new(Point::new_equal(0), DISPLAY_SIZE);
 
-pub const HEADING_FONT_FAST: &u8g2_fonts::Font = &MARATHON_SHAPIRO65_32;
-pub const MEDIUM_FONT_FAST: &u8g2_fonts::Font = &FRAKTION_MONO24;
-
 #[cfg(feature = "femtofont")]
 pub static MARATHON_SHAPIRO_FONT_BYTES: &[u8] =
     include_bytes!("../assets/MarathonShapiro-Wide65_subset.ttf");
@@ -106,21 +103,6 @@ pub const fn lerp_u8(a: u8, b: u8, factor: u8) -> u8 {
     // ((a as u16 * (u8::MAX - factor) as u16 + b as u16 * factor as u16) / u8::MAX as u16) as u8
     ((a as u16 * (u8::MAX - factor) as u16 + b as u16 * factor as u16 + u8::MAX as u16) >> 8) as u8
 }
-
-pub static MARATHON_SHAPIRO65_32: u8g2_fonts::Font =
-    u8g2_fonts::Font::new(include_bytes!("../assets/marathon_shapiro_32.u8g2"));
-pub static MARATHON_SHAPIRO65_20: u8g2_fonts::Font =
-    u8g2_fonts::Font::new(include_bytes!("../assets/marathon_shapiro_20.u8g2"));
-
-pub static FRAKTION_MONO28: u8g2_fonts::Font = u8g2_fonts::Font::new(include_bytes!(
-    "../assets/PPFraktion-Free for personal use v1.1/Mono/ppfraktionmono_regular_28.u8g2"
-));
-pub static FRAKTION_MONO24: u8g2_fonts::Font = u8g2_fonts::Font::new(include_bytes!(
-    "../assets/PPFraktion-Free for personal use v1.1/Mono/ppfraktionmono_regular_24.u8g2"
-));
-pub static FRAKTION_MONO20: u8g2_fonts::Font = u8g2_fonts::Font::new(include_bytes!(
-    "../assets/PPFraktion-Free for personal use v1.1/Mono/ppfraktionmono_regular_20.u8g2"
-));
 
 pub trait RgbColorExt {
     fn lerp(&self, other: &Self, factor: u8) -> Self;

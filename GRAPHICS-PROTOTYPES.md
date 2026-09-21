@@ -15,6 +15,11 @@ metadata. The three renderers intentionally share visual primitives so the
 comparison is about composition and invalidation rather than three different
 art directions.
 
+Text placement uses `embedded-layout`, including vertical header flow and
+alignment inside action regions. Prototype labels use the compile-time fontdue
+renderer; the separate femtofont implementation remains available for its
+earlier benchmark comparison.
+
 The first implementation is deliberately fixed-size and heap-free. It is a
 probe for screen composition, dirty-region behavior, and the cost of the
 architecture. It is not yet the application navigation model.

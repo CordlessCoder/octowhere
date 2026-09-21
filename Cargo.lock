@@ -642,6 +642,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "embedded-layout"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9a90553247f2b05c59ac7894ea13d830636c2b1203fa03bff400eddbd1fa9f52"
+dependencies = [
+ "embedded-graphics",
+ "embedded-layout-macros",
+]
+
+[[package]]
+name = "embedded-layout-macros"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4f6e621fe4c7e05b695274b722dc0a60bacd1c8696b58191baa0154713d52400"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "embedded-sdmmc"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1484,6 +1505,7 @@ dependencies = [
  "embedded-hal-async",
  "embedded-hal-bus",
  "embedded-io-async 0.7.0",
+ "embedded-layout",
  "embedded-sdmmc",
  "esp-alloc",
  "esp-backtrace",
@@ -1500,7 +1522,6 @@ dependencies = [
  "ph-qmi8658",
  "static_cell",
  "tca9554",
- "u8g2-fonts",
 ]
 
 [[package]]
@@ -2057,15 +2078,6 @@ name = "typenum"
 version = "1.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40ce102ab67701b8526c123c1bab5cbe42d7040ccfd0f64af1a385808d2f43de"
-
-[[package]]
-name = "u8g2-fonts"
-version = "0.7.2"
-source = "git+https://github.com/iriswebb/u8g2-fonts#232c7198339fdf40e2afa33a38e0c2a3053b4fca"
-dependencies = [
- "embedded-graphics",
- "embedded-graphics-core",
-]
 
 [[package]]
 name = "ufmt-write"

@@ -30,7 +30,7 @@ use esp_hal::{
 use esp_println::println;
 use octowhere::{
     board,
-    chrome::{self, Color, Dirty, FB},
+    chrome::{self, Color, Dirty, FB, FontdueRenderer, FontdueRendererCtx},
     drivers::{co5300::Co5300Display, framebuffer::Framebuffer, qspi_bus::QspiBus},
     peripherals::{
         rtc::Pcf85063aRtc,
@@ -242,6 +242,7 @@ fn bench_repeat<R>(mut the_thing: impl FnMut() -> R, name: &str) -> (R, Duration
 struct DrawCtx {
     touch_data: TouchData,
     selected_node: Option<u8>,
+    font_renderer: FontdueRenderer<'static, Color>,
 }
 
 #[derive(Debug, Default)]
@@ -298,6 +299,7 @@ where
         octowhere::ui::prototypes::State {
             selected_node: ctx.selected_node,
         },
+        &ctx.font_renderer,
         target,
     )
     .expect("prototype renderer failed")
@@ -507,9 +509,21 @@ async fn main(_spawner: Spawner) {
         },
     );
 
+    let fonts = Box::leak(Box::new([
+        &chrome::MarathonShapiroFont as &dyn fontdue::FontRepr,
+        &chrome::FraktionMonoRegularFont as &dyn fontdue::FontRepr,
+    ]));
+    let font_renderer = FontdueRenderer::new(
+        FontdueRendererCtx::new_rc(),
+        20,
+        chrome::WHITE,
+        chrome::BLACK,
+        fonts,
+    );
     let mut draw_ctx = DrawCtx {
         touch_data: TouchData::default(),
         selected_node: None,
+        font_renderer,
     };
     println!(
         "[MEM] internal_used={} psram_used={}",
