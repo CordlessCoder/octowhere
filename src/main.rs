@@ -38,6 +38,7 @@ use octowhere::{
     },
     ui::{
         dirty::DirtyAreas,
+        imu::{accel_micro_ms2, gyro_micro_rad_s},
         input::{Button, ButtonEvent},
         prototypes::{self, Screen},
     },
@@ -368,6 +369,8 @@ async fn main(_spawner: Spawner) {
 
     let gyro_range = ph_qmi8658::GyroRange::Dps512;
     let accel_range = ph_qmi8658::AccelRange::G2;
+    let accel_lsb_per_g = ph_qmi8658::accel_lsb_per_g(accel_range);
+    let gyro_lsb_per_dps = ph_qmi8658::gyro_lsb_per_dps(gyro_range);
 
     let mut exio = Tca9554::new(i2c.clone(), tca9554::Address::standard());
 
@@ -402,7 +405,8 @@ async fn main(_spawner: Spawner) {
         None::<core::convert::Infallible>,
         Some(imu_int2),
         config,
-        ph_qmi8658::I2cConfig::new(0x6B),
+        // The QMI8658 I2C output registers are low-byte first.
+        ph_qmi8658::I2cConfig::new(0x6B).with_big_endian(false),
     );
     imu.init(&mut embassy_time::Delay).await.unwrap();
     // imu.apply_interrupt_config(ph_qmi8658::InterruptConfig {
@@ -422,6 +426,7 @@ async fn main(_spawner: Spawner) {
     )
     .await
     .unwrap();
+    imu.set_sync_sample(true).await.unwrap();
 
     println!("[IMU] INIT");
 
@@ -603,12 +608,20 @@ async fn main(_spawner: Spawner) {
                 } else {
                     draw_ctx.peripherals.clock.valid = false;
                 }
-                if let Ok(sample) = imu.read_raw_block().await {
+                if let Ok(sample) = imu.read_sync_sample(&mut embassy_time::Delay).await {
                     if let Some(accel) = sample.accel {
-                        draw_ctx.peripherals.accel = [accel.x, accel.y, accel.z];
+                        draw_ctx.peripherals.accel_micro_ms2 = [
+                            accel_micro_ms2(accel.x, accel_lsb_per_g),
+                            accel_micro_ms2(accel.y, accel_lsb_per_g),
+                            accel_micro_ms2(accel.z, accel_lsb_per_g),
+                        ];
                     }
                     if let Some(gyro) = sample.gyro {
-                        draw_ctx.peripherals.gyro = [gyro.x, gyro.y, gyro.z];
+                        draw_ctx.peripherals.gyro_micro_rad_s = [
+                            gyro_micro_rad_s(gyro.x, gyro_lsb_per_dps),
+                            gyro_micro_rad_s(gyro.y, gyro_lsb_per_dps),
+                            gyro_micro_rad_s(gyro.z, gyro_lsb_per_dps),
+                        ];
                     }
                     draw_ctx.peripherals.imu_valid =
                         sample.accel.is_some() || sample.gyro.is_some();

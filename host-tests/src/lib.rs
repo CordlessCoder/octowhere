@@ -30,6 +30,8 @@ pub mod dirty;
 pub mod geometry;
 #[path = "../../src/ui/input.rs"]
 pub mod input;
+#[path = "../../src/ui/imu.rs"]
+pub mod imu;
 
 #[cfg(test)]
 mod tests {

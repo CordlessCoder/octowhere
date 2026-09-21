@@ -78,8 +78,8 @@ pub struct ClockState {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct PeripheralState {
-    pub accel: [i16; 3],
-    pub gyro: [i16; 3],
+    pub accel_micro_ms2: [i32; 3],
+    pub gyro_micro_rad_s: [i32; 3],
     pub imu_valid: bool,
     pub clock: ClockState,
     pub touch_points: u8,
@@ -398,7 +398,7 @@ where
         panel.into_styled(frame).draw(target)?;
     }
     aligned_text(
-        "ACCEL",
+        "ACCEL / M/S2",
         &Rectangle::new(Point::new(76, 148), Size::new(138, 28)),
         font,
         chrome::LIME,
@@ -410,7 +410,7 @@ where
         target,
     )?;
     aligned_text(
-        "GYRO",
+        "GYRO / RAD/S",
         &Rectangle::new(Point::new(252, 148), Size::new(138, 28)),
         font,
         chrome::ORANGE_RED,
@@ -422,14 +422,14 @@ where
         target,
     )?;
     draw_axis_values(
-        state.peripherals.accel,
+        state.peripherals.accel_micro_ms2,
         Point::new(76, 180),
         chrome::WHITE,
         font,
         target,
     )?;
     draw_axis_values(
-        state.peripherals.gyro,
+        state.peripherals.gyro_micro_rad_s,
         Point::new(252, 180),
         chrome::WHITE,
         font,
@@ -437,7 +437,7 @@ where
     )?;
     aligned_text(
         if state.peripherals.imu_valid {
-            "LIVE / RAW"
+            "LIVE / SI"
         } else {
             "WAITING"
         },
@@ -454,7 +454,7 @@ where
 }
 
 fn draw_axis_values<D>(
-    values: [i16; 3],
+    values: [i32; 3],
     origin: Point,
     color: Color,
     font: &chrome::FontdueRenderer<'static, Color>,
@@ -465,7 +465,8 @@ where
 {
     for (index, (axis, value)) in ["X", "Y", "Z"].into_iter().zip(values).enumerate() {
         let mut text = heapless::String::<16>::new();
-        _ = write!(text, "{axis} {value:>6}");
+        let value = format_fixed3(value);
+        _ = write!(text, "{axis} {value}");
         aligned_text(
             text.as_str(),
             &Rectangle::new(
@@ -483,6 +484,19 @@ where
         )?;
     }
     Ok(())
+}
+
+fn format_fixed3(value: i32) -> heapless::String<16> {
+    let mut text = heapless::String::new();
+    let sign = if value < 0 { '-' } else { '+' };
+    let value = value.unsigned_abs();
+    _ = write!(
+        text,
+        "{sign}{}.{:03}",
+        value / 1_000_000,
+        value % 1_000_000 / 1_000
+    );
+    text
 }
 
 fn draw_clock<D>(
