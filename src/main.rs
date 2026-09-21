@@ -576,13 +576,21 @@ async fn main(_spawner: Spawner) {
             };
             draw_ctx.peripherals.touch_points = touch_points;
             draw_ctx.peripherals.touch_position = touch_position;
-            let header_active = match &draw_ctx.touch_data {
-                TouchData::Points(points) => points.iter().any(|point| {
-                    (108..=366).contains(&(point.x as i32)) && (48..=98).contains(&(point.y as i32))
-                }),
-                TouchData::CoverGesture => false,
+            let (touch_active, header_hit) = match &draw_ctx.touch_data {
+                TouchData::Points(points) => (
+                    !points.is_empty(),
+                    points.iter().any(|point| {
+                        (108..=366).contains(&(point.x as i32))
+                            && (48..=98).contains(&(point.y as i32))
+                    }),
+                ),
+                TouchData::CoverGesture => (false, false),
             };
-            if draw_ctx.header_button.update(header_active) == ButtonEvent::Pressed {
+            if draw_ctx
+                .header_button
+                .update_touch(touch_active, header_hit)
+                == ButtonEvent::Pressed
+            {
                 draw_ctx.screen = draw_ctx.screen.next();
                 draw_ctx.selected_node = None;
                 needs_full_redraw.make_full();
