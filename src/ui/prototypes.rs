@@ -168,7 +168,7 @@ where
         Text::new(
             "FIELD MAP",
             Point::zero(),
-            font_style(font, chrome::WHITE, chrome::PURPLE, 20),
+            font_style(font, chrome::WHITE, chrome::PURPLE, 20, 0),
         ),
         Text::new(
             if state.selected_node.is_some() {
@@ -186,6 +186,7 @@ where
                 },
                 chrome::PURPLE,
                 20,
+                1,
             ),
         ),
     ];
@@ -201,6 +202,7 @@ where
         chrome::BLACK,
         chrome::PURPLE,
         20,
+        1,
         horizontal::Right,
         vertical::Center,
         target,
@@ -263,6 +265,7 @@ where
             chrome::BLACK,
             chrome::LIME,
             20,
+            1,
             horizontal::Center,
             vertical::Center,
             target,
@@ -275,6 +278,7 @@ where
         chrome::GRAY,
         chrome::BLACK,
         20,
+        1,
         horizontal::Left,
         vertical::Center,
         target,
@@ -286,6 +290,7 @@ where
         chrome::GRAY,
         chrome::BLACK,
         20,
+        1,
         horizontal::Left,
         vertical::Center,
         target,
@@ -323,6 +328,7 @@ where
             chrome::ORANGE_RED
         },
         20,
+        1,
         horizontal::Center,
         vertical::Center,
         target,
@@ -338,6 +344,7 @@ where
         chrome::WHITE,
         chrome::BLACK,
         20,
+        1,
         horizontal::Center,
         vertical::Center,
         target,
@@ -372,6 +379,7 @@ fn aligned_text<D, H, V>(
     color: Color,
     background: Color,
     size: u32,
+    font_index: usize,
     horizontal: H,
     vertical: V,
     target: &mut D,
@@ -384,7 +392,7 @@ where
     Text::new(
         value,
         Point::zero(),
-        font_style(font, color, background, size),
+        font_style(font, color, background, size, font_index),
     )
     .align_to(region, horizontal, vertical)
     .draw(target)
@@ -396,10 +404,12 @@ fn font_style(
     color: Color,
     background: Color,
     size: u32,
+    font_index: usize,
 ) -> chrome::FontdueRenderer<'static, Color> {
     let mut style = font.clone();
     style.text_color = color;
     style.background_color = background;
     style.font_size = size;
+    style.font_index = font_index;
     style
 }

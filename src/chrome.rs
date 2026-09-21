@@ -189,6 +189,7 @@ pub struct FontdueRenderer<'f, C> {
     // /// Strikethrough color.
     // pub strikethrough_color: DecorationColor<C>,
     pub font_size: u32,
+    pub font_index: usize,
     pub ctx: Rc<RefCell<FontdueRendererCtx>>,
     pub fonts: &'f [&'f dyn FontRepr],
 }
@@ -206,6 +207,7 @@ impl<'f, C: PixelColor> FontdueRenderer<'f, C> {
             background_color,
             ctx,
             font_size,
+            font_index: 0,
             fonts,
         }
     }
@@ -485,7 +487,7 @@ impl<C: PixelColor + RgbColorExt> embedded_graphics::text::renderer::TextRendere
             |layout, fonts| {
                 layout.append(
                     fonts,
-                    &fontdue::layout::TextStyle::new(text, self.font_size as f32, 0),
+                    &fontdue::layout::TextStyle::new(text, self.font_size as f32, self.font_index),
                 );
             },
             position,
@@ -513,7 +515,7 @@ impl<C: PixelColor + RgbColorExt> embedded_graphics::text::renderer::TextRendere
         ctx.reset_layout();
         ctx.layout.append(
             self.fonts,
-            &fontdue::layout::TextStyle::new(text, self.font_size as f32, 0),
+            &fontdue::layout::TextStyle::new(text, self.font_size as f32, self.font_index),
         );
         let size = ctx
             .layout
