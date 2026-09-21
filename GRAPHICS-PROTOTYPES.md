@@ -31,6 +31,12 @@ panel naturally hides anything outside its aperture.
 Touching a map marker selects it. The selection persists after release and
 updates the marker, node callout, header status, and primary action.
 
+The immediate prototype now has four live screens. Tap the header to cycle
+between the field map, raw IMU motion, RTC time, and touch diagnostics. RTC and
+IMU values refresh every 250 ms. The touch screen shows the active point and
+count. Values are left as raw sensor counts until the production units and
+calibration policy are settled.
+
 Timing statistics are no longer part of the display composition. Enable the
 `timing-log` Cargo feature to emit draw, vsync, flush, and swap timings through
 defmt.

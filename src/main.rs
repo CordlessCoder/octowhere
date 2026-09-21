@@ -36,7 +36,10 @@ use octowhere::{
         rtc::Pcf85063aRtc,
         touch::{Cst9217, Cst9217Config, TouchData},
     },
-    ui::dirty::DirtyAreas,
+    ui::{
+        dirty::DirtyAreas,
+        prototypes::{self, Screen},
+    },
     util::{Swap, SwapThread},
 };
 use static_cell::StaticCell;
@@ -242,6 +245,9 @@ fn bench_repeat<R>(mut the_thing: impl FnMut() -> R, name: &str) -> (R, Duration
 struct DrawCtx {
     touch_data: TouchData,
     selected_node: Option<u8>,
+    screen: Screen,
+    touch_active: bool,
+    peripherals: prototypes::PeripheralState,
     font_renderer: FontdueRenderer<'static, Color>,
 }
 
@@ -297,7 +303,9 @@ where
     octowhere::ui::prototypes::render(
         octowhere::ui::prototypes::ACTIVE_ARCHITECTURE,
         octowhere::ui::prototypes::State {
+            screen: ctx.screen,
             selected_node: ctx.selected_node,
+            peripherals: ctx.peripherals,
         },
         &ctx.font_renderer,
         target,
@@ -523,6 +531,9 @@ async fn main(_spawner: Spawner) {
     let mut draw_ctx = DrawCtx {
         touch_data: TouchData::default(),
         selected_node: None,
+        screen: Screen::Map,
+        touch_active: false,
+        peripherals: prototypes::PeripheralState::default(),
         font_renderer,
     };
     println!(
@@ -531,6 +542,7 @@ async fn main(_spawner: Spawner) {
         PSRAM_HEAP.used(),
     );
     let mut prev_swap_draw = Duration::MIN;
+    let mut last_sensor_sample = Instant::now();
     loop {
         let start = Instant::now();
         {
@@ -547,12 +559,64 @@ async fn main(_spawner: Spawner) {
             } = state;
             let fb = &mut **fb;
             draw_ctx.touch_data = touch.read_touch_data().await.unwrap();
+            let (touch_points, touch_position) = match &draw_ctx.touch_data {
+                TouchData::Points(points) => (
+                    points.len() as u8,
+                    points
+                        .first()
+                        .map(|point| Point::new(point.x as i32, point.y as i32)),
+                ),
+                TouchData::CoverGesture => (0, None),
+            };
+            let touch_active = touch_points != 0;
+            draw_ctx.peripherals.touch_points = touch_points;
+            draw_ctx.peripherals.touch_position = touch_position;
+            if touch_active
+                && !draw_ctx.touch_active
+                && let Some(point) = touch_position
+                && (108..=366).contains(&point.x)
+                && (48..=98).contains(&point.y)
+            {
+                draw_ctx.screen = draw_ctx.screen.next();
+                draw_ctx.selected_node = None;
+                needs_full_redraw.make_full();
+            }
+            draw_ctx.touch_active = touch_active;
             let previous_selected_node = draw_ctx.selected_node;
             if let Some(node) = selected_node(&draw_ctx.touch_data) {
                 draw_ctx.selected_node = Some(node);
             }
             if draw_ctx.selected_node != previous_selected_node {
                 needs_full_redraw.make_full();
+            }
+            if last_sensor_sample.elapsed() >= Duration::from_millis(250) {
+                if let Ok(time) = rtc.get_time().await {
+                    draw_ctx.peripherals.clock = prototypes::ClockState {
+                        hours: time.hours,
+                        minutes: time.minutes,
+                        seconds: time.seconds,
+                        day: time.day,
+                        month: time.month,
+                        year: time.year,
+                        valid: true,
+                    };
+                } else {
+                    draw_ctx.peripherals.clock.valid = false;
+                }
+                if let Ok(sample) = imu.read_raw_block().await {
+                    if let Some(accel) = sample.accel {
+                        draw_ctx.peripherals.accel = [accel.x, accel.y, accel.z];
+                    }
+                    if let Some(gyro) = sample.gyro {
+                        draw_ctx.peripherals.gyro = [gyro.x, gyro.y, gyro.z];
+                    }
+                    draw_ctx.peripherals.imu_valid =
+                        sample.accel.is_some() || sample.gyro.is_some();
+                } else {
+                    draw_ctx.peripherals.imu_valid = false;
+                }
+                needs_full_redraw.make_full();
+                last_sensor_sample = Instant::now();
             }
             dirty.clear();
 

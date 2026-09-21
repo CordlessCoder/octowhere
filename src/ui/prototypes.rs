@@ -1,7 +1,9 @@
+use core::fmt::Write as _;
+
 use embedded_graphics::{
     draw_target::DrawTarget,
     prelude::{Drawable, Point, Primitive, Size},
-    primitives::{Line, PrimitiveStyle, Rectangle},
+    primitives::{Circle, Line, PrimitiveStyle, Rectangle},
     text::Text,
 };
 use embedded_layout::{
@@ -23,11 +25,74 @@ pub enum Architecture {
     Tiled,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Screen {
+    Map,
+    Motion,
+    Clock,
+    Touch,
+}
+
+impl Screen {
+    #[must_use]
+    pub const fn next(self) -> Self {
+        match self {
+            Self::Map => Self::Motion,
+            Self::Motion => Self::Clock,
+            Self::Clock => Self::Touch,
+            Self::Touch => Self::Map,
+        }
+    }
+
+    #[must_use]
+    const fn title(self) -> &'static str {
+        match self {
+            Self::Map => "FIELD MAP",
+            Self::Motion => "MOTION",
+            Self::Clock => "CLOCK",
+            Self::Touch => "TOUCH",
+        }
+    }
+
+    #[must_use]
+    const fn page(self) -> &'static str {
+        match self {
+            Self::Map => "01 / 04",
+            Self::Motion => "02 / 04",
+            Self::Clock => "03 / 04",
+            Self::Touch => "04 / 04",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ClockState {
+    pub hours: u8,
+    pub minutes: u8,
+    pub seconds: u8,
+    pub day: u8,
+    pub month: u8,
+    pub year: u8,
+    pub valid: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct PeripheralState {
+    pub accel: [i16; 3],
+    pub gyro: [i16; 3],
+    pub imu_valid: bool,
+    pub clock: ClockState,
+    pub touch_points: u8,
+    pub touch_position: Option<Point>,
+}
+
 pub const ACTIVE_ARCHITECTURE: Architecture = Architecture::Immediate;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct State {
+    pub screen: Screen,
     pub selected_node: Option<u8>,
+    pub peripherals: PeripheralState,
 }
 
 const HEADER: Rectangle = Rectangle::new(Point::new(92, 48), Size::new(282, 50));
@@ -71,7 +136,7 @@ where
     D: DrawTarget<Color = Color>,
 {
     draw_header(state, font, target)?;
-    draw_map(state, font, target)?;
+    draw_screen(state, font, target)?;
     draw_footer(state, font, target)
 }
 
@@ -102,7 +167,7 @@ where
         if !bounds.intersection(&target.bounding_box()).is_zero_sized() {
             match node {
                 Node::Header => draw_header(state, font, target)?,
-                Node::Map => draw_map(state, font, target)?,
+                Node::Map => draw_screen(state, font, target)?,
                 Node::Footer => draw_footer(state, font, target)?,
             }
         }
@@ -132,7 +197,7 @@ where
         ),
         (
             MAP,
-            draw_map
+            draw_screen
                 as fn(
                     State,
                     &chrome::FontdueRenderer<'static, Color>,
@@ -171,7 +236,7 @@ where
     )?;
     let mut labels = [
         Text::new(
-            "FIELD MAP",
+            state.screen.title(),
             Point::zero(),
             font_style(font, chrome::WHITE, chrome::PURPLE, 20, 0),
         ),
@@ -201,7 +266,7 @@ where
         .align_to(&HEADER_CONTENT, horizontal::Left, vertical::Center)
         .draw(target)?;
     aligned_text(
-        "01 / 04",
+        state.screen.page(),
         &HEADER_CONTENT,
         font,
         chrome::BLACK,
@@ -212,6 +277,22 @@ where
         vertical::Center,
         target,
     )
+}
+
+fn draw_screen<D>(
+    state: State,
+    font: &chrome::FontdueRenderer<'static, Color>,
+    target: &mut D,
+) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Color>,
+{
+    match state.screen {
+        Screen::Map => draw_map(state, font, target),
+        Screen::Motion => draw_motion(state, font, target),
+        Screen::Clock => draw_clock(state, font, target),
+        Screen::Touch => draw_touch(state, font, target),
+    }
 }
 
 fn draw_map<D>(
@@ -302,6 +383,237 @@ where
     )
 }
 
+fn draw_motion<D>(
+    state: State,
+    font: &chrome::FontdueRenderer<'static, Color>,
+    target: &mut D,
+) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Color>,
+{
+    let frame = PrimitiveStyle::with_stroke(chrome::GRAY, 2);
+    let accel = Rectangle::new(Point::new(64, 136), Size::new(162, 178));
+    let gyro = Rectangle::new(Point::new(240, 136), Size::new(162, 178));
+    for panel in [accel, gyro] {
+        panel.into_styled(frame).draw(target)?;
+    }
+    aligned_text(
+        "ACCEL",
+        &Rectangle::new(Point::new(76, 148), Size::new(138, 28)),
+        font,
+        chrome::LIME,
+        chrome::BLACK,
+        16,
+        1,
+        horizontal::Left,
+        vertical::Center,
+        target,
+    )?;
+    aligned_text(
+        "GYRO",
+        &Rectangle::new(Point::new(252, 148), Size::new(138, 28)),
+        font,
+        chrome::ORANGE_RED,
+        chrome::BLACK,
+        16,
+        1,
+        horizontal::Left,
+        vertical::Center,
+        target,
+    )?;
+    draw_axis_values(
+        state.peripherals.accel,
+        Point::new(76, 180),
+        chrome::WHITE,
+        font,
+        target,
+    )?;
+    draw_axis_values(
+        state.peripherals.gyro,
+        Point::new(252, 180),
+        chrome::WHITE,
+        font,
+        target,
+    )?;
+    aligned_text(
+        if state.peripherals.imu_valid {
+            "LIVE / RAW"
+        } else {
+            "WAITING"
+        },
+        &Rectangle::new(Point::new(76, 274), Size::new(314, 26)),
+        font,
+        chrome::GRAY,
+        chrome::BLACK,
+        16,
+        1,
+        horizontal::Left,
+        vertical::Center,
+        target,
+    )
+}
+
+fn draw_axis_values<D>(
+    values: [i16; 3],
+    origin: Point,
+    color: Color,
+    font: &chrome::FontdueRenderer<'static, Color>,
+    target: &mut D,
+) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Color>,
+{
+    for (index, (axis, value)) in ["X", "Y", "Z"].into_iter().zip(values).enumerate() {
+        let mut text = heapless::String::<16>::new();
+        _ = write!(text, "{axis} {value:>6}");
+        aligned_text(
+            text.as_str(),
+            &Rectangle::new(
+                origin + Point::new(0, index as i32 * 28),
+                Size::new(138, 26),
+            ),
+            font,
+            color,
+            chrome::BLACK,
+            16,
+            1,
+            horizontal::Left,
+            vertical::Center,
+            target,
+        )?;
+    }
+    Ok(())
+}
+
+fn draw_clock<D>(
+    state: State,
+    font: &chrome::FontdueRenderer<'static, Color>,
+    target: &mut D,
+) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Color>,
+{
+    let frame = PrimitiveStyle::with_stroke(chrome::GRAY, 2);
+    let panel = Rectangle::new(Point::new(64, 136), Size::new(338, 178));
+    panel.into_styled(frame).draw(target)?;
+    let clock = state.peripherals.clock;
+    let mut time = heapless::String::<16>::new();
+    let mut date = heapless::String::<24>::new();
+    if clock.valid {
+        _ = write!(
+            time,
+            "{:02}:{:02}:{:02}",
+            clock.hours, clock.minutes, clock.seconds
+        );
+        _ = write!(
+            date,
+            "20{:02}-{:02}-{:02}",
+            clock.year, clock.month, clock.day
+        );
+    } else {
+        time.push_str("--:--:--").unwrap();
+        date.push_str("RTC UNAVAILABLE").unwrap();
+    }
+    aligned_text(
+        time.as_str(),
+        &Rectangle::new(Point::new(76, 158), Size::new(314, 62)),
+        font,
+        chrome::WHITE,
+        chrome::BLACK,
+        28,
+        1,
+        horizontal::Center,
+        vertical::Center,
+        target,
+    )?;
+    aligned_text(
+        date.as_str(),
+        &Rectangle::new(Point::new(76, 232), Size::new(314, 34)),
+        font,
+        chrome::LIME,
+        chrome::BLACK,
+        16,
+        1,
+        horizontal::Center,
+        vertical::Center,
+        target,
+    )?;
+    aligned_text(
+        if clock.valid {
+            "RTC / LIVE"
+        } else {
+            "RTC / ERROR"
+        },
+        &Rectangle::new(Point::new(76, 278), Size::new(314, 24)),
+        font,
+        if clock.valid {
+            chrome::GRAY
+        } else {
+            chrome::ORANGE_RED
+        },
+        chrome::BLACK,
+        16,
+        1,
+        horizontal::Center,
+        vertical::Center,
+        target,
+    )
+}
+
+fn draw_touch<D>(
+    state: State,
+    font: &chrome::FontdueRenderer<'static, Color>,
+    target: &mut D,
+) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Color>,
+{
+    let frame = PrimitiveStyle::with_stroke(chrome::GRAY, 2);
+    let panel = Rectangle::new(Point::new(64, 136), Size::new(338, 178));
+    panel.into_styled(frame).draw(target)?;
+    if let Some(position) = state.peripherals.touch_position {
+        Circle::new(position - Point::new(14, 14), 28)
+            .into_styled(PrimitiveStyle::with_stroke(chrome::LIME, 2))
+            .draw(target)?;
+        target.fill_solid(
+            &Rectangle::new(position - Point::new(3, 3), Size::new(6, 6)),
+            chrome::WHITE,
+        )?;
+    }
+    let mut points = heapless::String::<16>::new();
+    let mut position = heapless::String::<24>::new();
+    _ = write!(points, "POINTS  {:02}", state.peripherals.touch_points);
+    if let Some(point) = state.peripherals.touch_position {
+        _ = write!(position, "X {:03}   Y {:03}", point.x, point.y);
+    } else {
+        position.push_str("NO ACTIVE TOUCH").unwrap();
+    }
+    aligned_text(
+        points.as_str(),
+        &Rectangle::new(Point::new(76, 152), Size::new(314, 28)),
+        font,
+        chrome::WHITE,
+        chrome::BLACK,
+        16,
+        1,
+        horizontal::Left,
+        vertical::Center,
+        target,
+    )?;
+    aligned_text(
+        position.as_str(),
+        &Rectangle::new(Point::new(76, 274), Size::new(314, 26)),
+        font,
+        chrome::LIME,
+        chrome::BLACK,
+        16,
+        1,
+        horizontal::Center,
+        vertical::Center,
+        target,
+    )
+}
+
 fn draw_footer<D>(
     state: State,
     font: &chrome::FontdueRenderer<'static, Color>,
@@ -319,10 +631,10 @@ where
         },
     )?;
     aligned_text(
-        if state.selected_node.is_some() {
-            "PIN SELECTED"
-        } else {
-            "TAP A NODE"
+        match state.screen {
+            Screen::Map if state.selected_node.is_some() => "PIN SELECTED",
+            Screen::Map => "TAP A NODE",
+            _ => "TAP HEADER",
         },
         &FOOTER_PIN_CONTENT,
         font,
@@ -339,8 +651,18 @@ where
         target,
     )?;
     target.fill_solid(&FOOTER_SYNC, chrome::BLACK)?;
+    let mut sync = heapless::String::<16>::new();
+    if state.peripherals.clock.valid {
+        _ = write!(
+            sync,
+            "SYNC {:02}:{:02}",
+            state.peripherals.clock.hours, state.peripherals.clock.minutes
+        );
+    } else {
+        sync.push_str("SYNC --:--").unwrap();
+    }
     aligned_text(
-        "SYNC  12:42",
+        sync.as_str(),
         &FOOTER_SYNC_CONTENT,
         font,
         chrome::WHITE,
