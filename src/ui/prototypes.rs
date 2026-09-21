@@ -96,6 +96,7 @@ pub struct PeripheralState {
     pub clock: ClockState,
     pub touch_points: u8,
     pub touch_position: Option<Point>,
+    pub touch_positions: [Option<Point>; 2],
     pub pmic_valid: bool,
     pub tca_valid: bool,
     pub gnss_valid: bool,
@@ -611,7 +612,7 @@ where
     let frame = PrimitiveStyle::with_stroke(chrome::GRAY, 2);
     let panel = Rectangle::new(Point::new(64, 136), Size::new(338, 178));
     panel.into_styled(frame).draw(target)?;
-    if let Some(position) = state.peripherals.touch_position {
+    for position in state.peripherals.touch_positions.into_iter().flatten() {
         Circle::new(position - Point::new(14, 14), 28)
             .into_styled(PrimitiveStyle::with_stroke(chrome::LIME, 2))
             .draw(target)?;

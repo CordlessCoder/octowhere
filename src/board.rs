@@ -25,6 +25,7 @@ pub const LCD_TE: u8 = 13;
 pub const I2C_SDA: u8 = 15;
 pub const I2C_SCL: u8 = 14;
 pub const I2C_FREQ_HZ: u32 = 400_000;
+pub const I2C_POWER_SETTLE_MS: u64 = 80;
 
 // TOUCH
 pub const TP_INT: u8 = 11;

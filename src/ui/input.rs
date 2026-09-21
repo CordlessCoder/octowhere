@@ -73,13 +73,30 @@ pub struct TouchState {
     candidate_points: u8,
     point_samples: u8,
     position: Option<Point>,
+    positions: [Option<Point>; 2],
 }
 
 impl TouchState {
     const DEBOUNCE_SAMPLES: u8 = 3;
 
     pub fn update(&mut self, points: u8, position: Option<Point>) -> (u8, Option<Point>) {
-        let raw_active = position.is_some();
+        let mut positions = [None; 2];
+        positions[0] = position;
+        let (points, positions) = self.update_positions_with_count(points, positions);
+        (points, positions[0])
+    }
+
+    pub fn update_positions(&mut self, positions: [Option<Point>; 2]) -> (u8, [Option<Point>; 2]) {
+        let points = positions.iter().flatten().count() as u8;
+        self.update_positions_with_count(points, positions)
+    }
+
+    fn update_positions_with_count(
+        &mut self,
+        points: u8,
+        positions: [Option<Point>; 2],
+    ) -> (u8, [Option<Point>; 2]) {
+        let raw_active = points != 0;
         if raw_active == self.active {
             self.active_samples = 0;
         } else {
@@ -94,18 +111,24 @@ impl TouchState {
                 if !self.active {
                     self.points = 0;
                     self.position = None;
+                    self.positions = [None; 2];
                 } else {
                     self.points = points;
                     self.candidate_points = points;
-                    self.position = position;
+                    self.position = positions[0];
+                    self.positions = positions;
                 }
             }
         }
 
         if self.active {
-            self.position = position.or(self.position);
+            self.position = positions[0].or(self.position);
             if points == self.points {
                 self.point_samples = 0;
+                if points != 0 {
+                    self.positions = positions;
+                    self.position = positions[0].or(self.position);
+                }
             } else {
                 if self.candidate_points != points {
                     self.candidate_points = points;
@@ -115,11 +138,13 @@ impl TouchState {
                 if self.point_samples >= Self::DEBOUNCE_SAMPLES {
                     self.points = points;
                     self.point_samples = 0;
+                    self.positions = positions;
+                    self.position = positions[0].or(self.position);
                 }
             }
         }
 
-        (self.points, self.position)
+        (self.points, self.positions)
     }
 }
 
@@ -198,6 +223,16 @@ mod tests {
         assert_eq!(state.update(2, point), (1, point));
         assert_eq!(state.update(2, point), (1, point));
         assert_eq!(state.update(2, point), (2, point));
+    }
+
+    #[test]
+    fn touch_state_tracks_two_positions() {
+        let mut state = TouchState::default();
+        let positions = [Some(Point::new(10, 20)), Some(Point::new(30, 40))];
+        assert_eq!(state.update_positions(positions), (0, [None, None]));
+        assert_eq!(state.update_positions(positions), (0, [None, None]));
+        assert_eq!(state.update_positions(positions), (2, positions));
+        assert_eq!(state.update_positions(positions), (2, positions));
     }
 }
 use embedded_graphics_core::geometry::Point;

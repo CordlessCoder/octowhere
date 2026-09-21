@@ -13,8 +13,12 @@ extern crate alloc;
 use alloc::{alloc::Allocator, boxed::Box};
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_executor::Spawner;
-use embassy_futures::select::{Either, select};
-use embassy_sync::{blocking_mutex::raw::NoopRawMutex, mutex::Mutex};
+use embassy_futures::select::{Either, Either3, select, select3};
+use embassy_sync::{
+    blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex},
+    mutex::Mutex,
+    signal::Signal,
+};
 use embassy_time::{Duration, Instant, Timer};
 use embedded_graphics::prelude::*;
 use esp_hal::{
@@ -70,7 +74,42 @@ struct SecondCore<A: Allocator + 'static = alloc::alloc::Global> {
 static mut CORE1_STACK: esp_hal::system::Stack<8192> = esp_hal::system::Stack::new();
 static CORE1_EXECUTOR: StaticCell<esp_rtos::embassy::Executor> = StaticCell::new();
 static SWAP: StaticCell<Swap<SwapState<&esp_alloc::EspHeap>>> = StaticCell::new();
+type I2cBus = I2c<'static, esp_hal::Async>;
+type SharedI2cDevice = I2cDevice<'static, NoopRawMutex, I2cBus>;
+type SensorImu = ph_qmi8658::Qmi8658I2c<SharedI2cDevice, core::convert::Infallible, Input<'static>>;
+type SensorLora = Sx1272<spi::master::Spi<'static, esp_hal::Async>, Output<'static>>;
+
+static I2C_BUS: StaticCell<Mutex<NoopRawMutex, I2cBus>> = StaticCell::new();
+static SENSOR_STATE: Signal<CriticalSectionRawMutex, SensorSnapshot> = Signal::new();
 pub static PSRAM_HEAP: esp_alloc::EspHeap = esp_alloc::EspHeap::empty();
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct SensorSnapshot {
+    battery_present: bool,
+    battery_mv: Option<u16>,
+    vbus_mv: Option<u16>,
+    vsys_mv: Option<u16>,
+    gnss_bytes: u16,
+    lora_irq: u8,
+    clock: prototypes::ClockState,
+    accel_micro_ms2: [i32; 3],
+    gyro_micro_rad_s: [i32; 3],
+    imu_valid: bool,
+    magnetic_microtesla: [i32; 3],
+}
+
+struct SensorTask {
+    power: Axp2101Power<SharedI2cDevice>,
+    lora: SensorLora,
+    gnss: Lc76g<SharedI2cDevice>,
+    nmea: [u8; 64],
+    rtc: Pcf85063aRtc<SharedI2cDevice>,
+    magnetometer: Bmm350<SharedI2cDevice>,
+    imu: SensorImu,
+    accel_lsb_per_g: i32,
+    gyro_lsb_per_dps: i32,
+    state: SensorSnapshot,
+}
 
 macro_rules! start_display_core {
     ($peripherals:ident, $framebuffer_thread:ident) => {
@@ -141,10 +180,7 @@ fn main() -> ! {
 // PERF: The unit of scheduling for embassy is a task, not an async Future - it may be beneficial to
 // move some Futures into their own tasks.
 #[embassy_executor::task]
-async fn second_core(
-    _spawner: Spawner,
-    io: SecondCore<&'static esp_alloc::EspHeap>,
-) {
+async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHeap>) {
     println!("[DISPLAY] core_started");
     let SecondCore {
         gpio4,
@@ -309,6 +345,105 @@ async fn second_core(
     }
 }
 
+#[embassy_executor::task]
+async fn sensor_task(task: SensorTask) {
+    let SensorTask {
+        mut power,
+        mut lora,
+        mut gnss,
+        mut nmea,
+        mut rtc,
+        mut magnetometer,
+        mut imu,
+        accel_lsb_per_g,
+        gyro_lsb_per_dps,
+        mut state,
+    } = task;
+
+    loop {
+        Timer::after(Duration::from_millis(250)).await;
+
+        let battery_present = power.is_battery_present().await.unwrap_or(false);
+        let battery_mv = power.get_battery_voltage().await.ok();
+        let vbus_mv = power.get_vbus_voltage().await.ok();
+        let vsys_mv = power.get_system_voltage().await.ok();
+        state.battery_present = battery_present;
+        state.battery_mv = battery_present.then_some(battery_mv).flatten();
+        state.vbus_mv = vbus_mv;
+        state.vsys_mv = vsys_mv;
+        println!(
+            "[PMIC] sample battery_present={battery_present} VBAT={battery_mv:?}mV VBUS={vbus_mv:?}mV VSYS={vsys_mv:?}mV"
+        );
+
+        if let Ok(irq) = lora.irq_flags().await {
+            state.lora_irq = irq;
+            println!("[LORA] sample IRQ=0x{irq:02X}");
+        }
+        if let Ok(data) = gnss.read_nmea_chunk(&mut nmea).await {
+            state.gnss_bytes = data.len() as u16;
+            println!("[GNSS] sample bytes={}", data.len());
+        }
+        if magnetometer.data_ready().await.unwrap_or(false)
+            && let Ok(data) = magnetometer.read_data().await
+            && let Some(compensated) = magnetometer.compensate(&data)
+        {
+            println!(
+                "[BMM350] sample raw=({}, {}, {}) comp=({:.3}, {:.3}, {:.3})uT temp={:.3}C",
+                data.raw.x,
+                data.raw.y,
+                data.raw.z,
+                compensated.x_microtesla,
+                compensated.y_microtesla,
+                compensated.z_microtesla,
+                compensated.temperature_celsius
+            );
+            state.magnetic_microtesla = [
+                (compensated.x_microtesla * 1_000.0) as i32,
+                (compensated.y_microtesla * 1_000.0) as i32,
+                (compensated.z_microtesla * 1_000.0) as i32,
+            ];
+        }
+        if let Ok(time) = rtc.get_time().await {
+            state.clock = prototypes::ClockState {
+                hours: time.hours,
+                minutes: time.minutes,
+                seconds: time.seconds,
+                day: time.day,
+                month: time.month,
+                year: time.year,
+                valid: true,
+            };
+        } else {
+            state.clock.valid = false;
+        }
+        if let Ok(sample) = imu.read_sync_sample(&mut embassy_time::Delay).await {
+            if let Some(accel) = sample.accel {
+                state.accel_micro_ms2 = [
+                    accel_micro_ms2(accel.x, accel_lsb_per_g),
+                    accel_micro_ms2(accel.y, accel_lsb_per_g),
+                    accel_micro_ms2(accel.z, accel_lsb_per_g),
+                ];
+            }
+            if let Some(gyro) = sample.gyro {
+                state.gyro_micro_rad_s = [
+                    gyro_micro_rad_s(gyro.x, gyro_lsb_per_dps),
+                    gyro_micro_rad_s(gyro.y, gyro_lsb_per_dps),
+                    gyro_micro_rad_s(gyro.z, gyro_lsb_per_dps),
+                ];
+            }
+            state.imu_valid = sample.accel.is_some() || sample.gyro.is_some();
+            println!(
+                "[IMU] sample accel={:?} gyro={:?} si_accel={:?} si_gyro={:?}",
+                sample.accel, sample.gyro, state.accel_micro_ms2, state.gyro_micro_rad_s
+            );
+        } else {
+            state.imu_valid = false;
+        }
+
+        SENSOR_STATE.signal(state);
+    }
+}
+
 fn bench_repeat<R>(mut the_thing: impl FnMut() -> R, name: &str) -> (R, Duration) {
     const ITERS: u32 = 10;
     let start = Instant::now();
@@ -367,9 +502,8 @@ async fn run_fontdue_target_benchmark(font: &'static dyn fontdue::FontRepr) -> !
         for _ in 0..REPEATS {
             for &character in GLYPHS {
                 let (_, bitmap) = font.rasterize(&mut raster, character as char, px);
-                checksum = checksum.wrapping_add(
-                    bitmap.map(|coverage| coverage as usize).sum::<usize>(),
-                );
+                checksum =
+                    checksum.wrapping_add(bitmap.map(|coverage| coverage as usize).sum::<usize>());
             }
         }
         samples.sort_unstable();
@@ -513,6 +647,9 @@ async fn async_main(spawner: Spawner) {
         run_fontdue_target_benchmark(fonts[0]).await;
     }
 
+    // The I²C pull-ups share VCC3V3 with the secondary board.
+    Timer::after(Duration::from_millis(board::I2C_POWER_SETTLE_MS)).await;
+
     let i2c = I2c::new(
         peripherals.I2C0,
         esp_hal::i2c::master::Config::default().with_frequency(Rate::from_khz(400)),
@@ -521,8 +658,8 @@ async fn async_main(spawner: Spawner) {
     .with_scl(peripherals.GPIO14)
     .with_sda(peripherals.GPIO15)
     .into_async();
-    let i2c = Mutex::<NoopRawMutex, _>::new(i2c);
-    let i2c = I2cDevice::new(&i2c);
+    let i2c = I2C_BUS.init(Mutex::<NoopRawMutex, _>::new(i2c));
+    let i2c = I2cDevice::new(i2c);
 
     let gyro_range = ph_qmi8658::GyroRange::Dps512;
     let accel_range = ph_qmi8658::AccelRange::G2;
@@ -735,6 +872,29 @@ async fn async_main(spawner: Spawner) {
     let res = touch.resolution();
     println!("[TOUCH] OK, Resolution: {res}");
 
+    let initial_sensor_state = SensorSnapshot {
+        battery_present,
+        battery_mv: battery_present.then(|| pmic_readings.0.ok()).flatten(),
+        vbus_mv: pmic_readings.1.ok(),
+        vsys_mv: pmic_readings.2.ok(),
+        ..SensorSnapshot::default()
+    };
+    spawner.spawn(
+        sensor_task(SensorTask {
+            power,
+            lora,
+            gnss,
+            nmea: [0; 64],
+            rtc,
+            magnetometer,
+            imu,
+            accel_lsb_per_g,
+            gyro_lsb_per_dps,
+            state: initial_sensor_state,
+        })
+        .unwrap(),
+    );
+
     start_display_core!(peripherals, fb_st);
 
     let fonts = Box::leak(Box::new([
@@ -758,10 +918,9 @@ async fn async_main(spawner: Spawner) {
         font_renderer,
     };
     draw_ctx.peripherals.pmic_valid = pmic_valid;
-    let (vbat, vbus, vsys) = pmic_readings;
-    draw_ctx.peripherals.battery_mv = battery_present.then(|| vbat.ok()).flatten();
-    draw_ctx.peripherals.vbus_mv = vbus.ok();
-    draw_ctx.peripherals.vsys_mv = vsys.ok();
+    draw_ctx.peripherals.battery_mv = initial_sensor_state.battery_mv;
+    draw_ctx.peripherals.vbus_mv = initial_sensor_state.vbus_mv;
+    draw_ctx.peripherals.vsys_mv = initial_sensor_state.vsys_mv;
     draw_ctx.peripherals.tca_valid = true;
     draw_ctx.peripherals.gnss_valid = gnss_parse_ok;
     draw_ctx.peripherals.lora_valid = lora_result == 0;
@@ -772,7 +931,6 @@ async fn async_main(spawner: Spawner) {
         PSRAM_HEAP.used(),
     );
     let mut prev_swap_draw = Duration::MIN;
-    let mut last_sensor_sample = Instant::now() - Duration::from_millis(250);
     let mut last_touch_poll = Instant::now();
     const TOUCH_REPOLL: Duration = Duration::from_micros(16_667);
     loop {
@@ -793,45 +951,60 @@ async fn async_main(spawner: Spawner) {
             let mut changed = Dirty::new();
             let previous_touch_points = draw_ctx.peripherals.touch_points;
             let previous_touch_position = draw_ctx.peripherals.touch_position;
-            let sensor_due = last_sensor_sample.elapsed() >= Duration::from_millis(250);
+            let previous_touch_positions = draw_ctx.peripherals.touch_positions;
             let touch_repoll_due =
                 previous_touch_position.is_some() && last_touch_poll.elapsed() >= TOUCH_REPOLL;
-            let touch_ready = if sensor_due || touch_repoll_due {
-                touch_repoll_due
+            let wait_timeout = if touch_repoll_due {
+                Duration::from_micros(0)
+            } else if previous_touch_position.is_some() {
+                TOUCH_REPOLL
             } else {
-                let sensor_remaining = Duration::from_millis(250) - last_sensor_sample.elapsed();
-                let remaining = if previous_touch_position.is_some() {
-                    let touch_remaining = TOUCH_REPOLL - last_touch_poll.elapsed();
-                    sensor_remaining.min(touch_remaining)
-                } else {
-                    sensor_remaining
-                };
-                match select(touch.wait_for_touch(), Timer::after(remaining)).await {
-                    Either::First(result) => result.is_ok(),
-                    Either::Second(()) => {
-                        previous_touch_position.is_some()
-                            && last_touch_poll.elapsed() >= TOUCH_REPOLL
-                    }
-                }
+                Duration::from_millis(250)
+            };
+            let (touch_ready, sensor_state) = match select3(
+                touch.wait_for_touch(),
+                SENSOR_STATE.wait(),
+                Timer::after(wait_timeout),
+            )
+            .await
+            {
+                Either3::First(result) => (result.is_ok(), None),
+                Either3::Second(state) => (false, Some(state)),
+                Either3::Third(()) => (touch_repoll_due, None),
+            };
+            if let Some(sensor_state) = sensor_state {
+                draw_ctx.peripherals.battery_mv = sensor_state.battery_mv;
+                draw_ctx.peripherals.vbus_mv = sensor_state.vbus_mv;
+                draw_ctx.peripherals.vsys_mv = sensor_state.vsys_mv;
+                draw_ctx.peripherals.gnss_bytes = sensor_state.gnss_bytes;
+                draw_ctx.peripherals.lora_irq = sensor_state.lora_irq;
+                draw_ctx.peripherals.clock = sensor_state.clock;
+                draw_ctx.peripherals.accel_micro_ms2 = sensor_state.accel_micro_ms2;
+                draw_ctx.peripherals.gyro_micro_rad_s = sensor_state.gyro_micro_rad_s;
+                draw_ctx.peripherals.imu_valid = sensor_state.imu_valid;
+                draw_ctx.peripherals.magnetic_microtesla = sensor_state.magnetic_microtesla;
+                changed.make_full();
             };
             if touch_ready {
                 draw_ctx.touch_data = touch.read_touch_data().await.unwrap();
                 last_touch_poll = Instant::now();
             }
-            let (raw_touch_points, raw_touch_position) = match &draw_ctx.touch_data {
-                TouchData::Points(points) => (
-                    points.len() as u8,
-                    points
-                        .first()
-                        .map(|point| Point::new(point.x as i32, point.y as i32)),
-                ),
-                TouchData::CoverGesture => (0, None),
+            let raw_touch_positions = match &draw_ctx.touch_data {
+                TouchData::Points(points) => {
+                    let mut positions = [None; 2];
+                    for (slot, point) in points.iter().take(2).enumerate() {
+                        positions[slot] = Some(Point::new(point.x as i32, point.y as i32));
+                    }
+                    positions
+                }
+                TouchData::CoverGesture => [None; 2],
             };
-            let (touch_points, touch_position) = draw_ctx
-                .touch_state
-                .update(raw_touch_points, raw_touch_position);
+            let (touch_points, touch_positions) =
+                draw_ctx.touch_state.update_positions(raw_touch_positions);
+            let touch_position = touch_positions[0];
             draw_ctx.peripherals.touch_points = touch_points;
             draw_ctx.peripherals.touch_position = touch_position;
+            draw_ctx.peripherals.touch_positions = touch_positions;
             let (touch_active, header_hit) = match &draw_ctx.touch_data {
                 TouchData::Points(points) => (
                     !points.is_empty(),
@@ -860,91 +1033,10 @@ async fn async_main(spawner: Spawner) {
             }
             if draw_ctx.screen == Screen::Touch
                 && (touch_points != previous_touch_points
-                    || touch_position != previous_touch_position)
+                    || touch_position != previous_touch_position
+                    || touch_positions != previous_touch_positions)
             {
                 changed.make_full();
-            }
-            if sensor_due {
-                let battery_present = power.is_battery_present().await.unwrap_or(false);
-                let battery_mv = power.get_battery_voltage().await.ok();
-                let vbus_mv = power.get_vbus_voltage().await.ok();
-                let vsys_mv = power.get_system_voltage().await.ok();
-                draw_ctx.peripherals.battery_mv = battery_present.then_some(battery_mv).flatten();
-                draw_ctx.peripherals.vbus_mv = vbus_mv;
-                draw_ctx.peripherals.vsys_mv = vsys_mv;
-                println!(
-                    "[PMIC] sample battery_present={battery_present} VBAT={battery_mv:?}mV VBUS={vbus_mv:?}mV VSYS={vsys_mv:?}mV"
-                );
-                if let Ok(irq) = lora.irq_flags().await {
-                    draw_ctx.peripherals.lora_irq = irq;
-                    println!("[LORA] sample IRQ=0x{irq:02X}");
-                }
-                if let Ok(data) = gnss.read_nmea_chunk(&mut nmea).await {
-                    draw_ctx.peripherals.gnss_bytes = data.len() as u16;
-                    println!("[GNSS] sample bytes={}", data.len());
-                }
-                if magnetometer.data_ready().await.unwrap_or(false)
-                    && let Ok(data) = magnetometer.read_data().await
-                    && let Some(compensated) = magnetometer.compensate(&data)
-                {
-                    println!(
-                        "[BMM350] sample raw=({}, {}, {}) comp=({:.3}, {:.3}, {:.3})uT temp={:.3}C",
-                        data.raw.x,
-                        data.raw.y,
-                        data.raw.z,
-                        compensated.x_microtesla,
-                        compensated.y_microtesla,
-                        compensated.z_microtesla,
-                        compensated.temperature_celsius
-                    );
-                    draw_ctx.peripherals.magnetic_microtesla = [
-                        (compensated.x_microtesla * 1_000.0) as i32,
-                        (compensated.y_microtesla * 1_000.0) as i32,
-                        (compensated.z_microtesla * 1_000.0) as i32,
-                    ];
-                }
-                if let Ok(time) = rtc.get_time().await {
-                    draw_ctx.peripherals.clock = prototypes::ClockState {
-                        hours: time.hours,
-                        minutes: time.minutes,
-                        seconds: time.seconds,
-                        day: time.day,
-                        month: time.month,
-                        year: time.year,
-                        valid: true,
-                    };
-                } else {
-                    draw_ctx.peripherals.clock.valid = false;
-                }
-                if let Ok(sample) = imu.read_sync_sample(&mut embassy_time::Delay).await {
-                    if let Some(accel) = sample.accel {
-                        draw_ctx.peripherals.accel_micro_ms2 = [
-                            accel_micro_ms2(accel.x, accel_lsb_per_g),
-                            accel_micro_ms2(accel.y, accel_lsb_per_g),
-                            accel_micro_ms2(accel.z, accel_lsb_per_g),
-                        ];
-                    }
-                    if let Some(gyro) = sample.gyro {
-                        draw_ctx.peripherals.gyro_micro_rad_s = [
-                            gyro_micro_rad_s(gyro.x, gyro_lsb_per_dps),
-                            gyro_micro_rad_s(gyro.y, gyro_lsb_per_dps),
-                            gyro_micro_rad_s(gyro.z, gyro_lsb_per_dps),
-                        ];
-                    }
-                    draw_ctx.peripherals.imu_valid =
-                        sample.accel.is_some() || sample.gyro.is_some();
-                    println!(
-                        "[IMU] sample accel={:?} gyro={:?} si_accel={:?} si_gyro={:?}",
-                        sample.accel,
-                        sample.gyro,
-                        draw_ctx.peripherals.accel_micro_ms2,
-                        draw_ctx.peripherals.gyro_micro_rad_s
-                    );
-                } else {
-                    draw_ctx.peripherals.imu_valid = false;
-                }
-                changed.make_full();
-                last_sensor_sample = Instant::now();
             }
             dirty.clear();
 
