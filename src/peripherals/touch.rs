@@ -27,6 +27,7 @@ const REG_PROJECT_ID: u16 = 0xD204;
 const CST92XX_BOOT_ADDRESS: u8 = 0x5A;
 const CST92XX_ACK: u8 = 0xAB;
 const CST92XX_MEM_SIZE: u32 = 0x007F80;
+const CST9217_POWER_ON_SETTLE_MS: u32 = 100;
 
 const MAX_FINGER_NUM: usize = 2;
 const PROGRAM_PAGE_SIZE: u8 = 128;
@@ -179,6 +180,9 @@ impl<I: I2c, RST, INT, DELAY> Cst9217<I, INT, RST, DELAY> {
             CST92XX_ACK,
         ];
         self.i2c.write(self.addr, &ack).await?;
+        if !valid_touch_report(&buf) {
+            return Ok(TouchData::Points(heapless::Vec::new()));
+        }
         // Check for cover screen gesture
         if buf[4] >> 7 == 1 {
             return Ok(TouchData::CoverGesture);
@@ -216,6 +220,7 @@ impl<I: I2c, RST: OutputPin, INT, DELAY: embedded_hal_async::delay::DelayNs>
     Cst9217<I, INT, RST, DELAY>
 {
     pub async fn init(&mut self) -> Result<(), Cst9217Error<I::Error, RST::Error>> {
+        self.delay.delay_ms(CST9217_POWER_ON_SETTLE_MS).await;
         if i2c_helper::write_wide_reg(&mut self.i2c, self.addr, REG_DEBUG_MODE, 0x01)
             .await
             .is_err()
@@ -275,9 +280,13 @@ impl<I: I2c, RST: OutputPin, INT, DELAY: embedded_hal_async::delay::DelayNs>
         self.reset.set_low()?;
         self.delay.delay_ms(10).await;
         self.reset.set_high()?;
-        self.delay.delay_ms(30).await;
+        self.delay.delay_ms(CST9217_POWER_ON_SETTLE_MS).await;
         Ok(())
     }
+}
+
+fn valid_touch_report(buf: &[u8; READ_BUF_SIZE]) -> bool {
+    buf[0] != CST92XX_ACK && buf[0] != 0 && buf[6] == CST92XX_ACK
 }
 
 impl<I: I2c, RST, INT: Wait, DELAY> Cst9217<I, INT, RST, DELAY> {
@@ -288,7 +297,7 @@ impl<I: I2c, RST, INT: Wait, DELAY> Cst9217<I, INT, RST, DELAY> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cst9217Config, TouchPoint};
+    use super::{CST92XX_ACK, Cst9217Config, READ_BUF_SIZE, TouchPoint, valid_touch_report};
     use embedded_hal::digital::OutputPin;
     use embedded_hal_async::{
         delay::DelayNs,
@@ -412,6 +421,22 @@ mod tests {
         let mut point = TouchPoint { x: 0, y: 0 };
         config.apply(466, 300, &mut point);
         assert_eq!(point, TouchPoint { x: 465, y: 299 });
+    }
+
+    #[test]
+    fn rejects_empty_or_unacknowledged_reports() {
+        let mut report = [0u8; READ_BUF_SIZE];
+        assert!(!valid_touch_report(&report));
+
+        report[0] = CST92XX_ACK;
+        report[6] = CST92XX_ACK;
+        assert!(!valid_touch_report(&report));
+
+        report[0] = 0x06;
+        report[6] = 0;
+        assert!(!valid_touch_report(&report));
+        report[6] = CST92XX_ACK;
+        assert!(valid_touch_report(&report));
     }
 
     #[test]

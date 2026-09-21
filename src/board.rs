@@ -34,6 +34,22 @@ pub const TP_I2C_ADDR: u8 = 0x38;
 // Power: AXP2101
 pub const PMIC_I2C_ADDR: u8 = 0x34;
 
+// TCA9554 expander
+pub const TCA9554_I2C_ADDR: u8 = 0x20;
+pub const EXIO_RTC_INT: u8 = 3;
+pub const EXIO_SYS_OUT: u8 = 4;
+pub const EXIO_AXP_IRQ: u8 = 5;
+pub const EXIO_QMI_INT1: u8 = 6;
+pub const EXIO_GPS_RESET: u8 = 7;
+pub const EXIO_LORA_RESET: u8 = 0;
+
+// LoRa, SX1272 module on the secondary PCB
+pub const LORA_SCK: u8 = 16;
+pub const LORA_MISO: u8 = 17;
+pub const LORA_MOSI: u8 = 43;
+pub const LORA_NSS: u8 = 18;
+pub const LORA_DIO0: u8 = 44;
+
 // IMU
 pub const IMU_I2C_ADDR: u8 = 0x6B;
 

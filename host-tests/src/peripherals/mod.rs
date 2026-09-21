@@ -1,4 +1,14 @@
 #[path = "../../../src/peripherals/i2c_helper.rs"]
 pub mod i2c_helper;
+#[path = "../../../src/peripherals/gnss.rs"]
+pub mod gnss;
+#[path = "../../../src/peripherals/lora.rs"]
+pub mod lora;
+#[path = "../../../src/peripherals/magnetometer.rs"]
+pub mod magnetometer;
+#[path = "../../../src/peripherals/power.rs"]
+pub mod power;
+#[path = "../../../src/peripherals/rtc.rs"]
+pub mod rtc;
 #[path = "../../../src/peripherals/touch.rs"]
 pub mod touch;

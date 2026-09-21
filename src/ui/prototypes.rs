@@ -31,6 +31,9 @@ pub enum Screen {
     Motion,
     Clock,
     Touch,
+    Power,
+    Navigation,
+    Compass,
 }
 
 impl Screen {
@@ -40,7 +43,10 @@ impl Screen {
             Self::Map => Self::Motion,
             Self::Motion => Self::Clock,
             Self::Clock => Self::Touch,
-            Self::Touch => Self::Map,
+            Self::Touch => Self::Power,
+            Self::Power => Self::Navigation,
+            Self::Navigation => Self::Compass,
+            Self::Compass => Self::Map,
         }
     }
 
@@ -51,16 +57,22 @@ impl Screen {
             Self::Motion => "MOTION",
             Self::Clock => "CLOCK",
             Self::Touch => "TOUCH",
+            Self::Power => "POWER / IO",
+            Self::Navigation => "NAV / RADIO",
+            Self::Compass => "COMPASS",
         }
     }
 
     #[must_use]
     const fn page(self) -> &'static str {
         match self {
-            Self::Map => "01 / 04",
-            Self::Motion => "02 / 04",
-            Self::Clock => "03 / 04",
-            Self::Touch => "04 / 04",
+            Self::Map => "01 / 07",
+            Self::Motion => "02 / 07",
+            Self::Clock => "03 / 07",
+            Self::Touch => "04 / 07",
+            Self::Power => "05 / 07",
+            Self::Navigation => "06 / 07",
+            Self::Compass => "07 / 07",
         }
     }
 }
@@ -84,6 +96,17 @@ pub struct PeripheralState {
     pub clock: ClockState,
     pub touch_points: u8,
     pub touch_position: Option<Point>,
+    pub pmic_valid: bool,
+    pub tca_valid: bool,
+    pub gnss_valid: bool,
+    pub lora_valid: bool,
+    pub compass_valid: bool,
+    pub battery_mv: Option<u16>,
+    pub vbus_mv: Option<u16>,
+    pub vsys_mv: Option<u16>,
+    pub gnss_bytes: u16,
+    pub lora_irq: u8,
+    pub magnetic_microtesla: [i32; 3],
 }
 
 pub const ACTIVE_ARCHITECTURE: Architecture = Architecture::Immediate;
@@ -292,6 +315,9 @@ where
         Screen::Motion => draw_motion(state, font, target),
         Screen::Clock => draw_clock(state, font, target),
         Screen::Touch => draw_touch(state, font, target),
+        Screen::Power => draw_power(state, font, target),
+        Screen::Navigation => draw_navigation(state, font, target),
+        Screen::Compass => draw_compass(state, font, target),
     }
 }
 
@@ -625,6 +651,282 @@ where
         horizontal::Center,
         vertical::Center,
         target,
+    )
+}
+
+fn status_panel<D>(
+    title: &str,
+    status: bool,
+    region: Rectangle,
+    font: &chrome::FontdueRenderer<'static, Color>,
+    target: &mut D,
+) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Color>,
+{
+    region
+        .into_styled(PrimitiveStyle::with_stroke(chrome::GRAY, 2))
+        .draw(target)?;
+    aligned_text(
+        title,
+        &Rectangle::new(
+            region.top_left + Point::new(12, 10),
+            Size::new(region.size.width - 24, 28),
+        ),
+        font,
+        chrome::WHITE,
+        chrome::BLACK,
+        16,
+        1,
+        horizontal::Left,
+        vertical::Center,
+        target,
+    )?;
+    aligned_text(
+        if status { "ONLINE" } else { "NO DATA" },
+        &Rectangle::new(
+            region.top_left + Point::new(12, 54),
+            Size::new(region.size.width - 24, 30),
+        ),
+        font,
+        if status {
+            chrome::LIME
+        } else {
+            chrome::ORANGE_RED
+        },
+        chrome::BLACK,
+        20,
+        0,
+        horizontal::Left,
+        vertical::Center,
+        target,
+    )
+}
+
+fn draw_power<D>(
+    state: State,
+    font: &chrome::FontdueRenderer<'static, Color>,
+    target: &mut D,
+) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Color>,
+{
+    let battery = format_optional_mv("VBAT", state.peripherals.battery_mv);
+    let vbus = format_optional_mv("VBUS", state.peripherals.vbus_mv);
+    let vsys = format_optional_mv("VSYS", state.peripherals.vsys_mv);
+    aligned_text(
+        &battery,
+        &Rectangle::new(Point::new(76, 138), Size::new(314, 28)),
+        font,
+        chrome::WHITE,
+        chrome::BLACK,
+        16,
+        1,
+        horizontal::Center,
+        vertical::Center,
+        target,
+    )?;
+    aligned_text(
+        &vbus,
+        &Rectangle::new(Point::new(76, 174), Size::new(314, 28)),
+        font,
+        chrome::LIME,
+        chrome::BLACK,
+        16,
+        1,
+        horizontal::Center,
+        vertical::Center,
+        target,
+    )?;
+    aligned_text(
+        &vsys,
+        &Rectangle::new(Point::new(76, 210), Size::new(314, 28)),
+        font,
+        chrome::WHITE,
+        chrome::BLACK,
+        16,
+        1,
+        horizontal::Center,
+        vertical::Center,
+        target,
+    )?;
+    aligned_text(
+        if state.peripherals.tca_valid {
+            "TCA9554 / RESET OK"
+        } else {
+            "TCA9554 / ERROR"
+        },
+        &Rectangle::new(Point::new(76, 270), Size::new(314, 28)),
+        font,
+        chrome::GRAY,
+        chrome::BLACK,
+        16,
+        1,
+        horizontal::Center,
+        vertical::Center,
+        target,
+    )
+}
+
+fn draw_navigation<D>(
+    state: State,
+    font: &chrome::FontdueRenderer<'static, Color>,
+    target: &mut D,
+) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Color>,
+{
+    aligned_text(
+        "GNSS NMEA",
+        &Rectangle::new(Point::new(76, 142), Size::new(314, 28)),
+        font,
+        chrome::WHITE,
+        chrome::BLACK,
+        16,
+        1,
+        horizontal::Center,
+        vertical::Center,
+        target,
+    )?;
+    let mut nmea = heapless::String::<24>::new();
+    _ = write!(
+        nmea,
+        "{} BYTES / {}",
+        state.peripherals.gnss_bytes,
+        if state.peripherals.gnss_valid {
+            "VALID"
+        } else {
+            "WAITING"
+        }
+    );
+    aligned_text(
+        &nmea,
+        &Rectangle::new(Point::new(76, 174), Size::new(314, 28)),
+        font,
+        chrome::LIME,
+        chrome::BLACK,
+        16,
+        1,
+        horizontal::Center,
+        vertical::Center,
+        target,
+    )?;
+    aligned_text(
+        "LORA IRQ",
+        &Rectangle::new(Point::new(76, 222), Size::new(314, 28)),
+        font,
+        chrome::WHITE,
+        chrome::BLACK,
+        16,
+        1,
+        horizontal::Center,
+        vertical::Center,
+        target,
+    )?;
+    let mut irq = heapless::String::<16>::new();
+    _ = write!(
+        irq,
+        "0x{:02X} / {}",
+        state.peripherals.lora_irq,
+        if state.peripherals.lora_valid {
+            "READY"
+        } else {
+            "ERROR"
+        }
+    );
+    aligned_text(
+        &irq,
+        &Rectangle::new(Point::new(76, 254), Size::new(314, 28)),
+        font,
+        chrome::LIME,
+        chrome::BLACK,
+        16,
+        1,
+        horizontal::Center,
+        vertical::Center,
+        target,
+    )?;
+    aligned_text(
+        "LIVE PERIPHERAL DATA",
+        &Rectangle::new(Point::new(76, 270), Size::new(314, 28)),
+        font,
+        chrome::GRAY,
+        chrome::BLACK,
+        16,
+        1,
+        horizontal::Center,
+        vertical::Center,
+        target,
+    )
+}
+
+fn draw_compass<D>(
+    state: State,
+    font: &chrome::FontdueRenderer<'static, Color>,
+    target: &mut D,
+) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Color>,
+{
+    let panel = Rectangle::new(Point::new(64, 136), Size::new(338, 178));
+    panel
+        .into_styled(PrimitiveStyle::with_stroke(chrome::GRAY, 2))
+        .draw(target)?;
+    aligned_text(
+        "BMM350 MAGNETOMETER",
+        &Rectangle::new(Point::new(76, 150), Size::new(314, 30)),
+        font,
+        chrome::WHITE,
+        chrome::BLACK,
+        16,
+        1,
+        horizontal::Center,
+        vertical::Center,
+        target,
+    )?;
+    draw_axis_values(
+        state.peripherals.magnetic_microtesla,
+        Point::new(92, 196),
+        chrome::WHITE,
+        font,
+        target,
+    )?;
+    aligned_text(
+        if state.peripherals.compass_valid {
+            "LIVE / uT"
+        } else {
+            "NO DATA"
+        },
+        &Rectangle::new(Point::new(76, 278), Size::new(314, 24)),
+        font,
+        if state.peripherals.compass_valid {
+            chrome::LIME
+        } else {
+            chrome::ORANGE_RED
+        },
+        chrome::BLACK,
+        16,
+        1,
+        horizontal::Center,
+        vertical::Center,
+        target,
+    )
+}
+
+fn format_mv(label: &str, value: u16) -> heapless::String<16> {
+    let mut text = heapless::String::new();
+    _ = write!(text, "{label} {value}mV");
+    text
+}
+
+fn format_optional_mv(label: &str, value: Option<u16>) -> heapless::String<16> {
+    value.map_or_else(
+        || {
+            let mut text = heapless::String::new();
+            _ = write!(text, "{label} --");
+            text
+        },
+        |value| format_mv(label, value),
     )
 }
 

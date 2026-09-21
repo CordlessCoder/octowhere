@@ -136,7 +136,7 @@ impl RgbColorExt for Gray8 {
 
 pub struct FontdueRendererCtx {
     layout: fontdue::layout::Layout,
-    canvas: fontdue::raster::Raster,
+    canvas: fontdue::raster::Raster<'static>,
 }
 
 impl Default for FontdueRendererCtx {

@@ -65,7 +65,13 @@ pub struct Co5300Display<'d, C> {
 
 #[derive(Debug)]
 pub enum DisplayError {
-    BusError,
+    BusError(esp_hal::spi::Error),
+}
+
+impl From<esp_hal::spi::Error> for DisplayError {
+    fn from(error: esp_hal::spi::Error) -> Self {
+        Self::BusError(error)
+    }
 }
 
 /// Turn display on (exit sleep + display ON).
@@ -88,7 +94,7 @@ static CO5300_ENTER_SLEEP: [QSPIOperation; 4] = [
 // // // 24-bit RGB888
 // // QSPIOperation::CommandD8(CMD_PIXFMT, 0x77),
 
-static CO5300_INIT: [QSPIOperation; 13] = [
+static CO5300_INIT_PRE_COLOR: [QSPIOperation; 7] = [
     QSPIOperation::Command(CMD_SLPOUT),
     QSPIOperation::Delay(SLPOUT_DELAY_MS),
     // Set command page 0
@@ -101,6 +107,9 @@ static CO5300_INIT: [QSPIOperation; 13] = [
     QSPIOperation::CommandD8(CMD_BRIGHTNESS_HBM, 0xFF),
     // Brightness 80%
     QSPIOperation::CommandD8(CMD_BRIGHTNESS, 0xD0),
+];
+
+static CO5300_INIT_POST_COLOR: [QSPIOperation; 6] = [
     // Display on
     QSPIOperation::Command(CMD_DISPON),
     // Contrast enhancement off
@@ -158,7 +167,7 @@ where
         te_pin: Input<'d>,
         stream: DmaTxBuf,
         swap: DmaTxBuf,
-    ) -> Self {
+    ) -> Result<Self, DisplayError> {
         let mut disp = Self {
             bus,
             reset,
@@ -172,16 +181,18 @@ where
             color: PhantomData,
         };
         disp.hw_reset_async().await;
-        disp.bus.batch_async(&CO5300_INIT).await;
-        disp.apply_color();
+        disp.bus.batch_async(&CO5300_INIT_PRE_COLOR).await?;
+        disp.apply_color()?;
+        disp.bus.batch_async(&CO5300_INIT_POST_COLOR).await?;
 
-        disp
+        Ok(disp)
     }
-    fn apply_color(&mut self) {
+    fn apply_color(&mut self) -> Result<(), DisplayError> {
         self.bus
-            .execute(&QSPIOperation::CommandD8(CMD_PIXFMT, C::MODE_BYTE));
+            .execute(&QSPIOperation::CommandD8(CMD_PIXFMT, C::MODE_BYTE))?;
+        Ok(())
     }
-    pub fn with_color_format<NC>(self) -> Co5300Display<'d, NC>
+    pub fn with_color_format<NC>(self) -> Result<Co5300Display<'d, NC>, DisplayError>
     where
         NC: Co5300ColorMode,
         <NC as embedded_graphics::pixelcolor::raw::ToBytes>::Bytes: core::convert::AsRef<[u8]>,
@@ -210,18 +221,18 @@ where
             swap,
             color: PhantomData,
         };
-        new.apply_color();
-        new
+        new.apply_color()?;
+        Ok(new)
     }
 
     pub async fn hw_reset_async(&mut self) {
-        // Hardware reset
+        self.reset.set_low();
+        delay_ms_async(10).await;
         self.reset.set_high();
-        delay_us_async(10).await;
         self.reset.set_low();
         delay_us_async(10).await;
         self.reset.set_high();
-        delay_ms_async(10).await;
+        delay_ms_async(RST_DELAY_MS).await;
     }
 
     pub fn hw_reset(&mut self) {
@@ -235,7 +246,7 @@ where
     }
 
     /// Set the address window for pixel writes.
-    pub fn set_addr_window(&mut self, x: u16, y: u16, w: u16, h: u16) {
+    pub fn set_addr_window(&mut self, x: u16, y: u16, w: u16, h: u16) -> Result<(), DisplayError> {
         let (x, y, w, h) = self.even_window(x, y, w, h);
         let x_start = x + self.col_offset;
         let x_end = x_start + w - 1;
@@ -246,7 +257,8 @@ where
             QSPIOperation::CommandD16D16(CMD_CASET, x_start, x_end),
             QSPIOperation::CommandD16D16(CMD_PASET, y_start, y_end),
             QSPIOperation::Command(CMD_RAMWR),
-        ]);
+        ])?;
+        Ok(())
     }
 
     fn even_window(&self, x: u16, y: u16, w: u16, h: u16) -> (u16, u16, u16, u16) {
@@ -276,18 +288,18 @@ where
     }
 
     /// Fill the entire screen with a single color.
-    pub fn fill_screen(&mut self, color: C) {
+    pub fn fill_screen(&mut self, color: C) -> Result<(), DisplayError> {
         let raw = color.to_be_bytes();
-        self.set_addr_window(0, 0, self.width, self.height);
+        self.set_addr_window(0, 0, self.width, self.height)?;
         let total = self.width as usize * self.height as usize;
-        self.write_repeat(raw.as_ref(), total);
+        self.write_repeat(raw.as_ref(), total)
     }
 
-    pub fn write_repeat(&mut self, data: &[u8], count: usize) {
+    pub fn write_repeat(&mut self, data: &[u8], count: usize) -> Result<(), DisplayError> {
         if count == 0 {
-            return;
+            return Ok(());
         }
-        let mut stream = self.begin_stream();
+        let mut stream = self.begin_stream()?;
         let buf = stream.buf_remaining();
         let chunk_size = (buf.len() / data.len()).min(count);
         assert!(chunk_size > 0);
@@ -298,22 +310,29 @@ where
             let bytes = n * data.len();
 
             stream.write(bytes);
-            stream.flush_buf();
+            stream.flush_buf()?;
 
             remaining -= n;
         }
-        stream.end();
+        stream.end()
     }
 
     /// Fill a rectangular area with a solid color.
-    pub fn write_pixels_area(&mut self, x: u16, y: u16, w: u16, h: u16, color: C) {
+    pub fn write_pixels_area(
+        &mut self,
+        x: u16,
+        y: u16,
+        w: u16,
+        h: u16,
+        color: C,
+    ) -> Result<(), DisplayError> {
         if w == 0 || h == 0 {
-            return;
+            return Ok(());
         };
         let bytes = color.to_be_bytes();
         let (x, y, w, h) = self.even_window(x, y, w, h);
-        self.set_addr_window(x, y, w, h);
-        self.write_repeat(bytes.as_ref(), w as usize * h as usize);
+        self.set_addr_window(x, y, w, h)?;
+        self.write_repeat(bytes.as_ref(), w as usize * h as usize)
     }
 
     pub fn wait_for_vsync(&mut self) -> impl Future<Output = ()> {
@@ -321,45 +340,50 @@ where
     }
 
     /// Set display brightness (0x00 = off, 0xD0 = default, 0xFF = max).
-    pub fn set_brightness(&mut self, brightness: u8) {
+    pub fn set_brightness(&mut self, brightness: u8) -> Result<(), DisplayError> {
         self.bus
-            .execute(&QSPIOperation::CommandD8(CMD_BRIGHTNESS, brightness));
+            .execute(&QSPIOperation::CommandD8(CMD_BRIGHTNESS, brightness))?;
+        Ok(())
     }
 
     /// Turn display on (exit sleep + display ON).
     /// MIPI DCS order: SLPOUT -> 120ms -> DISPON -> 20ms.
-    pub fn display_on(&mut self) -> impl Future<Output = ()> {
-        self.bus.batch_async(&CO5300_EXIT_SLEEP)
+    pub async fn display_on(&mut self) -> Result<(), DisplayError> {
+        self.bus.batch_async(&CO5300_EXIT_SLEEP).await?;
+        Ok(())
     }
 
     /// Turn display off (DISPOFF + enter sleep).
     /// MIPI DCS order: DISPOFF -> 20ms -> SLPIN -> 120ms.
-    pub fn display_off(&mut self) -> impl Future<Output = ()> {
-        self.bus.batch_async(&CO5300_ENTER_SLEEP)
+    pub async fn display_off(&mut self) -> Result<(), DisplayError> {
+        self.bus.batch_async(&CO5300_ENTER_SLEEP).await?;
+        Ok(())
     }
 
-    pub async fn begin_stream_async<'r>(&'r mut self) -> PixelStream<'r, 'd, C> {
-        self.bus.begin_quad_write_async().await;
+    pub async fn begin_stream_async<'r>(
+        &'r mut self,
+    ) -> Result<PixelStream<'r, 'd, C>, DisplayError> {
+        self.bus.begin_quad_write_async().await?;
         let active = self.stream.take();
         let swap = self.swap.take();
-        PixelStream {
+        Ok(PixelStream {
             disp: self,
             active,
             swap,
             buffered: 0,
-        }
+        })
     }
 
-    pub fn begin_stream<'r>(&'r mut self) -> PixelStream<'r, 'd, C> {
-        self.bus.begin_quad_write();
+    pub fn begin_stream<'r>(&'r mut self) -> Result<PixelStream<'r, 'd, C>, DisplayError> {
+        self.bus.begin_quad_write()?;
         let active = self.stream.take();
         let swap = self.swap.take();
-        PixelStream {
+        Ok(PixelStream {
             disp: self,
             active,
             swap,
             buffered: 0,
-        }
+        })
     }
 }
 
@@ -380,19 +404,20 @@ where
     pub async fn flush_if_needed_and_get_buf_async(
         &mut self,
         fill_buf: impl FnOnce(&mut [u8]) -> usize,
-    ) {
+    ) -> Result<(), DisplayError> {
         if self.should_flush() {
-            self.flush_buf_async(fill_buf).await;
-            return;
+            self.flush_buf_async(fill_buf).await?;
+            return Ok(());
         }
         let new = fill_buf(self.buf_remaining());
         self.write(new);
+        Ok(())
     }
-    pub fn flush_if_needed_and_get_buf(&mut self) -> &mut [u8] {
+    pub fn flush_if_needed_and_get_buf(&mut self) -> Result<&mut [u8], DisplayError> {
         if self.should_flush() {
-            self.flush_buf();
+            self.flush_buf()?;
         }
-        self.buf_remaining()
+        Ok(self.buf_remaining())
     }
     pub fn buf_remaining(&mut self) -> &mut [u8] {
         &mut self.active.as_mut().unwrap().as_mut_slice()[self.buffered..]
@@ -409,36 +434,48 @@ where
     pub fn should_flush(&self) -> bool {
         self.buffered > self.active.as_ref().unwrap().len().saturating_sub(256)
     }
-    pub async fn flush_buf_async(&mut self, fill_swap_with: impl FnOnce(&mut [u8]) -> usize) {
+    pub async fn flush_buf_async(
+        &mut self,
+        fill_swap_with: impl FnOnce(&mut [u8]) -> usize,
+    ) -> Result<(), DisplayError> {
         if self.buffered == 0 {
             self.buffered = fill_swap_with(self.active.as_mut().unwrap().as_mut_slice());
-            return;
+            return Ok(());
         }
         let buffered = self.buffered;
         let active = self.active.take().unwrap();
         let mut swap = self.swap.take().unwrap();
         let spi = self.disp.bus.spi.take().unwrap();
-        let mut transfer = spi
-            .half_duplex_write_buffer(
-                DataMode::Quad,
-                Command::None,
-                Address::None,
-                0,
-                buffered,
-                active,
-            )
-            .unwrap();
+        let transfer = match spi.half_duplex_write_buffer(
+            DataMode::Quad,
+            Command::None,
+            Address::None,
+            0,
+            buffered,
+            active,
+        ) {
+            Ok(transfer) => transfer,
+            Err((error, spi, active)) => {
+                self.disp.bus.spi = Some(spi);
+                self.active = Some(active);
+                self.swap = Some(swap);
+                self.disp.bus.cs.set_high();
+                return Err(DisplayError::from(error));
+            }
+        };
         let new = fill_swap_with(swap.as_mut_slice());
+        let mut transfer = transfer;
         transfer.wait_for_done().await;
         let (spi, active) = transfer.wait();
         self.disp.bus.spi = Some(spi);
         self.active = Some(swap);
         self.swap = Some(active);
         self.buffered = new;
+        Ok(())
     }
-    pub fn flush_buf(&mut self) {
+    pub fn flush_buf(&mut self) -> Result<(), DisplayError> {
         if self.buffered == 0 {
-            return;
+            return Ok(());
         }
         let active = self.active.take().unwrap();
         let spi = self.disp.bus.spi.take().unwrap();
@@ -451,14 +488,20 @@ where
                 self.buffered,
                 active,
             )
-            .unwrap();
+            .map_err(|(error, spi, active)| {
+                self.disp.bus.spi = Some(spi);
+                self.active = Some(active);
+                self.disp.bus.cs.set_high();
+                DisplayError::from(error)
+            })?;
         let (spi, active) = transfer.wait();
         self.disp.bus.spi = Some(spi);
         self.active = Some(active);
         self.buffered = 0;
+        Ok(())
     }
-    pub fn end(mut self) {
-        self.flush_buf();
+    pub fn end(mut self) -> Result<(), DisplayError> {
+        self.flush_buf()
     }
 }
 

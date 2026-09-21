@@ -64,9 +64,70 @@ impl Button {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct TouchState {
+    active: bool,
+    candidate_active: bool,
+    active_samples: u8,
+    points: u8,
+    candidate_points: u8,
+    point_samples: u8,
+    position: Option<Point>,
+}
+
+impl TouchState {
+    const DEBOUNCE_SAMPLES: u8 = 3;
+
+    pub fn update(&mut self, points: u8, position: Option<Point>) -> (u8, Option<Point>) {
+        let raw_active = position.is_some();
+        if raw_active == self.active {
+            self.active_samples = 0;
+        } else {
+            if self.candidate_active != raw_active {
+                self.candidate_active = raw_active;
+                self.active_samples = 0;
+            }
+            self.active_samples = self.active_samples.saturating_add(1);
+            if self.active_samples >= Self::DEBOUNCE_SAMPLES {
+                self.active = raw_active;
+                self.active_samples = 0;
+                if !self.active {
+                    self.points = 0;
+                    self.position = None;
+                } else {
+                    self.points = points;
+                    self.candidate_points = points;
+                    self.position = position;
+                }
+            }
+        }
+
+        if self.active {
+            self.position = position.or(self.position);
+            if points == self.points {
+                self.point_samples = 0;
+            } else {
+                if self.candidate_points != points {
+                    self.candidate_points = points;
+                    self.point_samples = 0;
+                }
+                self.point_samples = self.point_samples.saturating_add(1);
+                if self.point_samples >= Self::DEBOUNCE_SAMPLES {
+                    self.points = points;
+                    self.point_samples = 0;
+                }
+            }
+        }
+
+        (self.points, self.position)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Button, ButtonEvent};
+    use embedded_graphics_core::geometry::Point;
+
+    use super::{Button, ButtonEvent, TouchState};
 
     #[test]
     fn press_is_reported_once() {
@@ -112,4 +173,31 @@ mod tests {
         assert_eq!(button.update_touch(false, false), ButtonEvent::None);
         assert_eq!(button.update_touch(true, true), ButtonEvent::None);
     }
+
+    #[test]
+    fn touch_state_ignores_short_contact_gaps() {
+        let mut state = TouchState::default();
+        let point = Some(Point::new(10, 20));
+        assert_eq!(state.update(1, point), (0, None));
+        assert_eq!(state.update(1, point), (0, None));
+        assert_eq!(state.update(1, point), (1, point));
+        assert_eq!(state.update(1, point), (1, point));
+        assert_eq!(state.update(0, None), (1, point));
+        assert_eq!(state.update(0, None), (1, point));
+        assert_eq!(state.update(1, point), (1, point));
+    }
+
+    #[test]
+    fn touch_state_debounces_point_count() {
+        let mut state = TouchState::default();
+        let point = Some(Point::new(10, 20));
+        for _ in 0..3 {
+            state.update(1, point);
+        }
+        assert_eq!(state.update(1, point), (1, point));
+        assert_eq!(state.update(2, point), (1, point));
+        assert_eq!(state.update(2, point), (1, point));
+        assert_eq!(state.update(2, point), (2, point));
+    }
 }
+use embedded_graphics_core::geometry::Point;

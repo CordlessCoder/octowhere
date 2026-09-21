@@ -1114,8 +1114,8 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "fontdue"
-version = "0.9.3"
-source = "git+https://github.com/CordlessCoder/fontdue#a344a733d465a469364b4828a4aa395fcebaa9b6"
+version = "0.9.4"
+source = "git+https://github.com/CordlessCoder/fontdue?rev=351eb539b18079fd21d608977161ab540f4d577a#351eb539b18079fd21d608977161ab540f4d577a"
 dependencies = [
  "hashbrown",
  "ttf-parser",
@@ -1123,10 +1123,11 @@ dependencies = [
 
 [[package]]
 name = "fontdue-macros"
-version = "0.9.3"
-source = "git+https://github.com/CordlessCoder/fontdue#a344a733d465a469364b4828a4aa395fcebaa9b6"
+version = "0.9.4"
+source = "git+https://github.com/CordlessCoder/fontdue?rev=351eb539b18079fd21d608977161ab540f4d577a#351eb539b18079fd21d608977161ab540f4d577a"
 dependencies = [
  "fontdue",
+ "litrs",
  "proc-macro2",
  "quote",
 ]
@@ -1406,6 +1407,9 @@ name = "litrs"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
+dependencies = [
+ "proc-macro2",
+]
 
 [[package]]
 name = "log"
@@ -1928,9 +1932,10 @@ dependencies = [
 
 [[package]]
 name = "tca9554"
-version = "0.1.1"
-source = "git+https://github.com/CordlessCoder/tca9554-rs#ccab5d944ac65f54b39dea5c43c979c329e694cd"
+version = "0.2.0"
+source = "git+https://github.com/CordlessCoder/tca9554-rs?rev=dd76e69#dd76e69113a05e18001cb0162304a85951accd8f"
 dependencies = [
+ "embassy-sync 0.8.0",
  "embedded-hal-async",
  "futures",
 ]

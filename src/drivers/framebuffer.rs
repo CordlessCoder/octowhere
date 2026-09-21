@@ -108,9 +108,13 @@ where
     // }
 
     /// Flush the entire framebuffer to the display via DMA QSPI.
-    pub async fn flush(&mut self, display: &mut Co5300Display<'_, C>, debug_damage: bool) {
-        display.set_addr_window(0, 0, WIDTH as u16, HEIGHT as u16);
-        let mut stream = display.begin_stream_async().await;
+    pub async fn flush(
+        &mut self,
+        display: &mut Co5300Display<'_, C>,
+        debug_damage: bool,
+    ) -> Result<(), DisplayError> {
+        display.set_addr_window(0, 0, WIDTH as u16, HEIGHT as u16)?;
+        let mut stream = display.begin_stream_async().await?;
         let mut remaining = &mut self.buf[..];
         let mut offset = 0;
 
@@ -127,10 +131,40 @@ where
                     offset += chunk;
                     chunk
                 })
-                .await;
+                .await?;
         }
-        stream.flush_buf_async(|_| 0).await;
-        stream.end();
+        stream.flush_buf_async(|_| 0).await?;
+        stream.end()
+    }
+
+    /// Flush the entire framebuffer through the blocking pixel-stream path.
+    pub fn flush_blocking(
+        &mut self,
+        display: &mut Co5300Display<'_, C>,
+        debug_damage: bool,
+    ) -> Result<(), DisplayError> {
+        display.set_addr_window(0, 0, WIDTH as u16, HEIGHT as u16)?;
+        let mut stream = display.begin_stream()?;
+        let mut remaining = &mut self.buf[..];
+        let mut offset = 0;
+
+        while !remaining.is_empty() {
+            let chunk = {
+                let buf = stream.flush_if_needed_and_get_buf()?;
+                let chunk = buf.len().min(remaining.len());
+                let captured = remaining.split_off_mut(..chunk).unwrap();
+                buf[..chunk].copy_from_slice(captured);
+                #[cfg(feature = "damage-debug")]
+                if debug_damage {
+                    debug_full_chunk::<C, WIDTH, HEIGHT>(&mut buf[..chunk], offset);
+                }
+                offset += chunk;
+                chunk
+            };
+            stream.write(chunk);
+        }
+        stream.flush_buf()?;
+        stream.end()
     }
 
     /// Flush only a rectangular region (dirty rect optimization).
@@ -142,9 +176,9 @@ where
         w: u16,
         h: u16,
         debug_overlay: Option<Rectangle>,
-    ) {
+    ) -> Result<(), DisplayError> {
         if w == 0 || h == 0 {
-            return;
+            return Ok(());
         }
 
         // The CO5300 is happier with even-aligned partial writes.
@@ -176,8 +210,8 @@ where
         // PERF: Buffer as much as possible into stream.buf() before streaming, instead of doing it
         // per-row(buffer fits anywhere between 2 and 8k pixels depending on pixel type)
 
-        display.set_addr_window(x0 as u16, y0 as u16, flush_w as u16, flush_h as u16);
-        let mut stream = display.begin_stream_async().await;
+        display.set_addr_window(x0 as u16, y0 as u16, flush_w as u16, flush_h as u16)?;
+        let mut stream = display.begin_stream_async().await?;
         let mut rows = self
             .buf
             .chunks_exact_mut(WIDTH * C::BYTES_PER_PIXEL)
@@ -228,10 +262,10 @@ where
                     }
                     new
                 })
-                .await;
+                .await?;
         }
-        stream.flush_buf_async(|_| 0).await;
-        stream.end();
+        stream.flush_buf_async(|_| 0).await?;
+        stream.end()
     }
 
     /// Get raw buffer for direct access.
