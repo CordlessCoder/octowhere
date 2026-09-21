@@ -28,6 +28,8 @@ pub mod peripherals;
 pub mod dirty;
 #[path = "../../src/ui/geometry.rs"]
 pub mod geometry;
+#[path = "../../src/ui/input.rs"]
+pub mod input;
 
 #[cfg(test)]
 mod tests {

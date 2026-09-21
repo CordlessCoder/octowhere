@@ -38,6 +38,7 @@ use octowhere::{
     },
     ui::{
         dirty::DirtyAreas,
+        input::{Button, ButtonEvent},
         prototypes::{self, Screen},
     },
     util::{Swap, SwapThread},
@@ -246,7 +247,7 @@ struct DrawCtx {
     touch_data: TouchData,
     selected_node: Option<u8>,
     screen: Screen,
-    touch_active: bool,
+    header_button: Button,
     peripherals: prototypes::PeripheralState,
     font_renderer: FontdueRenderer<'static, Color>,
 }
@@ -532,7 +533,7 @@ async fn main(_spawner: Spawner) {
         touch_data: TouchData::default(),
         selected_node: None,
         screen: Screen::Map,
-        touch_active: false,
+        header_button: Button::default(),
         peripherals: prototypes::PeripheralState::default(),
         font_renderer,
     };
@@ -568,20 +569,19 @@ async fn main(_spawner: Spawner) {
                 ),
                 TouchData::CoverGesture => (0, None),
             };
-            let touch_active = touch_points != 0;
             draw_ctx.peripherals.touch_points = touch_points;
             draw_ctx.peripherals.touch_position = touch_position;
-            if touch_active
-                && !draw_ctx.touch_active
-                && let Some(point) = touch_position
-                && (108..=366).contains(&point.x)
-                && (48..=98).contains(&point.y)
-            {
+            let header_active = match &draw_ctx.touch_data {
+                TouchData::Points(points) => points.iter().any(|point| {
+                    (108..=366).contains(&(point.x as i32)) && (48..=98).contains(&(point.y as i32))
+                }),
+                TouchData::CoverGesture => false,
+            };
+            if draw_ctx.header_button.update(header_active) == ButtonEvent::Pressed {
                 draw_ctx.screen = draw_ctx.screen.next();
                 draw_ctx.selected_node = None;
                 needs_full_redraw.make_full();
             }
-            draw_ctx.touch_active = touch_active;
             let previous_selected_node = draw_ctx.selected_node;
             if let Some(node) = selected_node(&draw_ctx.touch_data) {
                 draw_ctx.selected_node = Some(node);
