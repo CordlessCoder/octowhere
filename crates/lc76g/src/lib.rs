@@ -23,8 +23,6 @@ const PAIR_MESSAGE_FIELDS_CAPACITY: usize = PAIR_COMMAND_CAPACITY - 8;
 
 const ALP_ENABLE: &[u8] = b"$PAIR732,1*21\r\n";
 const ALP_DISABLE: &[u8] = b"$PAIR732,0*20\r\n";
-const SET_FIX_RATE_1_HZ: &[u8] = b"$PAIR050,1000*12\r\n";
-const SET_NORMAL_NAVIGATION: &[u8] = b"$PAIR080,0*2E\r\n";
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum GnssOperation {
@@ -113,6 +111,11 @@ impl PairCommandBuilder {
         self.field_bytes(field.as_bytes())
     }
 
+    /// Appends a boolean field using the receiver's `0` or `1` encoding.
+    pub fn field_bool(&mut self, value: bool) -> Result<(), PairCommandError> {
+        self.field_u32(value as u32)
+    }
+
     /// Finishes the command by appending its checksum and line ending.
     pub fn finish(mut self) -> Result<PairCommand, PairCommandError> {
         if self.bytes.len() + 5 > PAIR_COMMAND_CAPACITY {
@@ -144,6 +147,211 @@ pub enum LowPowerMode {
     Disabled,
     /// Adaptive Low Power mode.
     Adaptive,
+}
+
+/// Position-fix interval accepted by PAIR050, in milliseconds.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct FixIntervalMs(u16);
+
+impl FixIntervalMs {
+    /// The receiver's documented default and one-hertz interval.
+    pub const ONE_SECOND: Self = Self(1_000);
+
+    /// Creates an interval in the receiver's supported 100–1000 ms range.
+    pub const fn new(milliseconds: u16) -> Option<Self> {
+        if milliseconds >= 100 && milliseconds <= 1_000 {
+            Some(Self(milliseconds))
+        } else {
+            None
+        }
+    }
+
+    /// Returns the interval in milliseconds.
+    pub const fn milliseconds(self) -> u16 {
+        self.0
+    }
+}
+
+/// Minimum signal-to-noise ratio accepted for satellites in use.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct MinimumSnrDb(u8);
+
+impl MinimumSnrDb {
+    /// Creates a threshold in the receiver's supported 9–37 dB range.
+    pub const fn new(decibels: u8) -> Option<Self> {
+        if decibels >= 9 && decibels <= 37 {
+            Some(Self(decibels))
+        } else {
+            None
+        }
+    }
+
+    /// Returns the threshold in decibels.
+    pub const fn decibels(self) -> u8 {
+        self.0
+    }
+}
+
+/// Satellite constellation search configuration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GnssSearchMode {
+    gps: bool,
+    glonass: bool,
+    galileo: bool,
+    bds: bool,
+    qzss: bool,
+}
+
+impl GnssSearchMode {
+    /// Creates a search mode from the five constellation enable flags.
+    pub const fn new(gps: bool, glonass: bool, galileo: bool, bds: bool, qzss: bool) -> Self {
+        Self {
+            gps,
+            glonass,
+            galileo,
+            bds,
+            qzss,
+        }
+    }
+
+    /// Searches GPS satellites.
+    pub const fn gps(self) -> bool {
+        self.gps
+    }
+
+    /// Searches GLONASS satellites.
+    pub const fn glonass(self) -> bool {
+        self.glonass
+    }
+
+    /// Searches Galileo satellites.
+    pub const fn galileo(self) -> bool {
+        self.galileo
+    }
+
+    /// Searches BeiDou satellites.
+    pub const fn bds(self) -> bool {
+        self.bds
+    }
+
+    /// Searches QZSS satellites.
+    pub const fn qzss(self) -> bool {
+        self.qzss
+    }
+}
+
+/// Static-navigation speed threshold in decimetres per second.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct StaticNavigationThreshold(u8);
+
+impl StaticNavigationThreshold {
+    /// Disables static navigation.
+    pub const DISABLED: Self = Self(0);
+
+    /// Creates a threshold in the receiver's supported 0–20 dm/s range.
+    pub const fn new(decimetres_per_second: u8) -> Option<Self> {
+        if decimetres_per_second <= 20 {
+            Some(Self(decimetres_per_second))
+        } else {
+            None
+        }
+    }
+
+    /// Returns the threshold in decimetres per second.
+    pub const fn decimetres_per_second(self) -> u8 {
+        self.0
+    }
+}
+
+/// Satellite elevation mask in degrees.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct ElevationMaskDegrees(i8);
+
+impl ElevationMaskDegrees {
+    /// Creates a mask in the receiver's supported -90–90 degree range.
+    pub const fn new(degrees: i8) -> Option<Self> {
+        if degrees >= -90 && degrees <= 90 {
+            Some(Self(degrees))
+        } else {
+            None
+        }
+    }
+
+    /// Returns the mask in degrees.
+    pub const fn degrees(self) -> i8 {
+        self.0
+    }
+}
+
+/// Navigation model used by the receiver.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NavigationMode {
+    /// General-purpose navigation.
+    Normal,
+    /// Running and walking navigation.
+    Fitness,
+    /// Reserved receiver mode 2.
+    Reserved2,
+    /// Reserved receiver mode 3.
+    Reserved3,
+    /// Reserved receiver mode 4.
+    Reserved4,
+    /// Drone navigation.
+    Drone,
+    /// Reserved receiver mode 6.
+    Reserved6,
+    /// Swimming navigation.
+    Swimming,
+}
+
+impl NavigationMode {
+    const fn wire_value(self) -> u8 {
+        match self {
+            Self::Normal => 0,
+            Self::Fitness => 1,
+            Self::Reserved2 => 2,
+            Self::Reserved3 => 3,
+            Self::Reserved4 => 4,
+            Self::Drone => 5,
+            Self::Reserved6 => 6,
+            Self::Swimming => 7,
+        }
+    }
+
+}
+
+/// Active interference cancellation state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AicMode {
+    Disabled,
+    Enabled,
+}
+
+impl AicMode {
+    const fn wire_value(self) -> u8 {
+        match self {
+            Self::Disabled => 0,
+            Self::Enabled => 1,
+        }
+    }
+}
+
+/// Binary debug-log output mode.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DebugLogOutput {
+    Disabled,
+    Full,
+    Lite,
+}
+
+impl DebugLogOutput {
+    const fn wire_value(self) -> u8 {
+        match self {
+            Self::Disabled => 0,
+            Self::Full => 1,
+            Self::Lite => 2,
+        }
+    }
 }
 
 /// Standard NMEA sentence types whose output rate can be configured.
@@ -961,8 +1169,8 @@ where
         match mode {
             LowPowerMode::Disabled => self.write_nmea(ALP_DISABLE).await,
             LowPowerMode::Adaptive => {
-                self.write_nmea(SET_NORMAL_NAVIGATION).await?;
-                self.write_nmea(SET_FIX_RATE_1_HZ).await?;
+                self.set_navigation_mode(NavigationMode::Normal).await?;
+                self.set_fix_interval(FixIntervalMs::ONE_SECOND).await?;
                 self.write_nmea(ALP_ENABLE).await
             }
         }
@@ -976,6 +1184,156 @@ where
     /// Requests normal continuous tracking mode.
     pub async fn disable_alp_mode(&mut self) -> Result<(), GnssError<I::Error>> {
         self.set_low_power_mode(LowPowerMode::Disabled).await
+    }
+
+    /// Sets the receiver's position-fix interval.
+    pub async fn set_fix_interval(
+        &mut self,
+        interval: FixIntervalMs,
+    ) -> Result<(), GnssError<I::Error>> {
+        let mut builder = PairCommandBuilder::new(50).map_err(GnssError::PairCommand)?;
+        builder
+            .field_u32(interval.milliseconds() as u32)
+            .map_err(GnssError::PairCommand)?;
+        self.send_pair_builder(builder).await
+    }
+
+    /// Requests the receiver's configured position-fix interval.
+    pub async fn query_fix_interval(&mut self) -> Result<(), GnssError<I::Error>> {
+        self.send_pair_builder(PairCommandBuilder::new(51).map_err(GnssError::PairCommand)?)
+            .await
+    }
+
+    /// Sets the minimum signal-to-noise ratio for a satellite to be used.
+    pub async fn set_minimum_snr(
+        &mut self,
+        threshold: MinimumSnrDb,
+    ) -> Result<(), GnssError<I::Error>> {
+        let mut builder = PairCommandBuilder::new(58).map_err(GnssError::PairCommand)?;
+        builder
+            .field_u32(threshold.decibels() as u32)
+            .map_err(GnssError::PairCommand)?;
+        self.send_pair_builder(builder).await
+    }
+
+    /// Requests the receiver's configured minimum signal-to-noise ratio.
+    pub async fn query_minimum_snr(&mut self) -> Result<(), GnssError<I::Error>> {
+        self.send_pair_builder(PairCommandBuilder::new(59).map_err(GnssError::PairCommand)?)
+            .await
+    }
+
+    /// Selects the satellite constellations used during acquisition.
+    pub async fn set_gnss_search_mode(
+        &mut self,
+        mode: GnssSearchMode,
+    ) -> Result<(), GnssError<I::Error>> {
+        let mut builder = PairCommandBuilder::new(66).map_err(GnssError::PairCommand)?;
+        for constellation in [
+            mode.gps(),
+            mode.glonass(),
+            mode.galileo(),
+            mode.bds(),
+            mode.qzss(),
+        ] {
+            builder
+                .field_bool(constellation)
+                .map_err(GnssError::PairCommand)?;
+        }
+        builder.field_u32(0).map_err(GnssError::PairCommand)?;
+        self.send_pair_builder(builder).await
+    }
+
+    /// Requests the receiver's configured constellation search mode.
+    pub async fn query_gnss_search_mode(&mut self) -> Result<(), GnssError<I::Error>> {
+        self.send_pair_builder(PairCommandBuilder::new(67).map_err(GnssError::PairCommand)?)
+            .await
+    }
+
+    /// Sets the static-navigation speed threshold.
+    pub async fn set_static_navigation_threshold(
+        &mut self,
+        threshold: StaticNavigationThreshold,
+    ) -> Result<(), GnssError<I::Error>> {
+        let mut builder = PairCommandBuilder::new(70).map_err(GnssError::PairCommand)?;
+        builder
+            .field_u32(threshold.decimetres_per_second() as u32)
+            .map_err(GnssError::PairCommand)?;
+        self.send_pair_builder(builder).await
+    }
+
+    /// Requests the receiver's static-navigation speed threshold.
+    pub async fn query_static_navigation_threshold(&mut self) -> Result<(), GnssError<I::Error>> {
+        self.send_pair_builder(PairCommandBuilder::new(71).map_err(GnssError::PairCommand)?)
+            .await
+    }
+
+    /// Sets the minimum satellite elevation used during navigation.
+    pub async fn set_elevation_mask(
+        &mut self,
+        mask: ElevationMaskDegrees,
+    ) -> Result<(), GnssError<I::Error>> {
+        let mut builder = PairCommandBuilder::new(72).map_err(GnssError::PairCommand)?;
+        builder
+            .field_i32(mask.degrees() as i32)
+            .map_err(GnssError::PairCommand)?;
+        self.send_pair_builder(builder).await
+    }
+
+    /// Requests the receiver's minimum satellite elevation.
+    pub async fn query_elevation_mask(&mut self) -> Result<(), GnssError<I::Error>> {
+        self.send_pair_builder(PairCommandBuilder::new(73).map_err(GnssError::PairCommand)?)
+            .await
+    }
+
+    /// Enables or disables active interference cancellation.
+    pub async fn set_aic_mode(&mut self, mode: AicMode) -> Result<(), GnssError<I::Error>> {
+        let mut builder = PairCommandBuilder::new(74).map_err(GnssError::PairCommand)?;
+        builder
+            .field_u32(mode.wire_value() as u32)
+            .map_err(GnssError::PairCommand)?;
+        self.send_pair_builder(builder).await
+    }
+
+    /// Requests the receiver's active interference cancellation state.
+    pub async fn query_aic_mode(&mut self) -> Result<(), GnssError<I::Error>> {
+        self.send_pair_builder(PairCommandBuilder::new(75).map_err(GnssError::PairCommand)?)
+            .await
+    }
+
+    /// Sets the receiver's navigation model.
+    pub async fn set_navigation_mode(
+        &mut self,
+        mode: NavigationMode,
+    ) -> Result<(), GnssError<I::Error>> {
+        let mut builder = PairCommandBuilder::new(80).map_err(GnssError::PairCommand)?;
+        builder
+            .field_u32(mode.wire_value() as u32)
+            .map_err(GnssError::PairCommand)?;
+        self.send_pair_builder(builder).await
+    }
+
+    /// Requests the receiver's navigation model.
+    pub async fn query_navigation_mode(&mut self) -> Result<(), GnssError<I::Error>> {
+        self.send_pair_builder(PairCommandBuilder::new(81).map_err(GnssError::PairCommand)?)
+            .await
+    }
+
+    /// Sets the receiver's binary debug-log output mode.
+    pub async fn set_debug_log_output(
+        &mut self,
+        output: DebugLogOutput,
+    ) -> Result<(), GnssError<I::Error>> {
+        let mut builder = PairCommandBuilder::new(86).map_err(GnssError::PairCommand)?;
+        builder
+            .field_u32(output.wire_value() as u32)
+            .map_err(GnssError::PairCommand)?;
+        self.send_pair_builder(builder).await
+    }
+
+    /// Requests the receiver's binary debug-log output mode.
+    pub async fn query_debug_log_output(&mut self) -> Result<(), GnssError<I::Error>> {
+        self.send_pair_builder(PairCommandBuilder::new(87).map_err(GnssError::PairCommand)?)
+            .await
     }
 
     /// Sets the output rate for one standard NMEA sentence type.
@@ -1088,6 +1446,14 @@ where
         command: &PairCommand,
     ) -> Result<(), GnssError<I::Error>> {
         self.write_nmea(command.as_bytes()).await
+    }
+
+    async fn send_pair_builder(
+        &mut self,
+        builder: PairCommandBuilder,
+    ) -> Result<(), GnssError<I::Error>> {
+        let command = builder.finish().map_err(GnssError::PairCommand)?;
+        self.send_pair_command(&command).await
     }
 
     async fn read_nmea_length(&mut self) -> Result<usize, GnssError<I::Error>> {
