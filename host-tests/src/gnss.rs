@@ -4,8 +4,9 @@ use embedded_hal::i2c::{Operation, SevenBitAddress};
 use embedded_hal_async::{delay::DelayNs, i2c::I2c};
 use futures::executor::block_on;
 use lc76g::{
-    GnssFixType, Lc76g, LowPowerMode, NmeaOutputRate, NmeaParser, NmeaSentence, NmeaUpdate,
-    PairAck, PairAckStatus, PairCommandBuilder,
+    AicMode, DebugLogOutput, ElevationMaskDegrees, FixIntervalMs, GnssFixType, GnssSearchMode,
+    Lc76g, LowPowerMode, MinimumSnrDb, NavigationMode, NmeaOutputRate, NmeaParser, NmeaSentence,
+    NmeaUpdate, PairAck, PairAckStatus, PairCommandBuilder, StaticNavigationThreshold,
 };
 
 #[derive(Default)]
@@ -255,6 +256,83 @@ fn adaptive_low_power_mode_sends_documented_prerequisites() {
             b"$PAIR732,1*21\r\n".as_slice(),
         ]
     );
+}
+
+#[test]
+fn typed_receiver_configuration_uses_documented_wire_commands() {
+    let state = Rc::new(RefCell::new(MockState {
+        writes: Vec::new(),
+        reads: vec![vec![64, 0, 0, 0]; 16],
+    }));
+    let i2c = MockI2c {
+        state: state.clone(),
+    };
+    let mut gnss = Lc76g::new(i2c, MockDelay::default());
+
+    block_on(gnss.set_fix_interval(FixIntervalMs::new(1_000).unwrap())).unwrap();
+    block_on(gnss.query_fix_interval()).unwrap();
+    block_on(gnss.set_minimum_snr(MinimumSnrDb::new(15).unwrap())).unwrap();
+    block_on(gnss.query_minimum_snr()).unwrap();
+    block_on(gnss.set_gnss_search_mode(GnssSearchMode::new(
+        true, false, true, true, false,
+    )))
+    .unwrap();
+    block_on(gnss.query_gnss_search_mode()).unwrap();
+    block_on(gnss.set_static_navigation_threshold(
+        StaticNavigationThreshold::new(4).unwrap(),
+    ))
+    .unwrap();
+    block_on(gnss.query_static_navigation_threshold()).unwrap();
+    block_on(gnss.set_elevation_mask(ElevationMaskDegrees::new(5).unwrap())).unwrap();
+    block_on(gnss.query_elevation_mask()).unwrap();
+    block_on(gnss.set_aic_mode(AicMode::Enabled)).unwrap();
+    block_on(gnss.query_aic_mode()).unwrap();
+    block_on(gnss.set_navigation_mode(NavigationMode::Fitness))
+        .unwrap();
+    block_on(gnss.query_navigation_mode()).unwrap();
+    block_on(gnss.set_debug_log_output(DebugLogOutput::Full))
+        .unwrap();
+    block_on(gnss.query_debug_log_output()).unwrap();
+
+    let command_data: Vec<Vec<u8>> = state
+        .borrow()
+        .writes
+        .iter()
+        .filter(|(address, _)| *address == 0x58)
+        .map(|(_, data)| data.clone())
+        .collect();
+    assert_eq!(
+        command_data,
+        vec![
+            b"$PAIR050,1000*12\r\n".to_vec(),
+            b"$PAIR051*3E\r\n".to_vec(),
+            b"$PAIR058,15*1F\r\n".to_vec(),
+            b"$PAIR059*36\r\n".to_vec(),
+            b"$PAIR066,1,0,1,1,0,0*3B\r\n".to_vec(),
+            b"$PAIR067*3B\r\n".to_vec(),
+            b"$PAIR070,4*25\r\n".to_vec(),
+            b"$PAIR071*3C\r\n".to_vec(),
+            b"$PAIR072,5*26\r\n".to_vec(),
+            b"$PAIR073*3E\r\n".to_vec(),
+            b"$PAIR074,1*24\r\n".to_vec(),
+            b"$PAIR075*38\r\n".to_vec(),
+            b"$PAIR080,1*2F\r\n".to_vec(),
+            b"$PAIR081*33\r\n".to_vec(),
+            b"$PAIR086,1*29\r\n".to_vec(),
+            b"$PAIR087*35\r\n".to_vec(),
+        ]
+    );
+}
+
+#[test]
+fn typed_receiver_configuration_rejects_out_of_range_values() {
+    assert!(FixIntervalMs::new(99).is_none());
+    assert!(FixIntervalMs::new(1_001).is_none());
+    assert!(MinimumSnrDb::new(8).is_none());
+    assert!(MinimumSnrDb::new(38).is_none());
+    assert!(StaticNavigationThreshold::new(21).is_none());
+    assert!(ElevationMaskDegrees::new(-91).is_none());
+    assert!(ElevationMaskDegrees::new(91).is_none());
 }
 
 #[test]
