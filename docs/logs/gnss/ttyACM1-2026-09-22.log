@@ -1,0 +1,26 @@
+# GNSS capture excerpt
+
+# The board was connected as /dev/ttyACM1 while the other two boards were
+# connected. It later enumerated as /dev/ttyACM0 after those boards were
+# disconnected. This excerpt was captured before the GSV aggregation fix.
+
+[GNSS] RAW $GNGGA,075926.158,,,,,0,00,99.99,,M,,M,,*4B
+[GNSS] RAW $GNGSA,A,1,,,,,,,,,,,,,99.99,99.99,99.99,1*33
+[GNSS] RAW $GNGSA,A,1,,,,,,,,,,,,,99.99,99.99,99.99,2*30
+[GNSS] RAW $GNGSA,A,1,,,,,,,,,,,,,99.99,99.99,99.99,3*31
+[GNSS] RAW $GNGSA,A,1,,,,,,,,,,,,,99.99,99.99,99.99,4*36
+[GNSS] RAW $GPGSV,1,1,04,06,67,286,,04,66,087,,03,31,082,29,31,15,035,24,1*66
+[GNSS] RAW $GLGSV,1,1,00,1*78
+[GNSS] RAW $GAGSV,1,1,00,7*73
+[GNSS] RAW $GBGSV,1,1,00,1*76
+[GNSS] RAW $GNRMC,075926.158,V,,,,,,,220926,,,N,V*27
+[GNSS] acquisition in_view=0 with_signal=0 used=0 strongest_snr_db=None fix_type=NoFix
+
+[GNSS] RAW $GPGSV,2,1,05,06,67,286,,04,66,087,,09,63,185,,03,31,082,28,1*63
+[GNSS] RAW $GPGSV,2,2,05,31,15,035,23,1*50
+[GNSS] RAW $GLGSV,1,1,01,78,13,045,,1*45
+[GNSS] acquisition in_view=0 with_signal=0 used=0 strongest_snr_db=None fix_type=NoFix
+
+[GNSS] RAW $GPGSV,2,1,07,11,31,303,,09,63,185,,19,36,233,,04,66,087,,1*66
+[GNSS] RAW $GPGSV,2,2,07,03,31,082,26,17,18,204,,31,15,035,21,1*56
+[GNSS] acquisition in_view=0 with_signal=0 used=0 strongest_snr_db=None fix_type=NoFix

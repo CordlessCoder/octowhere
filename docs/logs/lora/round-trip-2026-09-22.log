@@ -1,0 +1,21 @@
+# SX1272 two-board round-trip
+
+# Board identities
+# TX: /dev/ttyACM0, MAC 44:1b:f6:86:1a:38
+# RX: /dev/ttyACM1, MAC 44:1b:f6:86:1c:1c
+
+# Both boards reported SX1272 RegVersion=0x22 and completed driver
+# initialization after the active-high reset sequence was corrected.
+
+[LORA] LINK_TX_DONE sequence=0
+[LORA] LINK_TX_DONE sequence=1
+[LORA] LINK_TX_DONE sequence=2
+[LORA] LINK_TX_DONE sequence=3
+
+[LORA] LINK_RX_OK len=8 rssi=-99 snr_raw=20 payload=[79, 87, 76, 75, 0, 0, 1, 52]
+[LORA] LINK_RX_OK len=8 rssi=-101 snr_raw=24 payload=[79, 87, 76, 75, 0, 0, 1, 54]
+[LORA] LINK_RX_OK len=8 rssi=-98 snr_raw=18 payload=[79, 87, 76, 75, 0, 0, 1, 56]
+[LORA] LINK_RX_OK len=8 rssi=-102 snr_raw=20 payload=[79, 87, 76, 75, 0, 0, 1, 58]
+
+# Payload bytes are ASCII OWLK followed by a big-endian sequence number.
+# The receiver used CRC-enabled LoRa mode and reported successful packets.

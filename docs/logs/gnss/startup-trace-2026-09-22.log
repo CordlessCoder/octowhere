@@ -1,0 +1,104 @@
+# GNSS startup trace
+# Firmware: gnss-full-power + gnss-raw-log
+# Captured by resetting the board with espflash monitor.
+# Filtered to reset/configuration, PAIR traffic, acquisition summaries, and the first position fix.
+
+[TCA9554] init_start[GNSS] STARTUP t_us=1121436 PAIR_SEND_RESULT command=063 status=accepted
+[GNSS] STARTUP t_us=1121597 PAIR_SEND command=062 sentence=Gsv rate=1
+[GNSS] STARTUP t_us=1153396 PAIR_SEND_RESULT command=062 status=accepted
+[GNSS] STARTUP t_us=1153679 PAIR_SEND command=063 sentence=Gsv
+[GNSS] STARTUP t_us=1185031 PAIR_SEND_RESULT command=063 status=accepted
+[GNSS] STARTUP t_us=1185305 PAIR_SEND command=067
+[GNSS] STARTUP t_us=1216623 PAIR_SEND_RESULT command=067 status=accepted
+[GNSS] RAW $PAIR001,124,0*3C
+[GNSS] RAW $PAIR011,001*27
+[GNSS] RAW $PAIR010,1,-1*16
+[GNSS] RAW $PAIR010,2,-1*15
+[GNSS] RAW $PAIR010,0,0,2437,204261*3A
+[GNSS] RAW $PAIR010,0,1,2437,204261*3B
+[GNSS] RAW $PAIR010,0,3,2437,204261*39
+[GNSS] RAW $PAIR010,0,2,2437,204261*38
+[GNSS] STARTUP t_us=1271720 PAIR_ACK command=124 status=Accepted
+[GNSS] STARTUP t_us=1272964 PAIR_RESPONSE command=11 fields=[48, 48, 49]
+[GNSS] STARTUP t_us=1276880 PAIR_RESPONSE command=10 fields=[49, 44, 45, 49]
+[GNSS] STARTUP t_us=1281044 PAIR_RESPONSE command=10 fields=[50, 44, 45, 49]
+[GNSS] STARTUP t_us=1285223 PAIR_RESPONSE command=10 fields=[48, 44, 48, 44, 50, 52, 51, 55, 44, 50, 48, 52, 50, 54, 49]
+[GNSS] STARTUP t_us=1292861 PAIR_RESPONSE command=10 fields=[48, 44, 49, 44, 50, 52, 51, 55, 44, 50, 48, 52, 50, 54, 49]
+[GNSS] STARTUP t_us=1300499 PAIR_RESPONSE command=10 fields=[48, 44, 51, 44, 50, 52, 51, 55, 44, 50, 48, 52, 50, 54, 49]
+[GNSS] STARTUP t_us=1308137 PAIR_RESPONSE command=10 fields=[48, 44, 50, 44, 50, 52, 51, 55, 44, 50, 48, 52, 50, 54, 49]
+[GNSS] acquisition in_view=0 with_signal=0 used=0 strongest_snr_db=None fix_type=NoFix hdop_milli=None
+[GNSS] RAW $PAIR001,732,0*3D
+[GNSS] RAW $PAIR001,062,0*3F
+[GNSS] RAW $PAIR001,063,0*3E
+[GNSS] RAW $PAIR063,2,1*3C
+[GNSS] RAW $PAIR001,062,0*3F
+[GNSS] RAW $PAIR001,063,0*3E
+[GNSS] RAW $PAIR063,3,1*3D
+[GNSS] RAW $PAIR001,067,0*3A
+[GNSS] RAW $PAIR067,1,1,1,1,1,0*3A
+[GNSS] PAIR_ACK command=732 status=Accepted
+[GNSS] PAIR_ACK command=62 status=Accepted
+[GNSS] PAIR_ACK command=63 status=Accepted
+[GNSS] NMEA_OUTPUT_RATE sentence=Gsa rate=NmeaOutputRate(1)
+[GNSS] PAIR_ACK command=62 status=Accepted
+[GNSS] PAIR_ACK command=63 status=Accepted
+[GNSS] NMEA_OUTPUT_RATE sentence=Gsv rate=NmeaOutputRate(1)
+[GNSS] PAIR_ACK command=67 status=Accepted
+[GNSS] PAIR_RESPONSE command=67 fields=[49, 44, 49, 44, 49, 44, 49, 44, 49, 44, 48]
+[GNSS] acquisition in_view=0 with_signal=0 used=0 strongest_snr_db=None fix_type=NoFix hdop_milli=None
+[GNSS] acquisition in_view=11 with_signal=6 used=0 strongest_snr_db=Some(41) fix_type=NoFix hdop_milli=None
+[GNSS] acquisition in_view=14 with_signal=7 used=0 strongest_snr_db=Some(40) fix_type=NoFix hdop_milli=None
+[GNSS] acquisition in_view=14 with_signal=7 used=0 strongest_snr_db=Some(40) fix_type=NoFix hdop_milli=None
+[GNSS] acquisition in_view=14 with_signal=7 used=0 strongest_snr_db=Some(40) fix_type=NoFix hdop_milli=None
+[GNSS] acquisition in_view=14 with_signal=7 used=0 strongest_snr_db=Some(40) fix_type=NoFix hdop_milli=None
+[GNSS] acquisition in_view=14 with_signal=7 used=0 strongest_snr_db=Some(40) fix_type=NoFix hdop_milli=None
+[GNSS] RAW $PAIR010,0,2,2437,204263*3A
+[GNSS] PAIR_RESPONSE command=10 fields=[48, 44, 50, 44, 50, 52, 51, 55, 44, 50, 48, 52, 50, 54, 51]
+[GNSS] acquisition in_view=19 with_signal=13 used=5 strongest_snr_db=Some(41) fix_type=Fix3D hdop_milli=Some(1100)
+[GNSS] sample bytes=512 updates=8 lat=527087749 lon=-88791587 alt_mm=Some(15883) sats=Some(SatelliteCount(14)) hdop_milli=Some(1100)
+[GNSS] acquisition in_view=19 with_signal=16 used=5 strongest_snr_db=Some(41) fix_type=Fix3D hdop_milli=Some(1100)
+[GNSS] sample bytes=512 updates=8 lat=527087749 lon=-88791587 alt_mm=None sats=None hdop_milli=None
+[GNSS] acquisition in_view=19 with_signal=16 used=5 strongest_snr_db=Some(41) fix_type=Fix3D hdop_milli=Some(1100)
+[GNSS] sample bytes=15 updates=1 lat=527087749 lon=-88791587 alt_mm=None sats=None hdop_milli=None
+[GNSS] acquisition in_view=19 with_signal=13 used=5 strongest_snr_db=Some(41) fix_type=Fix3D hdop_milli=Some(1100)
+[GNSS] sample bytes=512 updates=8 lat=527087703 lon=-88791547 alt_mm=Some(15856) sats=Some(SatelliteCount(14)) hdop_milli=Some(1100)
+[GNSS] acquisition in_view=19 with_signal=16 used=5 strongest_snr_db=Some(41) fix_type=Fix3D hdop_milli=Some(1100)
+[GNSS] RAW $PAIR010,0,2,2437,204323*3F
+[GNSS] PAIR_RESPONSE command=10 fields=[48, 44, 50, 44, 50, 52, 51, 55, 44, 50, 48, 52, 51, 50, 51]
+
+# Complete reset excerpt from an interactive monitor capture.
+# First invalid NMEA epoch: 08:46:19.918
+# First valid 3D fix: 08:46:40.000, approximately 20 seconds later.
+[GNSS] STARTUP t_us=2 RESET_SEQUENCE_BEGIN
+[GNSS] STARTUP t_us=202 RESET_OUTPUT phase=initial value=0x7E
+[GNSS] STARTUP t_us=10628 RESET_OUTPUT phase=after_10ms value=0x7F
+[GNSS] STARTUP t_us=11135 RESET_OUTPUT phase=after_200us value=0x7E
+[GNSS] STARTUP t_us=11608 RESET_DIRECTION value=0xFE
+[GNSS] STARTUP t_us=21997 RESET_OUTPUT phase=release_lora value=0xFE
+[GNSS] STARTUP t_us=1022583 PAIR_SEND command=732 mode=Disabled
+[GNSS] STARTUP t_us=1054083 PAIR_SEND_RESULT command=732 status=accepted
+[GNSS] STARTUP t_us=1054378 PAIR_SEND command=062 sentence=Gsa rate=1
+[GNSS] STARTUP t_us=1086100 PAIR_SEND_RESULT command=062 status=accepted
+[GNSS] STARTUP t_us=1086379 PAIR_SEND command=063 sentence=Gsa
+[GNSS] STARTUP t_us=1117790 PAIR_SEND_RESULT command=063 status=accepted
+[GNSS] STARTUP t_us=1118060 PAIR_SEND command=062 sentence=Gsv rate=1
+[GNSS] STARTUP t_us=1149576 PAIR_SEND_RESULT command=062 status=accepted
+[GNSS] STARTUP t_us=1149849 PAIR_SEND command=063 sentence=Gsv
+[GNSS] STARTUP t_us=1181297 PAIR_SEND_RESULT command=063 status=accepted
+[GNSS] STARTUP t_us=1181568 PAIR_SEND command=067
+[GNSS] STARTUP t_us=1222842 PAIR_SEND_RESULT command=067 status=accepted
+[GNSS] RAW $PAIR001,732,0*3D
+[GNSS] RAW $PAIR001,062,0*3F
+[GNSS] RAW $PAIR001,063,0*3E
+[GNSS] RAW $PAIR063,2,1*3C
+[GNSS] RAW $PAIR001,062,0*3F
+[GNSS] RAW $PAIR001,063,0*3E
+[GNSS] RAW $PAIR063,3,1*3D
+[GNSS] RAW $PAIR001,067,0*3A
+[GNSS] RAW $PAIR067,1,1,1,1,1,0*3A
+[GNSS] acquisition in_view=14 with_signal=8 used=0 strongest_snr_db=Some(41) fix_type=NoFix hdop_milli=None
+[GNSS] acquisition in_view=22 with_signal=11 used=0 strongest_snr_db=Some(41) fix_type=NoFix hdop_milli=None
+[GNSS] RAW $GNGGA,084640.000,A,5242.525210,N,00852.753092,W,1,15,1.08,11.394,M,58.233,M,,*52
+[GNSS] RAW $GNGSA,A,3,04,09,07,03,,,,,,,,,1.32,1.08,0.82,1*05
+[GNSS] acquisition in_view=22 with_signal=14 used=5 strongest_snr_db=Some(41) fix_type=Fix3D hdop_milli=Some(1080)
+[GNSS] sample bytes=512 updates=8 lat=527087534 lon=-88792182 alt_mm=Some(11394) sats=Some(SatelliteCount(15)) hdop_milli=Some(1080)
