@@ -43,6 +43,8 @@ pub const EXIO_AXP_IRQ: u8 = 5;
 pub const EXIO_QMI_INT1: u8 = 6;
 pub const EXIO_GPS_RESET: u8 = 7;
 pub const EXIO_LORA_RESET: u8 = 0;
+pub const EXIO_LORA_RX_SWITCH: u8 = 1;
+pub const EXIO_LORA_TX_SWITCH: u8 = 2;
 
 // LoRa, SX1272 module on the secondary PCB
 pub const LORA_SCK: u8 = 16;

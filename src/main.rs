@@ -8,6 +8,8 @@
 #![expect(unused)]
 #![deny(clippy::mem_forget)]
 #![warn(unused_must_use)]
+#[cfg(all(feature = "lora-link-tx", feature = "lora-link-rx"))]
+compile_error!("lora-link-tx and lora-link-rx are mutually exclusive");
 extern crate alloc;
 
 use alloc::{alloc::Allocator, boxed::Box};
@@ -21,6 +23,8 @@ use embassy_sync::{
 };
 use embassy_time::{Duration, Instant, Timer};
 use embedded_graphics::prelude::*;
+use embedded_hal_async::i2c::I2c as _;
+use embedded_hal_bus::spi::ExclusiveDevice;
 use esp_hal::{
     dma_tx_buffer,
     gpio::{Input, InputConfig, Level, Output, OutputConfig},
@@ -39,7 +43,6 @@ use octowhere::{
     chrome::{self, Color, Dirty, FB, FontdueRenderer, FontdueRendererCtx},
     drivers::{co5300::Co5300Display, framebuffer::Framebuffer, qspi_bus::QspiBus},
     peripherals::{
-        lora::{LoraError, Sx1272},
         magnetometer::Bmm350,
         power::Axp2101Power,
         rtc::{DateTime as RtcDateTime, Pcf85063aRtc},
@@ -54,6 +57,12 @@ use octowhere::{
     util::{Swap, SwapThread},
 };
 use static_cell::StaticCell;
+use sx127xlora::{
+    Sx1272,
+    driver::Sx1272Lora,
+    registers::{FRF_MSB, IRQ_FLAGS, OP_MODE, VERSION},
+    types::{RxDone, Sx127xLoraConfig, TxDone},
+};
 use tca9554::Tca9554;
 
 use esp_alloc as _;
@@ -80,7 +89,46 @@ static SWAP: StaticCell<Swap<SwapState<&esp_alloc::EspHeap>>> = StaticCell::new(
 type I2cBus = I2c<'static, esp_hal::Async>;
 type SharedI2cDevice = I2cDevice<'static, NoopRawMutex, I2cBus>;
 type SensorImu = ph_qmi8658::Qmi8658I2c<SharedI2cDevice, core::convert::Infallible, Input<'static>>;
-type SensorLora = Sx1272<spi::master::Spi<'static, esp_hal::Async>, Output<'static>>;
+type LoraSpi = ExclusiveDevice<
+    spi::master::Spi<'static, esp_hal::Async>,
+    Output<'static>,
+    embassy_time::Delay,
+>;
+type SensorLora = Sx1272Lora<LoraSpi>;
+
+struct LoraPath {
+    i2c: SharedI2cDevice,
+    output: u8,
+}
+
+impl LoraPath {
+    const OUTPUT_REGISTER: u8 = 0x01;
+
+    fn new(i2c: SharedI2cDevice, output: u8) -> Self {
+        Self { i2c, output }
+    }
+
+    async fn write_output(&mut self, output: u8) -> Result<(), ()> {
+        self.i2c
+            .write(board::TCA9554_I2C_ADDR, &[Self::OUTPUT_REGISTER, output])
+            .await
+            .map_err(|_| ())?;
+        self.output = output;
+        Ok(())
+    }
+
+    async fn receive(&mut self) -> Result<(), ()> {
+        let rx = 1 << board::EXIO_LORA_RX_SWITCH;
+        let tx = 1 << board::EXIO_LORA_TX_SWITCH;
+        self.write_output((self.output | rx) & !tx).await
+    }
+
+    async fn transmit(&mut self) -> Result<(), ()> {
+        let rx = 1 << board::EXIO_LORA_RX_SWITCH;
+        let tx = 1 << board::EXIO_LORA_TX_SWITCH;
+        self.write_output((self.output | tx) & !rx).await
+    }
+}
 
 static I2C_BUS: StaticCell<Mutex<NoopRawMutex, I2cBus>> = StaticCell::new();
 static SENSOR_STATE: Signal<CriticalSectionRawMutex, SensorSnapshot> = Signal::new();
@@ -110,8 +158,10 @@ struct SensorSnapshot {
 struct SensorTask {
     power: Axp2101Power<SharedI2cDevice>,
     lora: SensorLora,
+    lora_dio0: Input<'static>,
+    lora_path: LoraPath,
     gnss: Lc76g<SharedI2cDevice, embassy_time::Delay>,
-    nmea: [u8; 64],
+    nmea: [u8; 512],
     nmea_parser: NmeaParser,
     rtc: Pcf85063aRtc<SharedI2cDevice>,
     magnetometer: Bmm350<SharedI2cDevice>,
@@ -120,6 +170,30 @@ struct SensorTask {
     gyro_lsb_per_dps: i32,
     state: SensorSnapshot,
     rtc_sync_pending: bool,
+}
+
+#[cfg(feature = "gnss-raw-log")]
+fn log_raw_nmea(data: &[u8], line: &mut [u8; 256], line_len: &mut usize) {
+    for &byte in data {
+        if *line_len == line.len() {
+            println!("[GNSS] RAW_TRUNCATED");
+            *line_len = 0;
+        }
+        line[*line_len] = byte;
+        *line_len += 1;
+
+        if byte == b'\n' {
+            let mut end = *line_len;
+            while end != 0 && matches!(line[end - 1], b'\r' | b'\n') {
+                end -= 1;
+            }
+            match core::str::from_utf8(&line[..end]) {
+                Ok(sentence) => println!("[GNSS] RAW {sentence}"),
+                Err(_) => println!("[GNSS] RAW_NON_UTF8 len={end}"),
+            }
+            *line_len = 0;
+        }
+    }
 }
 
 macro_rules! start_display_core {
@@ -361,6 +435,8 @@ async fn sensor_task(task: SensorTask) {
     let SensorTask {
         mut power,
         mut lora,
+        mut lora_dio0,
+        mut lora_path,
         mut gnss,
         mut nmea,
         mut nmea_parser,
@@ -372,6 +448,18 @@ async fn sensor_task(task: SensorTask) {
         mut state,
         mut rtc_sync_pending,
     } = task;
+    #[cfg(feature = "gnss-raw-log")]
+    let mut raw_nmea_line = [0; 256];
+    #[cfg(feature = "gnss-raw-log")]
+    let mut raw_nmea_line_len = 0;
+
+    #[cfg(feature = "lora-link-tx")]
+    lora.map_dio0::<TxDone>().await.unwrap();
+    #[cfg(feature = "lora-link-rx")]
+    lora.map_dio0::<RxDone>().await.unwrap();
+
+    #[cfg(feature = "lora-link-tx")]
+    let mut lora_sequence = 0u32;
 
     loop {
         Timer::after(Duration::from_millis(250)).await;
@@ -388,13 +476,15 @@ async fn sensor_task(task: SensorTask) {
             "[PMIC] sample battery_present={battery_present} VBAT={battery_mv:?}mV VBUS={vbus_mv:?}mV VSYS={vsys_mv:?}mV"
         );
 
-        if let Ok(irq) = lora.irq_flags().await {
+        if let Ok(irq) = lora.read(IRQ_FLAGS).await {
             state.lora_irq = irq;
             println!("[LORA] sample IRQ=0x{irq:02X}");
         }
         match gnss.read_nmea_chunk(&mut nmea).await {
             Ok(data) => {
                 state.gnss_bytes = data.len() as u16;
+                #[cfg(feature = "gnss-raw-log")]
+                log_raw_nmea(data, &mut raw_nmea_line, &mut raw_nmea_line_len);
                 let mut updates = 0;
                 for &byte in data.iter() {
                     match nmea_parser.push(byte) {
@@ -452,12 +542,9 @@ async fn sensor_task(task: SensorTask) {
                     );
                 }
             }
-            Err(GnssError::I2c { operation, .. }) => match operation {
-                GnssOperation::WriteConfig => println!("[GNSS] I2C_WRITE_CONFIG_FAILED"),
-                GnssOperation::ReadLength => println!("[GNSS] I2C_READ_LENGTH_FAILED"),
-                GnssOperation::ReadData => println!("[GNSS] I2C_READ_DATA_FAILED"),
-                GnssOperation::WriteData => println!("[GNSS] I2C_WRITE_DATA_FAILED"),
-            },
+            Err(GnssError::I2c { operation, error }) => {
+                println!("[GNSS] I2C_FAILED operation={operation:?} error={error:?}");
+            }
             Err(GnssError::BufferTooSmall { .. }) => {
                 println!("[GNSS] NMEA_BUFFER_TOO_SMALL")
             }
@@ -551,6 +638,75 @@ async fn sensor_task(task: SensorTask) {
             );
         } else {
             state.imu_valid = false;
+        }
+
+        #[cfg(feature = "lora-link-tx")]
+        {
+            let payload = [
+                b'O',
+                b'W',
+                b'L',
+                b'K',
+                (lora_sequence >> 24) as u8,
+                (lora_sequence >> 16) as u8,
+                (lora_sequence >> 8) as u8,
+                lora_sequence as u8,
+            ];
+            lora_sequence = lora_sequence.wrapping_add(1);
+
+            if lora_path.transmit().await.is_err() {
+                println!("[LORA] LINK_TX_SWITCH_FAILED");
+            } else if lora.tx(&payload).await.is_err() {
+                println!("[LORA] LINK_TX_FAILED");
+            } else {
+                match select(
+                    lora_dio0.wait_for_rising_edge(),
+                    Timer::after(Duration::from_secs(2)),
+                )
+                .await
+                {
+                    Either::First(_) => {
+                        println!("[LORA] LINK_TX_DONE sequence={}", lora_sequence - 1);
+                        let _ = lora.clear_interrupt::<TxDone>().await;
+                    }
+                    Either::Second(_) => println!("[LORA] LINK_TX_TIMEOUT"),
+                }
+                let _ = lora_path.receive().await;
+            }
+        }
+
+        #[cfg(feature = "lora-link-rx")]
+        {
+            println!("[LORA] LINK_RX_START");
+            if lora_path.receive().await.is_err() {
+                println!("[LORA] LINK_RX_SWITCH_FAILED");
+            } else if lora.rx(None).await.is_err() {
+                println!("[LORA] LINK_RX_START_FAILED");
+            } else {
+                let mut received = false;
+                for _ in 0..100 {
+                    if lora.interrupt_flag::<RxDone>().await.unwrap_or(false) {
+                        received = true;
+                        break;
+                    }
+                    Timer::after(Duration::from_millis(20)).await;
+                }
+                if received {
+                    match lora.rx_packet().await {
+                        Ok(packet) => println!(
+                            "[LORA] LINK_RX_OK len={} rssi={} snr_raw={} payload={:?}",
+                            packet.length,
+                            packet.rssi,
+                            packet.snr_raw,
+                            packet.payload(),
+                        ),
+                        Err(_) => println!("[LORA] LINK_RX_PACKET_FAILED"),
+                    }
+                } else {
+                    println!("[LORA] LINK_RX_TIMEOUT");
+                }
+                let _ = lora.clear_all_interrupts().await;
+            }
         }
 
         SENSOR_STATE.signal(state);
@@ -795,65 +951,131 @@ async fn async_main(spawner: Spawner) {
     println!("[TCA9554] init_start");
     exio.init().await.unwrap();
     exio.write_output(u8::MAX).await.unwrap();
-    let exio_output_mask = (1 << board::EXIO_GPS_RESET) | (1 << board::EXIO_LORA_RESET);
+    let exio_output_mask = (1 << board::EXIO_GPS_RESET)
+        | (1 << board::EXIO_LORA_RESET)
+        | (1 << board::EXIO_LORA_RX_SWITCH)
+        | (1 << board::EXIO_LORA_TX_SWITCH);
     exio.write_direction(!exio_output_mask).await.unwrap();
     println!("[TCA9554] OK");
 
     let gps_reset = 1 << board::EXIO_GPS_RESET;
     let lora_reset = 1 << board::EXIO_LORA_RESET;
-    exio.write_output(!(gps_reset | lora_reset)).await.unwrap();
+    let lora_rx_switch = 1 << board::EXIO_LORA_RX_SWITCH;
+    let lora_tx_switch = 1 << board::EXIO_LORA_TX_SWITCH;
+    let gnss_trace_start = Instant::now();
+    macro_rules! gnss_trace {
+        ($($arg:tt)*) => {{
+            println!(
+                "[GNSS] STARTUP t_us={} {}",
+                gnss_trace_start.elapsed().as_micros(),
+                format_args!($($arg)*)
+            );
+        }};
+    }
+
+    gnss_trace!("RESET_SEQUENCE_BEGIN");
+    exio.write_output(!(gps_reset | lora_reset | lora_tx_switch))
+        .await
+        .unwrap();
+    gnss_trace!(
+        "RESET_OUTPUT phase=initial value=0x{:02X}",
+        !(gps_reset | lora_reset | lora_tx_switch)
+    );
     Timer::after(Duration::from_millis(10)).await;
-    exio.write_output(!gps_reset).await.unwrap();
+    exio.write_output(!lora_tx_switch)
+        .await
+        .unwrap();
+    gnss_trace!(
+        "RESET_OUTPUT phase=release_gps_pulse_lora value=0x{:02X}",
+        !lora_tx_switch
+    );
     Timer::after(Duration::from_micros(200)).await;
-    exio.write_output(!(gps_reset | lora_reset)).await.unwrap();
-    exio.write_direction(!lora_reset).await.unwrap();
+    exio.write_output(!(lora_reset | lora_tx_switch))
+        .await
+        .unwrap();
+    gnss_trace!(
+        "RESET_OUTPUT phase=release_lora value=0x{:02X}",
+        !(lora_reset | lora_tx_switch)
+    );
+    exio.write_direction(!(lora_reset | lora_rx_switch | lora_tx_switch))
+        .await
+        .unwrap();
+    gnss_trace!(
+        "RESET_DIRECTION value=0x{:02X}",
+        !(lora_reset | lora_rx_switch | lora_tx_switch)
+    );
     Timer::after(Duration::from_millis(10)).await;
-    exio.write_output(!lora_reset).await.unwrap();
+    exio.write_output(!(lora_reset | lora_tx_switch)).await.unwrap();
+    gnss_trace!(
+        "RESET_OUTPUT phase=select_rx value=0x{:02X}",
+        !(lora_reset | lora_tx_switch)
+    );
     let exio_direction = exio.read_direction().await.unwrap();
     println!("[TCA9554] direction=0x{exio_direction:02X}");
-    Timer::after(Duration::from_secs(1)).await;
+    #[cfg(not(any(feature = "lora-link-tx", feature = "lora-link-rx")))]
+    {
+        println!("[GNSS] STARTUP settle_begin");
+        Timer::after(Duration::from_secs(1)).await;
+        println!("[GNSS] STARTUP settle_complete");
+    }
+    drop(exio);
 
     let mut gnss = Lc76g::new(i2c.clone(), embassy_time::Delay);
+    gnss_trace!("PAIR_SEND command=732 mode={GNSS_LOW_POWER_MODE:?}");
     match gnss.set_low_power_mode(GNSS_LOW_POWER_MODE).await {
-        Ok(()) => println!("[GNSS] LOW_POWER_MODE={GNSS_LOW_POWER_MODE:?}"),
-        Err(_) => println!("[GNSS] LOW_POWER_MODE_FAILED"),
+        Ok(()) => gnss_trace!("PAIR_SEND_RESULT command=732 status=accepted"),
+        Err(error) => gnss_trace!("PAIR_SEND_RESULT command=732 status=error error={error:?}"),
     }
     for sentence in [NmeaSentence::Gsa, NmeaSentence::Gsv] {
+        gnss_trace!("PAIR_SEND command=062 sentence={sentence:?} rate=1");
         match gnss
             .set_nmea_output_rate(sentence, NmeaOutputRate::EVERY_FIX)
             .await
         {
-            Ok(()) => println!("[GNSS] NMEA_OUTPUT sentence={sentence:?} rate=1"),
-            Err(_) => println!("[GNSS] NMEA_OUTPUT_FAILED sentence={sentence:?}"),
+            Ok(()) => gnss_trace!("PAIR_SEND_RESULT command=062 status=accepted"),
+            Err(error) => {
+                gnss_trace!("PAIR_SEND_RESULT command=062 status=error error={error:?}")
+            }
         }
+        gnss_trace!("PAIR_SEND command=063 sentence={sentence:?}");
         match gnss.query_nmea_output_rate(sentence).await {
-            Ok(()) => println!("[GNSS] NMEA_OUTPUT_QUERY sentence={sentence:?}"),
-            Err(_) => println!("[GNSS] NMEA_OUTPUT_QUERY_FAILED sentence={sentence:?}"),
+            Ok(()) => gnss_trace!("PAIR_SEND_RESULT command=063 status=accepted"),
+            Err(error) => {
+                gnss_trace!("PAIR_SEND_RESULT command=063 status=error error={error:?}")
+            }
         }
     }
     if let Ok(command) = PairCommandBuilder::new(67).and_then(|builder| builder.finish()) {
+        gnss_trace!("PAIR_SEND command=067");
         match gnss.send_pair_command(&command).await {
-            Ok(()) => println!("[GNSS] SEARCH_MODE_QUERY"),
-            Err(_) => println!("[GNSS] SEARCH_MODE_QUERY_FAILED"),
+            Ok(()) => gnss_trace!("PAIR_SEND_RESULT command=067 status=accepted"),
+            Err(error) => {
+                gnss_trace!("PAIR_SEND_RESULT command=067 status=error error={error:?}")
+            }
         }
     }
     let mut nmea = [0u8; 512];
     let mut nmea_parser = NmeaParser::new();
+    #[cfg(feature = "gnss-raw-log")]
+    let mut raw_nmea_line = [0; 256];
+    #[cfg(feature = "gnss-raw-log")]
+    let mut raw_nmea_line_len = 0;
     let mut gnss_parse_ok = false;
     match gnss.read_nmea_chunk(&mut nmea).await {
         Ok(data) if !data.is_empty() => {
             println!("[GNSS] NMEA_CHUNK_OK bytes={}", data.len());
+            #[cfg(feature = "gnss-raw-log")]
+            log_raw_nmea(data, &mut raw_nmea_line, &mut raw_nmea_line_len);
             for &byte in data {
                 match nmea_parser.push(byte) {
-                    Ok(Some(NmeaUpdate::PairAck(ack))) => println!(
-                        "[GNSS] PAIR_ACK command={} status={:?}",
-                        ack.command, ack.status
-                    ),
-                    Ok(Some(NmeaUpdate::NmeaOutputRate { sentence, rate })) => {
-                        println!("[GNSS] NMEA_OUTPUT_RATE sentence={sentence:?} rate={rate:?}")
+                    Ok(Some(NmeaUpdate::PairAck(ack))) => {
+                        gnss_trace!("PAIR_ACK command={} status={:?}", ack.command, ack.status)
                     }
-                    Ok(Some(NmeaUpdate::Pair(message))) => println!(
-                        "[GNSS] PAIR_RESPONSE command={} fields={:?}",
+                    Ok(Some(NmeaUpdate::NmeaOutputRate { sentence, rate })) => {
+                        gnss_trace!("PAIR_RESPONSE command=063 sentence={sentence:?} rate={rate:?}")
+                    }
+                    Ok(Some(NmeaUpdate::Pair(message))) => gnss_trace!(
+                        "PAIR_RESPONSE command={} fields={:?}",
                         message.command(),
                         message.fields()
                     ),
@@ -874,12 +1096,9 @@ async fn async_main(spawner: Spawner) {
             );
         }
         Ok(_) => println!("[GNSS] NMEA_EMPTY bytes=0"),
-        Err(GnssError::I2c { operation, .. }) => match operation {
-            GnssOperation::WriteConfig => println!("[GNSS] I2C_WRITE_CONFIG_FAILED"),
-            GnssOperation::ReadLength => println!("[GNSS] I2C_READ_LENGTH_FAILED"),
-            GnssOperation::ReadData => println!("[GNSS] I2C_READ_DATA_FAILED"),
-            GnssOperation::WriteData => println!("[GNSS] I2C_WRITE_DATA_FAILED"),
-        },
+        Err(GnssError::I2c { operation, error }) => {
+            println!("[GNSS] I2C_FAILED operation={operation:?} error={error:?}");
+        }
         Err(GnssError::BufferTooSmall { .. }) => println!("[GNSS] NMEA_BUFFER_TOO_SMALL"),
         Err(GnssError::PairCommand(_)) => println!("[GNSS] PAIR_COMMAND_BUILD_FAILED"),
     }
@@ -894,16 +1113,51 @@ async fn async_main(spawner: Spawner) {
         .with_miso(peripherals.GPIO17)
         .into_async();
     let lora_cs = Output::new(peripherals.GPIO18, Level::High, OutputConfig::default());
-    let mut lora = Sx1272::new(lora_spi, lora_cs).expect("LoRa CS failed");
-    let lora_probe = lora.probe_registers().await;
-    let lora_result = match lora.identify().await {
-        Ok(()) => 0,
-        Err(LoraError::UnexpectedVersion(0)) => 10,
-        Err(LoraError::UnexpectedVersion(0xFF)) => 11,
-        Err(LoraError::UnexpectedVersion(_)) => 1,
-        Err(LoraError::Spi(_)) => 2,
-        Err(LoraError::ChipSelect(_)) => 3,
+    let lora_spi =
+        ExclusiveDevice::new(lora_spi, lora_cs, embassy_time::Delay).expect("LoRa CS failed");
+    let mut lora_config = Sx127xLoraConfig::for_variant::<Sx1272>();
+    lora_config.auto_optimize = true;
+    lora_config.use_crc = true;
+    println!("[LORA] init_start");
+    let mut lora = match Sx1272Lora::new_with_config(lora_spi, lora_config).await {
+        Ok(lora) => {
+            println!("[LORA] init_ok");
+            lora
+        }
+        Err(sx127xlora::driver::Sx127xError::InvalidVersion) => {
+            println!("[LORA] init_failed reason=invalid_version");
+            loop {
+                Timer::after(Duration::from_secs(1)).await;
+            }
+        }
+        Err(sx127xlora::driver::Sx127xError::SPI(_)) => {
+            println!("[LORA] init_failed reason=spi");
+            loop {
+                Timer::after(Duration::from_secs(1)).await;
+            }
+        }
+        Err(_) => {
+            println!("[LORA] init_failed reason=configuration");
+            loop {
+                Timer::after(Duration::from_secs(1)).await;
+            }
+        }
     };
+    let lora_probe = {
+        let op_mode = lora.read(OP_MODE).await;
+        let frf_msb = lora.read(FRF_MSB).await;
+        let irq_flags = lora.read(IRQ_FLAGS).await;
+        let version = lora.read(VERSION).await;
+        match (op_mode, frf_msb, irq_flags, version) {
+            (Ok(op_mode), Ok(frf_msb), Ok(irq_flags), Ok(version)) => {
+                Ok([op_mode, frf_msb, irq_flags, version])
+            }
+            _ => Err(()),
+        }
+    };
+    let lora_result = 0;
+    let lora_dio0 = Input::new(peripherals.GPIO44, InputConfig::default());
+    let lora_path = LoraPath::new(i2c.clone(), !(lora_reset | lora_tx_switch));
 
     let mut rtc = Pcf85063aRtc::new(i2c.clone());
     rtc.init().await.unwrap();
@@ -1043,8 +1297,10 @@ async fn async_main(spawner: Spawner) {
         sensor_task(SensorTask {
             power,
             lora,
+            lora_dio0,
+            lora_path,
             gnss,
-            nmea: [0; 64],
+            nmea: [0; 512],
             nmea_parser,
             rtc,
             magnetometer,
