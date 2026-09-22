@@ -36,12 +36,25 @@ pub struct DateTime {
 impl DateTime {
     #[must_use]
     pub fn new(year: u8, month: u8, day: u8, hours: u8, minutes: u8, seconds: u8) -> Self {
+        Self::with_weekday(year, month, day, 0, hours, minutes, seconds)
+    }
+
+    #[must_use]
+    pub fn with_weekday(
+        year: u8,
+        month: u8,
+        day: u8,
+        weekday: u8,
+        hours: u8,
+        minutes: u8,
+        seconds: u8,
+    ) -> Self {
         Self {
             seconds,
             minutes,
             hours,
             day,
-            weekday: 0,
+            weekday,
             month,
             year,
         }

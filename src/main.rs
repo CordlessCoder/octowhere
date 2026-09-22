@@ -30,7 +30,7 @@ use esp_hal::{
     timer::timg::TimerGroup,
 };
 use esp_println::println;
-use lc76g::{GnssError, GnssOperation, Lc76g, NmeaParser};
+use lc76g::{GnssError, GnssOperation, GnssState, Lc76g, NmeaParser};
 use octowhere::{
     board,
     chrome::{self, Color, Dirty, FB, FontdueRenderer, FontdueRendererCtx},
@@ -39,7 +39,7 @@ use octowhere::{
         lora::{LoraError, Sx1272},
         magnetometer::Bmm350,
         power::Axp2101Power,
-        rtc::Pcf85063aRtc,
+        rtc::{DateTime as RtcDateTime, Pcf85063aRtc},
         touch::{Cst9217, Cst9217Config, TouchData},
     },
     ui::{
@@ -90,6 +90,7 @@ struct SensorSnapshot {
     vbus_mv: Option<u16>,
     vsys_mv: Option<u16>,
     gnss_bytes: u16,
+    gnss: GnssState,
     lora_irq: u8,
     clock: prototypes::ClockState,
     accel_micro_ms2: [i32; 3],
@@ -103,12 +104,14 @@ struct SensorTask {
     lora: SensorLora,
     gnss: Lc76g<SharedI2cDevice, embassy_time::Delay>,
     nmea: [u8; 64],
+    nmea_parser: NmeaParser,
     rtc: Pcf85063aRtc<SharedI2cDevice>,
     magnetometer: Bmm350<SharedI2cDevice>,
     imu: SensorImu,
     accel_lsb_per_g: i32,
     gyro_lsb_per_dps: i32,
     state: SensorSnapshot,
+    rtc_sync_pending: bool,
 }
 
 macro_rules! start_display_core {
@@ -352,12 +355,14 @@ async fn sensor_task(task: SensorTask) {
         mut lora,
         mut gnss,
         mut nmea,
+        mut nmea_parser,
         mut rtc,
         mut magnetometer,
         mut imu,
         accel_lsb_per_g,
         gyro_lsb_per_dps,
         mut state,
+        mut rtc_sync_pending,
     } = task;
 
     loop {
@@ -381,7 +386,66 @@ async fn sensor_task(task: SensorTask) {
         }
         if let Ok(data) = gnss.read_nmea_chunk(&mut nmea).await {
             state.gnss_bytes = data.len() as u16;
-            println!("[GNSS] sample bytes={}", data.len());
+            let mut updates = 0;
+            for &byte in data.iter() {
+                match nmea_parser.push(byte) {
+                    Ok(Some(_)) => updates += 1,
+                    Ok(None) => {}
+                    Err(error) => println!("[GNSS] NMEA_PARSE_ERROR {error}"),
+                }
+            }
+            state.gnss = nmea_parser.state();
+            if let Some(fix) = state.gnss.fix {
+                println!(
+                    "[GNSS] sample bytes={} updates={} lat={} lon={} alt_mm={:?} sats={:?} hdop_milli={:?}",
+                    data.len(),
+                    updates,
+                    fix.latitude.get(),
+                    fix.longitude.get(),
+                    fix.altitude.map(|value| value.get()),
+                    fix.satellites,
+                    fix.hdop.map(|value| value.get()),
+                );
+            } else {
+                println!(
+                    "[GNSS] sample bytes={} updates={} no_fix",
+                    data.len(),
+                    updates
+                );
+            }
+        }
+        if state.gnss.utc.is_none() {
+            rtc_sync_pending = true;
+        } else if rtc_sync_pending && let Some(utc) = state.gnss.utc {
+            if !(2000..=2099).contains(&utc.year) {
+                println!("[RTC] GNSS year outside RTC range: {}", utc.year);
+            } else {
+                let rtc_time = RtcDateTime::with_weekday(
+                    (utc.year % 100) as u8,
+                    utc.month,
+                    utc.day,
+                    utc.weekday,
+                    utc.hours,
+                    utc.minutes,
+                    utc.seconds,
+                );
+                match rtc.set_time(&rtc_time).await {
+                    Ok(()) => {
+                        rtc_sync_pending = false;
+                        println!(
+                            "[RTC] synchronized from GNSS {:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03}",
+                            utc.year,
+                            utc.month,
+                            utc.day,
+                            utc.hours,
+                            utc.minutes,
+                            utc.seconds,
+                            utc.milliseconds,
+                        );
+                    }
+                    Err(_) => println!("[RTC] GNSS synchronization failed"),
+                }
+            }
         }
         if magnetometer.data_ready().await.unwrap_or(false)
             && let Ok(data) = magnetometer.read_data().await
@@ -706,20 +770,17 @@ async fn async_main(spawner: Spawner) {
         Err(_) => println!("[GNSS] ALP_ENABLE_FAILED"),
     }
     let mut nmea = [0u8; 512];
+    let mut nmea_parser = NmeaParser::new();
     let mut gnss_parse_ok = false;
     match gnss.read_nmea_chunk(&mut nmea).await {
         Ok(data) if !data.is_empty() => {
             println!("[GNSS] NMEA_CHUNK_OK bytes={}", data.len());
-            let mut parser = NmeaParser::<128>::new();
-            let mut valid_sentence = false;
             for &byte in data {
-                if let Ok(Some(sentence)) = parser.push(byte)
-                    && sentence.get(1) != Some(&b'P')
-                {
-                    valid_sentence = true;
+                if let Err(error) = nmea_parser.push(byte) {
+                    println!("[GNSS] NMEA_PARSE_ERROR {error}");
                 }
             }
-            gnss_parse_ok = valid_sentence;
+            gnss_parse_ok = nmea_parser.state().fix.is_some();
         }
         Ok(_) => println!("[GNSS] NMEA_EMPTY bytes=0"),
         Err(GnssError::I2c { operation, .. }) => match operation {
@@ -883,6 +944,7 @@ async fn async_main(spawner: Spawner) {
         battery_mv: battery_present.then(|| pmic_readings.0.ok()).flatten(),
         vbus_mv: pmic_readings.1.ok(),
         vsys_mv: pmic_readings.2.ok(),
+        gnss: nmea_parser.state(),
         ..SensorSnapshot::default()
     };
     spawner.spawn(
@@ -891,12 +953,14 @@ async fn async_main(spawner: Spawner) {
             lora,
             gnss,
             nmea: [0; 64],
+            nmea_parser,
             rtc,
             magnetometer,
             imu,
             accel_lsb_per_g,
             gyro_lsb_per_dps,
             state: initial_sensor_state,
+            rtc_sync_pending: true,
         })
         .unwrap(),
     );
@@ -983,6 +1047,7 @@ async fn async_main(spawner: Spawner) {
                 draw_ctx.peripherals.vbus_mv = sensor_state.vbus_mv;
                 draw_ctx.peripherals.vsys_mv = sensor_state.vsys_mv;
                 draw_ctx.peripherals.gnss_bytes = sensor_state.gnss_bytes;
+                draw_ctx.peripherals.gnss_valid = sensor_state.gnss.fix.is_some();
                 draw_ctx.peripherals.lora_irq = sensor_state.lora_irq;
                 draw_ctx.peripherals.clock = sensor_state.clock;
                 draw_ctx.peripherals.accel_micro_ms2 = sensor_state.accel_micro_ms2;

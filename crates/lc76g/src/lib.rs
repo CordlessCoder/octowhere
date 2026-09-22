@@ -1,6 +1,7 @@
 #![no_std]
 
 use embedded_hal_async::{delay::DelayNs, i2c::I2c};
+use nmea0183::{GGA, GPSQuality, Mode, ParseResult, RMC};
 
 const CONFIG_ADDRESS: u8 = 0x50;
 const DATA_ADDRESS: u8 = 0x54;
@@ -15,6 +16,8 @@ const MAX_I2C_RETRIES: usize = 20;
 
 const ALP_ENABLE: &[u8] = b"$PAIR732,1*21\r\n";
 const ALP_DISABLE: &[u8] = b"$PAIR732,0*20\r\n";
+const SET_FIX_RATE_1_HZ: &[u8] = b"$PAIR050,1000*12\r\n";
+const SET_NORMAL_NAVIGATION: &[u8] = b"$PAIR080,0*2E\r\n";
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum GnssOperation {
@@ -30,85 +33,321 @@ pub enum GnssError<E> {
     BufferTooSmall { required: usize, available: usize },
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub enum NmeaError {
-    LineTooLong,
-    InvalidChecksum,
+/// The low-power policy requested from the receiver.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LowPowerMode {
+    /// Continuous tracking with the receiver's normal duty cycle.
+    Disabled,
+    /// Adaptive Low Power mode.
+    Adaptive,
 }
 
-/// Incrementally validates complete NMEA lines without allocating.
-pub struct NmeaParser<const N: usize> {
-    line: [u8; N],
-    len: usize,
+/// The NMEA GGA fix-quality code.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum FixQuality {
+    /// No position solution.
+    #[default]
+    NoFix,
+    /// Autonomous GNSS solution.
+    Autonomous,
+    /// Differential GNSS solution.
+    Differential,
+    /// PPS-locked solution.
+    Pps,
+    /// Fixed RTK solution.
+    Rtk,
+    /// Float RTK solution.
+    FloatRtk,
+    /// Estimated solution.
+    Estimated,
+    /// Manually entered solution.
+    Manual,
+    /// Simulated solution.
+    Simulated,
 }
 
-impl<const N: usize> NmeaParser<N> {
-    pub const fn new() -> Self {
-        Self {
-            line: [0; N],
-            len: 0,
-        }
-    }
+macro_rules! coordinate_newtype {
+    ($(#[$meta:meta])* $name:ident, $inner:ty, $unit:literal) => {
+        $(#[$meta])*
+        #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
+        pub struct $name($inner);
 
-    pub fn push(&mut self, byte: u8) -> Result<Option<&[u8]>, NmeaError> {
-        if byte != b'\n' {
-            if self.len == N {
-                self.len = 0;
-                return Err(NmeaError::LineTooLong);
+        impl $name {
+            /// Creates a value from its integer representation.
+            pub const fn new(value: $inner) -> Self {
+                Self(value)
             }
-            self.line[self.len] = byte;
-            self.len += 1;
-            return Ok(None);
+
+            /// Returns the integer representation.
+            pub const fn get(self) -> $inner {
+                self.0
+            }
+
+            /// Returns the unit represented by this newtype.
+            pub const fn unit() -> &'static str {
+                $unit
+            }
         }
 
-        let line = &self.line[..self.len]
-            .strip_suffix(b"\r")
-            .unwrap_or(&self.line[..self.len]);
-        let valid = validate_checksum(line);
-        self.len = 0;
-        if !valid {
-            return Err(NmeaError::InvalidChecksum);
+        impl From<$name> for $inner {
+            fn from(value: $name) -> Self {
+                value.0
+            }
         }
-        Ok(Some(line))
+    };
+}
+
+coordinate_newtype!(
+    /// Latitude in degrees multiplied by 10⁷.
+    LatitudeE7,
+    i32,
+    "degrees × 10⁷"
+);
+coordinate_newtype!(
+    /// Longitude in degrees multiplied by 10⁷.
+    LongitudeE7,
+    i32,
+    "degrees × 10⁷"
+);
+coordinate_newtype!(
+    /// Altitude in millimetres.
+    AltitudeMm,
+    i32,
+    "mm"
+);
+coordinate_newtype!(
+    /// Ground speed in millimetres per second.
+    SpeedMmPerSecond,
+    u32,
+    "mm/s"
+);
+coordinate_newtype!(
+    /// Course over ground in thousandths of a degree.
+    CourseMilliDegrees,
+    u32,
+    "millidegrees"
+);
+coordinate_newtype!(
+    /// Horizontal dilution of precision multiplied by 1000.
+    HdopMilli,
+    u32,
+    "HDOP × 1000"
+);
+coordinate_newtype!(
+    /// Number of satellites used in the solution.
+    SatelliteCount,
+    u8,
+    "satellites"
+);
+
+/// UTC date and time reported by the receiver.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct GnssDateTime {
+    pub year: u16,
+    pub month: u8,
+    pub day: u8,
+    pub weekday: u8,
+    pub hours: u8,
+    pub minutes: u8,
+    pub seconds: u8,
+    pub milliseconds: u16,
+}
+
+/// The latest position solution assembled from RMC and GGA sentences.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct GnssFix {
+    pub latitude: LatitudeE7,
+    pub longitude: LongitudeE7,
+    pub altitude: Option<AltitudeMm>,
+    pub speed: Option<SpeedMmPerSecond>,
+    pub course: Option<CourseMilliDegrees>,
+    pub satellites: Option<SatelliteCount>,
+    pub hdop: Option<HdopMilli>,
+    pub quality: FixQuality,
+}
+
+/// Receiver state assembled from the latest valid NMEA sentences.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct GnssState {
+    pub fix: Option<GnssFix>,
+    pub utc: Option<GnssDateTime>,
+}
+
+/// Sentence type that changed the parsed receiver state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NmeaUpdate {
+    Rmc,
+    Gga,
+}
+
+/// Incrementally parses RMC and GGA sentences into fixed-point receiver state.
+pub struct NmeaParser {
+    parser: nmea0183::Parser,
+    state: GnssState,
+}
+
+impl NmeaParser {
+    pub fn new() -> Self {
+        Self {
+            parser: nmea0183::Parser::new()
+                .sentence_filter(nmea0183::Sentence::RMC | nmea0183::Sentence::GGA),
+            state: GnssState::default(),
+        }
+    }
+
+    pub fn state(&self) -> GnssState {
+        self.state
+    }
+
+    pub fn push(&mut self, byte: u8) -> Result<Option<NmeaUpdate>, &'static str> {
+        let Some(result) = self.parser.parse_from_byte(byte) else {
+            return Ok(None);
+        };
+        let result = match result {
+            Ok(result) => result,
+            Err("Source is not supported!" | "Unsupported sentence type.") => return Ok(None),
+            Err(error) => return Err(error),
+        };
+
+        match result {
+            ParseResult::RMC(Some(rmc)) => {
+                self.update_rmc(&rmc);
+                Ok(Some(NmeaUpdate::Rmc))
+            }
+            ParseResult::RMC(None) => {
+                self.state.fix = None;
+                self.state.utc = None;
+                Ok(Some(NmeaUpdate::Rmc))
+            }
+            ParseResult::GGA(Some(gga)) => {
+                self.update_gga(&gga);
+                Ok(Some(NmeaUpdate::Gga))
+            }
+            ParseResult::GGA(None) => {
+                self.state.fix = None;
+                Ok(Some(NmeaUpdate::Gga))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn update_rmc(&mut self, rmc: &RMC) {
+        if !rmc.mode.is_valid() {
+            self.state.fix = None;
+            self.state.utc = None;
+            return;
+        }
+
+        self.state.utc = Some(convert_datetime(&rmc.datetime));
+        self.state.fix = Some(GnssFix {
+            latitude: latitude_e7(&rmc.latitude),
+            longitude: longitude_e7(&rmc.longitude),
+            altitude: None,
+            speed: Some(SpeedMmPerSecond::new((rmc.speed.as_mps() * 1_000.0) as u32)),
+            course: rmc
+                .course
+                .as_ref()
+                .map(|course| CourseMilliDegrees::new((course.degrees * 1_000.0) as u32)),
+            satellites: None,
+            hdop: None,
+            quality: rmc_quality(&rmc.mode),
+        });
+    }
+
+    fn update_gga(&mut self, gga: &GGA) {
+        let quality = gps_quality(&gga.gps_quality);
+        if quality == FixQuality::NoFix {
+            self.state.fix = None;
+            return;
+        }
+
+        let previous = self.state.fix.unwrap_or_default();
+        self.state.fix = Some(GnssFix {
+            latitude: latitude_e7(&gga.latitude),
+            longitude: longitude_e7(&gga.longitude),
+            altitude: gga
+                .altitude
+                .as_ref()
+                .map(|altitude| AltitudeMm::new((altitude.meters * 1_000.0) as i32)),
+            speed: previous.speed,
+            course: previous.course,
+            satellites: Some(SatelliteCount::new(gga.sat_in_use)),
+            hdop: Some(HdopMilli::new((gga.hdop * 1_000.0) as u32)),
+            quality,
+        });
     }
 }
 
-impl<const N: usize> Default for NmeaParser<N> {
+impl Default for NmeaParser {
     fn default() -> Self {
         Self::new()
     }
 }
 
-fn validate_checksum(line: &[u8]) -> bool {
-    if line.len() < 7 || line[0] != b'$' {
-        return false;
+fn convert_datetime(datetime: &nmea0183::datetime::DateTime) -> GnssDateTime {
+    let mut seconds = datetime.time.seconds as u8;
+    let mut milliseconds = ((datetime.time.seconds - seconds as f32) * 1_000.0 + 0.5) as u16;
+    if milliseconds >= 1_000 {
+        if seconds < 59 {
+            seconds += 1;
+            milliseconds = 0;
+        } else {
+            milliseconds = 999;
+        }
     }
-    let Some(star) = line.iter().position(|&byte| byte == b'*') else {
-        return false;
-    };
-    if star + 3 != line.len() {
-        return false;
+    GnssDateTime {
+        year: datetime.date.year,
+        month: datetime.date.month,
+        day: datetime.date.day,
+        weekday: weekday(datetime.date.year, datetime.date.month, datetime.date.day),
+        hours: datetime.time.hours,
+        minutes: datetime.time.minutes,
+        seconds,
+        milliseconds,
     }
-
-    let checksum = line[1..star]
-        .iter()
-        .fold(0, |checksum, byte| checksum ^ byte);
-    let Some(high) = hex_digit(line[star + 1]) else {
-        return false;
-    };
-    let Some(low) = hex_digit(line[star + 2]) else {
-        return false;
-    };
-    checksum == (high << 4 | low)
 }
 
-fn hex_digit(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        _ => None,
+fn latitude_e7(latitude: &nmea0183::coords::Latitude) -> LatitudeE7 {
+    LatitudeE7::new((latitude.as_f64() * 10_000_000.0) as i32)
+}
+
+fn longitude_e7(longitude: &nmea0183::coords::Longitude) -> LongitudeE7 {
+    LongitudeE7::new((longitude.as_f64() * 10_000_000.0) as i32)
+}
+
+fn rmc_quality(mode: &Mode) -> FixQuality {
+    match mode {
+        Mode::Autonomous => FixQuality::Autonomous,
+        Mode::Differential => FixQuality::Differential,
+        Mode::Estimated => FixQuality::Estimated,
+        Mode::Manual => FixQuality::Manual,
+        Mode::Simulator => FixQuality::Simulated,
+        Mode::NotValid => FixQuality::NoFix,
     }
+}
+
+fn gps_quality(quality: &GPSQuality) -> FixQuality {
+    match quality {
+        GPSQuality::NoFix => FixQuality::NoFix,
+        GPSQuality::GPS => FixQuality::Autonomous,
+        GPSQuality::DGPS => FixQuality::Differential,
+        GPSQuality::PPS => FixQuality::Pps,
+        GPSQuality::RTK => FixQuality::Rtk,
+        GPSQuality::FRTK => FixQuality::FloatRtk,
+        GPSQuality::Estimated => FixQuality::Estimated,
+        GPSQuality::Manual => FixQuality::Manual,
+        GPSQuality::Simulated => FixQuality::Simulated,
+    }
+}
+
+fn weekday(year: u16, month: u8, day: u8) -> u8 {
+    const MONTH_OFFSETS: [i32; 12] = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
+    let mut year = year as i32;
+    if month < 3 {
+        year -= 1;
+    }
+    ((year + year / 4 - year / 100 + year / 400 + MONTH_OFFSETS[month as usize - 1] + day as i32)
+        % 7) as u8
 }
 
 pub struct Lc76g<I, D> {
@@ -126,14 +365,29 @@ where
         Self { i2c, delay }
     }
 
+    /// Selects the receiver's low-power policy.
+    pub async fn set_low_power_mode(
+        &mut self,
+        mode: LowPowerMode,
+    ) -> Result<(), GnssError<I::Error>> {
+        match mode {
+            LowPowerMode::Disabled => self.write_nmea(ALP_DISABLE).await,
+            LowPowerMode::Adaptive => {
+                self.write_nmea(SET_NORMAL_NAVIGATION).await?;
+                self.write_nmea(SET_FIX_RATE_1_HZ).await?;
+                self.write_nmea(ALP_ENABLE).await
+            }
+        }
+    }
+
     /// Requests the module's adaptive low-power mode.
     pub async fn enable_alp_mode(&mut self) -> Result<(), GnssError<I::Error>> {
-        self.write_nmea(ALP_ENABLE).await
+        self.set_low_power_mode(LowPowerMode::Adaptive).await
     }
 
     /// Requests normal continuous tracking mode.
     pub async fn disable_alp_mode(&mut self) -> Result<(), GnssError<I::Error>> {
-        self.write_nmea(ALP_DISABLE).await
+        self.set_low_power_mode(LowPowerMode::Disabled).await
     }
 
     /// Reads all currently buffered NMEA data into `buffer`.
@@ -263,7 +517,7 @@ where
 mod tests {
     use super::{
         ALP_DISABLE, ALP_ENABLE, CONFIG_READ_DATA, CONFIG_READ_FREE_LENGTH,
-        CONFIG_READ_NMEA_LENGTH, NmeaError, NmeaParser,
+        CONFIG_READ_NMEA_LENGTH, GnssDateTime, NmeaParser, NmeaUpdate,
     };
 
     #[test]
@@ -282,37 +536,80 @@ mod tests {
     }
 
     #[test]
-    fn parser_returns_a_valid_nmea_sentence_without_line_ending() {
-        let mut parser = NmeaParser::<128>::new();
-        let mut found = false;
-        for byte in b"$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47\r\n" {
-            if let Some(sentence) = parser.push(*byte).unwrap() {
-                assert_eq!(
-                    sentence,
-                    &b"$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47"[..]
-                );
-                found = true;
-            }
+    fn parser_decodes_rmc_position_and_utc() {
+        let mut parser = NmeaParser::new();
+        let mut update = None;
+        for byte in b"$GPRMC,125504.049,A,5542.2389,N,03741.6063,E,0.06,25.82,200906,,,A*56\r\n" {
+            update = parser.push(*byte).unwrap().or(update);
         }
-        assert!(found);
+
+        assert_eq!(update, Some(NmeaUpdate::Rmc));
+        assert_eq!(
+            parser.state().utc,
+            Some(GnssDateTime {
+                year: 2006,
+                month: 9,
+                day: 20,
+                weekday: 3,
+                hours: 12,
+                minutes: 55,
+                seconds: 4,
+                milliseconds: 49,
+            })
+        );
+        let fix = parser.state().fix.unwrap();
+        assert!((557_000_000..558_000_000).contains(&fix.latitude.get()));
+        assert!((376_000_000..377_000_000).contains(&fix.longitude.get()));
+        assert_eq!(fix.speed.map(|value| value.get()), Some(30));
+        assert_eq!(fix.course.map(|value| value.get()), Some(25_820));
+    }
+
+    #[test]
+    fn parser_merges_gga_quality_and_measurements() {
+        let mut parser = NmeaParser::new();
+        for byte in b"$GPRMC,125504.049,A,5542.2389,N,03741.6063,E,0.06,25.82,200906,,,A*56\r\n" {
+            parser.push(*byte).unwrap();
+        }
+        for byte in b"$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47\r\n" {
+            parser.push(*byte).unwrap();
+        }
+
+        let fix = parser.state().fix.unwrap();
+        assert_eq!(fix.altitude.map(|value| value.get()), Some(545_400));
+        assert_eq!(fix.satellites.map(|value| value.get()), Some(8));
+        assert_eq!(fix.hdop.map(|value| value.get()), Some(900));
+    }
+
+    #[test]
+    fn parser_ignores_proprietary_acknowledgements() {
+        let mut parser = NmeaParser::new();
+        for byte in b"$PAIR001,732,0*3D\r\n" {
+            assert_eq!(parser.push(*byte).unwrap(), None);
+        }
     }
 
     #[test]
     fn parser_rejects_a_bad_checksum_and_recovers() {
-        let mut parser = NmeaParser::<128>::new();
+        let mut parser = NmeaParser::new();
+        let mut error = None;
         for byte in b"$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*00\r\n" {
-            if *byte == b'\n' {
-                assert_eq!(parser.push(*byte), Err(NmeaError::InvalidChecksum));
-            } else {
-                parser.push(*byte).unwrap();
+            if let Err(value) = parser.push(*byte) {
+                error = Some(value);
             }
         }
+        assert_eq!(error, Some("Checksum error!"));
+
         for byte in b"$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47\r\n" {
-            if *byte == b'\n' {
-                assert!(parser.push(*byte).unwrap().is_some());
-            } else {
-                parser.push(*byte).unwrap();
-            }
+            parser.push(*byte).unwrap();
         }
+        assert_eq!(
+            parser
+                .state()
+                .fix
+                .unwrap()
+                .satellites
+                .map(|value| value.get()),
+            Some(8)
+        );
     }
 }

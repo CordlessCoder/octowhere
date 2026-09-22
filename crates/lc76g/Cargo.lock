@@ -22,4 +22,11 @@ name = "lc76g"
 version = "0.1.0"
 dependencies = [
  "embedded-hal-async",
+ "nmea0183",
 ]
+
+[[package]]
+name = "nmea0183"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32af3db91326d72af6c4289c37768618dbf56771e90c12f2187def40eaee08fd"
