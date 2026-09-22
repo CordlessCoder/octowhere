@@ -347,6 +347,18 @@ fn tx_uses_burst_fifo_and_clears_stale_interrupts() {
 }
 
 #[test]
+fn tx_rejects_empty_payloads() {
+    let mut driver = Sx1272Lora::new(sx1272_spi()).unwrap();
+
+    let result = driver.tx(&[]);
+
+    assert!(matches!(
+        result,
+        Err(sx127xlora::driver::Sx127xError::InvalidPayloadLength)
+    ));
+}
+
+#[test]
 fn clear_interrupt_writes_only_the_selected_write_one_to_clear_bit() {
     let mut driver = Sx1272Lora::new(sx1272_spi()).unwrap();
     driver.spi.spi.registers[IRQ_FLAGS as usize] = 0xff;

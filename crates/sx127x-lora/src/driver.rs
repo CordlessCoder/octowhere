@@ -666,6 +666,9 @@ impl<SPI: SpiDevice, V: Sx127xVariant> Sx127xLora<SPI, V> {
     pub async fn set_payload_length(&mut self, len: u8) -> Result<(), Sx127xError<SPI::Error>> {
         #[cfg(feature = "defmt")]
         debug!("Sx127xLora.set_payload_length: {}", len);
+        if len == 0 {
+            return Err(Sx127xError::InvalidPayloadLength);
+        }
         self.write(PAYLOAD_LENGTH, len).await
     }
 
@@ -721,7 +724,7 @@ impl<SPI: SpiDevice, V: Sx127xVariant> Sx127xLora<SPI, V> {
         #[cfg(feature = "defmt")]
         debug!("Sx127xLora.tx: {:a}", payload);
         let payload_len = payload.len();
-        if payload_len > PAYLOAD_SIZE {
+        if payload.is_empty() || payload_len > PAYLOAD_SIZE {
             #[cfg(feature = "defmt")]
             error!(
                 "payload length {} bytes is greater than max allowed {} bytes",

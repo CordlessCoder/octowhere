@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - apply variant-specific register mappings and SX1272 errata workarounds
 - use variant-correct FEI conversion and avoid SX1272 reserved register fields
 - preserve SX1272 temperature decoding and PA configuration reserved bits
+- reject empty payloads before programming the packet length
 - use burst FIFO transfers and preserve received payload lengths
 - fix signed SNR and FEI decoding, including fractional FEI conversion, power-ramp updates, and high-power PA selection
 - preserve the payload-size feature, validate public configurations, and widen FEI arithmetic
