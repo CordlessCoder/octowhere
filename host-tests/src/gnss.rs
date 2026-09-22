@@ -1,6 +1,6 @@
 use std::{cell::RefCell, rc::Rc};
 
-use embedded_hal::i2c::{Operation, SevenBitAddress};
+use embedded_hal::i2c::{Error, ErrorKind, Operation, SevenBitAddress};
 use embedded_hal_async::{delay::DelayNs, i2c::I2c};
 use futures::executor::block_on;
 use lc76g::{
@@ -13,6 +13,16 @@ use lc76g::{
 struct MockState {
     writes: Vec<(u8, Vec<u8>)>,
     reads: Vec<Vec<u8>>,
+    read_failures: usize,
+}
+
+#[derive(Debug)]
+struct MockError;
+
+impl Error for MockError {
+    fn kind(&self) -> ErrorKind {
+        ErrorKind::Other
+    }
 }
 
 struct MockI2c {
@@ -20,7 +30,7 @@ struct MockI2c {
 }
 
 impl embedded_hal::i2c::ErrorType for MockI2c {
-    type Error = embedded_hal::i2c::ErrorKind;
+    type Error = MockError;
 }
 
 impl I2c<SevenBitAddress> for MockI2c {
@@ -35,6 +45,10 @@ impl I2c<SevenBitAddress> for MockI2c {
                     self.state.borrow_mut().writes.push((address, data.to_vec()));
                 }
                 Operation::Read(data) => {
+                    if self.state.borrow().read_failures != 0 {
+                        self.state.borrow_mut().read_failures -= 1;
+                        return Err(MockError);
+                    }
                     let value = self.state.borrow_mut().reads.remove(0);
                     data.copy_from_slice(&value);
                 }
@@ -215,6 +229,7 @@ fn read_nmea_chunk_uses_the_length_and_data_commands() {
     let state = Rc::new(RefCell::new(MockState {
         writes: Vec::new(),
         reads: vec![vec![3, 0, 0, 0], b"abc".to_vec()],
+        read_failures: 0,
     }));
     let i2c = MockI2c {
         state: state.clone(),
@@ -230,10 +245,33 @@ fn read_nmea_chunk_uses_the_length_and_data_commands() {
 }
 
 #[test]
+fn read_nmea_reissues_the_command_after_a_read_failure() {
+    let state = Rc::new(RefCell::new(MockState {
+        writes: Vec::new(),
+        reads: vec![vec![3, 0, 0, 0], b"abc".to_vec()],
+        read_failures: 1,
+    }));
+    let i2c = MockI2c {
+        state: state.clone(),
+    };
+    let mut gnss = Lc76g::new(i2c, MockDelay::default());
+    let mut buffer = [0; 8];
+
+    assert_eq!(block_on(gnss.read_nmea_chunk(&mut buffer)).unwrap(), b"abc");
+
+    let writes = &state.borrow().writes;
+    assert_eq!(writes.len(), 3);
+    assert_eq!(writes[0].0, 0x50);
+    assert_eq!(writes[1], writes[0]);
+    assert_eq!(writes[2], (0x50, vec![0, 0x20, 0x51, 0xAA, 3, 0, 0, 0]));
+}
+
+#[test]
 fn adaptive_low_power_mode_sends_documented_prerequisites() {
     let state = Rc::new(RefCell::new(MockState {
         writes: Vec::new(),
         reads: vec![vec![64, 0, 0, 0]; 3],
+        read_failures: 0,
     }));
     let i2c = MockI2c {
         state: state.clone(),
@@ -263,6 +301,7 @@ fn typed_receiver_configuration_uses_documented_wire_commands() {
     let state = Rc::new(RefCell::new(MockState {
         writes: Vec::new(),
         reads: vec![vec![64, 0, 0, 0]; 16],
+        read_failures: 0,
     }));
     let i2c = MockI2c {
         state: state.clone(),
@@ -340,6 +379,7 @@ fn nmea_output_rate_configures_any_sentence_type() {
     let state = Rc::new(RefCell::new(MockState {
         writes: Vec::new(),
         reads: vec![vec![64, 0, 0, 0]; 2],
+        read_failures: 0,
     }));
     let i2c = MockI2c {
         state: state.clone(),
@@ -377,6 +417,7 @@ fn nmea_output_rate_queries_use_documented_commands() {
     let state = Rc::new(RefCell::new(MockState {
         writes: Vec::new(),
         reads: vec![vec![64, 0, 0, 0]; 3],
+        read_failures: 0,
     }));
     let i2c = MockI2c {
         state: state.clone(),

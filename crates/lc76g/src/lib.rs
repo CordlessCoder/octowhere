@@ -4,7 +4,7 @@ use core::fmt::Write;
 
 use embedded_hal_async::{delay::DelayNs, i2c::I2c};
 use heapless::{String, Vec};
-use nmea0183::{FixType, GGA, GPSQuality, GSA, GSV, Mode, ParseResult, RMC};
+use nmea0183::{FixType, GGA, GPSQuality, GSA, GSV, Mode, ParseResult, RMC, Source};
 
 pub use nmea0183::{Sentence as StandardSentence, SentenceMask as StandardSentenceMask};
 
@@ -24,7 +24,7 @@ const PAIR_MESSAGE_FIELDS_CAPACITY: usize = PAIR_COMMAND_CAPACITY - 8;
 const ALP_ENABLE: &[u8] = b"$PAIR732,1*21\r\n";
 const ALP_DISABLE: &[u8] = b"$PAIR732,0*20\r\n";
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GnssOperation {
     WriteConfig,
     ReadLength,
@@ -625,6 +625,23 @@ pub struct GnssState {
     pub signal: GnssSignal,
 }
 
+#[derive(Clone, Copy)]
+struct GsvState {
+    valid: bool,
+    satellites_in_view: u8,
+    satellites_with_signal: u8,
+    strongest_snr: Option<u8>,
+}
+
+impl GsvState {
+    const EMPTY: Self = Self {
+        valid: false,
+        satellites_in_view: 0,
+        satellites_with_signal: 0,
+        strongest_snr: None,
+    };
+}
+
 /// Event emitted for parsed receiver data or a proprietary response.
 #[derive(Clone, Debug, PartialEq)]
 pub enum NmeaUpdate {
@@ -895,6 +912,7 @@ pub struct NmeaParser {
     pair_ack: PairAckParser,
     raw: RawNmeaParser,
     state: GnssState,
+    gsv: [GsvState; 5],
 }
 
 impl NmeaParser {
@@ -918,6 +936,7 @@ impl NmeaParser {
             pair_ack: PairAckParser::new(),
             raw: RawNmeaParser::new(),
             state: GnssState::default(),
+            gsv: [GsvState::EMPTY; 5],
         }
     }
 
@@ -1026,23 +1045,57 @@ impl NmeaParser {
     }
 
     fn update_gsv(&mut self, gsv: &GSV) {
+        let source = match gsv.source {
+            Source::GPS => 0,
+            Source::GLONASS => 1,
+            Source::Gallileo => 2,
+            Source::Beidou => 3,
+            Source::GNSS => 4,
+        };
+        let source_state = &mut self.gsv[source];
         if gsv.message_number == 1 {
-            self.state.signal.satellites_with_signal = SatelliteCount::default();
-            self.state.signal.strongest_snr = None;
+            *source_state = GsvState {
+                valid: true,
+                ..GsvState::EMPTY
+            };
         }
-        self.state.signal.satellites_in_view = SatelliteCount::new(gsv.sat_in_view);
-        let mut with_signal = self.state.signal.satellites_with_signal.get();
-        let mut strongest = self.state.signal.strongest_snr;
+        source_state.valid = true;
+        source_state.satellites_in_view = gsv.sat_in_view;
         for satellite in gsv.get_in_view_satellites() {
             if let Some(snr) = satellite.snr {
-                with_signal = with_signal.saturating_add(1);
-                if strongest.is_none_or(|current| snr > current.get()) {
-                    strongest = Some(SnrDb::new(snr));
+                source_state.satellites_with_signal =
+                    source_state.satellites_with_signal.saturating_add(1);
+                if source_state
+                    .strongest_snr
+                    .is_none_or(|current| snr > current)
+                {
+                    source_state.strongest_snr = Some(snr);
                 }
             }
         }
-        self.state.signal.satellites_with_signal = SatelliteCount::new(with_signal);
-        self.state.signal.strongest_snr = strongest;
+
+        let specific_sources = &self.gsv[..4];
+        let sources = if specific_sources.iter().any(|source| source.valid) {
+            specific_sources
+        } else {
+            &self.gsv[4..]
+        };
+        let mut satellites_in_view = 0u8;
+        let mut satellites_with_signal = 0u8;
+        let mut strongest_snr = None;
+        for source in sources {
+            satellites_in_view = satellites_in_view.saturating_add(source.satellites_in_view);
+            satellites_with_signal =
+                satellites_with_signal.saturating_add(source.satellites_with_signal);
+            if let Some(snr) = source.strongest_snr
+                && strongest_snr.is_none_or(|current| snr > current)
+            {
+                strongest_snr = Some(snr);
+            }
+        }
+        self.state.signal.satellites_in_view = SatelliteCount::new(satellites_in_view);
+        self.state.signal.satellites_with_signal = SatelliteCount::new(satellites_with_signal);
+        self.state.signal.strongest_snr = strongest_snr.map(SnrDb::new);
     }
 
     fn update_gga(&mut self, gga: &GGA) {
@@ -1388,10 +1441,12 @@ where
             });
         }
 
-        self.write_config(CONFIG_READ_DATA, available as u32)
-            .await?;
-        self.command_delay().await;
-        self.read_data(&mut buffer[..available]).await?;
+        self.read_after_config(
+            CONFIG_READ_DATA,
+            &mut buffer[..available],
+            GnssOperation::ReadData,
+        )
+        .await?;
         Ok(&buffer[..available])
     }
 
@@ -1406,9 +1461,12 @@ where
             return Ok(&buffer[..0]);
         }
 
-        self.write_config(CONFIG_READ_DATA, read_len as u32).await?;
-        self.command_delay().await;
-        self.read_data(&mut buffer[..read_len]).await?;
+        self.read_after_config(
+            CONFIG_READ_DATA,
+            &mut buffer[..read_len],
+            GnssOperation::ReadData,
+        )
+        .await?;
         Ok(&buffer[..read_len])
     }
 
@@ -1421,22 +1479,8 @@ where
             });
         }
 
-        self.write_config(CONFIG_WRITE_NMEA, data.len() as u32)
-            .await?;
-        self.command_delay().await;
-        for attempt in 0..MAX_I2C_RETRIES {
-            match self.i2c.write(WRITE_DATA_ADDRESS, data).await {
-                Ok(()) => return Ok(()),
-                Err(error) if attempt + 1 == MAX_I2C_RETRIES => {
-                    return Err(GnssError::I2c {
-                        operation: GnssOperation::WriteData,
-                        error,
-                    });
-                }
-                Err(_) => self.command_delay().await,
-            }
-        }
-        unreachable!()
+        self.write_after_config(CONFIG_WRITE_NMEA, data, GnssOperation::WriteData)
+            .await
     }
 
     /// Sends a checked, checksummed proprietary PAIR command.
@@ -1460,26 +1504,48 @@ where
     }
 
     async fn read_buffer_length(&mut self, command: u32) -> Result<usize, GnssError<I::Error>> {
-        self.write_config(command, NMEA_LENGTH_BYTES as u32).await?;
-        self.command_delay().await;
         let mut length = [0; NMEA_LENGTH_BYTES];
-        self.read_data(&mut length).await?;
+        self.read_after_config(command, &mut length, GnssOperation::ReadLength)
+            .await?;
         Ok(u32::from_le_bytes(length) as usize)
     }
 
-    async fn read_data(&mut self, data: &mut [u8]) -> Result<(), GnssError<I::Error>> {
+    async fn read_after_config(
+        &mut self,
+        command: u32,
+        data: &mut [u8],
+        operation: GnssOperation,
+    ) -> Result<(), GnssError<I::Error>> {
         for attempt in 0..MAX_I2C_RETRIES {
+            self.write_config(command, data.len() as u32).await?;
+            self.command_delay().await;
             match self.i2c.read(DATA_ADDRESS, data).await {
                 Ok(()) => return Ok(()),
                 Err(error) if attempt + 1 == MAX_I2C_RETRIES => {
                     return Err(GnssError::I2c {
-                        operation: if data.len() == NMEA_LENGTH_BYTES {
-                            GnssOperation::ReadLength
-                        } else {
-                            GnssOperation::ReadData
-                        },
+                        operation,
                         error,
                     });
+                }
+                Err(_) => self.command_delay().await,
+            }
+        }
+        unreachable!()
+    }
+
+    async fn write_after_config(
+        &mut self,
+        command: u32,
+        data: &[u8],
+        operation: GnssOperation,
+    ) -> Result<(), GnssError<I::Error>> {
+        for attempt in 0..MAX_I2C_RETRIES {
+            self.write_config(command, data.len() as u32).await?;
+            self.command_delay().await;
+            match self.i2c.write(WRITE_DATA_ADDRESS, data).await {
+                Ok(()) => return Ok(()),
+                Err(error) if attempt + 1 == MAX_I2C_RETRIES => {
+                    return Err(GnssError::I2c { operation, error });
                 }
                 Err(_) => self.command_delay().await,
             }
@@ -1612,6 +1678,33 @@ mod tests {
         assert_eq!(fix.altitude.map(|value| value.get()), Some(545_400));
         assert_eq!(fix.satellites.map(|value| value.get()), Some(8));
         assert_eq!(fix.hdop.map(|value| value.get()), Some(900));
+    }
+
+    #[test]
+    fn parser_aggregates_gsv_across_constellations() {
+        let mut parser = NmeaParser::new();
+        for sentence in [
+            "$GPGSV,1,1,04,06,67,286,,04,66,087,,03,31,082,29,31,15,035,24,1*66\r\n",
+            "$GLGSV,1,1,00,1*78\r\n",
+            "$GAGSV,1,1,00,7*73\r\n",
+            "$GBGSV,1,1,00,1*76\r\n",
+        ] {
+            for byte in sentence.as_bytes() {
+                parser.push(*byte).unwrap();
+            }
+        }
+
+        let signal = parser.state().signal;
+        assert_eq!(signal.satellites_in_view.get(), 4);
+        assert_eq!(signal.satellites_with_signal.get(), 2);
+        assert_eq!(signal.strongest_snr.map(|value| value.get()), Some(29));
+
+        for byte in b"$GPGSV,1,1,00,1*64\r\n" {
+            parser.push(*byte).unwrap();
+        }
+        assert_eq!(parser.state().signal.satellites_in_view.get(), 0);
+        assert_eq!(parser.state().signal.satellites_with_signal.get(), 0);
+        assert_eq!(parser.state().signal.strongest_snr, None);
     }
 
     #[test]
