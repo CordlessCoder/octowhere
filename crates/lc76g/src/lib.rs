@@ -1,7 +1,7 @@
 #![no_std]
 
 use embedded_hal_async::{delay::DelayNs, i2c::I2c};
-use nmea0183::{GGA, GPSQuality, Mode, ParseResult, RMC};
+use nmea0183::{FixType, GGA, GPSQuality, GSA, GSV, Mode, ParseResult, RMC};
 
 const CONFIG_ADDRESS: u8 = 0x50;
 const DATA_ADDRESS: u8 = 0x54;
@@ -128,10 +128,10 @@ coordinate_newtype!(
     "millidegrees"
 );
 coordinate_newtype!(
-    /// Horizontal dilution of precision multiplied by 1000.
-    HdopMilli,
+    /// Dilution of precision multiplied by 1000.
+    DopMilli,
     u32,
-    "HDOP × 1000"
+    "DOP × 1000"
 );
 coordinate_newtype!(
     /// Number of satellites used in the solution.
@@ -139,6 +139,37 @@ coordinate_newtype!(
     u8,
     "satellites"
 );
+coordinate_newtype!(
+    /// Signal-to-noise ratio in decibels.
+    SnrDb,
+    u8,
+    "dB"
+);
+
+/// The dimensionality of the latest navigation solution.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum GnssFixType {
+    /// No position solution is available.
+    #[default]
+    NoFix,
+    /// A two-dimensional position solution is available.
+    Fix2D,
+    /// A three-dimensional position solution is available.
+    Fix3D,
+}
+
+/// Satellite and dilution data reported while the receiver is acquiring a fix.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct GnssSignal {
+    pub fix_type: GnssFixType,
+    pub satellites_in_view: SatelliteCount,
+    pub satellites_used: SatelliteCount,
+    pub satellites_with_signal: SatelliteCount,
+    pub strongest_snr: Option<SnrDb>,
+    pub pdop: Option<DopMilli>,
+    pub hdop: Option<DopMilli>,
+    pub vdop: Option<DopMilli>,
+}
 
 /// UTC date and time reported by the receiver.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -162,7 +193,7 @@ pub struct GnssFix {
     pub speed: Option<SpeedMmPerSecond>,
     pub course: Option<CourseMilliDegrees>,
     pub satellites: Option<SatelliteCount>,
-    pub hdop: Option<HdopMilli>,
+    pub hdop: Option<DopMilli>,
     pub quality: FixQuality,
 }
 
@@ -171,6 +202,7 @@ pub struct GnssFix {
 pub struct GnssState {
     pub fix: Option<GnssFix>,
     pub utc: Option<GnssDateTime>,
+    pub signal: GnssSignal,
 }
 
 /// Sentence type that changed the parsed receiver state.
@@ -178,6 +210,8 @@ pub struct GnssState {
 pub enum NmeaUpdate {
     Rmc,
     Gga,
+    Gsa,
+    Gsv,
     PairAck(PairAck),
 }
 
@@ -305,8 +339,12 @@ pub struct NmeaParser {
 impl NmeaParser {
     pub fn new() -> Self {
         Self {
-            parser: nmea0183::Parser::new()
-                .sentence_filter(nmea0183::Sentence::RMC | nmea0183::Sentence::GGA),
+            parser: nmea0183::Parser::new().sentence_filter(
+                nmea0183::Sentence::RMC
+                    | nmea0183::Sentence::GGA
+                    | nmea0183::Sentence::GSA
+                    | nmea0183::Sentence::GSV,
+            ),
             pair_ack: PairAckParser::new(),
             state: GnssState::default(),
         }
@@ -345,6 +383,19 @@ impl NmeaParser {
                 self.state.fix = None;
                 Ok(Some(NmeaUpdate::Gga))
             }
+            ParseResult::GSA(Some(gsa)) => {
+                self.update_gsa(&gsa);
+                Ok(Some(NmeaUpdate::Gsa))
+            }
+            ParseResult::GSA(None) => {
+                self.state.signal = GnssSignal::default();
+                Ok(Some(NmeaUpdate::Gsa))
+            }
+            ParseResult::GSV(Some(gsv)) => {
+                self.update_gsv(&gsv);
+                Ok(Some(NmeaUpdate::Gsv))
+            }
+            ParseResult::GSV(None) => Ok(Some(NmeaUpdate::Gsv)),
             _ => Ok(pair_ack),
         }
     }
@@ -372,6 +423,39 @@ impl NmeaParser {
         });
     }
 
+    fn update_gsa(&mut self, gsa: &GSA) {
+        self.state.signal.fix_type = match gsa.fix_type {
+            FixType::NoFix => GnssFixType::NoFix,
+            FixType::Fix2D => GnssFixType::Fix2D,
+            FixType::Fix3D => GnssFixType::Fix3D,
+        };
+        self.state.signal.satellites_used =
+            SatelliteCount::new(gsa.get_fix_satellites_prn().len().min(u8::MAX as usize) as u8);
+        self.state.signal.pdop = Some(dop_milli(gsa.pdop));
+        self.state.signal.hdop = Some(dop_milli(gsa.hdop));
+        self.state.signal.vdop = Some(dop_milli(gsa.vdop));
+    }
+
+    fn update_gsv(&mut self, gsv: &GSV) {
+        if gsv.message_number == 1 {
+            self.state.signal.satellites_with_signal = SatelliteCount::default();
+            self.state.signal.strongest_snr = None;
+        }
+        self.state.signal.satellites_in_view = SatelliteCount::new(gsv.sat_in_view);
+        let mut with_signal = self.state.signal.satellites_with_signal.get();
+        let mut strongest = self.state.signal.strongest_snr;
+        for satellite in gsv.get_in_view_satellites() {
+            if let Some(snr) = satellite.snr {
+                with_signal = with_signal.saturating_add(1);
+                if strongest.is_none_or(|current| snr > current.get()) {
+                    strongest = Some(SnrDb::new(snr));
+                }
+            }
+        }
+        self.state.signal.satellites_with_signal = SatelliteCount::new(with_signal);
+        self.state.signal.strongest_snr = strongest;
+    }
+
     fn update_gga(&mut self, gga: &GGA) {
         let quality = gps_quality(&gga.gps_quality);
         if quality == FixQuality::NoFix {
@@ -390,7 +474,7 @@ impl NmeaParser {
             speed: previous.speed,
             course: previous.course,
             satellites: Some(SatelliteCount::new(gga.sat_in_use)),
-            hdop: Some(HdopMilli::new((gga.hdop * 1_000.0) as u32)),
+            hdop: Some(dop_milli(gga.hdop)),
             quality,
         });
     }
@@ -431,6 +515,10 @@ fn latitude_e7(latitude: &nmea0183::coords::Latitude) -> LatitudeE7 {
 
 fn longitude_e7(longitude: &nmea0183::coords::Longitude) -> LongitudeE7 {
     LongitudeE7::new((longitude.as_f64() * 10_000_000.0) as i32)
+}
+
+fn dop_milli(value: f32) -> DopMilli {
+    DopMilli::new((value * 1_000.0) as u32)
 }
 
 fn rmc_quality(mode: &Mode) -> FixQuality {

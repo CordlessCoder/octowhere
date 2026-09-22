@@ -47,6 +47,7 @@ default = []
 femtofont = []
 damage-debug = []
 timing-log = []
+gnss-full-power = []
 fontdue-target-bench = []
 fontdue-target-bench-gcc = ["fontdue-target-bench"]
 

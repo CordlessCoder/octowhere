@@ -3,7 +3,9 @@ use std::{cell::RefCell, rc::Rc};
 use embedded_hal::i2c::{Operation, SevenBitAddress};
 use embedded_hal_async::{delay::DelayNs, i2c::I2c};
 use futures::executor::block_on;
-use lc76g::{Lc76g, LowPowerMode, NmeaParser, NmeaUpdate, PairAck, PairAckStatus};
+use lc76g::{
+    GnssFixType, Lc76g, LowPowerMode, NmeaParser, NmeaUpdate, PairAck, PairAckStatus,
+};
 
 #[derive(Default)]
 struct MockState {
@@ -101,6 +103,27 @@ fn parser_reports_pair_acknowledgements() {
             status: PairAckStatus::Accepted,
         }))
     );
+}
+
+#[test]
+fn parser_reports_satellite_acquisition_progress() {
+    let mut parser = NmeaParser::new();
+    for byte in b"$GNGSA,A,3,21,5,29,25,12,10,26,2,,,,,1.2,0.7,1.0*27\r\n" {
+        parser.push(*byte).unwrap();
+    }
+    for byte in b"$GPGSV,8,1,25,21,44,141,47,15,14,049,44,6,31,255,46,3,25,280,44*75\r\n" {
+        parser.push(*byte).unwrap();
+    }
+
+    let signal = parser.state().signal;
+    assert_eq!(signal.fix_type, GnssFixType::Fix3D);
+    assert_eq!(signal.satellites_used.get(), 8);
+    assert_eq!(signal.satellites_in_view.get(), 25);
+    assert_eq!(signal.satellites_with_signal.get(), 4);
+    assert_eq!(signal.strongest_snr.map(|value| value.get()), Some(47));
+    assert_eq!(signal.pdop.map(|value| value.get()), Some(1_200));
+    assert_eq!(signal.hdop.map(|value| value.get()), Some(700));
+    assert_eq!(signal.vdop.map(|value| value.get()), Some(1_000));
 }
 
 #[test]

@@ -30,7 +30,7 @@ use esp_hal::{
     timer::timg::TimerGroup,
 };
 use esp_println::println;
-use lc76g::{GnssError, GnssOperation, GnssState, Lc76g, NmeaParser, NmeaUpdate};
+use lc76g::{GnssError, GnssOperation, GnssState, Lc76g, LowPowerMode, NmeaParser, NmeaUpdate};
 use octowhere::{
     board,
     chrome::{self, Color, Dirty, FB, FontdueRenderer, FontdueRendererCtx},
@@ -82,6 +82,11 @@ type SensorLora = Sx1272<spi::master::Spi<'static, esp_hal::Async>, Output<'stat
 static I2C_BUS: StaticCell<Mutex<NoopRawMutex, I2cBus>> = StaticCell::new();
 static SENSOR_STATE: Signal<CriticalSectionRawMutex, SensorSnapshot> = Signal::new();
 pub static PSRAM_HEAP: esp_alloc::EspHeap = esp_alloc::EspHeap::empty();
+
+#[cfg(feature = "gnss-full-power")]
+const GNSS_LOW_POWER_MODE: LowPowerMode = LowPowerMode::Disabled;
+#[cfg(not(feature = "gnss-full-power"))]
+const GNSS_LOW_POWER_MODE: LowPowerMode = LowPowerMode::Adaptive;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct SensorSnapshot {
@@ -403,6 +408,16 @@ async fn sensor_task(task: SensorTask) {
                     }
                 }
                 state.gnss = nmea_parser.state();
+                let signal = state.gnss.signal;
+                println!(
+                    "[GNSS] acquisition in_view={} with_signal={} used={} strongest_snr_db={:?} fix_type={:?} hdop_milli={:?}",
+                    signal.satellites_in_view.get(),
+                    signal.satellites_with_signal.get(),
+                    signal.satellites_used.get(),
+                    signal.strongest_snr.map(|value| value.get()),
+                    signal.fix_type,
+                    signal.hdop.map(|value| value.get()),
+                );
                 if let Some(fix) = state.gnss.fix {
                     println!(
                         "[GNSS] sample bytes={} updates={} lat={} lon={} alt_mm={:?} sats={:?} hdop_milli={:?}",
@@ -783,9 +798,9 @@ async fn async_main(spawner: Spawner) {
     Timer::after(Duration::from_secs(1)).await;
 
     let mut gnss = Lc76g::new(i2c.clone(), embassy_time::Delay);
-    match gnss.enable_alp_mode().await {
-        Ok(()) => println!("[GNSS] ALP_ENABLE_SENT"),
-        Err(_) => println!("[GNSS] ALP_ENABLE_FAILED"),
+    match gnss.set_low_power_mode(GNSS_LOW_POWER_MODE).await {
+        Ok(()) => println!("[GNSS] LOW_POWER_MODE={GNSS_LOW_POWER_MODE:?}"),
+        Err(_) => println!("[GNSS] LOW_POWER_MODE_FAILED"),
     }
     let mut nmea = [0u8; 512];
     let mut nmea_parser = NmeaParser::new();
@@ -804,6 +819,16 @@ async fn async_main(spawner: Spawner) {
                 }
             }
             gnss_parse_ok = nmea_parser.state().fix.is_some();
+            let signal = nmea_parser.state().signal;
+            println!(
+                "[GNSS] acquisition in_view={} with_signal={} used={} strongest_snr_db={:?} fix_type={:?} hdop_milli={:?}",
+                signal.satellites_in_view.get(),
+                signal.satellites_with_signal.get(),
+                signal.satellites_used.get(),
+                signal.strongest_snr.map(|value| value.get()),
+                signal.fix_type,
+                signal.hdop.map(|value| value.get()),
+            );
         }
         Ok(_) => println!("[GNSS] NMEA_EMPTY bytes=0"),
         Err(GnssError::I2c { operation, .. }) => match operation {
