@@ -30,7 +30,10 @@ use esp_hal::{
     timer::timg::TimerGroup,
 };
 use esp_println::println;
-use lc76g::{GnssError, GnssOperation, GnssState, Lc76g, LowPowerMode, NmeaParser, NmeaUpdate};
+use lc76g::{
+    GnssError, GnssOperation, GnssState, Lc76g, LowPowerMode, NmeaOutputRate, NmeaParser,
+    NmeaSentence, NmeaUpdate,
+};
 use octowhere::{
     board,
     chrome::{self, Color, Dirty, FB, FontdueRenderer, FontdueRendererCtx},
@@ -401,6 +404,10 @@ async fn sensor_task(task: SensorTask) {
                                 "[GNSS] PAIR_ACK command={} status={:?}",
                                 ack.command, ack.status
                             );
+                        }
+                        Ok(Some(NmeaUpdate::NmeaOutputRate { sentence, rate })) => {
+                            updates += 1;
+                            println!("[GNSS] NMEA_OUTPUT_RATE sentence={sentence:?} rate={rate:?}");
                         }
                         Ok(Some(_)) => updates += 1,
                         Ok(None) => {}
@@ -802,6 +809,15 @@ async fn async_main(spawner: Spawner) {
         Ok(()) => println!("[GNSS] LOW_POWER_MODE={GNSS_LOW_POWER_MODE:?}"),
         Err(_) => println!("[GNSS] LOW_POWER_MODE_FAILED"),
     }
+    for sentence in [NmeaSentence::Gsa, NmeaSentence::Gsv] {
+        match gnss
+            .set_nmea_output_rate(sentence, NmeaOutputRate::EVERY_FIX)
+            .await
+        {
+            Ok(()) => println!("[GNSS] NMEA_OUTPUT sentence={sentence:?} rate=1"),
+            Err(_) => println!("[GNSS] NMEA_OUTPUT_FAILED sentence={sentence:?}"),
+        }
+    }
     let mut nmea = [0u8; 512];
     let mut nmea_parser = NmeaParser::new();
     let mut gnss_parse_ok = false;
@@ -814,6 +830,9 @@ async fn async_main(spawner: Spawner) {
                         "[GNSS] PAIR_ACK command={} status={:?}",
                         ack.command, ack.status
                     ),
+                    Ok(Some(NmeaUpdate::NmeaOutputRate { sentence, rate })) => {
+                        println!("[GNSS] NMEA_OUTPUT_RATE sentence={sentence:?} rate={rate:?}")
+                    }
                     Ok(_) => {}
                     Err(error) => println!("[GNSS] NMEA_PARSE_ERROR {error}"),
                 }

@@ -42,6 +42,115 @@ pub enum LowPowerMode {
     Adaptive,
 }
 
+/// Standard NMEA sentence types whose output rate can be configured.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NmeaSentence {
+    /// Geographic position, altitude and fix-quality data.
+    Gga,
+    /// Geographic position and fix status data.
+    Gll,
+    /// Fix dimensionality, active satellites and dilution of precision.
+    Gsa,
+    /// Satellites in view and their signal levels.
+    Gsv,
+    /// Recommended minimum position, speed and time data.
+    Rmc,
+    /// Course and speed relative to the ground.
+    Vtg,
+    /// UTC date and time.
+    Zda,
+    /// Residuals of the position solution.
+    Grs,
+    /// Pseudorange noise statistics.
+    Gst,
+    /// Combined GNSS fix data.
+    Gns,
+}
+
+impl NmeaSentence {
+    /// All sentence types accepted by the LC76G's PAIR062/PAIR063 commands.
+    pub const ALL: [Self; 10] = [
+        Self::Gga,
+        Self::Gll,
+        Self::Gsa,
+        Self::Gsv,
+        Self::Rmc,
+        Self::Vtg,
+        Self::Zda,
+        Self::Grs,
+        Self::Gst,
+        Self::Gns,
+    ];
+
+    const fn command_id(self) -> u8 {
+        match self {
+            Self::Gga => 0,
+            Self::Gll => 1,
+            Self::Gsa => 2,
+            Self::Gsv => 3,
+            Self::Rmc => 4,
+            Self::Vtg => 5,
+            Self::Zda => 6,
+            Self::Grs => 7,
+            Self::Gst => 8,
+            Self::Gns => 9,
+        }
+    }
+
+    const fn from_command_id(command_id: u8) -> Option<Self> {
+        Some(match command_id {
+            0 => Self::Gga,
+            1 => Self::Gll,
+            2 => Self::Gsa,
+            3 => Self::Gsv,
+            4 => Self::Rmc,
+            5 => Self::Vtg,
+            6 => Self::Zda,
+            7 => Self::Grs,
+            8 => Self::Gst,
+            9 => Self::Gns,
+            _ => return None,
+        })
+    }
+}
+
+/// Rate at which a standard NMEA sentence is emitted.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NmeaOutputRate(u8);
+
+impl NmeaOutputRate {
+    /// Disables this sentence type.
+    pub const DISABLED: Self = Self(0);
+
+    /// Emits this sentence type at every position fix.
+    pub const EVERY_FIX: Self = Self(1);
+
+    /// Creates a rate from the receiver's wire representation.
+    pub const fn from_interval(fixes: u8) -> Option<Self> {
+        if fixes <= 20 { Some(Self(fixes)) } else { None }
+    }
+
+    /// Creates a rate that emits once every `fixes` position fixes.
+    ///
+    /// The receiver accepts values from 1 through 20. `None` represents an
+    /// out-of-range value.
+    pub const fn every(fixes: u8) -> Option<Self> {
+        if fixes == 0 {
+            None
+        } else {
+            Self::from_interval(fixes)
+        }
+    }
+
+    /// Returns the interval, or `None` when output is disabled.
+    pub const fn interval(self) -> Option<u8> {
+        match self.0 {
+            0 => None,
+            fixes => Some(fixes),
+        }
+    }
+}
+
 /// The NMEA GGA fix-quality code.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum FixQuality {
@@ -205,14 +314,18 @@ pub struct GnssState {
     pub signal: GnssSignal,
 }
 
-/// Sentence type that changed the parsed receiver state.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Event emitted for parsed receiver data or a proprietary response.
+#[derive(Clone, Debug, PartialEq)]
 pub enum NmeaUpdate {
-    Rmc,
-    Gga,
-    Gsa,
-    Gsv,
+    /// A sentence parsed by the underlying NMEA parser.
+    Sentence(ParseResult),
+    /// An acknowledgement returned for a proprietary `PAIR` command.
     PairAck(PairAck),
+    /// The receiver reported the configured output rate for a sentence type.
+    NmeaOutputRate {
+        sentence: NmeaSentence,
+        rate: NmeaOutputRate,
+    },
 }
 
 /// Acknowledgement returned for a proprietary `PAIR` command.
@@ -246,6 +359,14 @@ struct PairAckParser {
     len: usize,
 }
 
+enum PairUpdate {
+    Ack(PairAck),
+    NmeaOutputRate {
+        sentence: NmeaSentence,
+        rate: NmeaOutputRate,
+    },
+}
+
 impl PairAckParser {
     const fn new() -> Self {
         Self {
@@ -254,7 +375,7 @@ impl PairAckParser {
         }
     }
 
-    fn push(&mut self, byte: u8) -> Option<PairAck> {
+    fn push(&mut self, byte: u8) -> Option<PairUpdate> {
         if byte == b'$' {
             self.len = 0;
         }
@@ -268,7 +389,7 @@ impl PairAckParser {
             return None;
         }
 
-        let ack = parse_pair_ack(&self.line[..self.len]);
+        let ack = parse_pair_update(&self.line[..self.len]);
         self.len = 0;
         ack
     }
@@ -306,6 +427,37 @@ fn parse_pair_ack(line: &[u8]) -> Option<PairAck> {
     Some(PairAck { command, status })
 }
 
+fn parse_pair_update(line: &[u8]) -> Option<PairUpdate> {
+    parse_pair_ack(line).map(PairUpdate::Ack).or_else(|| {
+        parse_pair_nmea_output_rate(line)
+            .map(|(sentence, rate)| PairUpdate::NmeaOutputRate { sentence, rate })
+    })
+}
+
+fn parse_pair_nmea_output_rate(line: &[u8]) -> Option<(NmeaSentence, NmeaOutputRate)> {
+    let line = line.strip_suffix(b"\r\n")?;
+    let prefix = b"$PAIR063,";
+    if !line.starts_with(prefix) {
+        return None;
+    }
+    let star = line.iter().position(|&byte| byte == b'*')?;
+    if star + 3 != line.len() {
+        return None;
+    }
+    let checksum = line[1..star]
+        .iter()
+        .fold(0, |checksum, byte| checksum ^ byte);
+    if checksum != (hex_digit(line[star + 1])? << 4 | hex_digit(line[star + 2])?) {
+        return None;
+    }
+
+    let fields = &line[prefix.len()..star];
+    let comma = fields.iter().position(|&byte| byte == b',')?;
+    let sentence = NmeaSentence::from_command_id(u8::try_from(decimal(&fields[..comma])?).ok()?)?;
+    let rate = NmeaOutputRate::from_interval(u8::try_from(decimal(&fields[comma + 1..])?).ok()?)?;
+    Some((sentence, rate))
+}
+
 fn decimal(bytes: &[u8]) -> Option<u16> {
     if bytes.is_empty() {
         return None;
@@ -329,7 +481,7 @@ fn hex_digit(byte: u8) -> Option<u8> {
     }
 }
 
-/// Incrementally parses RMC and GGA sentences into fixed-point receiver state.
+/// Incrementally parses standard NMEA sentences into receiver events and state.
 pub struct NmeaParser {
     parser: nmea0183::Parser,
     pair_ack: PairAckParser,
@@ -343,7 +495,10 @@ impl NmeaParser {
                 nmea0183::Sentence::RMC
                     | nmea0183::Sentence::GGA
                     | nmea0183::Sentence::GSA
-                    | nmea0183::Sentence::GSV,
+                    | nmea0183::Sentence::GSV
+                    | nmea0183::Sentence::GLL
+                    | nmea0183::Sentence::VTG
+                    | nmea0183::Sentence::ZDA,
             ),
             pair_ack: PairAckParser::new(),
             state: GnssState::default(),
@@ -355,48 +510,55 @@ impl NmeaParser {
     }
 
     pub fn push(&mut self, byte: u8) -> Result<Option<NmeaUpdate>, &'static str> {
-        let pair_ack = self.pair_ack.push(byte).map(NmeaUpdate::PairAck);
+        let pair_update = self.pair_ack.push(byte).map(|update| match update {
+            PairUpdate::Ack(ack) => NmeaUpdate::PairAck(ack),
+            PairUpdate::NmeaOutputRate { sentence, rate } => {
+                NmeaUpdate::NmeaOutputRate { sentence, rate }
+            }
+        });
         let Some(result) = self.parser.parse_from_byte(byte) else {
-            return Ok(pair_ack);
+            return Ok(pair_update);
         };
         let result = match result {
             Ok(result) => result,
-            Err("Source is not supported!" | "Unsupported sentence type.") => return Ok(pair_ack),
+            Err("Source is not supported!" | "Unsupported sentence type.") => {
+                return Ok(pair_update);
+            }
             Err(error) => return Err(error),
         };
 
         match result {
             ParseResult::RMC(Some(rmc)) => {
                 self.update_rmc(&rmc);
-                Ok(Some(NmeaUpdate::Rmc))
+                Ok(Some(NmeaUpdate::Sentence(ParseResult::RMC(Some(rmc)))))
             }
             ParseResult::RMC(None) => {
                 self.state.fix = None;
                 self.state.utc = None;
-                Ok(Some(NmeaUpdate::Rmc))
+                Ok(Some(NmeaUpdate::Sentence(ParseResult::RMC(None))))
             }
             ParseResult::GGA(Some(gga)) => {
                 self.update_gga(&gga);
-                Ok(Some(NmeaUpdate::Gga))
+                Ok(Some(NmeaUpdate::Sentence(ParseResult::GGA(Some(gga)))))
             }
             ParseResult::GGA(None) => {
                 self.state.fix = None;
-                Ok(Some(NmeaUpdate::Gga))
+                Ok(Some(NmeaUpdate::Sentence(ParseResult::GGA(None))))
             }
             ParseResult::GSA(Some(gsa)) => {
                 self.update_gsa(&gsa);
-                Ok(Some(NmeaUpdate::Gsa))
+                Ok(Some(NmeaUpdate::Sentence(ParseResult::GSA(Some(gsa)))))
             }
             ParseResult::GSA(None) => {
                 self.state.signal = GnssSignal::default();
-                Ok(Some(NmeaUpdate::Gsa))
+                Ok(Some(NmeaUpdate::Sentence(ParseResult::GSA(None))))
             }
             ParseResult::GSV(Some(gsv)) => {
                 self.update_gsv(&gsv);
-                Ok(Some(NmeaUpdate::Gsv))
+                Ok(Some(NmeaUpdate::Sentence(ParseResult::GSV(Some(gsv)))))
             }
-            ParseResult::GSV(None) => Ok(Some(NmeaUpdate::Gsv)),
-            _ => Ok(pair_ack),
+            ParseResult::GSV(None) => Ok(Some(NmeaUpdate::Sentence(ParseResult::GSV(None)))),
+            result => Ok(Some(NmeaUpdate::Sentence(result))),
         }
     }
 
@@ -429,11 +591,18 @@ impl NmeaParser {
             FixType::Fix2D => GnssFixType::Fix2D,
             FixType::Fix3D => GnssFixType::Fix3D,
         };
-        self.state.signal.satellites_used =
-            SatelliteCount::new(gsa.get_fix_satellites_prn().len().min(u8::MAX as usize) as u8);
-        self.state.signal.pdop = Some(dop_milli(gsa.pdop));
-        self.state.signal.hdop = Some(dop_milli(gsa.hdop));
-        self.state.signal.vdop = Some(dop_milli(gsa.vdop));
+        if gsa.fix_type == FixType::NoFix {
+            self.state.signal.satellites_used = SatelliteCount::default();
+            self.state.signal.pdop = None;
+            self.state.signal.hdop = None;
+            self.state.signal.vdop = None;
+        } else {
+            self.state.signal.satellites_used =
+                SatelliteCount::new(gsa.get_fix_satellites_prn().len().min(u8::MAX as usize) as u8);
+            self.state.signal.pdop = Some(dop_milli(gsa.pdop));
+            self.state.signal.hdop = Some(dop_milli(gsa.hdop));
+            self.state.signal.vdop = Some(dop_milli(gsa.vdop));
+        }
     }
 
     fn update_gsv(&mut self, gsv: &GSV) {
@@ -596,6 +765,43 @@ where
         self.set_low_power_mode(LowPowerMode::Disabled).await
     }
 
+    /// Sets the output rate for one standard NMEA sentence type.
+    pub async fn set_nmea_output_rate(
+        &mut self,
+        sentence: NmeaSentence,
+        rate: NmeaOutputRate,
+    ) -> Result<(), GnssError<I::Error>> {
+        let (command, length) = pair_set_nmea_output_rate(sentence, rate);
+        self.write_nmea(&command[..length]).await
+    }
+
+    /// Restores all standard NMEA output rates to the receiver defaults.
+    pub async fn reset_nmea_output_rates(&mut self) -> Result<(), GnssError<I::Error>> {
+        let (command, length) = pair_set_all_nmea_output_rates();
+        self.write_nmea(&command[..length]).await
+    }
+
+    /// Requests the configured output rate for one sentence type.
+    ///
+    /// The result arrives asynchronously in the receiver's NMEA stream as
+    /// [`NmeaUpdate::NmeaOutputRate`].
+    pub async fn query_nmea_output_rate(
+        &mut self,
+        sentence: NmeaSentence,
+    ) -> Result<(), GnssError<I::Error>> {
+        let (command, length) = pair_get_nmea_output_rate(Some(sentence));
+        self.write_nmea(&command[..length]).await
+    }
+
+    /// Requests the configured output rates for every sentence type.
+    ///
+    /// The results arrive asynchronously in the receiver's NMEA stream as
+    /// [`NmeaUpdate::NmeaOutputRate`] events.
+    pub async fn query_all_nmea_output_rates(&mut self) -> Result<(), GnssError<I::Error>> {
+        let (command, length) = pair_get_nmea_output_rate(None);
+        self.write_nmea(&command[..length]).await
+    }
+
     /// Reads all currently buffered NMEA data into `buffer`.
     pub async fn read_nmea<'a>(
         &mut self,
@@ -719,6 +925,99 @@ where
     }
 }
 
+fn pair_set_nmea_output_rate(sentence: NmeaSentence, rate: NmeaOutputRate) -> ([u8; 24], usize) {
+    let mut command = [0; 24];
+    let mut length = 0;
+    for &byte in b"$PAIR062," {
+        command[length] = byte;
+        length += 1;
+    }
+    command[length] = b'0' + sentence.command_id();
+    length += 1;
+    command[length] = b',';
+    length += 1;
+    let interval = rate.0;
+    if interval >= 10 {
+        command[length] = b'1';
+        length += 1;
+        command[length] = b'0' + interval - 10;
+        length += 1;
+    } else {
+        command[length] = b'0' + interval;
+        length += 1;
+    }
+    command[length] = b'*';
+    length += 1;
+    let checksum = command[1..length - 1]
+        .iter()
+        .fold(0, |checksum, byte| checksum ^ byte);
+    command[length] = hex_digit_to_ascii(checksum >> 4);
+    length += 1;
+    command[length] = hex_digit_to_ascii(checksum & 0x0F);
+    length += 1;
+    command[length] = b'\r';
+    length += 1;
+    command[length] = b'\n';
+    length += 1;
+    (command, length)
+}
+
+fn pair_set_all_nmea_output_rates() -> ([u8; 24], usize) {
+    pair_nmea_output_rate_command(b"$PAIR062,-1")
+}
+
+fn pair_get_nmea_output_rate(sentence: Option<NmeaSentence>) -> ([u8; 24], usize) {
+    let mut command = [0; 24];
+    let mut length = 0;
+    for &byte in b"$PAIR063," {
+        command[length] = byte;
+        length += 1;
+    }
+    if let Some(sentence) = sentence {
+        command[length] = b'0' + sentence.command_id();
+        length += 1;
+    } else {
+        command[length] = b'-';
+        command[length + 1] = b'1';
+        length += 2;
+    }
+    pair_nmea_output_rate_command_with_buffer(command, length)
+}
+
+fn pair_nmea_output_rate_command(prefix: &[u8]) -> ([u8; 24], usize) {
+    let mut command = [0; 24];
+    command[..prefix.len()].copy_from_slice(prefix);
+    pair_nmea_output_rate_command_with_buffer(command, prefix.len())
+}
+
+fn pair_nmea_output_rate_command_with_buffer(
+    mut command: [u8; 24],
+    mut length: usize,
+) -> ([u8; 24], usize) {
+    command[length] = b'*';
+    length += 1;
+    let checksum = command[1..length - 1]
+        .iter()
+        .fold(0, |checksum, byte| checksum ^ byte);
+    command[length] = hex_digit_to_ascii(checksum >> 4);
+    length += 1;
+    command[length] = hex_digit_to_ascii(checksum & 0x0F);
+    length += 1;
+    command[length] = b'\r';
+    length += 1;
+    command[length] = b'\n';
+    length += 1;
+    (command, length)
+}
+
+fn hex_digit_to_ascii(value: u8) -> u8 {
+    match value {
+        0..=9 => b'0' + value,
+        10..=15 => b'A' + value - 10,
+        _ => unreachable!(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -749,7 +1048,7 @@ mod tests {
             update = parser.push(*byte).unwrap().or(update);
         }
 
-        assert_eq!(update, Some(NmeaUpdate::Rmc));
+        assert!(matches!(update, Some(NmeaUpdate::Sentence(_))));
         assert_eq!(
             parser.state().utc,
             Some(GnssDateTime {

@@ -4,7 +4,8 @@ use embedded_hal::i2c::{Operation, SevenBitAddress};
 use embedded_hal_async::{delay::DelayNs, i2c::I2c};
 use futures::executor::block_on;
 use lc76g::{
-    GnssFixType, Lc76g, LowPowerMode, NmeaParser, NmeaUpdate, PairAck, PairAckStatus,
+    GnssFixType, Lc76g, LowPowerMode, NmeaOutputRate, NmeaParser, NmeaSentence, NmeaUpdate,
+    PairAck, PairAckStatus,
 };
 
 #[derive(Default)]
@@ -62,7 +63,7 @@ fn parser_decodes_rmc_position() {
         update = parser.push(*byte).unwrap().or(update);
     }
 
-    assert_eq!(update, Some(NmeaUpdate::Rmc));
+    assert!(matches!(update, Some(NmeaUpdate::Sentence(_))));
     let fix = parser.state().fix.unwrap();
     assert!((557_000_000..558_000_000).contains(&fix.latitude.get()));
     assert!((376_000_000..377_000_000).contains(&fix.longitude.get()));
@@ -102,6 +103,40 @@ fn parser_reports_pair_acknowledgements() {
             command: 732,
             status: PairAckStatus::Accepted,
         }))
+    );
+}
+
+#[test]
+fn parser_returns_all_standard_sentences_supported_by_dependency() {
+    let mut parser = NmeaParser::new();
+
+    for sentence in [
+        b"$GPGLL,4916.45,N,12311.12,W,225444,A*31\r\n".as_slice(),
+        b"$GPVTG,089.0,T,,,15.2,N,,,A*12\r\n".as_slice(),
+        b"$GNZDA,181604.456,12,09,2018,-01,15*6C\r\n".as_slice(),
+    ] {
+        let mut update = None;
+        for &byte in sentence {
+            update = parser.push(byte).unwrap().or(update);
+        }
+        assert!(matches!(update, Some(NmeaUpdate::Sentence(_))));
+    }
+}
+
+#[test]
+fn parser_reports_nmea_output_rate_queries() {
+    let mut parser = NmeaParser::new();
+    let mut update = None;
+    for &byte in b"$PAIR063,2,3*3E\r\n" {
+        update = parser.push(byte).unwrap().or(update);
+    }
+
+    assert_eq!(
+        update,
+        Some(NmeaUpdate::NmeaOutputRate {
+            sentence: NmeaSentence::Gsa,
+            rate: NmeaOutputRate::every(3).unwrap(),
+        })
     );
 }
 
@@ -170,6 +205,74 @@ fn adaptive_low_power_mode_sends_documented_prerequisites() {
             b"$PAIR080,0*2E\r\n".as_slice(),
             b"$PAIR050,1000*12\r\n".as_slice(),
             b"$PAIR732,1*21\r\n".as_slice(),
+        ]
+    );
+}
+
+#[test]
+fn nmea_output_rate_configures_any_sentence_type() {
+    let state = Rc::new(RefCell::new(MockState {
+        writes: Vec::new(),
+        reads: vec![vec![64, 0, 0, 0]; 2],
+    }));
+    let i2c = MockI2c {
+        state: state.clone(),
+    };
+    let mut gnss = Lc76g::new(i2c, MockDelay::default());
+
+    block_on(gnss.set_nmea_output_rate(
+        NmeaSentence::Gsa,
+        NmeaOutputRate::EVERY_FIX,
+    ))
+    .unwrap();
+    block_on(gnss.set_nmea_output_rate(
+        NmeaSentence::Gsv,
+        NmeaOutputRate::every(2).unwrap(),
+    ))
+    .unwrap();
+
+    let writes = &state.borrow().writes;
+    let command_data: Vec<&[u8]> = writes
+        .iter()
+        .filter(|(address, _)| *address == 0x58)
+        .map(|(_, data)| data.as_slice())
+        .collect();
+    assert_eq!(
+        command_data,
+        vec![
+            b"$PAIR062,2,1*3D\r\n".as_slice(),
+            b"$PAIR062,3,2*3F\r\n".as_slice(),
+        ]
+    );
+}
+
+#[test]
+fn nmea_output_rate_queries_use_documented_commands() {
+    let state = Rc::new(RefCell::new(MockState {
+        writes: Vec::new(),
+        reads: vec![vec![64, 0, 0, 0]; 3],
+    }));
+    let i2c = MockI2c {
+        state: state.clone(),
+    };
+    let mut gnss = Lc76g::new(i2c, MockDelay::default());
+
+    block_on(gnss.query_nmea_output_rate(NmeaSentence::Gsa)).unwrap();
+    block_on(gnss.query_all_nmea_output_rates()).unwrap();
+    block_on(gnss.reset_nmea_output_rates()).unwrap();
+
+    let writes = &state.borrow().writes;
+    let command_data: Vec<&[u8]> = writes
+        .iter()
+        .filter(|(address, _)| *address == 0x58)
+        .map(|(_, data)| data.as_slice())
+        .collect();
+    assert_eq!(
+        command_data,
+        vec![
+            b"$PAIR063,2*21\r\n".as_slice(),
+            b"$PAIR063,-1*0F\r\n".as_slice(),
+            b"$PAIR062,-1*0E\r\n".as_slice(),
         ]
     );
 }
