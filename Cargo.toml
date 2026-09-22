@@ -36,7 +36,7 @@ futures = { version = "0.3.32", default-features = false, features = ["async-awa
 embassy-embedded-hal = "0.6.0"
 ph-qmi8658 = { version = "0.1.1", features = ["fixed"] }
 tca9554 = "0.2.0"
-heapless = { version = "0.9.2", features = ["nightly"] }
+heapless = { version = "0.9.3", features = ["nightly"] }
 fontdue = { version = "0.9.3", default-features = false, features = ["hashbrown"] }
 fontdue-macros = "0.9.3"
 femtofont = { git = "https://github.com/iriswebb/femtofont", rev = "ffb120f0a2e17a5873d3bb7f59ec951ccff58525" }

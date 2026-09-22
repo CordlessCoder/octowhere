@@ -264,6 +264,7 @@ name = "lc76g"
 version = "0.1.0"
 dependencies = [
  "embedded-hal-async",
+ "heapless",
  "nmea0183",
 ]
 

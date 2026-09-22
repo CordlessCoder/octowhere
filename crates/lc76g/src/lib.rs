@@ -1,6 +1,9 @@
 #![no_std]
 
+use core::fmt::Write;
+
 use embedded_hal_async::{delay::DelayNs, i2c::I2c};
+use heapless::{String, Vec};
 use nmea0183::{FixType, GGA, GPSQuality, GSA, GSV, Mode, ParseResult, RMC};
 
 pub use nmea0183::{Sentence as StandardSentence, SentenceMask as StandardSentenceMask};
@@ -15,6 +18,8 @@ const CONFIG_READ_FREE_LENGTH: u32 = 0xAA51_0004;
 const NMEA_LENGTH_BYTES: usize = 4;
 const INTER_COMMAND_DELAY_MS: u32 = 10;
 const MAX_I2C_RETRIES: usize = 20;
+const PAIR_COMMAND_CAPACITY: usize = 120;
+const PAIR_MESSAGE_FIELDS_CAPACITY: usize = PAIR_COMMAND_CAPACITY - 8;
 
 const ALP_ENABLE: &[u8] = b"$PAIR732,1*21\r\n";
 const ALP_DISABLE: &[u8] = b"$PAIR732,0*20\r\n";
@@ -33,6 +38,103 @@ pub enum GnssOperation {
 pub enum GnssError<E> {
     I2c { operation: GnssOperation, error: E },
     BufferTooSmall { required: usize, available: usize },
+    PairCommand(PairCommandError),
+}
+
+/// Error returned while constructing a proprietary PAIR command.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PairCommandError {
+    /// The command identifier does not fit the three decimal digits required
+    /// by the LC76G protocol.
+    InvalidCommandId,
+    /// The encoded command would exceed the maximum NMEA sentence length.
+    TooLong,
+}
+
+/// A checked, checksummed LC76G proprietary command.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PairCommand {
+    bytes: Vec<u8, PAIR_COMMAND_CAPACITY>,
+}
+
+impl PairCommand {
+    /// Returns the complete command including checksum and line ending.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
+/// Builder for a checksummed LC76G proprietary command.
+pub struct PairCommandBuilder {
+    bytes: Vec<u8, PAIR_COMMAND_CAPACITY>,
+}
+
+impl PairCommandBuilder {
+    /// Starts a command with a three-digit PAIR command identifier.
+    pub fn new(command_id: u16) -> Result<Self, PairCommandError> {
+        if command_id > 999 {
+            return Err(PairCommandError::InvalidCommandId);
+        }
+
+        let mut prefix = String::<8>::new();
+        write!(&mut prefix, "$PAIR{command_id:03}").map_err(|_| PairCommandError::TooLong)?;
+        let mut bytes = Vec::new();
+        bytes
+            .extend_from_slice(prefix.as_bytes())
+            .map_err(|_| PairCommandError::TooLong)?;
+        Ok(Self { bytes })
+    }
+
+    /// Appends a field already encoded as ASCII.
+    pub fn field_bytes(&mut self, field: &[u8]) -> Result<(), PairCommandError> {
+        if self.bytes.len() + 1 + field.len() + 5 > PAIR_COMMAND_CAPACITY {
+            return Err(PairCommandError::TooLong);
+        }
+        self.bytes
+            .push(b',')
+            .map_err(|_| PairCommandError::TooLong)?;
+        self.bytes
+            .extend_from_slice(field)
+            .map_err(|_| PairCommandError::TooLong)?;
+        Ok(())
+    }
+
+    /// Appends an unsigned decimal field.
+    pub fn field_u32(&mut self, value: u32) -> Result<(), PairCommandError> {
+        let mut field = String::<10>::new();
+        write!(&mut field, "{value}").map_err(|_| PairCommandError::TooLong)?;
+        self.field_bytes(field.as_bytes())
+    }
+
+    /// Appends a signed decimal field.
+    pub fn field_i32(&mut self, value: i32) -> Result<(), PairCommandError> {
+        let mut field = String::<11>::new();
+        write!(&mut field, "{value}").map_err(|_| PairCommandError::TooLong)?;
+        self.field_bytes(field.as_bytes())
+    }
+
+    /// Finishes the command by appending its checksum and line ending.
+    pub fn finish(mut self) -> Result<PairCommand, PairCommandError> {
+        if self.bytes.len() + 5 > PAIR_COMMAND_CAPACITY {
+            return Err(PairCommandError::TooLong);
+        }
+        self.bytes
+            .push(b'*')
+            .map_err(|_| PairCommandError::TooLong)?;
+        let checksum = self.bytes[1..self.bytes.len() - 1]
+            .iter()
+            .fold(0, |checksum, byte| checksum ^ byte);
+        self.bytes
+            .push(hex_digit_to_ascii(checksum >> 4))
+            .map_err(|_| PairCommandError::TooLong)?;
+        self.bytes
+            .push(hex_digit_to_ascii(checksum & 0x0F))
+            .map_err(|_| PairCommandError::TooLong)?;
+        self.bytes
+            .extend_from_slice(b"\r\n")
+            .map_err(|_| PairCommandError::TooLong)?;
+        Ok(PairCommand { bytes: self.bytes })
+    }
 }
 
 /// The low-power policy requested from the receiver.
@@ -321,8 +423,12 @@ pub struct GnssState {
 pub enum NmeaUpdate {
     /// A sentence parsed by the underlying NMEA parser.
     Sentence(ParseResult),
+    /// A valid NMEA frame not understood by the underlying parser.
+    Raw(RawNmeaSentence),
     /// An acknowledgement returned for a proprietary `PAIR` command.
     PairAck(PairAck),
+    /// A proprietary response that does not have a specialized representation.
+    Pair(PairMessage),
     /// The receiver reported the configured output rate for a sentence type.
     NmeaOutputRate {
         sentence: NmeaSentence,
@@ -330,11 +436,44 @@ pub enum NmeaUpdate {
     },
 }
 
+/// A checksummed NMEA frame preserved without interpreting its fields.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RawNmeaSentence {
+    bytes: Vec<u8, PAIR_COMMAND_CAPACITY>,
+}
+
+impl RawNmeaSentence {
+    /// Returns the complete frame including its checksum and line ending.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
 /// Acknowledgement returned for a proprietary `PAIR` command.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PairAck {
     pub command: u16,
     pub status: PairAckStatus,
+}
+
+/// A checksummed proprietary response with its fields preserved as ASCII.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PairMessage {
+    command: u16,
+    fields: [u8; PAIR_MESSAGE_FIELDS_CAPACITY],
+    fields_len: u8,
+}
+
+impl PairMessage {
+    /// Returns the PAIR command identifier.
+    pub const fn command(self) -> u16 {
+        self.command
+    }
+
+    /// Returns the comma-separated response fields without the checksum.
+    pub fn fields(&self) -> &[u8] {
+        &self.fields[..self.fields_len as usize]
+    }
 }
 
 /// Result reported by the receiver for a proprietary `PAIR` command.
@@ -357,12 +496,37 @@ pub enum PairAckStatus {
 }
 
 struct PairAckParser {
-    line: [u8; 32],
-    len: usize,
+    line: Vec<u8, PAIR_COMMAND_CAPACITY>,
+}
+
+struct RawNmeaParser {
+    line: Vec<u8, PAIR_COMMAND_CAPACITY>,
+}
+
+impl RawNmeaParser {
+    const fn new() -> Self {
+        Self { line: Vec::new() }
+    }
+
+    fn push(&mut self, byte: u8) -> Option<RawNmeaSentence> {
+        if byte == b'$' {
+            self.line.clear();
+        }
+        if self.line.push(byte).is_err() {
+            self.line.clear();
+            return None;
+        }
+        if byte != b'\n' {
+            return None;
+        }
+        let bytes = core::mem::take(&mut self.line);
+        Some(RawNmeaSentence { bytes })
+    }
 }
 
 enum PairUpdate {
     Ack(PairAck),
+    Message(PairMessage),
     NmeaOutputRate {
         sentence: NmeaSentence,
         rate: NmeaOutputRate,
@@ -371,28 +535,23 @@ enum PairUpdate {
 
 impl PairAckParser {
     const fn new() -> Self {
-        Self {
-            line: [0; 32],
-            len: 0,
-        }
+        Self { line: Vec::new() }
     }
 
     fn push(&mut self, byte: u8) -> Option<PairUpdate> {
         if byte == b'$' {
-            self.len = 0;
+            self.line.clear();
         }
-        if self.len == self.line.len() {
-            self.len = 0;
+        if self.line.push(byte).is_err() {
+            self.line.clear();
             return None;
         }
-        self.line[self.len] = byte;
-        self.len += 1;
         if byte != b'\n' {
             return None;
         }
 
-        let ack = parse_pair_update(&self.line[..self.len]);
-        self.len = 0;
+        let ack = parse_pair_update(&self.line);
+        self.line.clear();
         ack
     }
 }
@@ -430,10 +589,50 @@ fn parse_pair_ack(line: &[u8]) -> Option<PairAck> {
 }
 
 fn parse_pair_update(line: &[u8]) -> Option<PairUpdate> {
-    parse_pair_ack(line).map(PairUpdate::Ack).or_else(|| {
-        parse_pair_nmea_output_rate(line)
-            .map(|(sentence, rate)| PairUpdate::NmeaOutputRate { sentence, rate })
-    })
+    parse_pair_ack(line)
+        .map(PairUpdate::Ack)
+        .or_else(|| {
+            parse_pair_nmea_output_rate(line)
+                .map(|(sentence, rate)| PairUpdate::NmeaOutputRate { sentence, rate })
+        })
+        .or_else(|| parse_pair_message(line).map(PairUpdate::Message))
+}
+
+fn parse_pair_message(line: &[u8]) -> Option<PairMessage> {
+    let line = line.strip_suffix(b"\r\n")?;
+    if !line.starts_with(b"$PAIR") {
+        return None;
+    }
+    let star = line.iter().position(|&byte| byte == b'*')?;
+    if star + 3 != line.len() {
+        return None;
+    }
+    let checksum = line[1..star]
+        .iter()
+        .fold(0, |checksum, byte| checksum ^ byte);
+    if checksum != (hex_digit(line[star + 1])? << 4 | hex_digit(line[star + 2])?) {
+        return None;
+    }
+
+    let command_end = line[..star]
+        .iter()
+        .position(|&byte| byte == b',')
+        .unwrap_or(star);
+    let command = decimal(&line[5..command_end])?;
+    let fields_start = (command_end < star)
+        .then_some(command_end + 1)
+        .unwrap_or(star);
+    let fields = &line[fields_start..star];
+    if fields.len() > PAIR_MESSAGE_FIELDS_CAPACITY {
+        return None;
+    }
+    let mut message = PairMessage {
+        command,
+        fields: [0; PAIR_MESSAGE_FIELDS_CAPACITY],
+        fields_len: fields.len() as u8,
+    };
+    message.fields[..fields.len()].copy_from_slice(fields);
+    Some(message)
 }
 
 fn parse_pair_nmea_output_rate(line: &[u8]) -> Option<(NmeaSentence, NmeaOutputRate)> {
@@ -487,6 +686,7 @@ fn hex_digit(byte: u8) -> Option<u8> {
 pub struct NmeaParser {
     parser: nmea0183::Parser,
     pair_ack: PairAckParser,
+    raw: RawNmeaParser,
     state: GnssState,
 }
 
@@ -509,6 +709,7 @@ impl NmeaParser {
         Self {
             parser: nmea0183::Parser::new().sentence_filter(filter),
             pair_ack: PairAckParser::new(),
+            raw: RawNmeaParser::new(),
             state: GnssState::default(),
         }
     }
@@ -520,8 +721,10 @@ impl NmeaParser {
 
     /// Feeds one byte from the receiver's NMEA stream into the parser.
     pub fn push(&mut self, byte: u8) -> Result<Option<NmeaUpdate>, &'static str> {
+        let raw = self.raw.push(byte).map(NmeaUpdate::Raw);
         let pair_update = self.pair_ack.push(byte).map(|update| match update {
             PairUpdate::Ack(ack) => NmeaUpdate::PairAck(ack),
+            PairUpdate::Message(message) => NmeaUpdate::Pair(message),
             PairUpdate::NmeaOutputRate { sentence, rate } => {
                 NmeaUpdate::NmeaOutputRate { sentence, rate }
             }
@@ -532,7 +735,7 @@ impl NmeaParser {
         let result = match result {
             Ok(result) => result,
             Err("Source is not supported!" | "Unsupported sentence type.") => {
-                return Ok(pair_update);
+                return Ok(pair_update.or(raw));
             }
             Err(error) => return Err(error),
         };
@@ -781,14 +984,14 @@ where
         sentence: NmeaSentence,
         rate: NmeaOutputRate,
     ) -> Result<(), GnssError<I::Error>> {
-        let (command, length) = pair_set_nmea_output_rate(sentence, rate);
-        self.write_nmea(&command[..length]).await
+        let command = pair_set_nmea_output_rate(sentence, rate).map_err(GnssError::PairCommand)?;
+        self.send_pair_command(&command).await
     }
 
     /// Restores all standard NMEA output rates to the receiver defaults.
     pub async fn reset_nmea_output_rates(&mut self) -> Result<(), GnssError<I::Error>> {
-        let (command, length) = pair_set_all_nmea_output_rates();
-        self.write_nmea(&command[..length]).await
+        let command = pair_set_all_nmea_output_rates().map_err(GnssError::PairCommand)?;
+        self.send_pair_command(&command).await
     }
 
     /// Requests the configured output rate for one sentence type.
@@ -799,8 +1002,8 @@ where
         &mut self,
         sentence: NmeaSentence,
     ) -> Result<(), GnssError<I::Error>> {
-        let (command, length) = pair_get_nmea_output_rate(Some(sentence));
-        self.write_nmea(&command[..length]).await
+        let command = pair_get_nmea_output_rate(Some(sentence)).map_err(GnssError::PairCommand)?;
+        self.send_pair_command(&command).await
     }
 
     /// Requests the configured output rates for every sentence type.
@@ -808,8 +1011,8 @@ where
     /// The results arrive asynchronously in the receiver's NMEA stream as
     /// [`NmeaUpdate::NmeaOutputRate`] events.
     pub async fn query_all_nmea_output_rates(&mut self) -> Result<(), GnssError<I::Error>> {
-        let (command, length) = pair_get_nmea_output_rate(None);
-        self.write_nmea(&command[..length]).await
+        let command = pair_get_nmea_output_rate(None).map_err(GnssError::PairCommand)?;
+        self.send_pair_command(&command).await
     }
 
     /// Reads all currently buffered NMEA data into `buffer`.
@@ -879,6 +1082,14 @@ where
         unreachable!()
     }
 
+    /// Sends a checked, checksummed proprietary PAIR command.
+    pub async fn send_pair_command(
+        &mut self,
+        command: &PairCommand,
+    ) -> Result<(), GnssError<I::Error>> {
+        self.write_nmea(command.as_bytes()).await
+    }
+
     async fn read_nmea_length(&mut self) -> Result<usize, GnssError<I::Error>> {
         self.read_buffer_length(CONFIG_READ_NMEA_LENGTH).await
     }
@@ -935,89 +1146,32 @@ where
     }
 }
 
-fn pair_set_nmea_output_rate(sentence: NmeaSentence, rate: NmeaOutputRate) -> ([u8; 24], usize) {
-    let mut command = [0; 24];
-    let mut length = 0;
-    for &byte in b"$PAIR062," {
-        command[length] = byte;
-        length += 1;
-    }
-    command[length] = b'0' + sentence.command_id();
-    length += 1;
-    command[length] = b',';
-    length += 1;
-    let interval = rate.0;
-    if interval >= 10 {
-        command[length] = b'1';
-        length += 1;
-        command[length] = b'0' + interval - 10;
-        length += 1;
-    } else {
-        command[length] = b'0' + interval;
-        length += 1;
-    }
-    command[length] = b'*';
-    length += 1;
-    let checksum = command[1..length - 1]
-        .iter()
-        .fold(0, |checksum, byte| checksum ^ byte);
-    command[length] = hex_digit_to_ascii(checksum >> 4);
-    length += 1;
-    command[length] = hex_digit_to_ascii(checksum & 0x0F);
-    length += 1;
-    command[length] = b'\r';
-    length += 1;
-    command[length] = b'\n';
-    length += 1;
-    (command, length)
+fn pair_set_nmea_output_rate(
+    sentence: NmeaSentence,
+    rate: NmeaOutputRate,
+) -> Result<PairCommand, PairCommandError> {
+    let mut builder = PairCommandBuilder::new(62)?;
+    builder.field_u32(sentence.command_id() as u32)?;
+    builder.field_u32(rate.0 as u32)?;
+    builder.finish()
 }
 
-fn pair_set_all_nmea_output_rates() -> ([u8; 24], usize) {
-    pair_nmea_output_rate_command(b"$PAIR062,-1")
+fn pair_set_all_nmea_output_rates() -> Result<PairCommand, PairCommandError> {
+    let mut builder = PairCommandBuilder::new(62)?;
+    builder.field_i32(-1)?;
+    builder.finish()
 }
 
-fn pair_get_nmea_output_rate(sentence: Option<NmeaSentence>) -> ([u8; 24], usize) {
-    let mut command = [0; 24];
-    let mut length = 0;
-    for &byte in b"$PAIR063," {
-        command[length] = byte;
-        length += 1;
-    }
+fn pair_get_nmea_output_rate(
+    sentence: Option<NmeaSentence>,
+) -> Result<PairCommand, PairCommandError> {
+    let mut builder = PairCommandBuilder::new(63)?;
     if let Some(sentence) = sentence {
-        command[length] = b'0' + sentence.command_id();
-        length += 1;
+        builder.field_u32(sentence.command_id() as u32)?;
     } else {
-        command[length] = b'-';
-        command[length + 1] = b'1';
-        length += 2;
+        builder.field_i32(-1)?;
     }
-    pair_nmea_output_rate_command_with_buffer(command, length)
-}
-
-fn pair_nmea_output_rate_command(prefix: &[u8]) -> ([u8; 24], usize) {
-    let mut command = [0; 24];
-    command[..prefix.len()].copy_from_slice(prefix);
-    pair_nmea_output_rate_command_with_buffer(command, prefix.len())
-}
-
-fn pair_nmea_output_rate_command_with_buffer(
-    mut command: [u8; 24],
-    mut length: usize,
-) -> ([u8; 24], usize) {
-    command[length] = b'*';
-    length += 1;
-    let checksum = command[1..length - 1]
-        .iter()
-        .fold(0, |checksum, byte| checksum ^ byte);
-    command[length] = hex_digit_to_ascii(checksum >> 4);
-    length += 1;
-    command[length] = hex_digit_to_ascii(checksum & 0x0F);
-    length += 1;
-    command[length] = b'\r';
-    length += 1;
-    command[length] = b'\n';
-    length += 1;
-    (command, length)
+    builder.finish()
 }
 
 fn hex_digit_to_ascii(value: u8) -> u8 {

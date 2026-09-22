@@ -9,4 +9,5 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 embedded-hal-async = "1.0.0"
+heapless = "0.9.3"
 nmea0183 = { version = "0.6.0", default-features = false }

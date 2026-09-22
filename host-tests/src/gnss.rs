@@ -5,7 +5,7 @@ use embedded_hal_async::{delay::DelayNs, i2c::I2c};
 use futures::executor::block_on;
 use lc76g::{
     GnssFixType, Lc76g, LowPowerMode, NmeaOutputRate, NmeaParser, NmeaSentence, NmeaUpdate,
-    PairAck, PairAckStatus,
+    PairAck, PairAckStatus, PairCommandBuilder,
 };
 
 #[derive(Default)]
@@ -138,6 +138,54 @@ fn parser_reports_nmea_output_rate_queries() {
             rate: NmeaOutputRate::every(3).unwrap(),
         })
     );
+}
+
+#[test]
+fn pair_command_builder_encodes_protocol_fields() {
+    let mut builder = PairCommandBuilder::new(66).unwrap();
+    for value in [1, 1, 1, 1, 0, 0] {
+        builder.field_u32(value).unwrap();
+    }
+    let command = builder.finish().unwrap();
+
+    assert_eq!(
+        command.as_bytes(),
+        b"$PAIR066,1,1,1,1,0,0*3A\r\n"
+    );
+
+    let mut builder = PairCommandBuilder::new(62).unwrap();
+    builder.field_i32(-1).unwrap();
+    assert_eq!(builder.finish().unwrap().as_bytes(), b"$PAIR062,-1*0E\r\n");
+}
+
+#[test]
+fn parser_preserves_untyped_pair_responses() {
+    let mut parser = NmeaParser::new();
+    let mut update = None;
+    for &byte in b"$PAIR067,1,1,1,1,1,0*3A\r\n" {
+        update = parser.push(byte).unwrap().or(update);
+    }
+
+    let Some(NmeaUpdate::Pair(message)) = update else {
+        panic!("expected a generic PAIR response");
+    };
+    assert_eq!(message.command(), 67);
+    assert_eq!(message.fields(), b"1,1,1,1,1,0");
+}
+
+#[test]
+fn parser_preserves_valid_unsupported_nmea_frames() {
+    let mut parser = NmeaParser::new();
+    let mut update = None;
+    let sentence = b"$GARLM,9A22BE29630F010,125713.000,F,5402*3B\r\n";
+    for &byte in sentence {
+        update = parser.push(byte).unwrap().or(update);
+    }
+
+    let Some(NmeaUpdate::Raw(raw)) = update else {
+        panic!("expected an untyped NMEA frame");
+    };
+    assert_eq!(raw.as_bytes(), sentence);
 }
 
 #[test]

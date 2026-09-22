@@ -32,7 +32,7 @@ use esp_hal::{
 use esp_println::println;
 use lc76g::{
     GnssError, GnssOperation, GnssState, Lc76g, LowPowerMode, NmeaOutputRate, NmeaParser,
-    NmeaSentence, NmeaUpdate,
+    NmeaSentence, NmeaUpdate, PairCommandBuilder,
 };
 use octowhere::{
     board,
@@ -409,6 +409,14 @@ async fn sensor_task(task: SensorTask) {
                             updates += 1;
                             println!("[GNSS] NMEA_OUTPUT_RATE sentence={sentence:?} rate={rate:?}");
                         }
+                        Ok(Some(NmeaUpdate::Pair(message))) => {
+                            updates += 1;
+                            println!(
+                                "[GNSS] PAIR_RESPONSE command={} fields={:?}",
+                                message.command(),
+                                message.fields()
+                            );
+                        }
                         Ok(Some(_)) => updates += 1,
                         Ok(None) => {}
                         Err(error) => println!("[GNSS] NMEA_PARSE_ERROR {error}"),
@@ -453,6 +461,7 @@ async fn sensor_task(task: SensorTask) {
             Err(GnssError::BufferTooSmall { .. }) => {
                 println!("[GNSS] NMEA_BUFFER_TOO_SMALL")
             }
+            Err(GnssError::PairCommand(_)) => println!("[GNSS] PAIR_COMMAND_BUILD_FAILED"),
         }
         if state.gnss.utc.is_none() {
             rtc_sync_pending = true;
@@ -817,6 +826,16 @@ async fn async_main(spawner: Spawner) {
             Ok(()) => println!("[GNSS] NMEA_OUTPUT sentence={sentence:?} rate=1"),
             Err(_) => println!("[GNSS] NMEA_OUTPUT_FAILED sentence={sentence:?}"),
         }
+        match gnss.query_nmea_output_rate(sentence).await {
+            Ok(()) => println!("[GNSS] NMEA_OUTPUT_QUERY sentence={sentence:?}"),
+            Err(_) => println!("[GNSS] NMEA_OUTPUT_QUERY_FAILED sentence={sentence:?}"),
+        }
+    }
+    if let Ok(command) = PairCommandBuilder::new(67).and_then(|builder| builder.finish()) {
+        match gnss.send_pair_command(&command).await {
+            Ok(()) => println!("[GNSS] SEARCH_MODE_QUERY"),
+            Err(_) => println!("[GNSS] SEARCH_MODE_QUERY_FAILED"),
+        }
     }
     let mut nmea = [0u8; 512];
     let mut nmea_parser = NmeaParser::new();
@@ -833,6 +852,11 @@ async fn async_main(spawner: Spawner) {
                     Ok(Some(NmeaUpdate::NmeaOutputRate { sentence, rate })) => {
                         println!("[GNSS] NMEA_OUTPUT_RATE sentence={sentence:?} rate={rate:?}")
                     }
+                    Ok(Some(NmeaUpdate::Pair(message))) => println!(
+                        "[GNSS] PAIR_RESPONSE command={} fields={:?}",
+                        message.command(),
+                        message.fields()
+                    ),
                     Ok(_) => {}
                     Err(error) => println!("[GNSS] NMEA_PARSE_ERROR {error}"),
                 }
@@ -857,6 +881,7 @@ async fn async_main(spawner: Spawner) {
             GnssOperation::WriteData => println!("[GNSS] I2C_WRITE_DATA_FAILED"),
         },
         Err(GnssError::BufferTooSmall { .. }) => println!("[GNSS] NMEA_BUFFER_TOO_SMALL"),
+        Err(GnssError::PairCommand(_)) => println!("[GNSS] PAIR_COMMAND_BUILD_FAILED"),
     }
 
     let lora_spi_config = spi::master::Config::default()
