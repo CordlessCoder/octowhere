@@ -51,8 +51,8 @@ lora-link-rx = []
 
 [patch.crates-io]
 tca9554 = { git = "https://github.com/CordlessCoder/tca9554-rs", rev = "dd76e69" }
-fontdue = { git = "https://github.com/CordlessCoder/fontdue", rev = "351eb539b18079fd21d608977161ab540f4d577a" }
-fontdue-macros = { git = "https://github.com/CordlessCoder/fontdue", rev = "351eb539b18079fd21d608977161ab540f4d577a" }
+fontdue = { git = "https://github.com/CordlessCoder/fontdue", rev = "15b03d419a1a98fecd850c7f3c3edb908485d1d4" }
+fontdue-macros = { git = "https://github.com/CordlessCoder/fontdue", rev = "15b03d419a1a98fecd850c7f3c3edb908485d1d4" }
 
 [profile.dev]
 opt-level = "s"

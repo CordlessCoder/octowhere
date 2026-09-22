@@ -86,7 +86,7 @@ Weigh that cost before adding one.
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 441,408 bytes, 10.69% of the 4,128,768-byte app partition.
+The image is currently 441,456 bytes, 10.69% of the 4,128,768-byte app partition.
 
 `panic = "immediate-abort"` is the size lever, and it is not taken. It needs
 `cargo-features = ["panic-immediate-abort"]` restored to unlock it, which costs the drift check
