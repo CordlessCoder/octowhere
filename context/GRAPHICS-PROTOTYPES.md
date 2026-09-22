@@ -10,10 +10,11 @@ boundaries. `ACTIVE_ARCHITECTURE` selects the version flashed by the firmware.
 | Tiled | Fixed visual regions aligned with flush damage | Matches the current double-buffer and partial-flush path | Region boundaries can force unrelated content to redraw together |
 
 The prototype uses a dark neutral field, saturated functional slabs, black
-knockout text, an orthogonal map grid, block-built symbols, and real coordinate
-metadata. The three renderers intentionally share visual primitives so the
-comparison is about composition and invalidation rather than three different
-art directions.
+knockout text, an orthogonal map grid, block-built symbols, and coordinate
+metadata. The map markers and their coordinates are fixed placeholder values,
+not a position fix. The three renderers intentionally share visual primitives
+so the comparison is about composition and invalidation rather than three
+different art directions.
 
 Text placement uses `embedded-layout`, including vertical header flow and
 alignment inside action regions. Prototype labels use the compile-time fontdue

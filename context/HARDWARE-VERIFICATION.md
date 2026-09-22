@@ -22,7 +22,7 @@ After the geometry fixes pass host checks, does partial flushing preserve both
 alternating framebuffers? Exercise moving touch marks, changing text, screen
 edges and regions crossing dirty-grid boundaries. Look for stale pixels and
 tearing. Verify the panel accepts the aligned transfer windows.
-Keep full-frame flushing as the default until this check passes.
+Partial flushing is now the default and no record says this check was run.
 
 ## Failure recovery
 
