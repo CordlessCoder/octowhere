@@ -44,6 +44,9 @@ pub trait Sx127xVariant {
     const HIGH_BANDWIDTH_OPTIMIZATION: bool;
     const CLEAR_DETECT_OPTIMIZE_AUTOMATIC_IF: bool;
     const IF_FREQUENCY_OPTIMIZATION: bool;
+    const FEI_BANDWIDTH_SCALING: bool;
+    const PA_CONFIG_MAX_POWER_SUPPORTED: bool;
+    const INVERT_IQ_TX_SUPPORTED: bool;
     const INVERT_IQ_2_SUPPORTED: bool;
 
     fn low_frequency_mode(frequency: u32) -> bool;
@@ -78,6 +81,9 @@ impl Sx127xVariant for Sx1272 {
     const HIGH_BANDWIDTH_OPTIMIZATION: bool = false;
     const CLEAR_DETECT_OPTIMIZE_AUTOMATIC_IF: bool = true;
     const IF_FREQUENCY_OPTIMIZATION: bool = false;
+    const FEI_BANDWIDTH_SCALING: bool = false;
+    const PA_CONFIG_MAX_POWER_SUPPORTED: bool = false;
+    const INVERT_IQ_TX_SUPPORTED: bool = false;
     const INVERT_IQ_2_SUPPORTED: bool = false;
 
     fn low_frequency_mode(_frequency: u32) -> bool {
@@ -132,6 +138,9 @@ impl Sx127xVariant for Sx1276 {
     const HIGH_BANDWIDTH_OPTIMIZATION: bool = true;
     const CLEAR_DETECT_OPTIMIZE_AUTOMATIC_IF: bool = false;
     const IF_FREQUENCY_OPTIMIZATION: bool = true;
+    const FEI_BANDWIDTH_SCALING: bool = true;
+    const PA_CONFIG_MAX_POWER_SUPPORTED: bool = true;
+    const INVERT_IQ_TX_SUPPORTED: bool = true;
     const INVERT_IQ_2_SUPPORTED: bool = true;
 
     fn low_frequency_mode(frequency: u32) -> bool {

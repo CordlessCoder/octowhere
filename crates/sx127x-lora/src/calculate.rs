@@ -4,8 +4,13 @@ pub(crate) fn data_rate(symbol_rate: f32, spreading_factor: f32, coding_rate: f3
     (symbol_rate * spreading_factor * coding_rate) as u16
 }
 
-pub(crate) fn fei_hz(fei: i32, bandwidth_khz: f32) -> f64 {
-    (fei as f64 * 2u32.pow(24) as f64 / 32_000_000.0) * (bandwidth_khz as f64 / 500.0)
+pub(crate) fn fei_hz<V: Sx127xVariant>(fei: i32, bandwidth_khz: f32) -> f64 {
+    let hz = fei as f64 * 2u32.pow(24) as f64 / 32_000_000.0;
+    if V::FEI_BANDWIDTH_SCALING {
+        hz * (bandwidth_khz as f64 / 500.0)
+    } else {
+        hz
+    }
 }
 
 pub(crate) fn fei_ppm(hz: f64, frf: u32) -> f64 {
@@ -73,35 +78,41 @@ mod tests {
 
     #[test]
     fn fei_new_neg_fei_hz_ok() {
-        let res = fei_hz(-2i32, 16f32);
+        let res = fei_hz::<Sx1276>(-2i32, 16f32);
         assert!((res - -0.033554432).abs() < 1e-9);
     }
 
     #[test]
     fn fei_new_pos_fei_hz_ok() {
-        let res = fei_hz(8i32, 16f32);
+        let res = fei_hz::<Sx1276>(8i32, 16f32);
         assert!((res - 0.134217728).abs() < 1e-9);
     }
 
     #[test]
     fn fei_new_neg_fei_ppm_ok() {
-        let fei_hz = fei_hz(-4i32, 16f32);
+        let fei_hz = fei_hz::<Sx1276>(-4i32, 16f32);
         let fei_ppm = fei_ppm(fei_hz, 32u32);
         assert!((fei_ppm - -2097.152).abs() < 1e-3);
     }
 
     #[test]
     fn fei_new_pos_fei_ppm_ok() {
-        let fei_hz = fei_hz(8i32, 16f32);
+        let fei_hz = fei_hz::<Sx1276>(8i32, 16f32);
         let fei_ppm = fei_ppm(fei_hz, 32u32);
         assert!((fei_ppm - 4194.304).abs() < 1e-3);
     }
 
     #[test]
     fn fei_hz_handles_full_signed_register_range() {
-        let res = fei_hz(0x7ffff, 500.0);
+        let res = fei_hz::<Sx1276>(0x7ffff, 500.0);
         assert!(res.is_finite());
         assert!(res > 0.0);
+    }
+
+    #[test]
+    fn sx1272_fei_does_not_scale_with_bandwidth() {
+        assert!((fei_hz::<Sx1272>(8, 16.0) - 4.194304).abs() < 1e-9);
+        assert!((fei_hz::<Sx1272>(-2, 16.0) + 1.048576).abs() < 1e-9);
     }
 
     #[test]

@@ -639,7 +639,15 @@ pub struct FEI {
 
 impl FEI {
     pub fn new(bandwidth: Bandwidth, fei: i32, frequency: u32) -> Self {
-        let hz = calculate::fei_hz(fei, bandwidth.khz());
+        Self::new_for_variant::<sx127x_common::Sx1276>(bandwidth, fei, frequency)
+    }
+
+    pub fn new_for_variant<V: Sx127xVariant>(
+        bandwidth: Bandwidth,
+        fei: i32,
+        frequency: u32,
+    ) -> Self {
+        let hz = calculate::fei_hz::<V>(fei, bandwidth.khz());
         Self {
             hz,
             ppm: calculate::fei_ppm(hz, frequency),

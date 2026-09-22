@@ -9,11 +9,15 @@ use sx127xlora::{
     driver::Sx1272Lora,
     registers::{
         DETECT_OPTIMIZE, FIFO, FIFO_RX_CURRENT_ADDR, FRF_LSB, FRF_MID, FRF_MSB, HOP_CHANNEL,
-        HOP_CHANNEL_CRC_ON_PAYLOAD_MASK, IRQ_FLAGS, IRQ_FLAGS_RX_DONE_MASK, OP_MODE,
-        OP_MODE_LOW_FREQUENCY_MODE_ON_MASK, OP_MODE_MODE_MASK, PAYLOAD_LENGTH, PKT_SNR_VALUE,
-        RX_NB_BYTES, TEMP, VERSION,
+        HOP_CHANNEL_CRC_ON_PAYLOAD_MASK, INVERT_IQ, INVERT_IQ_2, IRQ_FLAGS, IRQ_FLAGS_RX_DONE_MASK,
+        IRQ_FLAGS_RX_TIMEOUT_MASK, MODEM_CONFIG_1, MODEM_CONFIG_2, OP_MODE,
+        OP_MODE_LOW_FREQUENCY_MODE_ON_MASK, OP_MODE_MODE_MASK, PA_CONFIG, PAYLOAD_LENGTH,
+        PKT_SNR_VALUE, RX_NB_BYTES, TEMP, VERSION,
     },
-    types::{Bandwidth, CodingRate, HeaderMode, SpreadingFactor, Sx127xLoraConfig},
+    types::{
+        Bandwidth, CodingRate, HeaderMode, OCP, PowerRamp, SpreadingFactor, Sx127xLoraConfig,
+        TxConfig,
+    },
 };
 
 struct MockSpi {
@@ -169,6 +173,41 @@ fn sx1276_initialization_does_not_apply_sx1272_workaround() {
 }
 
 #[test]
+fn sx1272_automatic_if_optimization_does_not_restore_reserved_detect_bit() {
+    let mut config = Sx127xLoraConfig::for_variant::<Sx1272>();
+    config.auto_optimize = true;
+    config.bandwidth = Bandwidth::Bw500kHz;
+    let driver = Sx1272Lora::new_with_config(sx1272_spi(), config).unwrap();
+
+    assert_eq!(driver.spi.spi.registers[DETECT_OPTIMIZE as usize] & 0x80, 0);
+}
+
+#[test]
+fn sx1272_iq_inversion_preserves_reserved_transmit_bit() {
+    let mut spi = sx1272_spi();
+    spi.registers[INVERT_IQ as usize] = 0x27;
+    let mut driver = Sx1272Lora::new(spi).unwrap();
+
+    driver.set_invert_iq(true).unwrap();
+
+    assert_eq!(driver.spi.spi.registers[INVERT_IQ as usize], 0x67);
+    assert_eq!(driver.spi.spi.registers[INVERT_IQ_2 as usize], 0);
+}
+
+#[test]
+fn sx1276_iq_inversion_updates_both_inversion_registers() {
+    let mut spi = MockSpi::default();
+    spi.registers[VERSION as usize] = Sx1276::CHIP_VERSION;
+    spi.registers[INVERT_IQ as usize] = 0x27;
+    let mut driver = sx127xlora::driver::Sx1276Lora::new(spi).unwrap();
+
+    driver.set_invert_iq(true).unwrap();
+
+    assert_eq!(driver.spi.spi.registers[INVERT_IQ as usize], 0x66);
+    assert_eq!(driver.spi.spi.registers[INVERT_IQ_2 as usize], 0x19);
+}
+
+#[test]
 fn frequency_programming_uses_three_registers_and_keeps_sx1272_in_hf_mode() {
     let mut driver = Sx1272Lora::new(sx1272_spi()).unwrap();
     driver.set_frequency(868_000_000).unwrap();
@@ -222,6 +261,29 @@ fn raw_temperature_runs_the_measurement_and_decodes_the_inverted_value() {
 }
 
 #[test]
+fn raw_temperature_decodes_positive_values_without_losing_one_degree() {
+    let mut spi = sx1272_spi();
+    spi.registers[TEMP as usize] = (-30i8) as u8;
+    let mut driver = Sx1272Lora::new(spi).unwrap();
+
+    assert_eq!(driver.raw_temperature(MockDelay).unwrap(), 30);
+}
+
+#[test]
+fn sx1272_rfo_power_does_not_set_reserved_pa_config_bits() {
+    let mut sx1272 = Sx1272Lora::new(sx1272_spi()).unwrap();
+    let config = TxConfig::new(OCP::default(), 14, PowerRamp::default(), true).unwrap();
+    sx1272.configure_tx(config).unwrap();
+    assert_eq!(sx1272.spi.spi.registers[PA_CONFIG as usize], 14);
+
+    let mut sx1276_spi = MockSpi::default();
+    sx1276_spi.registers[VERSION as usize] = Sx1276::CHIP_VERSION;
+    let mut sx1276 = sx127xlora::driver::Sx1276Lora::new(sx1276_spi).unwrap();
+    sx1276.configure_tx(config).unwrap();
+    assert_eq!(sx1276.spi.spi.registers[PA_CONFIG as usize], 0x7e);
+}
+
+#[test]
 fn packet_snr_preserves_signed_quarter_db_precision() {
     let mut spi = sx1272_spi();
     spi.registers[PKT_SNR_VALUE as usize] = (-2i8) as u8;
@@ -252,6 +314,21 @@ fn configuration_writes_sx1272_and_sx1276_modem1_fields_at_their_datasheet_posit
         sx127xlora::driver::Sx1276Lora::new_with_config(sx1276_spi, sx1276_config).unwrap();
     assert_eq!(sx1276.spi.spi.registers[0x1d], 0x74);
     assert_eq!(sx1276.spi.spi.registers[0x1e] & 0x04, 0x04);
+}
+
+#[test]
+fn configuration_can_leave_sf6_implicit_mode_for_a_regular_explicit_mode() {
+    let mut spi = sx1272_spi();
+    spi.registers[MODEM_CONFIG_1 as usize] = 0x04;
+    spi.registers[MODEM_CONFIG_2 as usize] = 0x60;
+    let driver =
+        Sx1272Lora::new_with_config(spi, Sx127xLoraConfig::for_variant::<Sx1272>()).unwrap();
+
+    assert_eq!(driver.spi.spi.registers[MODEM_CONFIG_1 as usize] & 0x04, 0);
+    assert_eq!(
+        driver.spi.spi.registers[MODEM_CONFIG_2 as usize] & 0xf0,
+        0x70
+    );
 }
 
 #[test]
@@ -308,6 +385,32 @@ fn rx_packet_rejects_crc_errors_without_consulting_header_metadata() {
     spi.registers[IRQ_FLAGS as usize] = IRQ_FLAGS_RX_DONE_MASK | 0x20;
 
     let mut driver = Sx1272Lora::new(spi).unwrap();
+    let result = driver.rx_packet();
+
+    assert!(matches!(
+        result,
+        Err(sx127xlora::driver::Sx127xError::PacketTermination)
+    ));
+}
+
+#[test]
+fn rx_packet_rejects_reads_before_reception_is_complete() {
+    let mut driver = Sx1272Lora::new(sx1272_spi()).unwrap();
+
+    let result = driver.rx_packet();
+
+    assert!(matches!(
+        result,
+        Err(sx127xlora::driver::Sx127xError::PacketNotReady)
+    ));
+}
+
+#[test]
+fn rx_packet_reports_timeout_before_packet_readiness() {
+    let mut spi = sx1272_spi();
+    spi.registers[IRQ_FLAGS as usize] = IRQ_FLAGS_RX_TIMEOUT_MASK;
+    let mut driver = Sx1272Lora::new(spi).unwrap();
+
     let result = driver.rx_packet();
 
     assert!(matches!(

@@ -98,11 +98,19 @@ impl<SPI: SpiDevice, V: Sx127xVariant> Sx127xLora<SPI, V> {
         #[cfg(feature = "defmt")]
         debug!("Sx127xLora.configure_tx: {}", config);
 
+        let mut pa_config = if config.use_rfo {
+            0
+        } else {
+            PA_CONFIG_PA_SELECT_MASK
+        };
+        if V::PA_CONFIG_MAX_POWER_SUPPORTED {
+            pa_config |= PA_CONFIG_MAX_POWER_MASK;
+        }
+        pa_config |= config.power & PA_CONFIG_OUTPUT_POWER_MASK;
+        self.write(PA_CONFIG, pa_config).await?;
         if config.use_rfo {
-            self.write(PA_CONFIG, 0x70 | config.power).await?;
             self.write(V::PA_DAC, V::pa_dac(false)).await?;
         } else {
-            self.write(PA_CONFIG, 0x80 | config.power).await?;
             self.write(V::PA_DAC, V::pa_dac(config.high_power)).await?;
         }
         self.set_power_ramp(config.ramp).await?;
@@ -168,7 +176,7 @@ impl<SPI: SpiDevice, V: Sx127xVariant> Sx127xLora<SPI, V> {
         let bandwidth = self.bandwidth().await?;
         let frequency = self.frequency().await?;
 
-        Ok(FEI::new(bandwidth, fei, frequency))
+        Ok(FEI::new_for_variant::<V>(bandwidth, fei, frequency))
     }
 
     /// Gets the carrier frequency in Hz.
@@ -441,11 +449,7 @@ impl<SPI: SpiDevice, V: Sx127xVariant> Sx127xLora<SPI, V> {
         self.set_device_mode(DeviceMode::STDBY).await?;
 
         let raw = self.read(TEMP).await?;
-        if raw & 0x80 != 0 {
-            Ok((255 - raw) as i8)
-        } else {
-            Ok(-(raw as i8))
-        }
+        Ok(-(raw as i8))
     }
 
     /// Gets the received payload from the FIFO buffer.
@@ -459,14 +463,19 @@ impl<SPI: SpiDevice, V: Sx127xVariant> Sx127xLora<SPI, V> {
         #[cfg(feature = "defmt")]
         debug!("irq_flags: 0x{:x}", irq_flags);
 
-        if irq_flags & IRQ_FLAGS_PAYLOAD_CRC_ERROR_MASK != 0 {
-            #[cfg(feature = "defmt")]
-            error!("Packet termination failed due to PayloadCrcError");
-            return Err(Sx127xError::PacketTermination);
-        }
         if irq_flags & IRQ_FLAGS_RX_TIMEOUT_MASK != 0 {
             #[cfg(feature = "defmt")]
             error!("Packet termination failed due to RxTimeout");
+            return Err(Sx127xError::PacketTermination);
+        }
+        if irq_flags & IRQ_FLAGS_RX_DONE_MASK == 0 {
+            #[cfg(feature = "defmt")]
+            debug!("packet is not ready");
+            return Err(Sx127xError::PacketNotReady);
+        }
+        if irq_flags & IRQ_FLAGS_PAYLOAD_CRC_ERROR_MASK != 0 {
+            #[cfg(feature = "defmt")]
+            error!("Packet termination failed due to PayloadCrcError");
             return Err(Sx127xError::PacketTermination);
         }
 
@@ -593,8 +602,10 @@ impl<SPI: SpiDevice, V: Sx127xVariant> Sx127xLora<SPI, V> {
         debug!("Sx127xLora.set_invert_iq: {}", on);
         let mut byte = self.read(INVERT_IQ).await?;
         set_bits(&mut byte, on as u8, INVERT_IQ_RX_MASK, INVERT_IQ_RX_OFFSET);
-        // see https://github.com/jgromes/RadioLib/issues/778
-        set_bits(&mut byte, !on as u8, INVERT_IQ_TX_MASK, INVERT_IQ_TX_OFFSET);
+        if V::INVERT_IQ_TX_SUPPORTED {
+            // see https://github.com/jgromes/RadioLib/issues/778
+            set_bits(&mut byte, !on as u8, INVERT_IQ_TX_MASK, INVERT_IQ_TX_OFFSET);
+        }
         self.write(INVERT_IQ, byte).await?;
         if V::INVERT_IQ_2_SUPPORTED {
             self.write(
@@ -842,10 +853,15 @@ impl<SPI: SpiDevice, V: Sx127xVariant> Sx127xLora<SPI, V> {
         self.set_bandwidth(config.bandwidth).await?;
         self.set_coding_rate(config.coding_rate).await?;
         self.set_frequency(config.frequency).await?;
-        self.set_header_mode(config.header_mode).await?;
+        if config.spreading_factor == SpreadingFactor::Sf6 {
+            self.set_header_mode(config.header_mode).await?;
+            self.set_spreading_factor(config.spreading_factor).await?;
+        } else {
+            self.set_spreading_factor(config.spreading_factor).await?;
+            self.set_header_mode(config.header_mode).await?;
+        }
         self.set_invert_iq(config.invert_iq).await?;
         self.set_preamble_length(config.preamble_length).await?;
-        self.set_spreading_factor(config.spreading_factor).await?;
         self.set_sync_word(config.sync_word).await?;
         self.set_crc(config.use_crc).await?;
 
@@ -1031,10 +1047,10 @@ impl<SPI: SpiDevice, V: Sx127xVariant> Sx127xLora<SPI, V> {
             self.set_frequency(frequency).await?;
         }
 
-        self.set_automatic_if(config.automatic_if).await?;
         if !V::IF_FREQUENCY_OPTIMIZATION {
             return Ok(());
         }
+        self.set_automatic_if(config.automatic_if).await?;
         if let Some(if_freq_2) = config.if_freq_2 {
             self.write(IF_FREQ_2, if_freq_2).await?;
         }

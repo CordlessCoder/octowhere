@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - add SX1272/73 and SX1276-family chip variants
 - apply variant-specific register mappings and SX1272 errata workarounds
+- use variant-correct FEI conversion and avoid SX1272 reserved register fields
+- preserve SX1272 temperature decoding and PA configuration reserved bits
 - use burst FIFO transfers and preserve received payload lengths
 - fix signed SNR and FEI decoding, including fractional FEI conversion, power-ramp updates, and high-power PA selection
 - preserve the payload-size feature, validate public configurations, and widen FEI arithmetic
@@ -17,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - use the correct SX1272/SX1276 field positions for bandwidth, coding rate, header mode, and CRC
 - reject CRC and timeout flags independently of packet-header metadata
 - expose runtime modem configuration, optimization helpers, and raw temperature measurement
+- report incomplete receptions instead of reading stale FIFO data
 
 ## 0.2.0
 

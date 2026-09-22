@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - add chip-variant definitions for SX1272/73 and SX1276-family register maps
 - expose variant-specific LoRa modem field layouts
+- describe variant-specific FEI scaling and IQ inversion fields
 - expose burst SPI transactions for FIFO transfers
 
 ## [0.5.0] - 2026-06-27
