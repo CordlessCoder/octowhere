@@ -1066,14 +1066,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "femtofont"
-version = "0.5.0"
-source = "git+https://github.com/iriswebb/femtofont?rev=ffb120f0a2e17a5873d3bb7f59ec951ccff58525#ffb120f0a2e17a5873d3bb7f59ec951ccff58525"
-dependencies = [
- "ttf-parser",
-]
-
-[[package]]
 name = "find-msvc-tools"
 version = "0.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1532,7 +1524,6 @@ dependencies = [
  "esp-hal",
  "esp-println",
  "esp-rtos",
- "femtofont",
  "fontdue",
  "fontdue-macros",
  "futures",

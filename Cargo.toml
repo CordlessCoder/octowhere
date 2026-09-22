@@ -39,12 +39,10 @@ tca9554 = "0.2.0"
 heapless = { version = "0.9.3", features = ["nightly"] }
 fontdue = { version = "0.9.3", default-features = false, features = ["hashbrown"] }
 fontdue-macros = "0.9.3"
-femtofont = { git = "https://github.com/iriswebb/femtofont", rev = "ffb120f0a2e17a5873d3bb7f59ec951ccff58525" }
 embedded-layout = "0.4.2"
 
 [features]
 default = []
-femtofont = []
 damage-debug = []
 timing-log = []
 gnss-full-power = []
