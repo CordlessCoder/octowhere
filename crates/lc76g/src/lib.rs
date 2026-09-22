@@ -3,6 +3,8 @@
 use embedded_hal_async::{delay::DelayNs, i2c::I2c};
 use nmea0183::{FixType, GGA, GPSQuality, GSA, GSV, Mode, ParseResult, RMC};
 
+pub use nmea0183::{Sentence as StandardSentence, SentenceMask as StandardSentenceMask};
+
 const CONFIG_ADDRESS: u8 = 0x50;
 const DATA_ADDRESS: u8 = 0x54;
 const WRITE_DATA_ADDRESS: u8 = 0x58;
@@ -489,26 +491,34 @@ pub struct NmeaParser {
 }
 
 impl NmeaParser {
+    /// Creates a parser for every sentence type supported by `nmea0183`.
     pub fn new() -> Self {
+        Self::with_sentence_filter(
+            nmea0183::Sentence::RMC
+                | nmea0183::Sentence::GGA
+                | nmea0183::Sentence::GSA
+                | nmea0183::Sentence::GSV
+                | nmea0183::Sentence::GLL
+                | nmea0183::Sentence::VTG
+                | nmea0183::Sentence::ZDA,
+        )
+    }
+
+    /// Creates a parser that emits only the selected standard sentence types.
+    pub fn with_sentence_filter(filter: StandardSentenceMask) -> Self {
         Self {
-            parser: nmea0183::Parser::new().sentence_filter(
-                nmea0183::Sentence::RMC
-                    | nmea0183::Sentence::GGA
-                    | nmea0183::Sentence::GSA
-                    | nmea0183::Sentence::GSV
-                    | nmea0183::Sentence::GLL
-                    | nmea0183::Sentence::VTG
-                    | nmea0183::Sentence::ZDA,
-            ),
+            parser: nmea0183::Parser::new().sentence_filter(filter),
             pair_ack: PairAckParser::new(),
             state: GnssState::default(),
         }
     }
 
+    /// Returns the latest state projected from the parsed fix sentences.
     pub fn state(&self) -> GnssState {
         self.state
     }
 
+    /// Feeds one byte from the receiver's NMEA stream into the parser.
     pub fn push(&mut self, byte: u8) -> Result<Option<NmeaUpdate>, &'static str> {
         let pair_update = self.pair_ack.push(byte).map(|update| match update {
             PairUpdate::Ack(ack) => NmeaUpdate::PairAck(ack),
