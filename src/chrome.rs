@@ -77,17 +77,16 @@ const fn color_from_hex(hex: &str) -> Color {
     }
 }
 
+// Values come from the reference board; see context/palette-reference.md.
+// BLACK is the exception and stays pure. The doctrine asks for a dark neutral field, but an
+// unlit pixel on this AMOLED is a contrast step no near-black reaches.
 pub const LIME: Color = color_from_hex("#c0fe04");
 pub const RED: Color = color_from_hex("#f24723");
+pub const ORANGE: Color = color_from_hex("#f1710d");
 pub const PURPLE: Color = color_from_hex("#5500e4");
-pub const ORANGE_RED: Color = color_from_hex("#f15227");
-pub const GRAY: Color = color_from_hex("#999999");
-pub const WHITE: Color = color_from_hex("#ffffff");
+pub const GRAY: Color = color_from_hex("#888e98");
+pub const WHITE: Color = color_from_hex("#d2d3d6");
 pub const BLACK: Color = color_from_hex("#000000");
-
-pub const ACCENT: Color = LIME;
-// color-background: var(--color-black);
-// color-foreground: var(--color-white);
 
 #[inline]
 pub const fn lerp_u8(a: u8, b: u8, factor: u8) -> u8 {

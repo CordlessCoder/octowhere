@@ -352,7 +352,7 @@ where
     )?;
     marker(
         Point::new(294, 238),
-        chrome::ORANGE_RED,
+        chrome::ORANGE,
         state.selected_node == Some(2),
         target,
     )?;
@@ -440,7 +440,7 @@ where
         "GYRO / RAD/S",
         &Rectangle::new(Point::new(252, 148), Size::new(138, 28)),
         font,
-        chrome::ORANGE_RED,
+        chrome::ORANGE,
         chrome::BLACK,
         16,
         1,
@@ -590,7 +590,7 @@ where
         if clock.valid {
             chrome::GRAY
         } else {
-            chrome::ORANGE_RED
+            chrome::RED
         },
         chrome::BLACK,
         16,
@@ -693,7 +693,7 @@ where
         if status {
             chrome::LIME
         } else {
-            chrome::ORANGE_RED
+            chrome::RED
         },
         chrome::BLACK,
         20,
@@ -903,7 +903,7 @@ where
         if state.peripherals.compass_valid {
             chrome::LIME
         } else {
-            chrome::ORANGE_RED
+            chrome::RED
         },
         chrome::BLACK,
         16,
@@ -944,7 +944,7 @@ where
         if state.selected_node.is_some() {
             chrome::LIME
         } else {
-            chrome::ORANGE_RED
+            chrome::ORANGE
         },
     )?;
     aligned_text(
@@ -959,7 +959,7 @@ where
         if state.selected_node.is_some() {
             chrome::LIME
         } else {
-            chrome::ORANGE_RED
+            chrome::ORANGE
         },
         16,
         1,
