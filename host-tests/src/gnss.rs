@@ -3,7 +3,7 @@ use std::{cell::RefCell, rc::Rc};
 use embedded_hal::i2c::{Operation, SevenBitAddress};
 use embedded_hal_async::{delay::DelayNs, i2c::I2c};
 use futures::executor::block_on;
-use lc76g::{Lc76g, LowPowerMode, NmeaParser, NmeaUpdate};
+use lc76g::{Lc76g, LowPowerMode, NmeaParser, NmeaUpdate, PairAck, PairAckStatus};
 
 #[derive(Default)]
 struct MockState {
@@ -83,6 +83,23 @@ fn parser_rejects_a_bad_checksum_and_recovers() {
     assert_eq!(
         parser.state().fix.unwrap().satellites.map(|value| value.get()),
         Some(8)
+    );
+}
+
+#[test]
+fn parser_reports_pair_acknowledgements() {
+    let mut parser = NmeaParser::new();
+    let mut update = None;
+    for byte in b"$PAIR001,732,0*3D\r\n" {
+        update = parser.push(*byte).unwrap().or(update);
+    }
+
+    assert_eq!(
+        update,
+        Some(NmeaUpdate::PairAck(PairAck {
+            command: 732,
+            status: PairAckStatus::Accepted,
+        }))
     );
 }
 

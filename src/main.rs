@@ -30,7 +30,7 @@ use esp_hal::{
     timer::timg::TimerGroup,
 };
 use esp_println::println;
-use lc76g::{GnssError, GnssOperation, GnssState, Lc76g, NmeaParser};
+use lc76g::{GnssError, GnssOperation, GnssState, Lc76g, NmeaParser, NmeaUpdate};
 use octowhere::{
     board,
     chrome::{self, Color, Dirty, FB, FontdueRenderer, FontdueRendererCtx},
@@ -390,6 +390,13 @@ async fn sensor_task(task: SensorTask) {
                 let mut updates = 0;
                 for &byte in data.iter() {
                     match nmea_parser.push(byte) {
+                        Ok(Some(NmeaUpdate::PairAck(ack))) => {
+                            updates += 1;
+                            println!(
+                                "[GNSS] PAIR_ACK command={} status={:?}",
+                                ack.command, ack.status
+                            );
+                        }
                         Ok(Some(_)) => updates += 1,
                         Ok(None) => {}
                         Err(error) => println!("[GNSS] NMEA_PARSE_ERROR {error}"),
@@ -787,8 +794,13 @@ async fn async_main(spawner: Spawner) {
         Ok(data) if !data.is_empty() => {
             println!("[GNSS] NMEA_CHUNK_OK bytes={}", data.len());
             for &byte in data {
-                if let Err(error) = nmea_parser.push(byte) {
-                    println!("[GNSS] NMEA_PARSE_ERROR {error}");
+                match nmea_parser.push(byte) {
+                    Ok(Some(NmeaUpdate::PairAck(ack))) => println!(
+                        "[GNSS] PAIR_ACK command={} status={:?}",
+                        ack.command, ack.status
+                    ),
+                    Ok(_) => {}
+                    Err(error) => println!("[GNSS] NMEA_PARSE_ERROR {error}"),
                 }
             }
             gnss_parse_ok = nmea_parser.state().fix.is_some();

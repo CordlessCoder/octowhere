@@ -178,11 +178,127 @@ pub struct GnssState {
 pub enum NmeaUpdate {
     Rmc,
     Gga,
+    PairAck(PairAck),
+}
+
+/// Acknowledgement returned for a proprietary `PAIR` command.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PairAck {
+    pub command: u16,
+    pub status: PairAckStatus,
+}
+
+/// Result reported by the receiver for a proprietary `PAIR` command.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PairAckStatus {
+    /// The command was accepted by the receiver.
+    Accepted,
+    /// The command was received and is still being processed.
+    Processing,
+    /// The receiver could not send the command to the GNSS service.
+    Failed,
+    /// The receiver does not implement the command.
+    Unsupported,
+    /// One or more command parameters were invalid.
+    InvalidParameter,
+    /// The GNSS service is busy and the command can be retried.
+    Busy,
+    /// A newer firmware returned an unrecognised status code.
+    Unknown(u8),
+}
+
+struct PairAckParser {
+    line: [u8; 32],
+    len: usize,
+}
+
+impl PairAckParser {
+    const fn new() -> Self {
+        Self {
+            line: [0; 32],
+            len: 0,
+        }
+    }
+
+    fn push(&mut self, byte: u8) -> Option<PairAck> {
+        if byte == b'$' {
+            self.len = 0;
+        }
+        if self.len == self.line.len() {
+            self.len = 0;
+            return None;
+        }
+        self.line[self.len] = byte;
+        self.len += 1;
+        if byte != b'\n' {
+            return None;
+        }
+
+        let ack = parse_pair_ack(&self.line[..self.len]);
+        self.len = 0;
+        ack
+    }
+}
+
+fn parse_pair_ack(line: &[u8]) -> Option<PairAck> {
+    let line = line.strip_suffix(b"\r\n")?;
+    let prefix = b"$PAIR001,";
+    if !line.starts_with(prefix) {
+        return None;
+    }
+    let star = line.iter().position(|&byte| byte == b'*')?;
+    if star + 3 != line.len() {
+        return None;
+    }
+    let checksum = line[1..star]
+        .iter()
+        .fold(0, |checksum, byte| checksum ^ byte);
+    if checksum != (hex_digit(line[star + 1])? << 4 | hex_digit(line[star + 2])?) {
+        return None;
+    }
+
+    let fields = &line[prefix.len()..star];
+    let comma = fields.iter().position(|&byte| byte == b',')?;
+    let command = decimal(&fields[..comma])?;
+    let status = match decimal(&fields[comma + 1..])? {
+        0 => PairAckStatus::Accepted,
+        1 => PairAckStatus::Processing,
+        2 => PairAckStatus::Failed,
+        3 => PairAckStatus::Unsupported,
+        4 => PairAckStatus::InvalidParameter,
+        5 => PairAckStatus::Busy,
+        status => PairAckStatus::Unknown(status as u8),
+    };
+    Some(PairAck { command, status })
+}
+
+fn decimal(bytes: &[u8]) -> Option<u16> {
+    if bytes.is_empty() {
+        return None;
+    }
+    let mut value = 0u16;
+    for &byte in bytes {
+        if !byte.is_ascii_digit() {
+            return None;
+        }
+        value = value.checked_mul(10)?.checked_add((byte - b'0') as u16)?;
+    }
+    Some(value)
+}
+
+fn hex_digit(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        _ => None,
+    }
 }
 
 /// Incrementally parses RMC and GGA sentences into fixed-point receiver state.
 pub struct NmeaParser {
     parser: nmea0183::Parser,
+    pair_ack: PairAckParser,
     state: GnssState,
 }
 
@@ -191,6 +307,7 @@ impl NmeaParser {
         Self {
             parser: nmea0183::Parser::new()
                 .sentence_filter(nmea0183::Sentence::RMC | nmea0183::Sentence::GGA),
+            pair_ack: PairAckParser::new(),
             state: GnssState::default(),
         }
     }
@@ -200,12 +317,13 @@ impl NmeaParser {
     }
 
     pub fn push(&mut self, byte: u8) -> Result<Option<NmeaUpdate>, &'static str> {
+        let pair_ack = self.pair_ack.push(byte).map(NmeaUpdate::PairAck);
         let Some(result) = self.parser.parse_from_byte(byte) else {
-            return Ok(None);
+            return Ok(pair_ack);
         };
         let result = match result {
             Ok(result) => result,
-            Err("Source is not supported!" | "Unsupported sentence type.") => return Ok(None),
+            Err("Source is not supported!" | "Unsupported sentence type.") => return Ok(pair_ack),
             Err(error) => return Err(error),
         };
 
@@ -227,7 +345,7 @@ impl NmeaParser {
                 self.state.fix = None;
                 Ok(Some(NmeaUpdate::Gga))
             }
-            _ => Ok(None),
+            _ => Ok(pair_ack),
         }
     }
 
@@ -517,7 +635,7 @@ where
 mod tests {
     use super::{
         ALP_DISABLE, ALP_ENABLE, CONFIG_READ_DATA, CONFIG_READ_FREE_LENGTH,
-        CONFIG_READ_NMEA_LENGTH, GnssDateTime, NmeaParser, NmeaUpdate,
+        CONFIG_READ_NMEA_LENGTH, GnssDateTime, NmeaParser, NmeaUpdate, PairAck, PairAckStatus,
     };
 
     #[test]
@@ -583,9 +701,17 @@ mod tests {
     #[test]
     fn parser_ignores_proprietary_acknowledgements() {
         let mut parser = NmeaParser::new();
+        let mut update = None;
         for byte in b"$PAIR001,732,0*3D\r\n" {
-            assert_eq!(parser.push(*byte).unwrap(), None);
+            update = parser.push(*byte).unwrap().or(update);
         }
+        assert_eq!(
+            update,
+            Some(NmeaUpdate::PairAck(PairAck {
+                command: 732,
+                status: PairAckStatus::Accepted,
+            }))
+        );
     }
 
     #[test]
