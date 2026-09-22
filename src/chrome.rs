@@ -91,8 +91,8 @@ pub const ACCENT: Color = LIME;
 
 #[inline]
 pub const fn lerp_u8(a: u8, b: u8, factor: u8) -> u8 {
-    // PERF: The division can be approximated with a right-shift
-    // ((a as u16 * (u8::MAX - factor) as u16 + b as u16 * factor as u16) / u8::MAX as u16) as u8
+    // `>> 8` with a +255 bias stands in for `/ 255`: it matches the floor division or exceeds it
+    // by one, and factors 0 and 255 return `a` and `b` exactly.
     ((a as u16 * (u8::MAX - factor) as u16 + b as u16 * factor as u16 + u8::MAX as u16) >> 8) as u8
 }
 
