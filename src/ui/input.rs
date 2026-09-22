@@ -1,3 +1,5 @@
+use embedded_graphics_core::geometry::Point;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ButtonEvent {
     None,
@@ -235,4 +237,3 @@ mod tests {
         assert_eq!(state.update_positions(positions), (2, positions));
     }
 }
-use embedded_graphics_core::geometry::Point;
