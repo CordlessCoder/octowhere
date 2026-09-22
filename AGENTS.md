@@ -1,110 +1,90 @@
 # AGENTS.md
 
-This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
+This repository contains `no_std` Rust firmware for the Waveshare ESP32-S3-Touch-AMOLED-1.75.
+The board has a 466x466 round CO5300 AMOLED, CST9217 touch controller, QMI8658 IMU, PCF85063A
+RTC, AXP2101 PMIC, TCA9554 I/O expander, LC76G GNSS module, and an SX1272-based LoRa module.
 
-Bare-metal Rust firmware for the Waveshare ESP32-S3-Touch-AMOLED-1.75: a 466x466 round CO5300
-AMOLED, CST9217 touch, QMI8658 IMU, PCF85063A RTC, AXP2101 PMIC and a TCA9554 IO expander. No RTOS
-beyond `esp-rtos` + Embassy; no `std`.
+Hardware topology, pin routing, initialization findings, and saved reference documents are in
+[`docs/hardware-notes.md`](docs/hardware-notes.md) and
+[`docs/datasheets/README.md`](docs/datasheets/README.md). Check those before changing board
+initialization or peripheral mappings.
 
-## Build and flash
+## Build and test
 
+The `esp` toolchain from [`rust-toolchain.toml`](rust-toolchain.toml) and the target from
+[`.cargo/config.toml`](.cargo/config.toml) are selected automatically.
+
+```text
+cargo build --release --offline
+cargo clippy --release --offline -- -D warnings
+cargo +stable test --manifest-path host-tests/Cargo.toml \
+  --target x86_64-unknown-linux-gnu --locked
 ```
-cargo build --release      # or plain `cargo build` — dev is opt-level "s" + thin LTO
-cargo run --release        # .cargo/config.toml runner = espflash flash --monitor
-cargo clippy --release
-```
 
-Target `xtensa-esp32s3-none-elf` is set in `.cargo/config.toml`, so no `--target` flag.
-Root `cargo test` targets the board. Host checks live in `host-tests/` and compile
-the production geometry, touch and synchronisation modules separately.
+`cargo run --release` uses the configured `espflash` runner to flash and monitor the board.
+Feature-specific builds pass their features to Cargo, for example:
+`cargo run --release --features gnss-raw-log`.
 
-```
-cargo +stable test --manifest-path host-tests/Cargo.toml --target x86_64-unknown-linux-gnu --locked
-```
+The host harness and its scope are described in [`host-tests/README.md`](host-tests/README.md).
+The root package targets the board; the host harness is the place for pure-logic tests.
 
-Toolchain: `rust-toolchain.toml` selects espup's `esp` toolchain. It supports the
-nightly features used here. A locally built compiler is not required.
+The data-cache settings in [`.cargo/config.toml`](.cargo/config.toml) affect drawing and SPI flush
+timings. Change them only with a measurement.
 
-`ESP_HAL_CONFIG_DATA_CACHE_SIZE` and `..._LINE_SIZE` in `.cargo/config.toml` are worth ±15% on
-draw and flush time. Change them only with a measurement.
+## Rendering architecture
 
-## Rendering pipeline
+`async_main` on core 0 produces frames and `second_core` on core 1 owns the display SPI/DMA path.
+They exchange two PSRAM framebuffers through `util::Swap`.
 
-Two cores run a producer/consumer pair over a pair of framebuffers, handed back and forth by
-`util::Swap`. Everything below is the reason a change in one half breaks the other.
+- Core 0 reads touch and sensor state, draws into its current framebuffer, records `dirty`, and
+  hands the state to core 1.
+- Core 1 waits for display TE with a timeout, flushes the handed-off regions through
+  `Co5300Display`, and returns the other framebuffer.
+- `needs_full_redraw` identifies the regions that must be redrawn in the alternate framebuffer.
+  A buffer is not assumed to retain the pixels drawn into the other buffer.
+- Partial flushing is active. A full redraw is selected only when the accumulated damage is full.
 
-- **Core 0** (`main` in `src/main.rs`): reads touch, draws into the framebuffer it currently owns,
-  then `swap().await`.
-- **Core 1** (`second_core` task): owns the SPI/DMA peripheral and the `Co5300Display`. Waits on the
-  TE pin for vsync, flushes its framebuffer, then `swap().await`.
+`util::Swap` is lock-free and has `unsafe impl Send/Sync`. A started `SwapThreadFuture` must be
+allowed to complete; dropping it poisons the thread and a later `get()` panics.
 
-`SwapState` carries the framebuffer, `dirty`, `needs_full_redraw` and `Timings` across the handoff.
-The subtle invariant is `needs_full_redraw`: because the two buffers alternate, whatever core 0 drew
-this frame is stale in the *other* buffer, so the set of regions it just touched must be repainted
-next frame before anything new goes down. `update_text`/`update_touch` return exactly that set.
+The display path is split across:
 
-Core 1 flushes region-by-region when `dirty` is partial and whole-screen otherwise. **Core 0
-currently forces `dirty.make_full()` every frame**, so the partial-flush path is live code that
-nothing exercises; drop that call to re-enable it.
+- [`src/drivers/qspi_bus.rs`](src/drivers/qspi_bus.rs), which owns QSPI command transfers.
+- [`src/drivers/co5300.rs`](src/drivers/co5300.rs), which initializes the panel, handles TE,
+  address windows, brightness, and double-buffered DMA pixel streaming.
+- [`src/drivers/framebuffer.rs`](src/drivers/framebuffer.rs), which stores draw-target pixels in
+  PSRAM and aligns partial flushes to the controller's pixel granularity.
 
-`util::Swap` is hand-rolled lock-free synchronisation with `unsafe impl Send/Sync`. Dropping a
-`SwapThreadFuture` before completion poisons the `SwapThread` and the next `get()` panics.
-
-## Display stack
-
-Three layers, bottom up:
-
-- `drivers/qspi_bus.rs` — `QspiBus` wraps `SpiDma` + a `DmaTxBuf` + the CS pin. Command sequences are
-  `[QSPIOperation]` arrays executed blocking or async.
-- `drivers/co5300.rs` — panel init, address windows, brightness, TE/vsync. `PixelStream` is the hot
-  path: it double-buffers two `DmaTxBuf`s, so `flush_buf_async` overlaps the DMA write of one buffer
-  with the caller filling the other, then swaps them. `Drop` raises CS.
-- `drivers/framebuffer.rs` — `Framebuffer<N, WIDTH, HEIGHT, C>` in PSRAM, implements `DrawTarget`.
-  `N` must equal `buffer_size::<C>(WIDTH, HEIGHT)`; a const assert catches it. `flush_region` snaps
-  the rect to a 2x2 grid because the CO5300 rejects odd partial writes.
-
-Colour format is a type parameter (`Co5300ColorMode`: `Rgb565`, `Rgb888`, `Gray8`) threaded through
-all three layers. `chrome::Color` is the single alias that picks it — change it there.
-
-`ui/dirty.rs`: `DirtyAreas` is a fixed grid of per-cell bounding boxes plus a `full` flag.
-`chrome::Dirty` instantiates it 2x2.
+`chrome::Color` selects the framebuffer and panel colour format. Keep the format consistent through
+the QSPI, display, framebuffer, and UI layers.
 
 ## Memory
 
-- Internal heaps: 72 KB reclaimed + 260 KB, via `esp_alloc::heap_allocator!` in `main`.
-- PSRAM (octal, 80 MHz) is registered into a *separate* `PSRAM_HEAP` static, not the global
-  allocator. Ask for it explicitly: `FB::alloc(&PSRAM_HEAP)`.
-- Each framebuffer is 466·466·2 = 434,312 B, and there are two.
-- Core 1's stack is a `static mut CORE1_STACK` of 8 KB.
+- The current internal heap is 260 KiB, allocated by `esp_alloc::heap_allocator!` in `main`.
+- PSRAM is registered in the separate `PSRAM_HEAP` static. Framebuffers must be allocated with
+  `FB::alloc(&PSRAM_HEAP)` rather than the global allocator.
+- The current RGB565 configuration uses 466 × 466 × 2 = 434,312 bytes per framebuffer, with two
+  framebuffers.
+- Core 1 uses the 8 KiB `CORE1_STACK` static.
 
-## Fonts
+Check the allocator and framebuffer definitions in [`src/main.rs`](src/main.rs) and
+[`src/chrome.rs`](src/chrome.rs) when changing memory placement.
 
-Two renderers coexist:
+## Fonts and layout
 
-- **u8g2** (`u8g2-fonts`) is what the UI uses — pre-rasterised bitmaps, fast, fixed sizes.
-  `chrome::HEADING_FONT_FAST` / `MEDIUM_FONT_FAST`.
-- **fontdue** rasterises outlines at runtime with the font parsed at compile time by
-  `fontdue_macros::fontdue_font_from_file!`. `chrome::FontdueRenderer` implements
-  `embedded_graphics::text::renderer::TextRenderer`. All call sites are commented out; it is kept for
-  scalable text and antialiasing.
+The active UI uses the compile-time fontdue renderer in [`src/chrome.rs`](src/chrome.rs), with the
+Marathon Shapiro and PPFraktion font data under `assets/`. `embedded-layout` supplies the current
+text alignment helpers. The legacy u8g2 conversion files under `assets/` are not part of the active
+renderer.
 
-The `.u8g2` blobs are `include_bytes!`d. Regenerating one: TTF → BDF (FontForge) → `.c` with u8g2's
-`bdfconv` → raw bytes by compiling the two-line `to_u8g2.cpp`/`u8g2_font_to_bytes.cpp` next to the
-`.c` file and redirecting stdout. The `#include` in those files names the font being converted and
-has to be edited per font.
+The `fontdue-target-bench` features run the target font benchmark from `main`; keep benchmark-only
+paths out of normal firmware behavior.
 
-## Patched dependencies
+## Dependencies and conventions
 
-`[patch.crates-io]` redirects esp-hal, esp-rtos, esp-alloc, esp-println, esp-backtrace,
-esp-bootloader-esp-idf and esp-rom-sys to `github.com/CordlessCoder/esp-hal`, plus forks of
-`fontdue`, `fontdue-macros` and `tca9554`, and `u8g2-fonts` from `iriswebb`. The hot paths here
-(`half_duplex_write_and_wait`, `DmaTxBuf` handling, `fontdue::raster::Raster`) depend on fork-only
-APIs, so a feature that needs a HAL change goes into the fork first.
+The root manifest owns dependency versions, features, and git patches. It currently patches the
+fontdue pair and `tca9554`; `lc76g` and `sx127xlora` are local crates. Check [`Cargo.toml`](Cargo.toml)
+before relying on a fork-only API or changing a dependency.
 
-## Conventions
-
-`src/lib.rs` carries `#![expect(unused)]` — dead code is expected while the UI is being built, and
-unused warnings are silenced rather than fought.
-
-`PERF:` comments mark measured or suspected hot spots and open questions about them. They are notes
-to the next person, not TODOs to clear.
+`src/lib.rs` deliberately carries `#![expect(unused)]` while the UI is being built. `PERF:` comments
+mark measured or suspected hot spots and open questions; they are context, not a task list.
