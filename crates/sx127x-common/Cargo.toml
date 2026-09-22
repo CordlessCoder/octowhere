@@ -1,0 +1,25 @@
+[package]
+name = "sx127x-common"
+version = "0.5.0"
+edition = "2024"
+authors = ["Jonathan D. Baker <jonathan@ardent.tech>"]
+description = "Common code for the Semtech Sx127x chips."
+keywords = ["embedded", "semtech", "sx127x"]
+categories = ["embedded", "no-std"]
+repository = "https://github.com/ardentTech/sx127x"
+license = "MIT OR Apache-2.0"
+exclude = ["CHANGELOG.md"]
+readme = "README.md"
+
+[workspace]
+
+[dependencies]
+defmt = { version = "1.0.1", optional = true }
+embedded-hal = "1.0.0"
+embedded-hal-async = "1.0.0"
+maybe-async = "0.2"
+
+[features]
+default = []
+defmt = ["dep:defmt"]
+sync = ["maybe-async/is_sync"]

@@ -1,0 +1,27 @@
+[package]
+name = "sx127xlora"
+version = "0.2.0"
+edition = "2024"
+authors = ["Jonathan D. Baker <jonathan@ardent.tech>"]
+description = "A no-std driver for the LoRa modem on Semtech Sx127x chips."
+keywords = ["embedded", "embedded-hal-driver", "lora"]
+categories = ["embedded", "no-std"]
+repository = "https://github.com/ardentTech/sx127x"
+license = "MIT OR Apache-2.0"
+exclude = ["CHANGELOG.md", "examples/*"]
+readme = "README.md"
+
+[workspace]
+
+[dependencies]
+defmt = { version = "1.0.1", optional = true }
+embedded-hal = { version = "1.0.0", optional = true }
+embedded-hal-async = "1.0.0"
+maybe-async = "0.2"
+sx127x-common = { path = "../sx127x-common", version = "0.5.0" }
+
+[features]
+default = []
+defmt = ["dep:defmt", "sx127x-common/defmt"]
+half_duplex = []
+sync = ["maybe-async/is_sync", "dep:embedded-hal", "sx127x-common/sync"]

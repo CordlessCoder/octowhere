@@ -1441,6 +1441,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "maybe-async"
+version = "0.2.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "746873a384ad60adc5db74471dfaba74bd278afbdcfd81db93fafcdfc8b5ca0c"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1532,6 +1543,7 @@ dependencies = [
  "log",
  "ph-qmi8658",
  "static_cell",
+ "sx127xlora",
  "tca9554",
 ]
 
@@ -1902,6 +1914,26 @@ dependencies = [
  "quote",
  "syn 1.0.109",
  "unicode-width",
+]
+
+[[package]]
+name = "sx127x-common"
+version = "0.5.0"
+dependencies = [
+ "defmt",
+ "embedded-hal 1.0.0",
+ "embedded-hal-async",
+ "maybe-async",
+]
+
+[[package]]
+name = "sx127xlora"
+version = "0.2.0"
+dependencies = [
+ "defmt",
+ "embedded-hal-async",
+ "maybe-async",
+ "sx127x-common",
 ]
 
 [[package]]

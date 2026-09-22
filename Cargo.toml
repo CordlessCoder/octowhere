@@ -29,6 +29,7 @@ embedded-hal = "1.0"
 embedded-hal-bus = { version = "0.3", features = ["async"] }
 embedded-hal-async = "1.0.0"
 lc76g = { path = "crates/lc76g" }
+sx127xlora = { path = "crates/sx127x-lora", features = ["defmt"] }
 
 embedded-sdmmc = "0.9"
 embedded-io-async = "0.7"
@@ -45,9 +46,12 @@ embedded-layout = "0.4.2"
 default = []
 damage-debug = []
 timing-log = []
+gnss-raw-log = []
 gnss-full-power = []
 fontdue-target-bench = []
 fontdue-target-bench-gcc = ["fontdue-target-bench"]
+lora-link-tx = []
+lora-link-rx = []
 
 [patch.crates-io]
 tca9554 = { git = "https://github.com/CordlessCoder/tca9554-rs", rev = "dd76e69" }
