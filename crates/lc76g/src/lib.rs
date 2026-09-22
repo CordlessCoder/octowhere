@@ -317,7 +317,6 @@ impl NavigationMode {
             Self::Swimming => 7,
         }
     }
-
 }
 
 /// Active interference cancellation state.
