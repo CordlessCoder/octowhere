@@ -384,34 +384,45 @@ async fn sensor_task(task: SensorTask) {
             state.lora_irq = irq;
             println!("[LORA] sample IRQ=0x{irq:02X}");
         }
-        if let Ok(data) = gnss.read_nmea_chunk(&mut nmea).await {
-            state.gnss_bytes = data.len() as u16;
-            let mut updates = 0;
-            for &byte in data.iter() {
-                match nmea_parser.push(byte) {
-                    Ok(Some(_)) => updates += 1,
-                    Ok(None) => {}
-                    Err(error) => println!("[GNSS] NMEA_PARSE_ERROR {error}"),
+        match gnss.read_nmea_chunk(&mut nmea).await {
+            Ok(data) => {
+                state.gnss_bytes = data.len() as u16;
+                let mut updates = 0;
+                for &byte in data.iter() {
+                    match nmea_parser.push(byte) {
+                        Ok(Some(_)) => updates += 1,
+                        Ok(None) => {}
+                        Err(error) => println!("[GNSS] NMEA_PARSE_ERROR {error}"),
+                    }
+                }
+                state.gnss = nmea_parser.state();
+                if let Some(fix) = state.gnss.fix {
+                    println!(
+                        "[GNSS] sample bytes={} updates={} lat={} lon={} alt_mm={:?} sats={:?} hdop_milli={:?}",
+                        data.len(),
+                        updates,
+                        fix.latitude.get(),
+                        fix.longitude.get(),
+                        fix.altitude.map(|value| value.get()),
+                        fix.satellites,
+                        fix.hdop.map(|value| value.get()),
+                    );
+                } else {
+                    println!(
+                        "[GNSS] sample bytes={} updates={} no_fix",
+                        data.len(),
+                        updates
+                    );
                 }
             }
-            state.gnss = nmea_parser.state();
-            if let Some(fix) = state.gnss.fix {
-                println!(
-                    "[GNSS] sample bytes={} updates={} lat={} lon={} alt_mm={:?} sats={:?} hdop_milli={:?}",
-                    data.len(),
-                    updates,
-                    fix.latitude.get(),
-                    fix.longitude.get(),
-                    fix.altitude.map(|value| value.get()),
-                    fix.satellites,
-                    fix.hdop.map(|value| value.get()),
-                );
-            } else {
-                println!(
-                    "[GNSS] sample bytes={} updates={} no_fix",
-                    data.len(),
-                    updates
-                );
+            Err(GnssError::I2c { operation, .. }) => match operation {
+                GnssOperation::WriteConfig => println!("[GNSS] I2C_WRITE_CONFIG_FAILED"),
+                GnssOperation::ReadLength => println!("[GNSS] I2C_READ_LENGTH_FAILED"),
+                GnssOperation::ReadData => println!("[GNSS] I2C_READ_DATA_FAILED"),
+                GnssOperation::WriteData => println!("[GNSS] I2C_WRITE_DATA_FAILED"),
+            },
+            Err(GnssError::BufferTooSmall { .. }) => {
+                println!("[GNSS] NMEA_BUFFER_TOO_SMALL")
             }
         }
         if state.gnss.utc.is_none() {
