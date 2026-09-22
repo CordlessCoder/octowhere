@@ -921,7 +921,7 @@ async fn async_main(spawner: Spawner) {
 
     let i2c = I2c::new(
         peripherals.I2C0,
-        esp_hal::i2c::master::Config::default().with_frequency(Rate::from_khz(400)),
+        esp_hal::i2c::master::Config::default().with_frequency(Rate::from_hz(board::I2C_FREQ_HZ)),
     )
     .expect("I2C failed")
     .with_scl(peripherals.GPIO14)

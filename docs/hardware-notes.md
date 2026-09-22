@@ -42,3 +42,30 @@
 - The SX1272/73 V2b errata identifies `RegVersion=0x22`, requires bit 7 of `RegDetectOptimize` (`0x31`) to be cleared after reset to reduce spurious reception, and says not to rely on the valid-packet counter. The forked driver applies the receive workaround during initialization; applications should count successful packets from `RxDone` and CRC status rather than use the silicon counter.
 - SX1272/73 reset is active-high. The firmware pulses `EXIO0` high for 200 µs and releases it before SPI access.
 - The earlier firmware used GPIO44 for MOSI, one header position wrong, so all register reads were zero. After changing MOSI to GPIO43 and DIO0 to GPIO44, the board returned `RegOpMode=0x01`, `RegFrfMsb=0xE4`, `RegIrqFlags=0x15`, and `RegVersion=0x22`; the radio is now identified correctly.
+
+## Pin map
+
+GPIO numbers were removed from [`src/board.rs`](../src/board.rs) because esp-hal takes typed
+peripheral singletons and a `u8` can never reach it. Two of those constants had already drifted
+without anything noticing: `RTC_INT` claimed GPIO39, which is the display reset, and `TP_I2C_ADDR`
+claimed `0x38`, the FT6236 address, where the CST9217 driver uses `0x5A`. The table below is
+transcribed from the binding sites in `main.rs`, which are the live record.
+
+| Signal | Pin | Bound at |
+| --- | --- | --- |
+| LCD SCLK | GPIO38 | `with_sck` |
+| LCD SIO0–SIO3 | GPIO4, GPIO5, GPIO6, GPIO7 | `with_sio0`–`with_sio3` |
+| LCD CS | GPIO12 | `Output` into `QspiBus` |
+| LCD TE | GPIO13 | `Input` into `Co5300Display` |
+| LCD reset | GPIO39 | `Output` into `Co5300Display` |
+| I2C SDA / SCL | GPIO15 / GPIO14 | `with_sda` / `with_scl` |
+| Touch reset / INT | GPIO40 / GPIO11 | `touch_rst` / `touch_int` |
+| IMU INT2 | GPIO21 | `imu_int2` |
+| LoRa SCLK / MISO / MOSI / NSS / DIO0 | GPIO16 / GPIO17 / GPIO43 / GPIO18 / GPIO44 | LoRa SPI setup |
+
+The IMU has two interrupt lines: INT1 reaches the TCA9554 as `EXIO_QMI_INT1`, INT2 is GPIO21. The
+RTC interrupt is on the expander as `EXIO_RTC_INT`, not a GPIO.
+
+Unbound in firmware, recorded from the Waveshare `pin_config.h` and not verified against this
+board: SD CLK/CMD/DATA GPIO2/GPIO1/GPIO3 with CS GPIO41, boot button GPIO0, power button GPIO10,
+and the ES8311 audio codec. No firmware drives any of these.
