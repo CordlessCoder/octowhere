@@ -1012,7 +1012,6 @@ async fn async_main(spawner: Spawner) {
     );
     let exio_direction = exio.read_direction().await.unwrap();
     println!("[TCA9554] direction=0x{exio_direction:02X}");
-    #[cfg(not(any(feature = "lora-link-tx", feature = "lora-link-rx")))]
     {
         println!("[GNSS] STARTUP settle_begin");
         Timer::after(Duration::from_secs(1)).await;
