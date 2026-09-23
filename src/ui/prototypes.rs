@@ -2,7 +2,7 @@ use core::fmt::Write as _;
 
 use embedded_graphics::{
     draw_target::{DrawTarget, DrawTargetExt},
-    prelude::{Drawable, Point, Primitive, Size},
+    prelude::{Dimensions, Drawable, Point, Primitive, Size},
     primitives::{Circle, Line, PrimitiveStyle, Rectangle},
     text::Text,
 };
@@ -12,7 +12,10 @@ use embedded_layout::{
     prelude::Views,
 };
 
-use crate::chrome::{self, Color, Dirty};
+use crate::{
+    board::LCD_WIDTH,
+    chrome::{self, Color, Dirty},
+};
 
 /// Rendering boundaries under consideration for the first product screens.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -918,7 +921,9 @@ where
 }
 
 pub const COMPASS_CENTER: Point = Point::new(233, 233);
-const COMPASS_RADIUS: i32 = 214;
+/// The dial's edge, just inside the panel's.
+const COMPASS_INSET: i32 = 1;
+const COMPASS_RADIUS: i32 = LCD_WIDTH as i32 / 2 - COMPASS_INSET;
 const CARDINALS: [&str; 16] = [
     "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW",
     "NNW",
@@ -933,26 +938,45 @@ where
     D: DrawTarget<Color = Color>,
 {
     let view = state.peripherals.compass;
-    Circle::with_center(COMPASS_CENTER, 2 * COMPASS_RADIUS as u32)
-        .into_styled(PrimitiveStyle::with_stroke(chrome::GRAY, 2))
-        .draw(target)?;
-    // The lubber mark: the top edge's direction, which the dial turns under.
-    target.fill_solid(
-        &Rectangle::new(
-            COMPASS_CENTER - Point::new(4, COMPASS_RADIUS + 10),
-            Size::new(8, 36),
-        ),
-        chrome::LIME,
-    )?;
+    let center = (COMPASS_CENTER.x as f32, COMPASS_CENTER.y as f32);
+    let radius = COMPASS_RADIUS as f32;
+    super::smooth::ring(target, center, radius - 2.0, radius, chrome::GRAY, chrome::BLACK)?;
 
     // Without a trusted heading the dial holds still and carries no bearings, so it cannot be
     // read as pointing anywhere.
     let heading = view.heading_decidegrees;
     let turn = heading.map_or(0.0, |decidegrees| decidegrees as f32 / 10.0);
-    for tick in 0..36 {
-        let bearing = tick as f32 * 10.0;
-        let (sin, cos) = libm::sincosf((bearing - turn).to_radians());
-        let major = tick % 3 == 0;
+    // One quarter of the ticks is filled, and each is drawn at all four quarter turns: ticks nine
+    // apart are a quarter turn apart and all major or all minor alike.
+    let mut raster = fontdue::raster::Raster::empty();
+    let mut coverage = alloc::vec::Vec::new();
+    for tick in 0..9 {
+        let (sin, cos) = libm::sincosf((tick as f32 * 10.0 - turn).to_radians());
+        let (width, inner) = if tick % 3 == 0 { (4.0, 30.0) } else { (2.0, 16.0) };
+        let point = |along: f32, across: f32| {
+            (
+                center.0 + sin * along + cos * across,
+                center.1 - cos * along + sin * across,
+            )
+        };
+        let (outer, inner) = (radius - 6.0, radius - inner);
+        super::smooth::polygon_quarters(
+            target,
+            &mut raster,
+            &mut coverage,
+            &[
+                point(outer, -width / 2.0),
+                point(outer, width / 2.0),
+                point(inner, width / 2.0),
+                point(inner, -width / 2.0),
+            ],
+            COMPASS_CENTER,
+            if tick % 3 == 0 { chrome::WHITE } else { chrome::GRAY },
+            chrome::BLACK,
+        )?;
+    }
+    for tick in (0..36).step_by(3).filter(|_| heading.is_some()) {
+        let (sin, cos) = libm::sincosf((tick as f32 * 10.0 - turn).to_radians());
         let at = |radius: i32| {
             COMPASS_CENTER
                 + Point::new(
@@ -960,15 +984,6 @@ where
                     libm::roundf(-cos * radius as f32) as i32,
                 )
         };
-        Line::new(at(COMPASS_RADIUS - 6), at(COMPASS_RADIUS - if major { 30 } else { 16 }))
-            .into_styled(PrimitiveStyle::with_stroke(
-                if major { chrome::WHITE } else { chrome::GRAY },
-                if major { 4 } else { 2 },
-            ))
-            .draw(target)?;
-        if heading.is_none() || !major {
-            continue;
-        }
         let (label, color, size, font_index, radius) = match tick {
             0 => ("N", chrome::ORANGE, 40, 0, COMPASS_RADIUS - 58),
             9 => ("E", chrome::WHITE, 40, 0, COMPASS_RADIUS - 58),
@@ -985,6 +1000,15 @@ where
         font_style(font, color, chrome::BLACK, size, font_index)
             .draw_rotated(label, at(radius), cos, sin, target)?;
     }
+    // The lubber mark: the top edge's direction, which the dial turns under. Drawn after the
+    // dial so the bearings pass beneath it.
+    target.fill_solid(
+        &Rectangle::new(
+            COMPASS_CENTER - Point::new(2, COMPASS_RADIUS),
+            Size::new(4, 20),
+        ),
+        chrome::BLUE,
+    )?;
 
     if !view.live {
         return aligned_text(
@@ -1027,26 +1051,43 @@ where
         primary_color = chrome::WHITE;
         secondary_color = chrome::GRAY;
     }
-    let (primary_size, primary_font) = if heading.is_some() { (72, 1) } else { (32, 0) };
-    aligned_text(
-        &primary,
-        &Rectangle::with_center(COMPASS_CENTER - Point::new(0, 24), Size::new(260, 80)),
-        font,
-        primary_color,
-        chrome::BLACK,
-        primary_size,
-        primary_font,
-        horizontal::Center,
-        vertical::Center,
-        target,
-    )?;
+    let primary_region =
+        Rectangle::with_center(COMPASS_CENTER - Point::new(0, 60), Size::new(260, 80));
+    if heading.is_some() {
+        // The heading is knocked out of a slab of its colour.
+        let number = Text::new(
+            &primary,
+            Point::zero(),
+            font_style(font, chrome::BLACK, primary_color, 72, 1),
+        )
+        .align_to(&primary_region, horizontal::Center, vertical::Center);
+        let ink = number.bounding_box();
+        target.fill_solid(
+            &Rectangle::with_center(ink.center(), ink.size + Size::new(28, 20)),
+            primary_color,
+        )?;
+        number.draw(target)?;
+    } else {
+        aligned_text(
+            &primary,
+            &primary_region,
+            font,
+            primary_color,
+            chrome::BLACK,
+            32,
+            0,
+            horizontal::Center,
+            vertical::Center,
+            target,
+        )?;
+    }
     aligned_text(
         &secondary,
-        &Rectangle::with_center(COMPASS_CENTER + Point::new(0, 34), Size::new(260, 32)),
+        &Rectangle::with_center(COMPASS_CENTER + Point::new(0, 6), Size::new(300, 40)),
         font,
         secondary_color,
         chrome::BLACK,
-        26,
+        32,
         1,
         horizontal::Center,
         vertical::Center,
@@ -1056,11 +1097,11 @@ where
     _ = write!(tilt, "P {:+03}  R {:+03}", view.pitch_deg, view.roll_deg);
     aligned_text(
         &tilt,
-        &Rectangle::with_center(COMPASS_CENTER + Point::new(0, 72), Size::new(260, 28)),
+        &Rectangle::with_center(COMPASS_CENTER + Point::new(0, 50), Size::new(260, 34)),
         font,
         chrome::GRAY,
         chrome::BLACK,
-        20,
+        26,
         1,
         horizontal::Center,
         vertical::Center,
@@ -1068,11 +1109,11 @@ where
     )?;
     aligned_text(
         "TAP CENTRE TO RECAL",
-        &Rectangle::with_center(COMPASS_CENTER + Point::new(0, 104), Size::new(260, 22)),
+        &Rectangle::with_center(COMPASS_CENTER + Point::new(0, 90), Size::new(260, 26)),
         font,
         chrome::GRAY,
         chrome::BLACK,
-        14,
+        18,
         1,
         horizontal::Center,
         vertical::Center,

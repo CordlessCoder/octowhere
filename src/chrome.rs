@@ -84,6 +84,7 @@ pub const LIME: Color = color_from_hex("#c0fe04");
 pub const RED: Color = color_from_hex("#f24723");
 pub const ORANGE: Color = color_from_hex("#f1710d");
 pub const PURPLE: Color = color_from_hex("#5500e4");
+pub const BLUE: Color = color_from_hex("#409de4");
 pub const GRAY: Color = color_from_hex("#888e98");
 pub const WHITE: Color = color_from_hex("#d2d3d6");
 pub const BLACK: Color = color_from_hex("#000000");

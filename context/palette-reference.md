@@ -51,6 +51,7 @@ Every constant in [`src/chrome.rs`](../src/chrome.rs) is a board value except `B
 | `RED` | `#F24723` | R1C3 | faults and unavailable data |
 | `ORANGE` | `#F1710D` | R1C2 | second data series, second map node, idle prompt |
 | `PURPLE` | `#5500E4` | R2C6 | header slab |
+| `BLUE` | `#409DE4` | R2C5 | compass lubber mark |
 | `GRAY` | `#888E98` | R3C2 | frames and secondary text |
 | `WHITE` | `#D2D3D6` | R3C1 | primary text |
 | `BLACK` | `#000000` | none | background field, knockout text on saturated fills |

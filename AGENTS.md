@@ -235,7 +235,7 @@ screens. Read it before changing how anything looks. These rules constrain the c
 they hold even while the design is provisional:
 
 - Colour tokens are a single source of truth. They live in [`src/chrome.rs`](src/chrome.rs) as
-  `LIME`, `RED`, `ORANGE`, `PURPLE`, `GRAY`, `WHITE`, `BLACK`. Every one is a value from the
+  `LIME`, `RED`, `ORANGE`, `PURPLE`, `BLUE`, `GRAY`, `WHITE`, `BLACK`. Every one is a value from the
   reference board except `BLACK`, which stays pure for panel contrast. Define a new colour there,
   not at the call site, and take its value from
   [`context/palette-reference.md`](context/palette-reference.md) rather than inventing one.
