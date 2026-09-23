@@ -254,8 +254,8 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
         target: &mut D,
     ) -> Result<Rectangle, D::Error> {
         let bbox = target.bounding_box();
-        let usable_width = bbox.size.width.saturating_sub_signed(position.x);
-        if usable_width == 0 {
+        let usable_width = bbox.top_left.x + bbox.size.width as i32 - position.x;
+        if usable_width <= 0 {
             return Ok(Rectangle::zero());
         }
         let mut rendered = Rectangle::zero();
