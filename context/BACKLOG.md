@@ -5,6 +5,18 @@ until the feature set is complete, because profiling an incomplete firmware pric
 
 ## Next
 
+- Magnetometer calibration that follows a changing environment. `HardIron` in
+  [`src/ui/compass.rs`](../src/ui/compass.rs) sums every sample into its sphere fit forever, so a
+  lasting change of the board's own offset is followed only as fast as new samples outweigh all
+  the old ones, and `MAG INTERFERENCE` stays up meanwhile. It also adds disturbed samples to the
+  fit: `motion_task` calls `update` before checking `disturbed`, so a phone held close shifts the
+  offset for good. The agreed design: exponential forgetting in the normal equations, so the fit
+  reflects the last few hundred spaced samples; disturbed samples go to a second, candidate fit
+  instead; the candidate replaces the main fit once it forms a good sphere over enough
+  orientations, since a real offset change turns with the board and a passing magnet does not.
+  Tap-to-recalibrate stays. The thresholds that separate the two are the risk: tune them against
+  the recordings in [`docs/logs/compass/`](../docs/logs/compass/README.md), which hold both
+  kinds of event, before flashing.
 - Build the protocol in [`LORA-PROTOCOL.md`](LORA-PROTOCOL.md). Its "Firmware structure" section
   comes first: the radio moves into its own task, and I2C gets a single owning task.
 

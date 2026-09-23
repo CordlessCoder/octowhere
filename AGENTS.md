@@ -24,8 +24,8 @@ initialization or peripheral mappings.
   and `docs/hardware-notes.md` has the pin map.
 - `crates/` holds the local `lc76g`, `sx127x-lora` and `sx127x-common` crates.
 - `host-tests/` is the std test harness.
-- `docs/` holds hardware reference: the topology notes, the datasheet pack, and captured GNSS and
-  LoRa traces under `docs/logs/`.
+- `docs/` holds hardware reference: the topology notes, the datasheet pack, and captured GNSS,
+  LoRa and compass traces under `docs/logs/`.
 - `context/` holds the agent-facing documents below. This file stays at the root.
 
 `context/` carries what is not in the code:
