@@ -45,6 +45,10 @@ with fontdue. It withholds the heading until the magnetometer is calibrated by
 turning the board through every orientation; tapping the centre starts again.
 The calibration fits a sphere to the field by least squares, and the screen
 flags interference when the corrected field's strength strays from it.
+Heading and tilt come from `ui::fusion`, a Mahony filter: the gyro turns the
+orientation every sample, gravity corrects the tilt while the accelerometer
+reads close to 1 g, and the field's level part corrects only the heading while
+it is calibrated and undisturbed.
 
 The axis check screen follows the compass. It steps through twelve held poses
 with vertical swipes, logs 1.5 s of raw magnetometer and accelerometer readings

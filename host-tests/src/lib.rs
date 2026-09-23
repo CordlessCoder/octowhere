@@ -35,6 +35,8 @@ pub mod compass;
 pub mod dirty;
 #[path = "../../src/ui/geometry.rs"]
 pub mod geometry;
+#[path = "../../src/ui/fusion.rs"]
+pub mod fusion;
 #[path = "../../src/ui/gesture.rs"]
 pub mod gesture;
 #[path = "../../src/ui/pager.rs"]

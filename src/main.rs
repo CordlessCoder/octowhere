@@ -51,7 +51,8 @@ use octowhere::{
     },
     ui::{
         axis_check::AxisCheck,
-        compass::{self, AxisMap, CompassView, HardIron, Vec3},
+        compass::{AxisMap, CompassView, HardIron, Vec3},
+        fusion::Fusion,
         dirty::DirtyAreas,
         imu::{accel_micro_ms2, gyro_micro_rad_s},
         gesture::{GestureEvent, GestureTracker},
@@ -454,8 +455,9 @@ const MAG_AXES: AxisMap = AxisMap([(0, -1.0), (1, -1.0), (2, 1.0)]);
 const MOTION_PERIOD: Duration = Duration::from_millis(250);
 /// Faster than the frame loop redraws, so every frame has a fresh sample.
 const COMPASS_PERIOD: Duration = Duration::from_millis(20);
-/// Weight of each new sample in the smoothed vectors.
-const COMPASS_SMOOTHING: f32 = 0.3;
+/// The longest step the fusion integrates the gyro over, in seconds, so a stall does not throw
+/// the orientation.
+const MAX_FUSION_STEP: f32 = 0.3;
 
 #[embassy_executor::task]
 async fn motion_task(task: MotionTask) {
@@ -467,16 +469,14 @@ async fn motion_task(task: MotionTask) {
     } = task;
     let mut state = MotionSnapshot::default();
     let mut calibration = HardIron::new();
-    let mut accel: Option<Vec3> = None;
+    let mut fusion = Fusion::new();
+    // The heading is set straight from the field when calibration completes, not left to
+    // converge from wherever the uncalibrated field put it.
+    let mut calibrated = false;
+    // The latest calibrated field, for the interference check between magnetometer samples.
     let mut field: Option<Vec3> = None;
+    let mut last_update: Option<Instant> = None;
     let mut last_log = Instant::now();
-    let smooth = |previous: Option<Vec3>, sample: Vec3| -> Vec3 {
-        previous.map_or(sample, |previous| {
-            core::array::from_fn(|axis| {
-                previous[axis] + COMPASS_SMOOTHING * (sample[axis] - previous[axis])
-            })
-        })
-    };
 
     loop {
         let compass_active = COMPASS_ACTIVE.load(Ordering::Relaxed);
@@ -492,9 +492,12 @@ async fn motion_task(task: MotionTask) {
         }
         if COMPASS_RECALIBRATE.swap(false, Ordering::Relaxed) {
             calibration = HardIron::new();
+            calibrated = false;
             field = None;
             println!("[COMPASS] recalibrating");
         }
+        let mut raw_field = None;
+        let mut new_field = None;
 
         if let Some(magnetometer) = &mut magnetometer
             && magnetometer.data_ready().await.unwrap_or(false)
@@ -522,11 +525,12 @@ async fn motion_task(task: MotionTask) {
             let sample = MAG_AXES.apply(sample);
             calibration.update(sample);
             let offset = calibration.offset();
-            field = Some(smooth(
-                field,
-                core::array::from_fn(|axis| sample[axis] - offset[axis]),
-            ));
+            raw_field = Some(sample);
+            new_field = Some(core::array::from_fn(|axis| sample[axis] - offset[axis]));
+            field = new_field;
         }
+        let mut accel = None;
+        let mut gyro = None;
         if let Ok(sample) = imu.read_sync_sample(&mut embassy_time::Delay).await {
             if let Some(raw) = sample.accel {
                 state.accel_micro_ms2 = [
@@ -534,17 +538,19 @@ async fn motion_task(task: MotionTask) {
                     accel_micro_ms2(raw.y, accel_lsb_per_g),
                     accel_micro_ms2(raw.z, accel_lsb_per_g),
                 ];
-                accel = Some(smooth(
-                    accel,
-                    IMU_AXES.apply(state.accel_micro_ms2.map(|value| value as f32 / 1e6)),
+                accel = Some(IMU_AXES.apply(
+                    state.accel_micro_ms2.map(|value| value as f32 / 1e6),
                 ));
             }
-            if let Some(gyro) = sample.gyro {
+            if let Some(raw) = sample.gyro {
                 state.gyro_micro_rad_s = [
-                    gyro_micro_rad_s(gyro.x, gyro_lsb_per_dps),
-                    gyro_micro_rad_s(gyro.y, gyro_lsb_per_dps),
-                    gyro_micro_rad_s(gyro.z, gyro_lsb_per_dps),
+                    gyro_micro_rad_s(raw.x, gyro_lsb_per_dps),
+                    gyro_micro_rad_s(raw.y, gyro_lsb_per_dps),
+                    gyro_micro_rad_s(raw.z, gyro_lsb_per_dps),
                 ];
+                gyro = Some(IMU_AXES.apply(
+                    state.gyro_micro_rad_s.map(|value| value as f32 / 1e6),
+                ));
             }
             state.imu_valid = sample.accel.is_some() || sample.gyro.is_some();
             if log {
@@ -557,16 +563,31 @@ async fn motion_task(task: MotionTask) {
             state.imu_valid = false;
         }
 
-        let attitude = accel
-            .zip(field)
-            .and_then(|(accel, field)| compass::attitude(accel, field));
-        state.compass = CompassView::new(attitude, field, &calibration);
+        let now = Instant::now();
+        let dt = last_update.map_or(0.0, |last: Instant| {
+            ((now - last).as_micros() as f32 / 1e6).min(MAX_FUSION_STEP)
+        });
+        last_update = Some(now);
+        if let Some(gyro) = gyro {
+            let trusted = calibration.progress() >= 1.0;
+            let trusted_field =
+                new_field.filter(|field| trusted && !calibration.disturbed(*field));
+            if trusted && !calibrated {
+                calibrated = true;
+                if let Some(accel) = accel {
+                    fusion.reset(accel, trusted_field);
+                }
+            }
+            fusion.update(gyro, accel, raw_field, trusted_field, dt);
+        }
+        state.compass = CompassView::new(fusion.attitude(), field, &calibration);
         if log && compass_active {
             println!(
-                "[COMPASS] screen accel={:?} field={:?}uT offset={:?}uT view={:?}",
+                "[COMPASS] screen accel={:?} field={:?}uT offset={:?}uT gyro_offset={:?} view={:?}",
                 accel,
                 field,
                 calibration.offset(),
+                fusion.gyro_offset(),
                 state.compass
             );
         }

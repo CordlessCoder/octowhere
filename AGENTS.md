@@ -86,7 +86,7 @@ Weigh that cost before adding one.
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 433,008 bytes, 10.49% of the 4,128,768-byte app partition.
+The image is currently 436,736 bytes, 10.58% of the 4,128,768-byte app partition.
 
 `panic = "immediate-abort"` is the size lever, and it is not taken. It needs
 `cargo-features = ["panic-immediate-abort"]` restored to unlock it, which costs the drift check
@@ -122,9 +122,10 @@ core 1 owns the display SPI/DMA path.
   `dirty`, and hands the state to core 1.
 - `sensor_task`, also on core 0, owns the PMIC, RTC, GNSS and LoRa. It publishes a whole
   `SensorSnapshot` through the `SENSOR_STATE` signal.
-- `motion_task`, also on core 0, owns the IMU and magnetometer, and the compass calibration. It
-  samples every 250 ms, or every 20 ms while the frame loop sets `COMPASS_ACTIVE`, and publishes
-  a `MotionSnapshot` through `MOTION_STATE`. The frame loop never touches these devices.
+- `motion_task`, also on core 0, owns the IMU and magnetometer, the compass calibration and the
+  sensor fusion. It samples every 250 ms, or every 20 ms while the frame loop sets
+  `COMPASS_ACTIVE`, and publishes a `MotionSnapshot` through `MOTION_STATE`. The frame loop
+  never touches these devices.
 - `second_core` on core 1 waits for display TE with a timeout, flushes the handed-off regions
   through `Co5300Display`, and returns the other framebuffer.
 
