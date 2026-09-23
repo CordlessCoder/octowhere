@@ -1094,7 +1094,7 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 [[package]]
 name = "fontdue"
 version = "0.9.4"
-source = "git+https://github.com/CordlessCoder/fontdue?rev=2ad75496fbec5ff7747835b7ab0da8975e280a43#2ad75496fbec5ff7747835b7ab0da8975e280a43"
+source = "git+https://github.com/CordlessCoder/fontdue?rev=7678d10ea76791beb96415855dc774e5d53a7775#7678d10ea76791beb96415855dc774e5d53a7775"
 dependencies = [
  "hashbrown",
  "ttf-parser",
@@ -1103,7 +1103,7 @@ dependencies = [
 [[package]]
 name = "fontdue-macros"
 version = "0.9.4"
-source = "git+https://github.com/CordlessCoder/fontdue?rev=2ad75496fbec5ff7747835b7ab0da8975e280a43#2ad75496fbec5ff7747835b7ab0da8975e280a43"
+source = "git+https://github.com/CordlessCoder/fontdue?rev=7678d10ea76791beb96415855dc774e5d53a7775#7678d10ea76791beb96415855dc774e5d53a7775"
 dependencies = [
  "fontdue",
  "litrs",

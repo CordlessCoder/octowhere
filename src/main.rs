@@ -751,7 +751,7 @@ async fn run_fontdue_target_benchmark(font: &'static dyn fontdue::FontRepr) -> !
     } else {
         "A"
     };
-    const LINE_BYTES: usize = core::mem::size_of::<fontdue::math::Line>();
+    const POINT_BYTES: usize = core::mem::size_of::<fontdue::math::Point>();
     let mut results = [(0_u32, 0_u32); 3];
 
     for (result, px) in results.iter_mut().zip(SIZES) {
@@ -779,9 +779,9 @@ async fn run_fontdue_target_benchmark(font: &'static dyn fontdue::FontRepr) -> !
         *result = (samples[SAMPLES / 2], checksum as u32);
     }
     println!(
-        "[FONTDUE-BENCH] arm={} line_bytes={} px12={} px32={} px64={} checksums={},{},{}",
+        "[FONTDUE-BENCH] arm={} point_bytes={} px12={} px32={} px64={} checksums={},{},{}",
         ARM,
-        LINE_BYTES,
+        POINT_BYTES,
         results[0].0,
         results[1].0,
         results[2].0,
@@ -791,9 +791,9 @@ async fn run_fontdue_target_benchmark(font: &'static dyn fontdue::FontRepr) -> !
     );
     loop {
         println!(
-            "[FONTDUE-BENCH] repeat arm={} line_bytes={} px12={} px32={} px64={} checksums={},{},{}",
+            "[FONTDUE-BENCH] repeat arm={} point_bytes={} px12={} px32={} px64={} checksums={},{},{}",
             ARM,
-            LINE_BYTES,
+            POINT_BYTES,
             results[0].0,
             results[1].0,
             results[2].0,
