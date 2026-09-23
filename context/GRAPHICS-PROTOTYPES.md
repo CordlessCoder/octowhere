@@ -44,7 +44,29 @@ panel. It turns under a fixed mark, and its bearing labels are drawn rotated
 with fontdue. It withholds the heading until the magnetometer is calibrated by
 turning the board through every orientation; tapping the centre starts again.
 The calibration fits a sphere to the field by least squares, and the screen
-flags interference when the corrected field's strength strays from it.
+flags interference when the corrected field's strength strays from it by more
+than 35%. Once complete, the calibration keeps following the environment
+(`ui::compass::Calibration`):
+
+- Samples within 15% of the sphere keep joining the fit, which forgets old ones
+  over about 300 spaced samples, so a slowly drifting offset is followed.
+  Forgetting stops at 20 samples' worth of the completed calibration, so a
+  board kept level does not lose the offset along the axis it no longer turns
+  through.
+- A sample outside 15% starts a candidate fit, which takes every sample from
+  then on. It replaces the calibration once it covers as much as a calibration
+  does, fits its sphere to within 2 µT RMS, and has a radius within 15% of the
+  calibration's. A board whose own offset changed passes, because that offset
+  turns with the board. A magnet passing by, or steel that weakens the field,
+  does not.
+- The candidate is dropped after 40 spaced samples in a row within 15%, or
+  once it covers enough without forming a sphere. The second clears samples
+  taken while a change was still happening, such as a magnet being brought up.
+- Each fit works relative to its first sample, so a magnet fixed to the board,
+  hundreds of µT from zero, still fits.
+
+`host-tests/examples/replay_calibration.rs` replays a serial log's magnetometer
+samples through it; the thresholds were tuned against `docs/logs/compass/`.
 Heading and tilt come from `ui::fusion`, a Mahony filter: the gyro turns the
 orientation every sample, gravity corrects the tilt while the accelerometer
 reads close to 1 g, and the field's level part corrects only the heading while

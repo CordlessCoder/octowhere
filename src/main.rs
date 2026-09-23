@@ -51,7 +51,7 @@ use octowhere::{
     },
     ui::{
         axis_check::AxisCheck,
-        compass::{AxisMap, CompassView, HardIron, Vec3},
+        compass::{AxisMap, Calibration, CalibrationEvent, CompassView, Vec3},
         fusion::Fusion,
         dirty::DirtyAreas,
         imu::{accel_micro_ms2, gyro_micro_rad_s},
@@ -468,7 +468,7 @@ async fn motion_task(task: MotionTask) {
         gyro_lsb_per_dps,
     } = task;
     let mut state = MotionSnapshot::default();
-    let mut calibration = HardIron::new();
+    let mut calibration = Calibration::new();
     let mut fusion = Fusion::new();
     // The heading is set straight from the field when calibration completes, not left to
     // converge from wherever the uncalibrated field put it.
@@ -491,7 +491,7 @@ async fn motion_task(task: MotionTask) {
             last_log = Instant::now();
         }
         if COMPASS_RECALIBRATE.swap(false, Ordering::Relaxed) {
-            calibration = HardIron::new();
+            calibration = Calibration::new();
             calibrated = false;
             field = None;
             println!("[COMPASS] recalibrating");
@@ -523,8 +523,16 @@ async fn motion_task(task: MotionTask) {
             ];
             state.magnetic_microtesla = sample.map(|value| (value * 1_000.0) as i32);
             let sample = MAG_AXES.apply(sample);
-            calibration.update(sample);
+            let event = calibration.update(sample);
             let offset = calibration.offset();
+            if event != CalibrationEvent::None {
+                println!(
+                    "[COMPASS] calibration {:?} offset={:?}uT radius={}uT",
+                    event,
+                    offset,
+                    calibration.radius()
+                );
+            }
             raw_field = Some(sample);
             new_field = Some(core::array::from_fn(|axis| sample[axis] - offset[axis]));
             field = new_field;
@@ -583,11 +591,14 @@ async fn motion_task(task: MotionTask) {
         state.compass = CompassView::new(fusion.attitude(), field, &calibration);
         if log && compass_active {
             println!(
-                "[COMPASS] screen accel={:?} field={:?}uT offset={:?}uT gyro_offset={:?} view={:?}",
+                "[COMPASS] screen accel={:?} field={:?}uT offset={:?}uT gyro_offset={:?} candidate={:?} view={:?}",
                 accel,
                 field,
                 calibration.offset(),
                 fusion.gyro_offset(),
+                calibration
+                    .candidate()
+                    .map(|candidate| (candidate.progress(), candidate.residual())),
                 state.compass
             );
         }
