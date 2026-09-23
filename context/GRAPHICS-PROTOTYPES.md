@@ -32,10 +32,26 @@ panel naturally hides anything outside its aperture.
 Touching a map marker selects it. The selection persists after release and
 updates the marker, node callout, header status, and primary action.
 
-The immediate prototype now has four live screens. Tap the header to cycle
-between the field map, SI-unit IMU motion, RTC time, and touch diagnostics. RTC
-and IMU values refresh every 250 ms. The touch screen shows the active point and
-count. Acceleration is displayed in m/s² and angular velocity in rad/s.
+The immediate prototype has seven screens: field map, motion, clock, touch,
+power, navigation and compass. Drag sideways to move between them; the page
+follows the finger and settles to the next screen or back. Tapping the header
+moves one screen on. `ui::gesture` turns touch samples into taps and drags with
+velocity, and `ui::pager` turns drags into the page offset the renderer draws
+at. During a switch both pages are drawn, each clipped to its visible part.
+
+The compass screen has no header or footer, because a round dial fills the round
+panel. It turns under a fixed mark, and its bearing labels are drawn rotated
+with fontdue. It withholds the heading until the magnetometer is calibrated by
+turning the board through every orientation; tapping the centre starts again.
+The calibration fits a sphere to the field by least squares, and the screen
+flags interference when the corrected field's strength strays from it.
+
+The axis check screen follows the compass. It steps through twelve held poses
+with vertical swipes, logs 1.5 s of raw magnetometer and accelerometer readings
+per tap as a `[POSE]` line, and refuses a capture if the board moved.
+`tools/fit-sensor-axes.py` fits each sensor's axes to the screen's from those
+lines; `IMU_AXES` and `MAG_AXES` in `src/main.rs` hold the result.
+Acceleration is displayed in m/s² and angular velocity in rad/s.
 
 Timing statistics are no longer part of the display composition. Enable the
 `timing-log` Cargo feature to emit draw, vsync, flush, and swap timings through

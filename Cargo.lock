@@ -1526,6 +1526,7 @@ dependencies = [
  "futures",
  "heapless 0.9.3",
  "lc76g",
+ "libm",
  "log",
  "ph-qmi8658",
  "static_cell",

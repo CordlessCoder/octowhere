@@ -13,9 +13,10 @@ compile_error!("lora-link-tx and lora-link-rx are mutually exclusive");
 extern crate alloc;
 
 use alloc::{alloc::Allocator, boxed::Box};
+use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_executor::Spawner;
-use embassy_futures::select::{Either, Either3, select, select3};
+use embassy_futures::select::{Either, Either3, Either4, select, select3, select4};
 use embassy_sync::{
     blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex},
     mutex::Mutex,
@@ -49,9 +50,13 @@ use octowhere::{
         touch::{Cst9217, Cst9217Config, TouchData},
     },
     ui::{
+        axis_check::AxisCheck,
+        compass::{self, AxisMap, CompassView, HardIron, Vec3},
         dirty::DirtyAreas,
         imu::{accel_micro_ms2, gyro_micro_rad_s},
-        input::{Button, ButtonEvent, TouchState},
+        gesture::{GestureEvent, GestureTracker},
+        input::TouchState,
+        pager::Pager,
         prototypes::{self, Screen},
     },
     util::{Swap, SwapThread},
@@ -132,6 +137,10 @@ impl LoraPath {
 
 static I2C_BUS: StaticCell<Mutex<NoopRawMutex, I2cBus>> = StaticCell::new();
 static SENSOR_STATE: Signal<CriticalSectionRawMutex, SensorSnapshot> = Signal::new();
+static MOTION_STATE: Signal<CriticalSectionRawMutex, MotionSnapshot> = Signal::new();
+/// Set by the frame loop while the compass screen shows; `motion_task` then samples fast.
+static COMPASS_ACTIVE: AtomicBool = AtomicBool::new(false);
+static COMPASS_RECALIBRATE: AtomicBool = AtomicBool::new(false);
 pub static PSRAM_HEAP: esp_alloc::EspHeap = esp_alloc::EspHeap::empty();
 
 #[cfg(feature = "gnss-full-power")]
@@ -149,10 +158,15 @@ struct SensorSnapshot {
     gnss: GnssState,
     lora_irq: u8,
     clock: prototypes::ClockState,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct MotionSnapshot {
     accel_micro_ms2: [i32; 3],
     gyro_micro_rad_s: [i32; 3],
     imu_valid: bool,
     magnetic_microtesla: [i32; 3],
+    compass: CompassView,
 }
 
 struct SensorTask {
@@ -164,12 +178,15 @@ struct SensorTask {
     nmea: [u8; 512],
     nmea_parser: NmeaParser,
     rtc: Pcf85063aRtc<SharedI2cDevice>,
-    magnetometer: Bmm350<SharedI2cDevice>,
+    state: SensorSnapshot,
+    rtc_sync_pending: bool,
+}
+
+struct MotionTask {
+    magnetometer: Option<Bmm350<SharedI2cDevice>>,
     imu: SensorImu,
     accel_lsb_per_g: i32,
     gyro_lsb_per_dps: i32,
-    state: SensorSnapshot,
-    rtc_sync_pending: bool,
 }
 
 #[cfg(feature = "gnss-raw-log")]
@@ -430,6 +447,133 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
     }
 }
 
+/// Sensor axes into the screen frame of `ui::compass`, fitted from the axis check screen's twelve
+/// poses by `tools/fit-sensor-axes.py`. Both chips sit face down on their boards.
+const IMU_AXES: AxisMap = AxisMap([(1, 1.0), (0, 1.0), (2, -1.0)]);
+const MAG_AXES: AxisMap = AxisMap([(0, -1.0), (1, -1.0), (2, 1.0)]);
+const MOTION_PERIOD: Duration = Duration::from_millis(250);
+/// Faster than the frame loop redraws, so every frame has a fresh sample.
+const COMPASS_PERIOD: Duration = Duration::from_millis(20);
+/// Weight of each new sample in the smoothed vectors.
+const COMPASS_SMOOTHING: f32 = 0.3;
+
+#[embassy_executor::task]
+async fn motion_task(task: MotionTask) {
+    let MotionTask {
+        mut magnetometer,
+        mut imu,
+        accel_lsb_per_g,
+        gyro_lsb_per_dps,
+    } = task;
+    let mut state = MotionSnapshot::default();
+    let mut calibration = HardIron::new();
+    let mut accel: Option<Vec3> = None;
+    let mut field: Option<Vec3> = None;
+    let mut last_log = Instant::now();
+    let smooth = |previous: Option<Vec3>, sample: Vec3| -> Vec3 {
+        previous.map_or(sample, |previous| {
+            core::array::from_fn(|axis| {
+                previous[axis] + COMPASS_SMOOTHING * (sample[axis] - previous[axis])
+            })
+        })
+    };
+
+    loop {
+        let compass_active = COMPASS_ACTIVE.load(Ordering::Relaxed);
+        Timer::after(if compass_active {
+            COMPASS_PERIOD
+        } else {
+            MOTION_PERIOD
+        })
+        .await;
+        let log = last_log.elapsed() >= MOTION_PERIOD;
+        if log {
+            last_log = Instant::now();
+        }
+        if COMPASS_RECALIBRATE.swap(false, Ordering::Relaxed) {
+            calibration = HardIron::new();
+            field = None;
+            println!("[COMPASS] recalibrating");
+        }
+
+        if let Some(magnetometer) = &mut magnetometer
+            && magnetometer.data_ready().await.unwrap_or(false)
+            && let Ok(data) = magnetometer.read_data().await
+            && let Some(compensated) = magnetometer.compensate(&data)
+        {
+            if log {
+                println!(
+                    "[BMM350] sample raw=({}, {}, {}) comp=({:.3}, {:.3}, {:.3})uT temp={:.3}C",
+                    data.raw.x,
+                    data.raw.y,
+                    data.raw.z,
+                    compensated.x_microtesla,
+                    compensated.y_microtesla,
+                    compensated.z_microtesla,
+                    compensated.temperature_celsius
+                );
+            }
+            let sample = [
+                compensated.x_microtesla,
+                compensated.y_microtesla,
+                compensated.z_microtesla,
+            ];
+            state.magnetic_microtesla = sample.map(|value| (value * 1_000.0) as i32);
+            let sample = MAG_AXES.apply(sample);
+            calibration.update(sample);
+            let offset = calibration.offset();
+            field = Some(smooth(
+                field,
+                core::array::from_fn(|axis| sample[axis] - offset[axis]),
+            ));
+        }
+        if let Ok(sample) = imu.read_sync_sample(&mut embassy_time::Delay).await {
+            if let Some(raw) = sample.accel {
+                state.accel_micro_ms2 = [
+                    accel_micro_ms2(raw.x, accel_lsb_per_g),
+                    accel_micro_ms2(raw.y, accel_lsb_per_g),
+                    accel_micro_ms2(raw.z, accel_lsb_per_g),
+                ];
+                accel = Some(smooth(
+                    accel,
+                    IMU_AXES.apply(state.accel_micro_ms2.map(|value| value as f32 / 1e6)),
+                ));
+            }
+            if let Some(gyro) = sample.gyro {
+                state.gyro_micro_rad_s = [
+                    gyro_micro_rad_s(gyro.x, gyro_lsb_per_dps),
+                    gyro_micro_rad_s(gyro.y, gyro_lsb_per_dps),
+                    gyro_micro_rad_s(gyro.z, gyro_lsb_per_dps),
+                ];
+            }
+            state.imu_valid = sample.accel.is_some() || sample.gyro.is_some();
+            if log {
+                println!(
+                    "[IMU] sample accel={:?} gyro={:?} si_accel={:?} si_gyro={:?}",
+                    sample.accel, sample.gyro, state.accel_micro_ms2, state.gyro_micro_rad_s
+                );
+            }
+        } else {
+            state.imu_valid = false;
+        }
+
+        let attitude = accel
+            .zip(field)
+            .and_then(|(accel, field)| compass::attitude(accel, field));
+        state.compass = CompassView::new(attitude, field, &calibration);
+        if log && compass_active {
+            println!(
+                "[COMPASS] screen accel={:?} field={:?}uT offset={:?}uT view={:?}",
+                accel,
+                field,
+                calibration.offset(),
+                state.compass
+            );
+        }
+        MOTION_STATE.signal(state);
+    }
+}
+
 #[embassy_executor::task]
 async fn sensor_task(task: SensorTask) {
     let SensorTask {
@@ -441,10 +585,6 @@ async fn sensor_task(task: SensorTask) {
         mut nmea,
         mut nmea_parser,
         mut rtc,
-        mut magnetometer,
-        mut imu,
-        accel_lsb_per_g,
-        gyro_lsb_per_dps,
         mut state,
         mut rtc_sync_pending,
     } = task;
@@ -583,26 +723,6 @@ async fn sensor_task(task: SensorTask) {
                 }
             }
         }
-        if magnetometer.data_ready().await.unwrap_or(false)
-            && let Ok(data) = magnetometer.read_data().await
-            && let Some(compensated) = magnetometer.compensate(&data)
-        {
-            println!(
-                "[BMM350] sample raw=({}, {}, {}) comp=({:.3}, {:.3}, {:.3})uT temp={:.3}C",
-                data.raw.x,
-                data.raw.y,
-                data.raw.z,
-                compensated.x_microtesla,
-                compensated.y_microtesla,
-                compensated.z_microtesla,
-                compensated.temperature_celsius
-            );
-            state.magnetic_microtesla = [
-                (compensated.x_microtesla * 1_000.0) as i32,
-                (compensated.y_microtesla * 1_000.0) as i32,
-                (compensated.z_microtesla * 1_000.0) as i32,
-            ];
-        }
         if let Ok(time) = rtc.get_time().await {
             state.clock = prototypes::ClockState {
                 hours: time.hours,
@@ -615,29 +735,6 @@ async fn sensor_task(task: SensorTask) {
             };
         } else {
             state.clock.valid = false;
-        }
-        if let Ok(sample) = imu.read_sync_sample(&mut embassy_time::Delay).await {
-            if let Some(accel) = sample.accel {
-                state.accel_micro_ms2 = [
-                    accel_micro_ms2(accel.x, accel_lsb_per_g),
-                    accel_micro_ms2(accel.y, accel_lsb_per_g),
-                    accel_micro_ms2(accel.z, accel_lsb_per_g),
-                ];
-            }
-            if let Some(gyro) = sample.gyro {
-                state.gyro_micro_rad_s = [
-                    gyro_micro_rad_s(gyro.x, gyro_lsb_per_dps),
-                    gyro_micro_rad_s(gyro.y, gyro_lsb_per_dps),
-                    gyro_micro_rad_s(gyro.z, gyro_lsb_per_dps),
-                ];
-            }
-            state.imu_valid = sample.accel.is_some() || sample.gyro.is_some();
-            println!(
-                "[IMU] sample accel={:?} gyro={:?} si_accel={:?} si_gyro={:?}",
-                sample.accel, sample.gyro, state.accel_micro_ms2, state.gyro_micro_rad_s
-            );
-        } else {
-            state.imu_valid = false;
         }
 
         #[cfg(feature = "lora-link-tx")]
@@ -734,7 +831,9 @@ struct DrawCtx {
     touch_data: TouchData,
     selected_node: Option<u8>,
     screen: Screen,
-    header_button: Button,
+    gesture: GestureTracker,
+    pager: Pager,
+    axis_check: AxisCheck,
     touch_state: TouchState,
     peripherals: prototypes::PeripheralState,
     font_renderer: FontdueRenderer<'static, Color>,
@@ -814,23 +913,17 @@ struct Timings {
     frametime: Duration,
 }
 
-fn selected_node(touch_data: &TouchData) -> Option<u8> {
-    let TouchData::Points(points) = touch_data else {
-        return None;
-    };
-    points.iter().find_map(|point| {
-        let x = point.x as i32;
-        let y = point.y as i32;
-        if (100..=164).contains(&x) && (146..=210).contains(&y) {
-            Some(1)
-        } else if (262..=326).contains(&x) && (206..=270).contains(&y) {
-            Some(2)
-        } else if (322..=386).contains(&x) && (284..=348).contains(&y) {
-            Some(3)
-        } else {
-            None
-        }
-    })
+fn selected_node(point: Point) -> Option<u8> {
+    let (x, y) = (point.x, point.y);
+    if (100..=164).contains(&x) && (146..=210).contains(&y) {
+        Some(1)
+    } else if (262..=326).contains(&x) && (206..=270).contains(&y) {
+        Some(2)
+    } else if (322..=386).contains(&x) && (284..=348).contains(&y) {
+        Some(3)
+    } else {
+        None
+    }
 }
 
 fn draw_if_in_bounds<C, D, T>(target: &mut D, dirty: &mut Dirty, thing: T) -> Result<(), D::Error>
@@ -860,6 +953,12 @@ where
             screen: ctx.screen,
             selected_node: ctx.selected_node,
             peripherals: ctx.peripherals,
+            offset: ctx.pager.view().offset,
+            neighbour: ctx
+                .pager
+                .view()
+                .neighbour
+                .map(|(page, offset)| (Screen::ALL[page], offset)),
         },
         &ctx.font_renderer,
         target,
@@ -1302,12 +1401,18 @@ async fn async_main(spawner: Spawner) {
             nmea: [0; 512],
             nmea_parser,
             rtc,
-            magnetometer,
+            state: initial_sensor_state,
+            rtc_sync_pending: true,
+        })
+        .unwrap(),
+    );
+
+    spawner.spawn(
+        motion_task(MotionTask {
+            magnetometer: (bmm_ready && bmm_compensated).then_some(magnetometer),
             imu,
             accel_lsb_per_g,
             gyro_lsb_per_dps,
-            state: initial_sensor_state,
-            rtc_sync_pending: true,
         })
         .unwrap(),
     );
@@ -1329,7 +1434,9 @@ async fn async_main(spawner: Spawner) {
         touch_data: TouchData::default(),
         selected_node: None,
         screen: Screen::Map,
-        header_button: Button::default(),
+        gesture: GestureTracker::default(),
+        pager: Pager::new(0, Screen::ALL.len(), board::LCD_WIDTH as i32),
+        axis_check: AxisCheck::default(),
         touch_state: TouchState::default(),
         peripherals: prototypes::PeripheralState::default(),
         font_renderer,
@@ -1341,7 +1448,6 @@ async fn async_main(spawner: Spawner) {
     draw_ctx.peripherals.tca_valid = true;
     draw_ctx.peripherals.gnss_valid = gnss_parse_ok;
     draw_ctx.peripherals.lora_valid = lora_result == 0;
-    draw_ctx.peripherals.compass_valid = bmm_ready && bmm_compensated;
     println!(
         "[MEM] internal_used={} psram_used={}",
         esp_alloc::HEAP.used(),
@@ -1369,26 +1475,43 @@ async fn async_main(spawner: Spawner) {
             let previous_touch_points = draw_ctx.peripherals.touch_points;
             let previous_touch_position = draw_ctx.peripherals.touch_position;
             let previous_touch_positions = draw_ctx.peripherals.touch_positions;
-            let touch_repoll_due =
-                previous_touch_position.is_some() && last_touch_poll.elapsed() >= TOUCH_REPOLL;
-            let wait_timeout = if touch_repoll_due {
+            // Keep reading while either tracker holds a contact, or neither sees it lift.
+            let in_contact = previous_touch_position.is_some() || draw_ctx.gesture.in_contact();
+            let touch_repoll_due = in_contact && last_touch_poll.elapsed() >= TOUCH_REPOLL;
+            let wait_timeout = if touch_repoll_due || draw_ctx.pager.is_moving() {
                 Duration::from_micros(0)
-            } else if previous_touch_position.is_some() {
+            } else if in_contact {
                 TOUCH_REPOLL
             } else {
                 Duration::from_millis(250)
             };
-            let (touch_ready, sensor_state) = match select3(
+            let (touch_ready, sensor_state, motion_state) = match select4(
                 touch.wait_for_touch(),
                 SENSOR_STATE.wait(),
+                MOTION_STATE.wait(),
                 Timer::after(wait_timeout),
             )
             .await
             {
-                Either3::First(result) => (result.is_ok(), None),
-                Either3::Second(state) => (false, Some(state)),
-                Either3::Third(()) => (touch_repoll_due, None),
+                Either4::First(result) => (result.is_ok(), None, None),
+                Either4::Second(state) => (false, Some(state), None),
+                Either4::Third(state) => (false, None, Some(state)),
+                Either4::Fourth(()) => (touch_repoll_due, None, None),
             };
+            if let Some(motion) = motion_state {
+                let peripherals = &mut draw_ctx.peripherals;
+                peripherals.accel_micro_ms2 = motion.accel_micro_ms2;
+                peripherals.gyro_micro_rad_s = motion.gyro_micro_rad_s;
+                peripherals.imu_valid = motion.imu_valid;
+                peripherals.magnetic_microtesla = motion.magnetic_microtesla;
+                peripherals.compass = motion.compass;
+                if matches!(
+                    draw_ctx.screen,
+                    Screen::Motion | Screen::Compass | Screen::AxisCheck
+                ) {
+                    changed.make_full();
+                }
+            }
             if let Some(sensor_state) = sensor_state {
                 draw_ctx.peripherals.battery_mv = sensor_state.battery_mv;
                 draw_ctx.peripherals.vbus_mv = sensor_state.vbus_mv;
@@ -1397,10 +1520,6 @@ async fn async_main(spawner: Spawner) {
                 draw_ctx.peripherals.gnss_valid = sensor_state.gnss.fix.is_some();
                 draw_ctx.peripherals.lora_irq = sensor_state.lora_irq;
                 draw_ctx.peripherals.clock = sensor_state.clock;
-                draw_ctx.peripherals.accel_micro_ms2 = sensor_state.accel_micro_ms2;
-                draw_ctx.peripherals.gyro_micro_rad_s = sensor_state.gyro_micro_rad_s;
-                draw_ctx.peripherals.imu_valid = sensor_state.imu_valid;
-                draw_ctx.peripherals.magnetic_microtesla = sensor_state.magnetic_microtesla;
                 changed.make_full();
             };
             if touch_ready {
@@ -1423,30 +1542,79 @@ async fn async_main(spawner: Spawner) {
             draw_ctx.peripherals.touch_points = touch_points;
             draw_ctx.peripherals.touch_position = touch_position;
             draw_ctx.peripherals.touch_positions = touch_positions;
-            let (touch_active, header_hit) = match &draw_ctx.touch_data {
-                TouchData::Points(points) => (
-                    !points.is_empty(),
-                    points.iter().any(|point| {
-                        (108..=366).contains(&(point.x as i32))
-                            && (48..=98).contains(&(point.y as i32))
-                    }),
-                ),
-                TouchData::CoverGesture => (false, false),
+            let now = Instant::now().as_micros();
+            let previous_view = draw_ctx.pager.view();
+            let previous_selected_node = draw_ctx.selected_node;
+            let event = if touch_ready {
+                draw_ctx.gesture.update(raw_touch_positions[0], now)
+            } else {
+                GestureEvent::None
             };
-            if draw_ctx
-                .header_button
-                .update_touch(touch_active, header_hit)
-                == ButtonEvent::Pressed
-            {
-                draw_ctx.screen = draw_ctx.screen.next();
+            draw_ctx.pager.handle(&event, now);
+            if draw_ctx.screen == Screen::AxisCheck {
+                if let GestureEvent::DragEnd(drag) = event {
+                    let offset = drag.offset();
+                    if offset.y.abs() > 60 && offset.y.abs() > offset.x.abs() {
+                        draw_ctx.axis_check.step(offset.y < 0);
+                    }
+                }
+                if let Some(motion) = motion_state
+                    && let Some(record) = draw_ctx.axis_check.sample(
+                        motion.magnetic_microtesla.map(|value| value as f32 / 1e3),
+                        motion.accel_micro_ms2.map(|value| value as f32 / 1e6),
+                        now,
+                    )
+                {
+                    println!(
+                        "[POSE] pose={} mag=({:.2}, {:.2}, {:.2})uT accel=({:.3}, {:.3}, {:.3}) samples={}",
+                        record.pose + 1,
+                        record.magnetic_microtesla[0],
+                        record.magnetic_microtesla[1],
+                        record.magnetic_microtesla[2],
+                        record.accel_ms2[0],
+                        record.accel_ms2[1],
+                        record.accel_ms2[2],
+                        record.samples
+                    );
+                }
+            }
+            if let GestureEvent::Tap(point) = event {
+                if draw_ctx.screen == Screen::AxisCheck {
+                    draw_ctx.axis_check.start(now);
+                } else if draw_ctx.screen == Screen::Compass {
+                    let offset = point - prototypes::COMPASS_CENTER;
+                    if offset.x * offset.x + offset.y * offset.y <= 100 * 100 {
+                        COMPASS_RECALIBRATE.store(true, Ordering::Relaxed);
+                    }
+                } else if prototypes::HEADER.contains(point) {
+                    draw_ctx.pager.advance(true, now);
+                } else if draw_ctx.screen == Screen::Map
+                    && let Some(node) = selected_node(point)
+                {
+                    draw_ctx.selected_node = Some(node);
+                }
+            }
+            draw_ctx.pager.step(now);
+            let view = draw_ctx.pager.view();
+            let screen = Screen::ALL[view.page];
+            if screen != draw_ctx.screen {
+                draw_ctx.screen = screen;
                 draw_ctx.selected_node = None;
+            }
+            let samples_fast = |screen: Screen| matches!(screen, Screen::Compass | Screen::AxisCheck);
+            COMPASS_ACTIVE.store(
+                samples_fast(screen)
+                    || view
+                        .neighbour
+                        .is_some_and(|(page, _)| samples_fast(Screen::ALL[page])),
+                Ordering::Relaxed,
+            );
+            let axis_check = draw_ctx.axis_check.view();
+            if axis_check != draw_ctx.peripherals.axis_check {
+                draw_ctx.peripherals.axis_check = axis_check;
                 changed.make_full();
             }
-            let previous_selected_node = draw_ctx.selected_node;
-            if let Some(node) = selected_node(&draw_ctx.touch_data) {
-                draw_ctx.selected_node = Some(node);
-            }
-            if draw_ctx.selected_node != previous_selected_node {
+            if view != previous_view || draw_ctx.selected_node != previous_selected_node {
                 changed.make_full();
             }
             if draw_ctx.screen == Screen::Touch

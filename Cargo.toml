@@ -37,6 +37,7 @@ heapless = { version = "0.9.3", features = ["nightly"] }
 fontdue = { version = "0.9.3", default-features = false, features = ["hashbrown"] }
 fontdue-macros = "0.9.3"
 embedded-layout = "0.4.2"
+libm = "0.2.16"
 
 [features]
 default = []

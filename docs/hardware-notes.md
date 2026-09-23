@@ -69,3 +69,4 @@ RTC interrupt is on the expander as `EXIO_RTC_INT`, not a GPIO.
 Unbound in firmware, recorded from the Waveshare `pin_config.h` and not verified against this
 board: SD CLK/CMD/DATA GPIO2/GPIO1/GPIO3 with CS GPIO41, boot button GPIO0, power button GPIO10,
 and the ES8311 audio codec. No firmware drives any of these.
+- Both motion sensors sit face down and turned against the screen. In the screen's axes (x toward the right edge, y toward the top edge, z out of the glass), the QMI8658 reads screen = (y, x, −z) and the BMM350 reads screen = (−x, −y, z). These come from twelve held poses captured with the axis check screen and fitted by `tools/fit-sensor-axes.py`: every other axis mapping fitted at least 40 times worse for the IMU, and at 21.5 µT RMS against 3.2 µT for the magnetometer. The same capture put the board's own field at about (−2.1, −59.5, 4.0) µT in the BMM350's axes, and the field at the capture site at 8.8 µT horizontal and 42.9 µT vertical, indoors.

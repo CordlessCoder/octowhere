@@ -27,10 +27,18 @@ pub mod peripherals;
 #[cfg(test)]
 mod gnss;
 
+#[path = "../../src/ui/axis_check.rs"]
+pub mod axis_check;
+#[path = "../../src/ui/compass.rs"]
+pub mod compass;
 #[path = "../../src/ui/dirty.rs"]
 pub mod dirty;
 #[path = "../../src/ui/geometry.rs"]
 pub mod geometry;
+#[path = "../../src/ui/gesture.rs"]
+pub mod gesture;
+#[path = "../../src/ui/pager.rs"]
+pub mod pager;
 #[path = "../../src/ui/input.rs"]
 pub mod input;
 #[path = "../../src/ui/imu.rs"]

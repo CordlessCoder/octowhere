@@ -305,6 +305,50 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
         Ok(rendered)
     }
 
+    /// Draws `text` centred on `center`, turned clockwise by the angle with this cosine and sine.
+    pub fn draw_rotated<D: DrawTarget<Color = C>>(
+        &self,
+        text: &str,
+        center: Point,
+        cos: f32,
+        sin: f32,
+        target: &mut D,
+    ) -> Result<(), D::Error> {
+        let font = self.fonts[self.font_index];
+        let px = self.font_size as f32;
+        let transform = fontdue::Transform::rotation(cos, sin);
+        let mut offsets = fontdue::PenOffsets::new(font, text, px);
+        let (mut bottom, mut top) = (i32::MAX, i32::MIN);
+        for (index, _) in offsets.by_ref() {
+            let metrics = font.metrics_indexed(index, px);
+            if metrics.height > 0 {
+                bottom = bottom.min(metrics.ymin);
+                top = top.max(metrics.ymin + metrics.height as i32);
+            }
+        }
+        if bottom > top {
+            return Ok(());
+        }
+        // Pen-relative and y down: back half the advance, and down to the middle of the ink.
+        let start = (-offsets.advance() / 2.0, (bottom + top) as f32 / 2.0);
+        let ctx = &mut *self.ctx.borrow_mut();
+        for (index, offset) in fontdue::PenOffsets::new(font, text, px) {
+            let (dx, dy) = transform.apply(start.0 + offset, start.1);
+            let pen = (center.x as f32 + dx, center.y as f32 + dy);
+            let (metrics, bitmap) =
+                font.rasterize_indexed_transformed(&mut ctx.canvas, index, px, transform, pen);
+            let width = metrics.width.max(1);
+            let origin = Point::new(metrics.x, metrics.y);
+            target.draw_iter(bitmap.enumerate().filter(|&(_, c)| c != 0).map(|(idx, c)| {
+                Pixel(
+                    origin + Point::new((idx % width) as i32, (idx / width) as i32),
+                    self.background_color.lerp(&self.text_color, c),
+                )
+            }))?;
+        }
+        Ok(())
+    }
+
     fn layout_bounds(ctx: &FontdueRendererCtx, position: Point) -> Rectangle {
         ctx.layout
             .glyphs()

@@ -1,5 +1,9 @@
+pub mod axis_check;
+pub mod compass;
 pub mod dirty;
 pub mod geometry;
+pub mod gesture;
 pub mod imu;
 pub mod input;
+pub mod pager;
 pub mod prototypes;

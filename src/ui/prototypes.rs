@@ -1,7 +1,7 @@
 use core::fmt::Write as _;
 
 use embedded_graphics::{
-    draw_target::DrawTarget,
+    draw_target::{DrawTarget, DrawTargetExt},
     prelude::{Drawable, Point, Primitive, Size},
     primitives::{Circle, Line, PrimitiveStyle, Rectangle},
     text::Text,
@@ -34,6 +34,7 @@ pub enum Screen {
     Power,
     Navigation,
     Compass,
+    AxisCheck,
 }
 
 impl Screen {
@@ -46,8 +47,28 @@ impl Screen {
             Self::Touch => Self::Power,
             Self::Power => Self::Navigation,
             Self::Navigation => Self::Compass,
-            Self::Compass => Self::Map,
+            Self::Compass => Self::AxisCheck,
+            Self::AxisCheck => Self::Map,
         }
+    }
+
+    /// Every screen, in the order the pager visits them.
+    pub const ALL: [Self; 8] = [
+        Self::Map,
+        Self::Motion,
+        Self::Clock,
+        Self::Touch,
+        Self::Power,
+        Self::Navigation,
+        Self::Compass,
+        Self::AxisCheck,
+    ];
+
+    /// Whether the header and footer frame this screen. A round screen fills the round panel
+    /// without them.
+    #[must_use]
+    const fn has_chrome(self) -> bool {
+        !matches!(self, Self::Compass | Self::AxisCheck)
     }
 
     #[must_use]
@@ -60,19 +81,21 @@ impl Screen {
             Self::Power => "POWER / IO",
             Self::Navigation => "NAV / RADIO",
             Self::Compass => "COMPASS",
+            Self::AxisCheck => "AXIS CHECK",
         }
     }
 
     #[must_use]
     const fn page(self) -> &'static str {
         match self {
-            Self::Map => "01 / 07",
-            Self::Motion => "02 / 07",
-            Self::Clock => "03 / 07",
-            Self::Touch => "04 / 07",
-            Self::Power => "05 / 07",
-            Self::Navigation => "06 / 07",
-            Self::Compass => "07 / 07",
+            Self::Map => "01 / 08",
+            Self::Motion => "02 / 08",
+            Self::Clock => "03 / 08",
+            Self::Touch => "04 / 08",
+            Self::Power => "05 / 08",
+            Self::Navigation => "06 / 08",
+            Self::Compass => "07 / 08",
+            Self::AxisCheck => "08 / 08",
         }
     }
 }
@@ -101,7 +124,8 @@ pub struct PeripheralState {
     pub tca_valid: bool,
     pub gnss_valid: bool,
     pub lora_valid: bool,
-    pub compass_valid: bool,
+    pub compass: super::compass::CompassView,
+    pub axis_check: super::axis_check::AxisCheckView,
     pub battery_mv: Option<u16>,
     pub vbus_mv: Option<u16>,
     pub vsys_mv: Option<u16>,
@@ -117,9 +141,13 @@ pub struct State {
     pub screen: Screen,
     pub selected_node: Option<u8>,
     pub peripherals: PeripheralState,
+    /// How far right `screen` is shifted, while a page switch moves it.
+    pub offset: i32,
+    /// The screen a shift uncovers, and its own offset.
+    pub neighbour: Option<(Screen, i32)>,
 }
 
-const HEADER: Rectangle = Rectangle::new(Point::new(92, 48), Size::new(282, 50));
+pub const HEADER: Rectangle = Rectangle::new(Point::new(92, 48), Size::new(282, 50));
 const HEADER_CONTENT: Rectangle = Rectangle::new(Point::new(108, 48), Size::new(258, 50));
 const MAP: Rectangle = Rectangle::new(Point::new(48, 112), Size::new(370, 242));
 const FOOTER: Rectangle = Rectangle::new(Point::new(92, 368), Size::new(282, 50));
@@ -141,14 +169,38 @@ where
     let bounds = target.bounding_box();
     target.fill_solid(&bounds, chrome::BLACK)?;
 
-    match architecture {
-        Architecture::Immediate => render_immediate(state, font, target)?,
-        Architecture::Retained => render_retained(state, font, target)?,
-        Architecture::Tiled => render_tiled(state, font, target)?,
+    render_page(architecture, state, state.offset, font, target)?;
+    if let Some((screen, offset)) = state.neighbour {
+        render_page(architecture, State { screen, ..state }, offset, font, target)?;
     }
 
     dirty.add(bounds);
     Ok(dirty)
+}
+
+/// Draws one screen shifted right by `offset`, clipped to the part of it that is on the panel.
+fn render_page<D>(
+    architecture: Architecture,
+    state: State,
+    offset: i32,
+    font: &chrome::FontdueRenderer<'static, Color>,
+    target: &mut D,
+) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Color>,
+{
+    let page = Rectangle::new(Point::new(offset, 0), chrome::DISPLAY_SIZE);
+    let visible = page.intersection(&target.bounding_box());
+    if visible.is_zero_sized() {
+        return Ok(());
+    }
+    let mut clipped = target.clipped(&visible);
+    let target = &mut clipped.translated(Point::new(offset, 0));
+    match architecture {
+        Architecture::Immediate => render_immediate(state, font, target),
+        Architecture::Retained => render_retained(state, font, target),
+        Architecture::Tiled => render_tiled(state, font, target),
+    }
 }
 
 fn render_immediate<D>(
@@ -253,6 +305,9 @@ fn draw_header<D>(
 where
     D: DrawTarget<Color = Color>,
 {
+    if !state.screen.has_chrome() {
+        return Ok(());
+    }
     target.fill_solid(&HEADER, chrome::PURPLE)?;
     target.fill_solid(
         &Rectangle::new(Point::new(92, 48), Size::new(14, 50)),
@@ -319,6 +374,7 @@ where
         Screen::Power => draw_power(state, font, target),
         Screen::Navigation => draw_navigation(state, font, target),
         Screen::Compass => draw_compass(state, font, target),
+        Screen::AxisCheck => draw_axis_check(state, font, target),
     }
 }
 
@@ -861,6 +917,13 @@ where
     )
 }
 
+pub const COMPASS_CENTER: Point = Point::new(233, 233);
+const COMPASS_RADIUS: i32 = 214;
+const CARDINALS: [&str; 16] = [
+    "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW",
+    "NNW",
+];
+
 fn draw_compass<D>(
     state: State,
     font: &chrome::FontdueRenderer<'static, Color>,
@@ -869,49 +932,226 @@ fn draw_compass<D>(
 where
     D: DrawTarget<Color = Color>,
 {
-    let panel = Rectangle::new(Point::new(64, 136), Size::new(338, 178));
-    panel
+    let view = state.peripherals.compass;
+    Circle::with_center(COMPASS_CENTER, 2 * COMPASS_RADIUS as u32)
         .into_styled(PrimitiveStyle::with_stroke(chrome::GRAY, 2))
         .draw(target)?;
+    // The lubber mark: the top edge's direction, which the dial turns under.
+    target.fill_solid(
+        &Rectangle::new(
+            COMPASS_CENTER - Point::new(4, COMPASS_RADIUS + 10),
+            Size::new(8, 36),
+        ),
+        chrome::LIME,
+    )?;
+
+    // Without a trusted heading the dial holds still and carries no bearings, so it cannot be
+    // read as pointing anywhere.
+    let heading = view.heading_decidegrees;
+    let turn = heading.map_or(0.0, |decidegrees| decidegrees as f32 / 10.0);
+    for tick in 0..36 {
+        let bearing = tick as f32 * 10.0;
+        let (sin, cos) = libm::sincosf((bearing - turn).to_radians());
+        let major = tick % 3 == 0;
+        let at = |radius: i32| {
+            COMPASS_CENTER
+                + Point::new(
+                    libm::roundf(sin * radius as f32) as i32,
+                    libm::roundf(-cos * radius as f32) as i32,
+                )
+        };
+        Line::new(at(COMPASS_RADIUS - 6), at(COMPASS_RADIUS - if major { 30 } else { 16 }))
+            .into_styled(PrimitiveStyle::with_stroke(
+                if major { chrome::WHITE } else { chrome::GRAY },
+                if major { 4 } else { 2 },
+            ))
+            .draw(target)?;
+        if heading.is_none() || !major {
+            continue;
+        }
+        let (label, color, size, font_index, radius) = match tick {
+            0 => ("N", chrome::ORANGE, 40, 0, COMPASS_RADIUS - 58),
+            9 => ("E", chrome::WHITE, 40, 0, COMPASS_RADIUS - 58),
+            18 => ("S", chrome::WHITE, 40, 0, COMPASS_RADIUS - 58),
+            27 => ("W", chrome::WHITE, 40, 0, COMPASS_RADIUS - 58),
+            _ => (
+                ["30", "60", "", "120", "150", "", "210", "240", "", "300", "330"][tick / 3 - 1],
+                chrome::GRAY,
+                22,
+                1,
+                COMPASS_RADIUS - 50,
+            ),
+        };
+        font_style(font, color, chrome::BLACK, size, font_index)
+            .draw_rotated(label, at(radius), cos, sin, target)?;
+    }
+
+    if !view.live {
+        return aligned_text(
+            "NO DATA",
+            &Rectangle::with_center(COMPASS_CENTER, Size::new(260, 40)),
+            font,
+            chrome::RED,
+            chrome::BLACK,
+            32,
+            0,
+            horizontal::Center,
+            vertical::Center,
+            target,
+        );
+    }
+    let mut primary = heapless::String::<16>::new();
+    let mut secondary = heapless::String::<16>::new();
+    let primary_color;
+    let secondary_color;
+    if let Some(decidegrees) = heading {
+        let degrees = (decidegrees + 5) / 10 % 360;
+        _ = write!(primary, "{degrees:03}");
+        if view.disturbed {
+            _ = secondary.push_str("MAG INTERFERENCE");
+            primary_color = chrome::ORANGE;
+            secondary_color = chrome::ORANGE;
+        } else {
+            _ = secondary.push_str(CARDINALS[usize::from((decidegrees + 112) / 225 % 16)]);
+            primary_color = chrome::WHITE;
+            secondary_color = chrome::LIME;
+        }
+    } else if view.calibration_percent < 100 {
+        _ = write!(primary, "CAL {:02}%", view.calibration_percent);
+        _ = secondary.push_str("TURN ALL WAYS");
+        primary_color = chrome::ORANGE;
+        secondary_color = chrome::GRAY;
+    } else {
+        _ = primary.push_str("---");
+        _ = secondary.push_str("TOP EDGE UP");
+        primary_color = chrome::WHITE;
+        secondary_color = chrome::GRAY;
+    }
+    let (primary_size, primary_font) = if heading.is_some() { (72, 1) } else { (32, 0) };
     aligned_text(
-        "BMM350 MAGNETOMETER",
-        &Rectangle::new(Point::new(76, 150), Size::new(314, 30)),
+        &primary,
+        &Rectangle::with_center(COMPASS_CENTER - Point::new(0, 24), Size::new(260, 80)),
         font,
-        chrome::WHITE,
+        primary_color,
         chrome::BLACK,
-        16,
+        primary_size,
+        primary_font,
+        horizontal::Center,
+        vertical::Center,
+        target,
+    )?;
+    aligned_text(
+        &secondary,
+        &Rectangle::with_center(COMPASS_CENTER + Point::new(0, 34), Size::new(260, 32)),
+        font,
+        secondary_color,
+        chrome::BLACK,
+        26,
         1,
         horizontal::Center,
         vertical::Center,
         target,
     )?;
-    draw_axis_values(
-        state.peripherals.magnetic_microtesla,
-        Point::new(92, 196),
-        chrome::WHITE,
+    let mut tilt = heapless::String::<24>::new();
+    _ = write!(tilt, "P {:+03}  R {:+03}", view.pitch_deg, view.roll_deg);
+    aligned_text(
+        &tilt,
+        &Rectangle::with_center(COMPASS_CENTER + Point::new(0, 72), Size::new(260, 28)),
         font,
+        chrome::GRAY,
+        chrome::BLACK,
+        20,
+        1,
+        horizontal::Center,
+        vertical::Center,
         target,
     )?;
     aligned_text(
-        if state.peripherals.compass_valid {
-            "LIVE / uT"
-        } else {
-            "NO DATA"
-        },
-        &Rectangle::new(Point::new(76, 278), Size::new(314, 24)),
+        "TAP CENTRE TO RECAL",
+        &Rectangle::with_center(COMPASS_CENTER + Point::new(0, 104), Size::new(260, 22)),
         font,
-        if state.peripherals.compass_valid {
-            chrome::LIME
-        } else {
-            chrome::RED
-        },
+        chrome::GRAY,
         chrome::BLACK,
-        16,
+        14,
         1,
         horizontal::Center,
         vertical::Center,
         target,
     )
+}
+
+fn draw_axis_check<D>(
+    state: State,
+    font: &chrome::FontdueRenderer<'static, Color>,
+    target: &mut D,
+) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Color>,
+{
+    use super::axis_check::{POSES, Status};
+
+    let view = state.peripherals.axis_check;
+    let (up, facing) = POSES[usize::from(view.pose)];
+    let mut number = heapless::String::<16>::new();
+    _ = write!(number, "POSE {:02} / {:02}", view.pose + 1, POSES.len());
+    let mut status = heapless::String::<24>::new();
+    let status_color = match view.status {
+        Status::Ready => {
+            _ = status.push_str("TAP TO LOG");
+            chrome::GRAY
+        }
+        Status::Holding(tenths) => {
+            _ = write!(status, "HOLD STILL {}.{}", tenths / 10, tenths % 10);
+            chrome::ORANGE
+        }
+        Status::Logged(samples) => {
+            _ = write!(status, "LOGGED {samples} SAMPLES");
+            chrome::LIME
+        }
+        Status::Moved => {
+            _ = status.push_str("MOVED, TAP AGAIN");
+            chrome::ORANGE
+        }
+    };
+    for (text, y, height, color, size, font_index) in [
+        ("AXIS CHECK", 72, 24, chrome::GRAY, 16, 1),
+        (number.as_str(), 118, 34, chrome::WHITE, 26, 1),
+        (up, 180, 40, chrome::LIME, 30, 0),
+        (facing, 226, 34, chrome::WHITE, 22, 0),
+        (status.as_str(), 284, 34, status_color, 24, 1),
+        ("SWIPE UP OR DOWN", 398, 22, chrome::GRAY, 14, 1),
+    ] {
+        aligned_text(
+            text,
+            &Rectangle::with_center(Point::new(233, y), Size::new(380, height)),
+            font,
+            color,
+            chrome::BLACK,
+            size,
+            font_index,
+            horizontal::Center,
+            vertical::Center,
+            target,
+        )?;
+    }
+    // One block per pose: filled once logged, outlined white for the current one.
+    let count = POSES.len() as i32;
+    let left = 233 - (count * 24 - 6) / 2;
+    for index in 0..count {
+        let block = Rectangle::new(Point::new(left + index * 24, 330), Size::new(18, 18));
+        if view.logged & (1 << index) != 0 {
+            target.fill_solid(&block, chrome::LIME)?;
+        }
+        let outline = if index == i32::from(view.pose) {
+            chrome::WHITE
+        } else {
+            chrome::GRAY
+        };
+        block
+            .into_styled(PrimitiveStyle::with_stroke(outline, 2))
+            .draw(target)?;
+    }
+    Ok(())
 }
 
 fn format_mv(label: &str, value: u16) -> heapless::String<16> {
@@ -939,6 +1179,9 @@ fn draw_footer<D>(
 where
     D: DrawTarget<Color = Color>,
 {
+    if !state.screen.has_chrome() {
+        return Ok(());
+    }
     target.fill_solid(
         &FOOTER_PIN,
         if state.selected_node.is_some() {
