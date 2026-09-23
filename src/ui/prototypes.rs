@@ -166,7 +166,7 @@ pub fn render<D>(
     target: &mut D,
 ) -> Result<Dirty, D::Error>
 where
-    D: DrawTarget<Color = Color>,
+    D: chrome::CoverageTarget<Color = Color>,
 {
     let mut dirty = Dirty::new();
     let bounds = target.bounding_box();
@@ -190,15 +190,14 @@ fn render_page<D>(
     target: &mut D,
 ) -> Result<(), D::Error>
 where
-    D: DrawTarget<Color = Color>,
+    D: chrome::CoverageTarget<Color = Color>,
 {
     let page = Rectangle::new(Point::new(offset, 0), chrome::DISPLAY_SIZE);
     let visible = page.intersection(&target.bounding_box());
     if visible.is_zero_sized() {
         return Ok(());
     }
-    let mut clipped = target.clipped(&visible);
-    let target = &mut clipped.translated(Point::new(offset, 0));
+    let target = &mut chrome::Window::new(target, Point::new(offset, 0), visible);
     match architecture {
         Architecture::Immediate => render_immediate(state, font, target),
         Architecture::Retained => render_retained(state, font, target),
@@ -212,7 +211,7 @@ fn render_immediate<D>(
     target: &mut D,
 ) -> Result<(), D::Error>
 where
-    D: DrawTarget<Color = Color>,
+    D: chrome::CoverageTarget<Color = Color>,
 {
     draw_header(state, font, target)?;
     draw_screen(state, font, target)?;
@@ -232,7 +231,7 @@ fn render_retained<D>(
     target: &mut D,
 ) -> Result<(), D::Error>
 where
-    D: DrawTarget<Color = Color>,
+    D: chrome::CoverageTarget<Color = Color>,
 {
     // This is deliberately a fixed scene. It gives us retained invalidation without
     // introducing a heap-backed widget tree before the interaction model is known.
@@ -260,7 +259,7 @@ fn render_tiled<D>(
     target: &mut D,
 ) -> Result<(), D::Error>
 where
-    D: DrawTarget<Color = Color>,
+    D: chrome::CoverageTarget<Color = Color>,
 {
     // These regions are the first candidate composition units for partial flushes.
     // Their boundaries match the visual rails, not arbitrary widget rectangles.
@@ -306,7 +305,7 @@ fn draw_header<D>(
     target: &mut D,
 ) -> Result<(), D::Error>
 where
-    D: DrawTarget<Color = Color>,
+    D: chrome::CoverageTarget<Color = Color>,
 {
     if !state.screen.has_chrome() {
         return Ok(());
@@ -367,7 +366,7 @@ fn draw_screen<D>(
     target: &mut D,
 ) -> Result<(), D::Error>
 where
-    D: DrawTarget<Color = Color>,
+    D: chrome::CoverageTarget<Color = Color>,
 {
     match state.screen {
         Screen::Map => draw_map(state, font, target),
@@ -387,7 +386,7 @@ fn draw_map<D>(
     target: &mut D,
 ) -> Result<(), D::Error>
 where
-    D: DrawTarget<Color = Color>,
+    D: chrome::CoverageTarget<Color = Color>,
 {
     let frame = PrimitiveStyle::with_stroke(chrome::GRAY, 2);
     MAP.into_styled(frame).draw(target)?;
@@ -475,7 +474,7 @@ fn draw_motion<D>(
     target: &mut D,
 ) -> Result<(), D::Error>
 where
-    D: DrawTarget<Color = Color>,
+    D: chrome::CoverageTarget<Color = Color>,
 {
     let frame = PrimitiveStyle::with_stroke(chrome::GRAY, 2);
     let accel = Rectangle::new(Point::new(64, 136), Size::new(162, 178));
@@ -547,7 +546,7 @@ fn draw_axis_values<D>(
     target: &mut D,
 ) -> Result<(), D::Error>
 where
-    D: DrawTarget<Color = Color>,
+    D: chrome::CoverageTarget<Color = Color>,
 {
     for (index, (axis, value)) in ["X", "Y", "Z"].into_iter().zip(values).enumerate() {
         let mut text = heapless::String::<16>::new();
@@ -591,7 +590,7 @@ fn draw_clock<D>(
     target: &mut D,
 ) -> Result<(), D::Error>
 where
-    D: DrawTarget<Color = Color>,
+    D: chrome::CoverageTarget<Color = Color>,
 {
     let frame = PrimitiveStyle::with_stroke(chrome::GRAY, 2);
     let panel = Rectangle::new(Point::new(64, 136), Size::new(338, 178));
@@ -666,7 +665,7 @@ fn draw_touch<D>(
     target: &mut D,
 ) -> Result<(), D::Error>
 where
-    D: DrawTarget<Color = Color>,
+    D: chrome::CoverageTarget<Color = Color>,
 {
     let frame = PrimitiveStyle::with_stroke(chrome::GRAY, 2);
     let panel = Rectangle::new(Point::new(64, 136), Size::new(338, 178));
@@ -722,7 +721,7 @@ fn status_panel<D>(
     target: &mut D,
 ) -> Result<(), D::Error>
 where
-    D: DrawTarget<Color = Color>,
+    D: chrome::CoverageTarget<Color = Color>,
 {
     region
         .into_styled(PrimitiveStyle::with_stroke(chrome::GRAY, 2))
@@ -769,7 +768,7 @@ fn draw_power<D>(
     target: &mut D,
 ) -> Result<(), D::Error>
 where
-    D: DrawTarget<Color = Color>,
+    D: chrome::CoverageTarget<Color = Color>,
 {
     let battery = format_optional_mv("VBAT", state.peripherals.battery_mv);
     let vbus = format_optional_mv("VBUS", state.peripherals.vbus_mv);
@@ -834,7 +833,7 @@ fn draw_navigation<D>(
     target: &mut D,
 ) -> Result<(), D::Error>
 where
-    D: DrawTarget<Color = Color>,
+    D: chrome::CoverageTarget<Color = Color>,
 {
     aligned_text(
         "GNSS NMEA",
@@ -935,12 +934,12 @@ fn draw_compass<D>(
     target: &mut D,
 ) -> Result<(), D::Error>
 where
-    D: DrawTarget<Color = Color>,
+    D: chrome::CoverageTarget<Color = Color>,
 {
     let view = state.peripherals.compass;
     let center = (COMPASS_CENTER.x as f32, COMPASS_CENTER.y as f32);
     let radius = COMPASS_RADIUS as f32;
-    super::smooth::ring(target, center, radius - 2.0, radius, chrome::GRAY, chrome::BLACK)?;
+    super::smooth::ring(target, COMPASS_CENTER, radius - 2.0, radius, chrome::GRAY);
 
     // Without a trusted heading the dial holds still and carries no bearings, so it cannot be
     // read as pointing anywhere.
@@ -972,8 +971,7 @@ where
             ],
             COMPASS_CENTER,
             if tick % 3 == 0 { chrome::WHITE } else { chrome::GRAY },
-            chrome::BLACK,
-        )?;
+        );
     }
     for tick in (0..36).step_by(3).filter(|_| heading.is_some()) {
         let (sin, cos) = libm::sincosf((tick as f32 * 10.0 - turn).to_radians());
@@ -1055,18 +1053,20 @@ where
         Rectangle::with_center(COMPASS_CENTER - Point::new(0, 60), Size::new(260, 80));
     if heading.is_some() {
         // The heading is knocked out of a slab of its colour.
-        let number = Text::new(
-            &primary,
-            Point::zero(),
-            font_style(font, chrome::BLACK, primary_color, 72, 1),
-        )
-        .align_to(&primary_region, horizontal::Center, vertical::Center);
-        let ink = number.bounding_box();
+        let number = font_style(font, chrome::BLACK, primary_color, 72, 1);
+        let ink =
+            number.aligned_bounds(&primary, &primary_region, horizontal::Center, vertical::Center);
         target.fill_solid(
             &Rectangle::with_center(ink.center(), ink.size + Size::new(28, 20)),
             primary_color,
         )?;
-        number.draw(target)?;
+        number.draw_aligned(
+            &primary,
+            &primary_region,
+            horizontal::Center,
+            vertical::Center,
+            target,
+        )?;
     } else {
         aligned_text(
             &primary,
@@ -1127,7 +1127,7 @@ fn draw_axis_check<D>(
     target: &mut D,
 ) -> Result<(), D::Error>
 where
-    D: DrawTarget<Color = Color>,
+    D: chrome::CoverageTarget<Color = Color>,
 {
     use super::axis_check::{POSES, Status};
 
@@ -1218,7 +1218,7 @@ fn draw_footer<D>(
     target: &mut D,
 ) -> Result<(), D::Error>
 where
-    D: DrawTarget<Color = Color>,
+    D: chrome::CoverageTarget<Color = Color>,
 {
     if !state.screen.has_chrome() {
         return Ok(());
@@ -1278,7 +1278,7 @@ where
 
 fn marker<D>(center: Point, color: Color, selected: bool, target: &mut D) -> Result<(), D::Error>
 where
-    D: DrawTarget<Color = Color>,
+    D: chrome::CoverageTarget<Color = Color>,
 {
     if selected {
         target.fill_solid(
@@ -1310,18 +1310,13 @@ fn aligned_text<D, H, V>(
     target: &mut D,
 ) -> Result<(), D::Error>
 where
-    D: DrawTarget<Color = Color>,
+    D: chrome::CoverageTarget<Color = Color>,
     H: embedded_layout::align::HorizontalAlignment,
     V: embedded_layout::align::VerticalAlignment,
 {
-    Text::new(
-        value,
-        Point::zero(),
-        font_style(font, color, background, size, font_index),
-    )
-    .align_to(region, horizontal, vertical)
-    .draw(target)
-    .map(|_| ())
+    font_style(font, color, background, size, font_index)
+        .draw_aligned(value, region, horizontal, vertical, target)
+        .map(|_| ())
 }
 
 fn font_style(

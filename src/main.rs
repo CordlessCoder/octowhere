@@ -976,7 +976,7 @@ where
 
 fn draw<D>(ctx: &mut DrawCtx, target: &mut D) -> Dirty
 where
-    D: DrawTarget<Color = Color>,
+    D: chrome::CoverageTarget<Color = Color>,
     D::Error: core::fmt::Debug,
 {
     octowhere::ui::prototypes::render(
@@ -1672,7 +1672,7 @@ async fn async_main(spawner: Spawner) {
                 dirty.make_full();
             } else {
                 for area in repaint.iter() {
-                    let mut clipped = fb.clipped(&area);
+                    let mut clipped = chrome::Window::new(fb, Point::zero(), area);
                     dirty.extend(&draw(&mut draw_ctx, &mut clipped));
                 }
             }

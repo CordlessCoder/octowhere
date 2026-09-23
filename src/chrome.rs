@@ -3,11 +3,12 @@ use core::cell::RefCell;
 use alloc::rc::Rc;
 use embedded_graphics::{
     Pixel,
-    pixelcolor::{Gray8, Rgb565, Rgb888},
-    prelude::{DrawTarget, GrayColor, PixelColor, Point, RgbColor, Size},
+    pixelcolor::{Gray8, Rgb565, Rgb888, raw::RawU16},
+    prelude::{Dimensions, DrawTarget, GrayColor, PixelColor, Point, PointsIter, RawData, RgbColor, Size, Transform},
     primitives::Rectangle,
     text::renderer::TextMetrics,
 };
+use embedded_layout::align::{HorizontalAlignment, VerticalAlignment};
 use fontdue::{FontRepr, layout::Layout};
 
 use crate::{board, ui::dirty::DirtyAreas};
@@ -32,6 +33,141 @@ pub type FB = crate::drivers::framebuffer::Framebuffer<
 >;
 pub type Dirty =
     DirtyAreas<{ board::LCD_WIDTH as usize }, { board::LCD_HEIGHT as usize }, 2, 2, { 2 * 2 }>;
+
+/// A draw target that takes antialiased coverage a row at a time and blends it over what it
+/// already holds, so edges come out right over any background.
+pub trait CoverageTarget: DrawTarget {
+    /// Blends `color` into row `y` from column `x` onward, one coverage byte per pixel: 0 leaves
+    /// the pixel, 255 replaces it, and anything between mixes with it. Pixels outside the target
+    /// are skipped.
+    fn blend_row(&mut self, x: i32, y: i32, coverage: &[u8], color: Self::Color);
+
+    fn blend_pixel(&mut self, point: Point, coverage: u8, color: Self::Color) {
+        self.blend_row(point.x, point.y, &[coverage], color);
+    }
+}
+
+impl CoverageTarget for FB {
+    fn blend_row(&mut self, x: i32, y: i32, coverage: &[u8], color: Color) {
+        const WIDTH: i32 = board::LCD_WIDTH as i32;
+        if !(0..board::LCD_HEIGHT as i32).contains(&y) {
+            return;
+        }
+        let start = x.max(0);
+        let end = x.saturating_add(coverage.len() as i32).min(WIDTH);
+        if start >= end {
+            return;
+        }
+        let coverage = &coverage[(start - x) as usize..(end - x) as usize];
+        let row = (y * WIDTH) as usize;
+        let pixels = &mut self.buffer_mut()[(row + start as usize) * 2..(row + end as usize) * 2];
+        let full = RawU16::from(color).into_inner().to_be_bytes();
+        for (pixel, &covered) in pixels.chunks_exact_mut(2).zip(coverage) {
+            match covered {
+                0 => {}
+                u8::MAX => pixel.copy_from_slice(&full),
+                _ => {
+                    let under = Rgb565::from(RawU16::new(u16::from_be_bytes([pixel[0], pixel[1]])));
+                    let mixed = under.lerp(&color, covered);
+                    pixel.copy_from_slice(&RawU16::from(mixed).into_inner().to_be_bytes());
+                }
+            }
+        }
+    }
+}
+
+/// A view of `parent` shifted by `offset` and clipped to `clip`, which is in the parent's
+/// coordinates. It shifts and clips each row once rather than each pixel, which is why it stands
+/// in for embedded-graphics' `translated` and `clipped`.
+pub struct Window<'a, T> {
+    parent: &'a mut T,
+    offset: Point,
+    clip: Rectangle,
+}
+
+impl<'a, T: DrawTarget> Window<'a, T> {
+    pub fn new(parent: &'a mut T, offset: Point, clip: Rectangle) -> Self {
+        let clip = clip.intersection(&parent.bounding_box());
+        Self {
+            parent,
+            offset,
+            clip,
+        }
+    }
+}
+
+impl<T: DrawTarget> Dimensions for Window<'_, T> {
+    fn bounding_box(&self) -> Rectangle {
+        self.clip.translate(-self.offset)
+    }
+}
+
+impl<T: DrawTarget> DrawTarget for Window<'_, T> {
+    type Color = T::Color;
+    type Error = T::Error;
+
+    fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = Pixel<Self::Color>>,
+    {
+        let (offset, clip) = (self.offset, self.clip);
+        self.parent.draw_iter(
+            pixels
+                .into_iter()
+                .map(|Pixel(point, color)| Pixel(point + offset, color))
+                .filter(|Pixel(point, _)| clip.contains(*point)),
+        )
+    }
+
+    fn fill_contiguous<I>(&mut self, area: &Rectangle, colors: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = Self::Color>,
+    {
+        let area = area.translate(self.offset);
+        if self.clip.contains(area.top_left)
+            && area.bottom_right().is_none_or(|corner| self.clip.contains(corner))
+        {
+            return self.parent.fill_contiguous(&area, colors);
+        }
+        let clip = self.clip;
+        self.parent.draw_iter(
+            area.points()
+                .zip(colors)
+                .filter(|(point, _)| clip.contains(*point))
+                .map(|(point, color)| Pixel(point, color)),
+        )
+    }
+
+    fn fill_solid(&mut self, area: &Rectangle, color: Self::Color) -> Result<(), Self::Error> {
+        let area = area.translate(self.offset).intersection(&self.clip);
+        if area.is_zero_sized() {
+            return Ok(());
+        }
+        self.parent.fill_solid(&area, color)
+    }
+}
+
+impl<T: CoverageTarget> CoverageTarget for Window<'_, T> {
+    fn blend_row(&mut self, x: i32, y: i32, coverage: &[u8], color: Self::Color) {
+        let (x, y) = (x + self.offset.x, y + self.offset.y);
+        let top = self.clip.top_left;
+        if y < top.y || y >= top.y + self.clip.size.height as i32 {
+            return;
+        }
+        let start = x.max(top.x);
+        let end = x
+            .saturating_add(coverage.len() as i32)
+            .min(top.x + self.clip.size.width as i32);
+        if start < end {
+            self.parent.blend_row(
+                start,
+                y,
+                &coverage[(start - x) as usize..(end - x) as usize],
+                color,
+            );
+        }
+    }
+}
 
 fontdue_macros::fontdue_font_from_file!(
     MarathonShapiroFont,
@@ -96,6 +232,22 @@ pub const fn lerp_u8(a: u8, b: u8, factor: u8) -> u8 {
     ((a as u16 * (u8::MAX - factor) as u16 + b as u16 * factor as u16 + u8::MAX as u16) >> 8) as u8
 }
 
+/// Blends a row-major coverage bitmap `width` pixels wide with its top-left pixel at `origin`.
+fn blend_bitmap<D: CoverageTarget>(
+    target: &mut D,
+    origin: Point,
+    width: usize,
+    coverage: &[u8],
+    color: D::Color,
+) {
+    if width == 0 {
+        return;
+    }
+    for (row, line) in coverage.chunks_exact(width).enumerate() {
+        target.blend_row(origin.x, origin.y + row as i32, line, color);
+    }
+}
+
 pub trait RgbColorExt {
     fn lerp(&self, other: &Self, factor: u8) -> Self;
 }
@@ -129,6 +281,8 @@ impl RgbColorExt for Gray8 {
 pub struct FontdueRendererCtx {
     layout: fontdue::layout::Layout,
     canvas: fontdue::raster::Raster<'static>,
+    /// One glyph's coverage, row by row, for the row-blending draws.
+    coverage: alloc::vec::Vec<u8>,
 }
 
 impl Default for FontdueRendererCtx {
@@ -144,6 +298,7 @@ impl FontdueRendererCtx {
         Self {
             layout: Layout::new(fontdue::layout::CoordinateSystem::PositiveYDown),
             canvas: fontdue::raster::Raster::empty(),
+            coverage: alloc::vec::Vec::new(),
         }
     }
     #[inline]
@@ -307,7 +462,7 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
     }
 
     /// Draws `text` centred on `center`, turned clockwise by the angle with this cosine and sine.
-    pub fn draw_rotated<D: DrawTarget<Color = C>>(
+    pub fn draw_rotated<D: CoverageTarget<Color = C>>(
         &self,
         text: &str,
         center: Point,
@@ -338,16 +493,87 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
             let pen = (center.x as f32 + dx, center.y as f32 + dy);
             let (metrics, bitmap) =
                 font.rasterize_indexed_transformed(&mut ctx.canvas, index, px, transform, pen);
-            let width = metrics.width.max(1);
-            let origin = Point::new(metrics.x, metrics.y);
-            target.draw_iter(bitmap.enumerate().filter(|&(_, c)| c != 0).map(|(idx, c)| {
-                Pixel(
-                    origin + Point::new((idx % width) as i32, (idx / width) as i32),
-                    self.background_color.lerp(&self.text_color, c),
-                )
-            }))?;
+            ctx.coverage.clear();
+            bitmap.for_each(|covered| ctx.coverage.push(covered));
+            blend_bitmap(
+                target,
+                Point::new(metrics.x, metrics.y),
+                metrics.width,
+                &ctx.coverage,
+                self.text_color,
+            );
         }
         Ok(())
+    }
+
+    fn lay_out(&self, ctx: &mut FontdueRendererCtx, text: &str) {
+        ctx.reset_layout();
+        ctx.layout.append(
+            self.fonts,
+            &fontdue::layout::TextStyle::new(text, self.font_size as f32, self.font_index),
+        );
+    }
+
+    /// The ink bounds of `text` once aligned in `region`, as [`draw_aligned`](Self::draw_aligned)
+    /// would place it.
+    pub fn aligned_bounds<H, V>(&self, text: &str, region: &Rectangle, horizontal: H, vertical: V) -> Rectangle
+    where
+        H: HorizontalAlignment,
+        V: VerticalAlignment,
+    {
+        let mut ctx = self.borrow_ctx();
+        self.lay_out(&mut ctx, text);
+        let bounds = Self::layout_bounds(&ctx, Point::zero());
+        bounds.translate(Point::new(
+            horizontal.align(bounds, *region),
+            vertical.align(bounds, *region),
+        ))
+    }
+
+    /// Draws `text` where embedded-layout's `align_to` would put it in `region`, laying it out
+    /// once, and blends its edges over whatever is already drawn. Returns its ink bounds.
+    pub fn draw_aligned<D, H, V>(
+        &self,
+        text: &str,
+        region: &Rectangle,
+        horizontal: H,
+        vertical: V,
+        target: &mut D,
+    ) -> Result<Rectangle, D::Error>
+    where
+        D: CoverageTarget<Color = C>,
+        H: HorizontalAlignment,
+        V: VerticalAlignment,
+    {
+        let mut ctx = self.borrow_ctx();
+        self.lay_out(&mut ctx, text);
+        let bounds = Self::layout_bounds(&ctx, Point::zero());
+        let position = Point::new(
+            horizontal.align(bounds, *region),
+            vertical.align(bounds, *region),
+        );
+        let FontdueRendererCtx {
+            layout,
+            canvas,
+            coverage,
+        } = &mut *ctx;
+        for glyph in layout.glyphs().iter().filter(|g| g.char_data.rasterize()) {
+            let (metrics, bitmap) = self.fonts[glyph.font_index].rasterize_indexed(
+                canvas,
+                glyph.key.glyph_index,
+                glyph.key.px,
+            );
+            coverage.clear();
+            bitmap.for_each(|covered| coverage.push(covered));
+            blend_bitmap(
+                target,
+                position + Point::new(glyph.x as i32, glyph.y as i32),
+                metrics.width,
+                coverage,
+                self.text_color,
+            );
+        }
+        Ok(bounds.translate(position))
     }
 
     fn layout_bounds(ctx: &FontdueRendererCtx, position: Point) -> Rectangle {
