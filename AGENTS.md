@@ -109,7 +109,8 @@ branch, based on a committed revision rather than on uncommitted work, and build
 branch and the command that reruns it alongside the numbers. Existing ones: `bench/f32-division`,
 and `bench/fontdue`, which adds IRAM placement (`fontdue-iram`), a serial glyph dump
 (`fontdue-bench-dump`, compared by `tools/compare-glyph-dumps.py`) and a compressed line store
-decode bench (`fontdue-line-store`) to the font benchmark.
+decode bench (`fontdue-line-store`) to the font benchmark, and `bench/opt-level`, which times the
+draw alone under `timing-log` and builds the firmware at each candidate opt-level.
 
 ## Concurrency
 
