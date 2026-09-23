@@ -32,6 +32,9 @@ initialization or peripheral mappings.
 
 - [`context/BACKLOG.md`](context/BACKLOG.md) lists open work that is not in progress, and says
   where each entry's detail lives. Read it when choosing what to do next.
+- [`context/COMPASS-SCREEN-HANDOFF.md`](context/COMPASS-SCREEN-HANDOFF.md) briefs a design
+  agent on the compass screen: its states, current layout, the panel's physical size and what
+  the renderer can draw.
 - [`context/GRAPHICS-PROTOTYPES.md`](context/GRAPHICS-PROTOTYPES.md) explains the three renderer
   architectures in `src/ui/prototypes.rs` and the `ACTIVE_ARCHITECTURE` constant that selects one.
 - [`context/HARDWARE-VERIFICATION.md`](context/HARDWARE-VERIFICATION.md) lists open hardware
