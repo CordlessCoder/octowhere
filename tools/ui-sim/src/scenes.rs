@@ -30,7 +30,7 @@ pub const SCENES: &[Scene] = &[
     },
     Scene {
         name: "compass-calibration",
-        about: "the compass calibrating, finding its heading, and meeting interference",
+        about: "the compass calibrating, finding its heading, turning, and meeting interference",
         run: compass_calibration,
     },
     Scene {
@@ -132,18 +132,20 @@ fn calibrating(percent: u8) -> Motion {
     }
 }
 
-/// From calibration starting, through finding a heading, to interference and back.
+/// From calibration starting, through finding a heading and turning, to interference and back.
 fn compass_walk(driver: &mut Driver) {
     driver.wait(ms(600));
     driver.motion_over(ms(1_500), |t| calibrating((t * 99.0) as u8));
     driver.wait(ms(300));
     driver.motion(facing(212.0));
     driver.wait(ms(1_000));
-    let mut disturbed = facing(212.0);
+    driver.motion_over(ms(900), |t| facing(212.0 + 70.0 * ease(t)));
+    driver.wait(ms(700));
+    let mut disturbed = facing(282.0);
     disturbed.compass.disturbed = true;
     driver.motion(disturbed);
     driver.wait(ms(1_200));
-    driver.motion(facing(212.0));
+    driver.motion(facing(282.0));
     driver.wait(ms(1_000));
 }
 
