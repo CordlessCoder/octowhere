@@ -11,7 +11,7 @@ use embedded_graphics::{
 use heapless::String;
 
 use super::{
-    clock::{ClockState, DateTime, ZoneMode, ZoneState},
+    clock::{ClockState, ClockView, DateTime, ZoneMode, ZoneState},
     icon::{self, Glyph, Tile},
     reveal::{Reveal, draw_revealed, revealed_bounds},
 };
@@ -172,7 +172,8 @@ pub struct Keys {
 
 impl Keys {
     #[must_use]
-    pub fn of(clock: &ClockState, zone: &ZoneState) -> Self {
+    pub fn of(view: &ClockView) -> Self {
+        let ClockView { clock, zone, known } = view;
         let mode = Mode::of(clock, zone);
         let local = clock.local(*zone);
         let tag = match zone.mode {
@@ -180,17 +181,25 @@ impl Keys {
             ZoneMode::Manual => "MANUAL",
         };
         let mut values = heapless::Vec::new();
-        match (mode, local) {
+        // A stopped or unreadable clock has no time to find the offset from, so the plate keeps
+        // the one the zone last had.
+        let offset = match (mode, local) {
+            (Mode::Local { .. }, Some(local)) => Some(local.offset),
+            (Mode::Stopped | Mode::NoData, _) => known
+                .filter(|known| Some(known.zone) == zone.zone)
+                .map(|known| known.offset),
+            _ => None,
+        };
+        match (mode, offset) {
             (Mode::NoZone, _) => _ = values.push(String::try_from("NO FIX YET").unwrap()),
-            // The offset needs a time, which a stopped or unread clock does not have.
-            (Mode::Local { .. }, Some(local)) => {
+            (_, Some(known)) => {
                 let mut offset = String::new();
-                let seconds = local.offset.utc_offset;
+                let seconds = known.utc_offset;
                 let sign = if seconds < 0 { '-' } else { '+' };
                 let minutes = seconds.unsigned_abs() / 60;
                 _ = write!(offset, "{sign}{:02}:{:02}", minutes / 60, minutes % 60);
                 let mut abbreviation = String::new();
-                _ = abbreviation.push_str(local.offset.abbreviation);
+                _ = abbreviation.push_str(known.abbreviation);
                 _ = values.push(abbreviation);
                 _ = values.push(offset);
             }
@@ -270,8 +279,9 @@ fn date(time: &DateTime) -> String<16> {
 }
 
 impl Parts {
-    fn of(clock: &ClockState, zone: &ZoneState, accents: Accents) -> Self {
-        let keys = Keys::of(clock, zone);
+    fn of(view: &ClockView, accents: Accents) -> Self {
+        let keys = Keys::of(view);
+        let ClockView { clock, zone, .. } = view;
         let mode = keys.mode;
         let local = clock.local(*zone).filter(|_| matches!(mode, Mode::Local { .. }));
         let (hours, minutes, seconds) = match (mode, local) {
@@ -439,8 +449,7 @@ fn draw_plate<D: CoverageTarget<Color = Color>>(
 }
 
 pub fn draw<D>(
-    clock: &ClockState,
-    zone: &ZoneState,
+    view: &ClockView,
     accents: Accents,
     font: &FontdueRenderer<'static, Color>,
     target: &mut D,
@@ -448,7 +457,7 @@ pub fn draw<D>(
 where
     D: CoverageTarget<Color = Color>,
 {
-    let parts = Parts::of(clock, zone, accents);
+    let parts = Parts::of(view, accents);
     if let Some(color) = parts.ring {
         super::smooth::perimeter().draw(&mut OnBackground::new(&mut *target, chrome::BLACK), color);
     }
@@ -501,13 +510,13 @@ fn text(digits: &Option<String<2>>) -> &str {
 /// Marks in `damage` every pixel that differs between the face drawn for `before` and for
 /// `after`.
 pub fn damage(
-    before: (&ClockState, &ZoneState, Accents),
-    after: (&ClockState, &ZoneState, Accents),
+    before: (&ClockView, Accents),
+    after: (&ClockView, Accents),
     font: &FontdueRenderer<'static, Color>,
     damage: &mut chrome::Dirty,
 ) {
-    let old = Parts::of(before.0, before.1, before.2);
-    let new = Parts::of(after.0, after.1, after.2);
+    let old = Parts::of(before.0, before.1);
+    let new = Parts::of(after.0, after.1);
     if old == new {
         return;
     }
@@ -559,5 +568,50 @@ pub fn damage(
         for (name, _) in [&old.zone, &new.zone].into_iter().flatten() {
             damage.add(revealed_bounds(&zone_style(font), name, zone_pen(font, name)));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::clock::{ClockState, ZoneState};
+
+    fn view(stopped: bool, readable: bool, zone: &str) -> ClockView {
+        ClockView {
+            clock: ClockState {
+                utc: readable.then_some(
+                    DateTime { year: 2026, month: 9, day: 24, hour: 12, ..DateTime::default() }.to_unix(),
+                ),
+                set_from_gnss: false,
+                stopped,
+            },
+            zone: ZoneState {
+                mode: ZoneMode::Manual,
+                zone: octowhere_tz::DATABASE.find(zone).map(|zone| zone.id),
+            },
+            known: None,
+        }
+    }
+
+    fn values(view: &ClockView) -> heapless::Vec<String<10>, 2> {
+        Keys::of(view).plate.values
+    }
+
+    #[test]
+    fn a_stopped_or_unread_clock_keeps_the_offset_the_zone_last_had() {
+        let trusted = view(false, true, "Europe/Dublin").remembering();
+        assert_eq!(values(&trusted), ["IST", "+01:00"]);
+        for (stopped, readable) in [(true, true), (false, false)] {
+            let later = ClockView { known: trusted.known, ..view(stopped, readable, "Europe/Dublin") }.remembering();
+            assert_eq!(values(&later), ["IST", "+01:00"], "stopped {stopped}, readable {readable}");
+        }
+    }
+
+    #[test]
+    fn without_a_trusted_reading_for_the_zone_the_plate_holds_only_the_mode() {
+        assert!(values(&view(true, true, "Europe/Dublin").remembering()).is_empty());
+        let trusted = view(false, true, "Europe/Dublin").remembering();
+        let moved = ClockView { known: trusted.known, ..view(true, true, "Asia/Kolkata") }.remembering();
+        assert!(values(&moved).is_empty());
     }
 }

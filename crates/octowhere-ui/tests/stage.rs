@@ -719,8 +719,9 @@ fn the_clock_rebuilds_on_a_change_and_shows_a_fault_at_once() {
     driver.step(sensors(ClockState { utc: None, ..clock_at(12, 7, 43) }, dublin));
     assert_eq!(clock_accents(&driver), ClockAccents::FULL);
     driver.step(sensors(clock_at(12, 7, 44), dublin));
+    // The plate kept the zone's offset through the fault, so only the icon and label rebuild.
     let back = clock_accents(&driver);
-    assert!(back.icon_rows < 5 && back.label < 255 && back.plate < 255, "{back:?}");
+    assert!(back.icon_rows < 5 && back.label < 255 && back.plate == 255, "{back:?}");
 }
 
 #[test]

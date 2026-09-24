@@ -8,7 +8,7 @@ use embedded_graphics::{
 };
 
 use super::{
-    clock::{ClockState, ZoneState},
+    clock::ClockView,
     clock_screen,
     compass::CompassView,
     compass_screen,
@@ -38,8 +38,7 @@ impl Screen {
 /// The readings the screens show.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct PeripheralState {
-    pub clock: ClockState,
-    pub zone: ZoneState,
+    pub clock: ClockView,
     pub compass: CompassView,
 }
 
@@ -146,13 +145,7 @@ where
     let target = &mut chrome::Window::new(target, Point::new(offset, 0), visible);
     let peripherals = &state.peripherals;
     match state.screen {
-        Screen::Clock => clock_screen::draw(
-            &peripherals.clock,
-            &peripherals.zone,
-            state.clock_accents,
-            font,
-            target,
-        ),
+        Screen::Clock => clock_screen::draw(&peripherals.clock, state.clock_accents, font, target),
         Screen::Compass => compass_screen::draw(&peripherals.compass, state.compass_accents, font, target),
     }
 }

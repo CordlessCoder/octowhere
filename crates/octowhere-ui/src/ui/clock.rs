@@ -33,6 +33,43 @@ pub struct ZoneState {
     pub zone: Option<ZoneId>,
 }
 
+/// A zone's offset as it read the last time the clock was trusted, which the face keeps showing
+/// while the clock is stopped or unreadable.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KnownOffset {
+    pub zone: ZoneId,
+    pub offset: Offset<'static>,
+}
+
+/// Everything the clock face shows.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ClockView {
+    pub clock: ClockState,
+    pub zone: ZoneState,
+    pub known: Option<KnownOffset>,
+}
+
+impl ClockView {
+    /// `known` brought up to date: the zone's current offset, while the clock is trusted.
+    #[must_use]
+    pub fn remembering(self) -> Self {
+        let trusted = !self.clock.stopped;
+        let current = self
+            .clock
+            .local(self.zone)
+            .filter(|_| trusted)
+            .zip(self.zone.zone)
+            .map(|(local, zone)| KnownOffset {
+                zone,
+                offset: local.offset,
+            });
+        Self {
+            known: current.or(self.known),
+            ..self
+        }
+    }
+}
+
 /// What the clocks read in a zone.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LocalTime {

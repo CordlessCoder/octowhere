@@ -5,7 +5,7 @@
 use embedded_graphics::prelude::Point;
 
 use super::{
-    clock::{ClockState, ZoneState},
+    clock::{ClockState, ClockView, ZoneState},
     clock_screen,
     compass::CompassView,
     compass_screen::{self, Accents, DialFootprint, Mode},
@@ -146,7 +146,7 @@ pub struct Stage {
     clock_settled: Option<(ClockTimes, clock_screen::Keys)>,
     clock_accents: clock_screen::Accents,
     /// What the clock page showed after the last step, while it filled the panel.
-    drawn_clock: Option<(ClockState, ZoneState, clock_screen::Accents)>,
+    drawn_clock: Option<(ClockView, clock_screen::Accents)>,
 }
 
 impl Stage {
@@ -256,8 +256,12 @@ impl Stage {
             full |= self.screen == Screen::Compass;
         }
         if let Some(sensors) = sensors {
-            self.peripherals.clock = sensors.clock;
-            self.peripherals.zone = sensors.zone;
+            self.peripherals.clock = ClockView {
+                clock: sensors.clock,
+                zone: sensors.zone,
+                ..self.peripherals.clock
+            }
+            .remembering();
             full |= self.screen == Screen::Clock;
         }
 
@@ -325,11 +329,8 @@ impl Stage {
         let settled = view.offset == 0 && view.neighbour.is_none();
         let compass = (self.screen == Screen::Compass && settled)
             .then_some((self.peripherals.compass, self.accents));
-        let clock = (self.screen == Screen::Clock && settled).then_some((
-            self.peripherals.clock,
-            self.peripherals.zone,
-            self.clock_accents,
-        ));
+        let clock =
+            (self.screen == Screen::Clock && settled).then_some((self.peripherals.clock, self.clock_accents));
         if let (Some(before), Some(after)) = (self.drawn_compass, compass) {
             compass_screen::damage(
                 (&before.0, before.1),
@@ -340,8 +341,8 @@ impl Stage {
             );
         } else if let (Some(before), Some(after)) = (self.drawn_clock, clock) {
             clock_screen::damage(
-                (&before.0, &before.1, before.2),
-                (&after.0, &after.1, after.2),
+                (&before.0, before.1),
+                (&after.0, after.1),
                 &self.renderer,
                 &mut self.changed,
             );
@@ -447,7 +448,7 @@ impl Stage {
             return Accents::FULL;
         }
         let view = self.pager.view();
-        let keys = clock_screen::Keys::of(&self.peripherals.clock, &self.peripherals.zone);
+        let keys = clock_screen::Keys::of(&self.peripherals.clock);
         let (times, shown) = match &mut self.clock_settled {
             Some(settled) => settled,
             None if view.offset == 0 => {

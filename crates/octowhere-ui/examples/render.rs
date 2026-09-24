@@ -106,8 +106,16 @@ fn main() {
             },
         ),
     ] {
-        let sensors = Sensors { clock, zone };
-        frames.push((format!("clock-{name}"), stage_with(Screen::Clock, calibrated, sensors, 1_000_000)));
+        // A trusted reading first, as the device would have had before a fault, then this one.
+        let mut stage = stage_with(Screen::Clock, calibrated, fixture, 1_000_000);
+        for now in [1_000_001, 2_000_000] {
+            stage.step(Input {
+                now,
+                sensors: Some(Sensors { clock, zone }),
+                ..Input::default()
+            });
+        }
+        frames.push((format!("clock-{name}"), stage));
     }
     // 200 ms into the clock's entry: the icon half built, the plate landing.
     let mut entering = stage_at(Screen::Clock, calibrated, 200_000);
