@@ -510,7 +510,7 @@ fn compass_walk() -> Vec<(String, Motion)> {
     for step in 0..12 {
         let mut motion = heading(1234 - step * 13);
         motion.compass.pitch_deg = (step as i8 - 6) * 17;
-        motion.compass.roll_deg = (step as i8 * 23).wrapping_sub(90);
+        motion.compass.roll_deg = (step as i8).wrapping_mul(23).wrapping_sub(90);
         motion.compass.disturbed = step % 3 == 0;
         walk.push((format!("tilted {step}"), motion));
     }
