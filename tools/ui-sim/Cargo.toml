@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 critical-section = { version = "1.2.0", features = ["std"] }
 embedded-graphics = "0.8.2"
+gif = "0.14.2"
 minifb = "0.28.0"
 octowhere-ui = { version = "0.1.0", path = "../../crates/octowhere-ui" }
 png = "0.18.1"

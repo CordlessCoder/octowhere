@@ -19,8 +19,9 @@ initialization or peripheral mappings.
 - `crates/octowhere-ui/` is everything between the sensors and the pixels, with no board
   dependency, so it also builds for the host. `src/ui/` there owns dirty tracking, geometry,
   gestures and paging, IMU unit conversion, the compass maths, the clock and compass screens with
-  the icon and cell reveal they share, and `stage`, which holds the screen state and turns touch
-  and readings into redraws. `src/chrome.rs` is the
+  the icon and cell reveal they share, `stage`, which holds the screen state and turns touch
+  and readings into redraws, and `script`, which steps a stage on a simulated clock for tests
+  and scenes. `src/chrome.rs` is the
   font and draw-target layer, and `src/framebuffer.rs` holds the pixels. The firmware re-exports
   its `chrome`, `framebuffer` and `ui` modules, so `octowhere::ui::…` paths still resolve.
 - `src/main.rs` holds both cores, the sensor and motion tasks, and the frame loop, which feeds
@@ -116,11 +117,13 @@ for them.
 Every release build emits one `linker_messages` warning about a LOAD segment with RWX permissions.
 It is expected for this target and is not a regression.
 
-The UI runs on the host through `crates/octowhere-ui`. Its tests drive a `Stage` with taps,
-swipes and readings, and check that a redraw clipped to tiles matches a full one. The `render`
-example writes every screen to PNG, and `tools/ui-sim` is the interactive window. Both render
-through the firmware's own drawing code, so they show what the panel will show, but they say
-nothing about draw time on the target. Commands are in the headers of `examples/render.rs` and
+The UI runs on the host through `crates/octowhere-ui`. Its tests drive a `Stage` through
+`ui::script::Driver` with taps, swipes and readings, and check that a redraw clipped to tiles
+matches a full one. `tools/ui-sim` plays scenes written on the same driver, from its
+`scenes.rs`, and records them to GIF the same every run, which is the way to share an
+animation. The `render` example writes every screen to PNG, and `tools/ui-sim` is also the
+interactive window. Both render through the firmware's own drawing code, so they show what the
+panel will show, but they say nothing about draw time on the target. Commands are in the headers of `examples/render.rs` and
 `tools/ui-sim/src/main.rs`. Keep the crate free of board dependencies: that is what lets the host
 build it, and its manifest enforces it.
 
@@ -139,7 +142,7 @@ Weigh that cost before adding one.
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 930,128 bytes, 22.53% of the 4,128,768-byte app partition. The time zone
+The image is currently 930,112 bytes, 22.53% of the 4,128,768-byte app partition. The time zone
 data is about 390 KB of that, and its boundary tolerance in `tools/tz-data.py` is the lever: the
 bench branch `bench/tz-boundary-size` tabulates size against accuracy. PP Fraktion Mono Bold with
 all of printable ASCII is about 54 KB; subsetting it to the glyphs the compass uses is the other
