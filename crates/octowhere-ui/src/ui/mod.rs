@@ -12,5 +12,6 @@ pub mod imu;
 pub mod input;
 pub mod pager;
 pub mod prototypes;
+pub mod reveal;
 pub mod smooth;
 pub mod stage;

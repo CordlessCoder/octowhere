@@ -130,6 +130,13 @@ fn main() {
         ..Input::default()
     });
     frames.push(("compass-entering".into(), entering));
+    // Halfway through the dial's sweep.
+    let mut sweeping = stage_at(Screen::Compass, calibrated, 275_000);
+    sweeping.step(Input {
+        now: 275_001,
+        ..Input::default()
+    });
+    frames.push(("compass-sweeping".into(), sweeping));
     // Dragged a third of the way to the next page, where the accents have nearly faded.
     let mut swiping = stage(Screen::Compass, calibrated);
     for (step, x) in [400, 340, 280, 245].into_iter().enumerate() {

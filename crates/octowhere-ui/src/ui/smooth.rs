@@ -158,15 +158,16 @@ pub fn disc_rows<D: CoverageTarget>(
     Ok(())
 }
 
-/// Fills the polygon through `corners`, then draws it and its turns by one, two and three
-/// quarters clockwise about `center`, so one fill serves all four. `raster` and `coverage` are
-/// scratch, reused across calls.
+/// Fills the polygon through `corners`, then draws it turned by each number of quarters
+/// clockwise about `center` whose bit is set in `quarters`, bit 0 unturned, so one fill serves
+/// all four. `raster` and `coverage` are scratch, reused across calls.
 pub fn polygon_quarters<D: CoverageTarget>(
     target: &mut D,
     raster: &mut Raster<'static>,
     coverage: &mut Vec<u8>,
     corners: &[(f32, f32)],
     center: Point,
+    quarters: u8,
     color: D::Color,
 ) {
     let bound = |pick: fn(f32, f32) -> f32, axis: fn(&(f32, f32)) -> f32| {
@@ -183,13 +184,14 @@ pub fn polygon_quarters<D: CoverageTarget>(
     let (dx0, dy0) = (left - center.x, top - center.y);
     let (dx1, dy1) = (dx0 + width as i32 - 1, dy0 + height as i32 - 1);
     let (along, across) = (Size::new(width as u32, height as u32), Size::new(height as u32, width as u32));
-    let quarters = [
+    let turned = |quarter: u32| quarters & (1 << quarter) != 0;
+    let places = [
         Rectangle::new(Point::new(left, top), along),
-        Rectangle::new(Point::new(center.x + dy0, center.y - 1 - dx1), across),
-        Rectangle::new(Point::new(center.x - 1 - dx1, center.y - 1 - dy1), along),
         Rectangle::new(Point::new(center.x - 1 - dy1, center.y + dx0), across),
+        Rectangle::new(Point::new(center.x - 1 - dx1, center.y - 1 - dy1), along),
+        Rectangle::new(Point::new(center.x + dy0, center.y - 1 - dx1), across),
     ];
-    if !quarters.iter().any(|quarter| target.visible(quarter)) {
+    if !(0..4).any(|quarter| turned(quarter) && target.visible(&places[quarter as usize])) {
         return;
     }
     raster.resize(width, height);
@@ -211,17 +213,28 @@ pub fn polygon_quarters<D: CoverageTarget>(
     // of the fill is still whole rows: its own rows, reversed, or its columns.
     for (row, pixels) in coverage.chunks_exact(width).enumerate() {
         let dy = dy0 + row as i32;
-        target.blend_row(center.x + dx0, center.y + dy, pixels, color);
-        line.clear();
-        line.extend(pixels.iter().rev());
-        target.blend_row(center.x - 1 - dx1, center.y - 1 - dy, &line, color);
+        if turned(0) {
+            target.blend_row(center.x + dx0, center.y + dy, pixels, color);
+        }
+        if turned(2) {
+            line.clear();
+            line.extend(pixels.iter().rev());
+            target.blend_row(center.x - 1 - dx1, center.y - 1 - dy, &line, color);
+        }
+    }
+    if !turned(1) && !turned(3) {
+        return;
     }
     for column in 0..width {
         let dx = dx0 + column as i32;
         line.clear();
         line.extend(coverage[column..].iter().step_by(width));
-        target.blend_row(center.x + dy0, center.y - 1 - dx, &line, color);
+        if turned(3) {
+            target.blend_row(center.x + dy0, center.y - 1 - dx, &line, color);
+        }
         line.reverse();
-        target.blend_row(center.x - 1 - dy1, center.y + dx, &line, color);
+        if turned(1) {
+            target.blend_row(center.x - 1 - dy1, center.y + dx, &line, color);
+        }
     }
 }

@@ -197,7 +197,7 @@ fn accents(driver: &Driver) -> Accents {
 }
 
 #[test]
-fn the_compass_accents_fade_in_after_the_page_settles() {
+fn the_compass_accents_build_after_the_page_settles() {
     let mut driver = Driver::on(Screen::Compass);
     driver.motion(heading(470));
     assert_eq!(accents(&driver).ring, 0);
@@ -205,21 +205,21 @@ fn the_compass_accents_fade_in_after_the_page_settles() {
     driver.wait(150_000);
     let early = accents(&driver);
     assert_eq!(early.ring, 255);
-    assert!(early.icon > 0 && early.icon < 255, "{early:?}");
-    assert_eq!(early.ticks, 0);
+    assert!(early.icon_rows > 0 && early.icon_rows < 5, "{early:?}");
+    assert_eq!(early.dial, 0);
     driver.wait(300_000);
     assert_eq!(accents(&driver), Accents::FULL);
     assert!(!driver.stage.is_animating());
 }
 
 #[test]
-fn a_swipe_off_the_compass_fades_its_accents_reversibly() {
+fn a_swipe_off_the_compass_takes_its_accents_reversibly() {
     let mut driver = Driver::settled_on_compass();
     driver.touch(Some(Point::new(400, 233)));
     driver.touch(Some(Point::new(360, 233)));
     driver.touch(Some(Point::new(340, 233)));
     let part = accents(&driver);
-    assert!(part.ring > 0 && part.ring < 255, "{part:?}");
+    assert!(part.hint < 255 && part.ring == 255, "{part:?}");
     driver.touch(Some(Point::new(200, 233)));
     assert_eq!(accents(&driver), Accents::HIDDEN);
     driver.touch(Some(Point::new(399, 233)));
@@ -234,6 +234,7 @@ fn a_swipe_off_the_compass_fades_its_accents_reversibly() {
 #[test]
 fn the_compass_accents_stay_hidden_while_it_slides_in() {
     let mut driver = Driver::on(Screen::Navigation);
+    driver.motion(heading(470));
     driver.wait(500_000);
     driver.touch(Some(Point::new(400, 233)));
     driver.touch(Some(Point::new(200, 233)));
@@ -253,7 +254,7 @@ fn the_compass_accents_stay_hidden_while_it_slides_in() {
 }
 
 #[test]
-fn a_heading_after_calibration_reveals_the_ticks_then_the_letters() {
+fn a_heading_after_calibration_sweeps_the_dial_and_rebuilds_the_icon() {
     let mut driver = Driver::on(Screen::Compass);
     let mut calibrating = heading(470);
     calibrating.compass.heading_decidegrees = None;
@@ -263,8 +264,9 @@ fn a_heading_after_calibration_reveals_the_ticks_then_the_letters() {
     driver.motion(heading(470));
     driver.wait(60_000);
     let early = accents(&driver);
-    assert!(early.ticks > 0 && early.ticks < 255, "{early:?}");
-    assert_eq!(early.letters, 0);
+    assert!(early.dial > 0 && early.dial < 255, "{early:?}");
+    assert!(early.icon_rows < 5 && early.caption < 255, "{early:?}");
+    assert_eq!((early.divider, early.hint), (255, 255));
     driver.wait(200_000);
     assert_eq!(accents(&driver), Accents::FULL);
 }
@@ -426,13 +428,13 @@ fn a_heading_back_quickly_from_top_edge_up_skips_the_reveal() {
 #[test]
 fn a_heading_back_slowly_from_top_edge_up_reveals_again() {
     let accents = heading_back_after(top_edge_up(), 1_000_000);
-    assert!(accents.ticks < 255 && accents.letters == 0, "{accents:?}");
+    assert!(accents.dial < 255 && accents.icon_rows < 5, "{accents:?}");
 }
 
 #[test]
 fn a_heading_back_from_no_data_reveals_again() {
     let accents = heading_back_after(Motion::default(), 300_000);
-    assert!(accents.ticks < 255 && accents.letters == 0, "{accents:?}");
+    assert!(accents.dial < 255 && accents.icon_rows < 5, "{accents:?}");
 }
 
 /// Two framebuffers drawn in turn as the frame loop draws them: each repaints the damage of the
@@ -556,7 +558,7 @@ fn compass_damage_redraws_what_changed() {
     for (name, motion) in compass_walk() {
         // Each reading, then a few quiet steps for any fade it starts.
         driver.motion(motion);
-        for frame in 0..6 {
+        for frame in 0..12 {
             let partial = buffers.draw(&driver.stage, driver.stage.changed());
             let whole = render(&driver.stage);
             let wrong = differing(partial, &whole);
@@ -742,4 +744,27 @@ fn a_tap_on_the_clock_does_nothing() {
     driver.stroke(&[HEADER.center()]);
     driver.wait(500_000);
     assert_eq!(driver.stage.screen(), Screen::Clock);
+}
+
+#[test]
+fn interference_swaps_the_icon_without_replaying_anything() {
+    let mut driver = Driver::settled_on_compass();
+    let mut disturbed = heading(470);
+    disturbed.compass.disturbed = true;
+    driver.motion(disturbed);
+    assert_eq!(accents(&driver), Accents::FULL);
+    driver.motion(heading(470));
+    assert_eq!(accents(&driver), Accents::FULL);
+}
+
+#[test]
+fn a_fault_on_the_compass_shows_at_once() {
+    let mut driver = Driver::on(Screen::Compass);
+    driver.motion(Motion::default());
+    let entering = accents(&driver);
+    assert_eq!((entering.ring, entering.icon_rows, entering.caption), (255, 5, 255));
+    let mut driver = Driver::settled_on_compass();
+    driver.motion(Motion::default());
+    let fault = accents(&driver);
+    assert_eq!((fault.ring, fault.icon_rows, fault.caption), (255, 5, 255));
 }

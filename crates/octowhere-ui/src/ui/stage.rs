@@ -52,46 +52,61 @@ pub enum Touch {
     Cover,
 }
 
-/// When each group of the compass's accents starts fading in after the page settles, and how
-/// long each fade takes.
-const ENTRY_DELAYS: Accents<Micros> = Accents {
+/// When each of the compass's accents starts after the page settles, and how long each takes.
+/// The icon's modules land a row per `ICON_ROW`.
+const COMPASS_ENTRY: CompassTimes<Micros> = CompassTimes {
     ring: 0,
     icon: 95_000,
-    ticks: 190_000,
-    letters: 285_000,
+    caption: 120_000,
+    dial: 190_000,
+    divider: 240_000,
+    hint: 280_000,
 };
-const ENTRY_FADE: Micros = 110_000;
-/// A heading that appears on a settled page reveals the ticks, then the letters this much later.
-const REVEAL_FADE: Micros = 170_000;
-const REVEAL_LETTERS: Micros = 70_000;
-/// A heading back from TOP EDGE UP within this skips the reveal, so tilting through vertical does
-/// not pulse the dial.
+const RING_FADE: Micros = 110_000;
+const ICON_ROW: Micros = 30_000;
+const CAPTION_REVEAL: Micros = 120_000;
+const DIAL_SWEEP: Micros = 170_000;
+const DIVIDER_DRAW: Micros = 100_000;
+const HINT_REVEAL: Micros = 160_000;
+/// A heading back from TOP EDGE UP within this shows the dial at once, so tilting through
+/// vertical does not replay anything.
 const TOP_EDGE_GRACE: Micros = 750_000;
-/// Dragging the compass this fraction of the panel's width fades its accents out entirely.
+
+/// When each of the compass's accents started, or starts. `None` shows it whole at once.
+#[derive(Clone, Copy, Debug, Default)]
+struct CompassTimes<T = Option<Micros>> {
+    ring: T,
+    icon: T,
+    caption: T,
+    dial: T,
+    divider: T,
+    hint: T,
+}
+
+/// Dragging the compass or the clock this fraction of the panel's width takes its accents out
+/// entirely.
 const SWIPE_FADE: f32 = 0.35;
 /// When each of the clock face's accents starts after the page settles. The icon's modules land
 /// a row per step, and the reveals run over their durations.
-const CLOCK_ENTRY: ClockTimes = ClockTimes {
+const CLOCK_ENTRY: ClockTimes<Micros> = ClockTimes {
     ring: 0,
     icon: 60_000,
     label: 100_000,
     plate: 160_000,
     zone: 240_000,
 };
-const CLOCK_RING_FADE: Micros = 110_000;
-const CLOCK_ICON_ROW: Micros = 30_000;
 const CLOCK_LABEL_REVEAL: Micros = 120_000;
 const CLOCK_PLATE_REVEAL: Micros = 120_000;
 const CLOCK_ZONE_REVEAL: Micros = 160_000;
 
-/// When each of the clock face's accents started, or starts.
+/// When each of the clock face's accents started, or starts. `None` shows it whole at once.
 #[derive(Clone, Copy, Debug, Default)]
-struct ClockTimes {
-    ring: Micros,
-    icon: Micros,
-    label: Micros,
-    plate: Micros,
-    zone: Micros,
+struct ClockTimes<T = Option<Micros>> {
+    ring: T,
+    icon: T,
+    label: T,
+    plate: T,
+    zone: T,
 }
 
 /// How long without a cover report before another cover is a new hand. The controller does not
@@ -133,10 +148,8 @@ pub struct Stage {
     renderer: FontdueRenderer<'static, Color>,
     /// When the last cover report arrived, while the hand that sent it may still be there.
     covered_at: Option<Micros>,
-    /// When the compass page last settled into view, from another page.
-    compass_settled: Option<Micros>,
-    /// When the heading the dial turns to last appeared.
-    heading_since: Option<Micros>,
+    /// When the compass page last settled into view, and the state it showed last step.
+    compass_settled: Option<(CompassTimes, Mode)>,
     /// When the heading gave way to TOP EDGE UP, while nothing else has shown since.
     top_edge_since: Option<Micros>,
     accents: Accents,
@@ -174,7 +187,6 @@ impl Stage {
             ),
             covered_at: None,
             compass_settled: None,
-            heading_since: None,
             top_edge_since: None,
             accents: Accents::FULL,
             fading: false,
@@ -197,7 +209,6 @@ impl Stage {
         self.screen = screen;
         self.selected_node = None;
         self.compass_settled = None;
-        self.heading_since = None;
         self.top_edge_since = None;
         self.drawn_compass = None;
         self.clock_settled = None;
@@ -441,57 +452,83 @@ impl Stage {
             && self.peripherals.compass.live
     }
 
-    /// Advances the compass page's fades to `now`, and returns how far each group has come.
+    /// Advances the compass page's builds and reveals to `now`, and returns how far each has
+    /// come.
     fn compass_accents(&mut self, now: Micros) -> Accents {
         self.fading = false;
         if self.screen != Screen::Compass {
             self.compass_settled = None;
-            self.heading_since = None;
             self.top_edge_since = None;
             return Accents::FULL;
         }
         let view = self.pager.view();
-        if self.compass_settled.is_none() && view.offset == 0 {
-            self.compass_settled = Some(now);
-        }
         let mode = Mode::of(&self.peripherals.compass);
-        let heading = mode.heading().is_some();
-        if heading {
-            if self.heading_since.is_none() {
-                let quick = self
-                    .top_edge_since
-                    .is_some_and(|since| now.saturating_sub(since) < TOP_EDGE_GRACE);
-                // A quick return from TOP EDGE UP shows the dial as though it had never gone.
-                let revealed = REVEAL_LETTERS + REVEAL_FADE;
-                self.heading_since = Some(if quick { now.saturating_sub(revealed) } else { now });
+        let (times, shown) = match &mut self.compass_settled {
+            Some(settled) => settled,
+            None if view.offset == 0 => {
+                let start = |delay: Micros| Some(now + delay);
+                let mut times = CompassTimes {
+                    ring: start(COMPASS_ENTRY.ring),
+                    icon: start(COMPASS_ENTRY.icon),
+                    caption: start(COMPASS_ENTRY.caption),
+                    dial: start(COMPASS_ENTRY.dial),
+                    divider: start(COMPASS_ENTRY.divider),
+                    hint: start(COMPASS_ENTRY.hint),
+                };
+                if mode == Mode::NoData {
+                    // A fault shows at once.
+                    (times.ring, times.icon, times.caption) = (None, None, None);
+                }
+                self.compass_settled.insert((times, mode))
             }
-            self.top_edge_since = None;
-        } else if mode != Mode::TopEdgeUp {
-            self.heading_since = None;
-            self.top_edge_since = None;
-        } else if self.heading_since.take().is_some() {
-            self.top_edge_since = Some(now);
-        }
-        let Some(settled) = self.compass_settled else {
-            return Accents::HIDDEN;
+            None => return Accents::HIDDEN,
         };
-        let since_settle = now.saturating_sub(settled);
-        let since_heading = self.heading_since.map_or(0, |since| now.saturating_sub(since));
-        let entry = |delay: Micros| fade(since_settle.saturating_sub(delay), ENTRY_FADE);
-        let reveal = |delay: Micros| fade(since_heading.saturating_sub(delay), REVEAL_FADE);
-        let swipe =
-            (1.0 - view.offset.unsigned_abs() as f32 / board::LCD_WIDTH as f32 / SWIPE_FADE)
-                .clamp(0.0, 1.0);
-        let scale = |amount: u8| libm::roundf(f32::from(amount) * swipe) as u8;
-        let entry_done = since_settle >= ENTRY_DELAYS.letters + ENTRY_FADE;
-        let reveal_done = !heading || since_heading >= REVEAL_LETTERS + REVEAL_FADE;
-        self.fading = !(entry_done && reveal_done);
-        Accents {
-            ring: scale(entry(ENTRY_DELAYS.ring)),
-            icon: scale(entry(ENTRY_DELAYS.icon)),
-            ticks: scale(entry(ENTRY_DELAYS.ticks).min(reveal(0))),
-            letters: scale(entry(ENTRY_DELAYS.letters).min(reveal(REVEAL_LETTERS))),
+        if *shown != mode {
+            if mode == Mode::NoData {
+                (times.ring, times.icon, times.caption) = (None, None, None);
+            } else if mode.heading().is_some() && shown.heading().is_none() {
+                let quick = *shown == Mode::TopEdgeUp
+                    && self
+                        .top_edge_since
+                        .is_some_and(|since| now.saturating_sub(since) < TOP_EDGE_GRACE);
+                // The dial sweeps in, and the icon rebuilds with it. Only a sweep rebuilds the
+                // icon, so interference coming and going swaps it in place.
+                if !quick {
+                    let from_now = |start: Option<Micros>| Some(start.map_or(now, |start| start.max(now)));
+                    times.dial = from_now(times.dial);
+                    times.icon = from_now(times.icon);
+                    if compass_screen::caption(*shown).0 != compass_screen::caption(mode).0 {
+                        times.caption = from_now(times.caption);
+                    }
+                }
+            }
+            if mode == Mode::TopEdgeUp && shown.heading().is_some() {
+                self.top_edge_since = Some(now);
+            } else if mode != Mode::TopEdgeUp {
+                self.top_edge_since = None;
+            }
+            *shown = mode;
         }
+        let entry = Accents {
+            ring: progress(now, times.ring, RING_FADE),
+            icon_rows: rows_built(now, times.icon),
+            caption: progress(now, times.caption, CAPTION_REVEAL),
+            dial: progress(now, times.dial, DIAL_SWEEP),
+            divider: progress(now, times.divider, DIVIDER_DRAW),
+            hint: progress(now, times.hint, HINT_REVEAL),
+        };
+        self.fading = entry != Accents::FULL;
+        // Going out, the accents follow the page's offset, so reversing a drag restores them.
+        let p = swipe_progress(view.offset);
+        let exit = Accents {
+            ring: leaving(p, 0.6, 0.4),
+            icon_rows: rows_leaving(p, 0.3, 0.5),
+            caption: leaving(p, 0.2, 0.3),
+            dial: leaving(p, 0.2, 0.4),
+            divider: leaving(p, 0.1, 0.2),
+            hint: leaving(p, 0.0, 0.2),
+        };
+        entry.min(exit)
     }
 
     /// Advances the clock face's builds and reveals to `now`, and returns how far each has come.
@@ -506,14 +543,18 @@ impl Stage {
         let (times, shown) = match &mut self.clock_settled {
             Some(settled) => settled,
             None if view.offset == 0 => {
-                let start = |delay: Micros| now + delay;
-                let times = ClockTimes {
+                let start = |delay: Micros| Some(now + delay);
+                let mut times = ClockTimes {
                     ring: start(CLOCK_ENTRY.ring),
                     icon: start(CLOCK_ENTRY.icon),
                     label: start(CLOCK_ENTRY.label),
                     plate: start(CLOCK_ENTRY.plate),
                     zone: start(CLOCK_ENTRY.zone),
                 };
+                if keys.mode == clock_screen::Mode::NoData {
+                    // A fault shows at once.
+                    (times.ring, times.icon, times.label) = (None, None, None);
+                }
                 self.clock_settled.insert((times, keys.clone()))
             }
             None => return Accents::HIDDEN,
@@ -526,46 +567,41 @@ impl Stage {
                 // The icon rebuilds on any change of state, the label on a change of text, and
                 // the plate and the zone name together on any change of zone. One the entry has
                 // not reached yet shows the new text when it gets there.
-                if shown.mode != keys.mode && times.icon <= now {
-                    times.icon = now;
+                let restart = |start: &mut Option<Micros>, at: Micros| {
+                    if start.is_none_or(|start| start <= now) {
+                        *start = Some(at);
+                    }
+                };
+                if shown.mode != keys.mode {
+                    restart(&mut times.icon, now);
                 }
-                if shown.mode.label() != keys.mode.label() && times.label <= now {
-                    times.label = now;
+                if shown.mode.label() != keys.mode.label() {
+                    restart(&mut times.label, now);
                 }
-                if (&shown.plate, shown.zone) != (&keys.plate, keys.zone) && times.plate <= now {
-                    times.plate = now;
-                    times.zone = times.zone.max(now + (CLOCK_ENTRY.zone - CLOCK_ENTRY.plate));
+                if (&shown.plate, shown.zone) != (&keys.plate, keys.zone)
+                    && times.plate.is_none_or(|start| start <= now)
+                {
+                    times.plate = Some(now);
+                    restart(&mut times.zone, now + (CLOCK_ENTRY.zone - CLOCK_ENTRY.plate));
                 }
             }
             *shown = keys;
         }
-        let since = |start: Micros| (now >= start).then(|| now - start);
-        let fraction = |start: Micros, duration: Micros| {
-            since(start).map_or(0, |elapsed| fade(elapsed, duration))
-        };
         let entry = Accents {
-            ring: fraction(times.ring, CLOCK_RING_FADE),
-            icon_rows: since(times.icon).map_or(0, |elapsed| (elapsed / CLOCK_ICON_ROW + 1).min(5) as u8),
-            label: fraction(times.label, CLOCK_LABEL_REVEAL),
-            plate: fraction(times.plate, CLOCK_PLATE_REVEAL),
-            zone: fraction(times.zone, CLOCK_ZONE_REVEAL),
+            ring: progress(now, times.ring, RING_FADE),
+            icon_rows: rows_built(now, times.icon),
+            label: progress(now, times.label, CLOCK_LABEL_REVEAL),
+            plate: progress(now, times.plate, CLOCK_PLATE_REVEAL),
+            zone: progress(now, times.zone, CLOCK_ZONE_REVEAL),
         };
-        let done = |start: Micros, duration: Micros| now >= start + duration;
-        self.fading |= !(done(times.ring, CLOCK_RING_FADE)
-            && done(times.icon, 4 * CLOCK_ICON_ROW)
-            && done(times.label, CLOCK_LABEL_REVEAL)
-            && done(times.plate, CLOCK_PLATE_REVEAL)
-            && done(times.zone, CLOCK_ZONE_REVEAL));
-        // Going out, the accents follow the page's offset instead, so reversing restores them.
-        let p = view.offset.unsigned_abs() as f32 / board::LCD_WIDTH as f32 / SWIPE_FADE;
-        let left = |from: f32, over: f32| 1.0 - ((p - from) / over).clamp(0.0, 1.0);
-        let amount = |from: f32, over: f32| libm::roundf(left(from, over) * 255.0) as u8;
+        self.fading |= entry != Accents::FULL;
+        let p = swipe_progress(view.offset);
         let exit = Accents {
-            ring: amount(0.6, 0.4),
-            icon_rows: libm::roundf(5.0 * left(0.3, 0.5)) as u8,
-            label: amount(0.2, 0.3),
-            plate: amount(0.1, 0.3),
-            zone: amount(0.0, 0.2),
+            ring: leaving(p, 0.6, 0.4),
+            icon_rows: rows_leaving(p, 0.3, 0.5),
+            label: leaving(p, 0.2, 0.3),
+            plate: leaving(p, 0.1, 0.3),
+            zone: leaving(p, 0.0, 0.2),
         };
         entry.min(exit)
     }
@@ -610,7 +646,35 @@ fn selected_node(point: Point) -> Option<u8> {
     }
 }
 
-/// How far a fade of `duration` has come after `elapsed`, 0 to 255.
-fn fade(elapsed: Micros, duration: Micros) -> u8 {
-    (elapsed.min(duration) * 255 / duration) as u8
+/// How far an accent that starts at `start` and takes `duration` has come, 0 to 255.
+fn progress(now: Micros, start: Option<Micros>, duration: Micros) -> u8 {
+    match start {
+        None => u8::MAX,
+        Some(start) if now < start => 0,
+        Some(start) => ((now - start).min(duration) * 255 / duration) as u8,
+    }
+}
+
+/// How many rows of an icon's modules have landed, a row every `ICON_ROW` from `start`.
+fn rows_built(now: Micros, start: Option<Micros>) -> u8 {
+    match start {
+        None => 5,
+        Some(start) if now < start => 0,
+        Some(start) => ((now - start) / ICON_ROW + 1).min(5) as u8,
+    }
+}
+
+/// How far a page at `offset` has gone towards hiding its accents: 0 at rest, 1 at
+/// `SWIPE_FADE` of the panel's width.
+fn swipe_progress(offset: i32) -> f32 {
+    offset.unsigned_abs() as f32 / board::LCD_WIDTH as f32 / SWIPE_FADE
+}
+
+/// What is left of an accent that leaves over `from..from + over` of the swipe, 0 to 255.
+fn leaving(p: f32, from: f32, over: f32) -> u8 {
+    libm::roundf((1.0 - ((p - from) / over).clamp(0.0, 1.0)) * 255.0) as u8
+}
+
+fn rows_leaving(p: f32, from: f32, over: f32) -> u8 {
+    libm::roundf(5.0 * f32::from(leaving(p, from, over)) / 255.0) as u8
 }
