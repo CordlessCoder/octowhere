@@ -35,6 +35,16 @@ impl Reveal {
     pub fn cells(self) -> usize {
         self.glyphs + usize::from(self.block)
     }
+
+    /// The share of the `len` characters from `from` on, for one reveal run across several
+    /// strings in turn.
+    #[must_use]
+    pub fn part(self, from: usize, len: usize) -> Self {
+        Self {
+            glyphs: self.glyphs.saturating_sub(from).min(len),
+            block: self.block && (from..from + len).contains(&self.glyphs),
+        }
+    }
 }
 
 /// The block that stands in cell `index` of a mono line, from the baseline up to cap height and

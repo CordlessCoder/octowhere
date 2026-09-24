@@ -64,7 +64,9 @@ const NO_ZONE: Glyph = [0b01110, 0b10001, 0b00110, 0b00000, 0b00100];
 
 /// How far each of the face's accents has come in: the ring's fade, 0 to 255; how many rows of
 /// the icon's modules show, 0 to 5; and the band label's, the plate's, the zone name's and the
-/// wordmark's reveals, 0 to 255. The centre content always shows whole.
+/// wordmark's reveals, 0 to 255. Also the reveals of the time, across hours, minutes and
+/// seconds, and of the date line, which run only when a fix or a zone change replaces the time.
+/// The time and date are centre content, so a page's entry and exit leave them whole.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Accents {
     pub ring: u8,
@@ -73,6 +75,8 @@ pub struct Accents {
     pub plate: u8,
     pub zone: u8,
     pub mark: u8,
+    pub time: u8,
+    pub date: u8,
 }
 
 impl Accents {
@@ -83,6 +87,8 @@ impl Accents {
         plate: u8::MAX,
         zone: u8::MAX,
         mark: u8::MAX,
+        time: u8::MAX,
+        date: u8::MAX,
     };
     pub const HIDDEN: Self = Self {
         ring: 0,
@@ -91,6 +97,8 @@ impl Accents {
         plate: 0,
         zone: 0,
         mark: 0,
+        time: u8::MAX,
+        date: u8::MAX,
     };
 
     /// Each accent at the lesser of the two.
@@ -103,6 +111,8 @@ impl Accents {
             plate: self.plate.min(other.plate),
             zone: self.zone.min(other.zone),
             mark: self.mark.min(other.mark),
+            time: self.time.min(other.time),
+            date: self.date.min(other.date),
         }
     }
 }
@@ -239,7 +249,9 @@ struct Parts {
     hours: Option<String<2>>,
     minutes: Option<String<2>>,
     seconds: Option<String<2>>,
-    date: Option<(String<16>, Line)>,
+    /// Across the hours, minutes and seconds in turn.
+    time: Reveal,
+    date: Option<(String<16>, Line, Reveal)>,
     /// The plate, and how many of its cells show.
     plate: (Plate, usize),
     zone: Option<(String<32>, Reveal)>,
@@ -291,6 +303,19 @@ fn date(time: &DateTime) -> String<16> {
     text
 }
 
+/// The local time the face shows, in seconds, or `None` when it shows none.
+#[must_use]
+pub fn shown_time(view: &ClockView) -> Option<i64> {
+    if !matches!(Mode::of(&view.clock, &view.zone), Mode::Local { .. }) {
+        return None;
+    }
+    let local = view.clock.local(view.zone)?;
+    Some(view.clock.utc? + i64::from(local.offset.utc_offset))
+}
+
+/// The time's characters: two each for the hours, minutes and seconds.
+const TIME_CELLS: usize = 6;
+
 impl Parts {
     fn of(view: &ClockView, accents: Accents) -> Self {
         let keys = Keys::of(view);
@@ -336,7 +361,11 @@ impl Parts {
             hours,
             minutes,
             seconds,
-            date,
+            time: Reveal::of(accents.time, TIME_CELLS),
+            date: date.map(|(text, line)| {
+                let reveal = Reveal::of(accents.date, text.len());
+                (text, line, reveal)
+            }),
             plate: (
                 keys.plate,
                 (0..cells).take_while(|&i| i * 255 < usize::from(accents.plate) * cells).count(),
@@ -570,7 +599,7 @@ where
     {
         let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
         if let Some(hours) = &parts.hours {
-            digits(font, chrome::WHITE).draw_on_baseline(hours, HOURS, field)?;
+            draw_revealed(&digits(font, chrome::WHITE), hours, HOURS, parts.time.part(0, 2), field)?;
         }
     }
     let (glyph, color, rows) = parts.icon;
@@ -586,20 +615,20 @@ where
         let (label, reveal) = parts.label;
         draw_revealed(&label_style(font), label, LABEL, reveal, band)?;
         if let Some(minutes) = &parts.minutes {
-            digits(font, chrome::BLACK).draw_on_baseline(minutes, MINUTES, band)?;
+            draw_revealed(&digits(font, chrome::BLACK), minutes, MINUTES, parts.time.part(2, 2), band)?;
         } else {
             no_data_style(font).draw_on_baseline("NO DATA", no_data_origin(font), band)?;
         }
         if let Some(seconds) = &parts.seconds {
-            seconds_style(font).draw_on_baseline(seconds, SECONDS, band)?;
+            draw_revealed(&seconds_style(font), seconds, SECONDS, parts.time.part(4, 2), band)?;
         }
     }
     draw_mark(font, parts.mark, parts.band, target)?;
 
     let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
-    if let Some((text, line)) = &parts.date {
+    if let Some((text, line, reveal)) = &parts.date {
         let (style, origin) = date_origin(font, text, *line);
-        style.draw_on_baseline(text, origin, field)?;
+        draw_revealed(&style, text, origin, *reveal, field)?;
     }
     let (plate, shown) = &parts.plate;
     draw_plate(font, plate, *shown, target)?;
@@ -612,6 +641,24 @@ where
 
 fn text(digits: &Option<String<2>>) -> &str {
     digits.as_ref().map_or("", String::as_str)
+}
+
+/// Marks what changed in a pair of digits: each changed glyph on a tick, or every cell either
+/// shows while its reveal moves.
+fn digit_damage(
+    style: &FontdueRenderer<'static, Color>,
+    pen: Point,
+    (old, old_reveal): (&Option<String<2>>, Reveal),
+    (new, new_reveal): (&Option<String<2>>, Reveal),
+    damage: &mut chrome::Dirty,
+) {
+    if old_reveal != new_reveal {
+        for digits in [old, new].into_iter().flatten() {
+            damage.add(revealed_bounds(style, digits, pen));
+        }
+    } else if old != new {
+        style.glyph_damage((text(old), pen), (text(new), pen), damage);
+    }
 }
 
 /// Marks in `damage` every pixel that differs between the face drawn for `before` and for
@@ -631,10 +678,8 @@ pub fn damage(
         damage.make_full();
         return;
     }
-    if old.hours != new.hours {
-        let (was, now) = (text(&old.hours), text(&new.hours));
-        digits(font, chrome::WHITE).glyph_damage((was, HOURS), (now, HOURS), damage);
-    }
+    let white = digits(font, chrome::WHITE);
+    digit_damage(&white, HOURS, (&old.hours, old.time.part(0, 2)), (&new.hours, new.time.part(0, 2)), damage);
     if old.icon != new.icon {
         let ((old_glyph, old_color, old_rows), (new_glyph, new_color, new_rows)) = (old.icon, new.icon);
         if (old_glyph, old_color) == (new_glyph, new_color) {
@@ -648,23 +693,19 @@ pub fn damage(
             damage.add(revealed_bounds(&label_style(font), label, LABEL));
         }
     }
-    if old.minutes != new.minutes {
-        if old.minutes.is_none() || new.minutes.is_none() {
-            // `NO DATA` comes and goes only with the band's colour.
-            damage.make_full();
-            return;
-        }
-        let (was, now) = (text(&old.minutes), text(&new.minutes));
-        digits(font, chrome::BLACK).glyph_damage((was, MINUTES), (now, MINUTES), damage);
+    if old.minutes.is_none() != new.minutes.is_none() {
+        // `NO DATA` comes and goes only with the band's colour.
+        damage.make_full();
+        return;
     }
-    if old.seconds != new.seconds {
-        let (was, now) = (text(&old.seconds), text(&new.seconds));
-        seconds_style(font).glyph_damage((was, SECONDS), (now, SECONDS), damage);
-    }
+    let black = digits(font, chrome::BLACK);
+    digit_damage(&black, MINUTES, (&old.minutes, old.time.part(2, 2)), (&new.minutes, new.time.part(2, 2)), damage);
+    let seconds = seconds_style(font);
+    digit_damage(&seconds, SECONDS, (&old.seconds, old.time.part(4, 2)), (&new.seconds, new.time.part(4, 2)), damage);
     if old.date != new.date {
-        for (text, line) in [&old.date, &new.date].into_iter().flatten() {
+        for (text, line, _) in [&old.date, &new.date].into_iter().flatten() {
             let (style, origin) = date_origin(font, text, *line);
-            damage.add(style.baseline_bounds(text, origin));
+            damage.add(revealed_bounds(&style, text, origin));
         }
     }
     if old.plate != new.plate {

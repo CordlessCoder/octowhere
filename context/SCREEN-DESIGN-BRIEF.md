@@ -268,8 +268,9 @@ decisions from both rounds that bind later screens:
 - Elements that come and go keep their space, so nothing else moves between states.
 - Wording is shortened before it is shrunk.
 - Fades may look stepped; durations are not stretched to add frames.
-- Digits never animate. Accents build after the page settles and leave with the swipe, driven by
-  its offset. A fault shows at once.
+- Digits never animate on a tick. On the clock, a time that a fix or zone change replaces types
+  in again by cell reveal. Accents build after the page settles and leave with the swipe, driven
+  by its offset. A fault shows at once.
 - Nothing on a face can be changed by an accidental touch.
 
 ## Colour

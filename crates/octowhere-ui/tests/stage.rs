@@ -700,3 +700,39 @@ fn a_swipe_takes_its_duration_and_turns_the_page() {
     driver.settle();
     assert_eq!(driver.stage.screen(), Screen::Compass);
 }
+
+/// Whether the time is typing in again after a step with `input`, then whether it finished.
+fn retypes(driver: &mut Driver, input: Input) -> bool {
+    driver.step(input);
+    let typing = clock_accents(driver).time < 255;
+    if typing {
+        driver.wait(400_000);
+        assert_eq!(clock_accents(driver), ClockAccents::FULL, "the reveal never finished");
+    }
+    typing
+}
+
+#[test]
+fn the_time_types_in_again_when_a_fix_or_zone_replaces_it_and_not_on_a_tick() {
+    let dublin = zone("Europe/Dublin", ZoneMode::Automatic);
+    let unset = |clock: ClockState| ClockState { set_from_gnss: false, ..clock };
+    let mut driver = Driver::on(Screen::Clock);
+    driver.step(sensors(unset(clock_at(12, 7, 40)), ZoneState::default()));
+    driver.wait(500_000);
+
+    assert!(retypes(&mut driver, sensors(clock_at(12, 7, 41), dublin)), "a first fix");
+    // The reveal took 400 ms and the clock ticks a second later, which is no jump.
+    driver.wait(100_000);
+    assert!(!retypes(&mut driver, sensors(clock_at(12, 7, 42), dublin)), "a tick");
+    driver.wait(500_000);
+    assert!(!retypes(&mut driver, sensors(unset(clock_at(12, 7, 43)), dublin)), "no time change");
+    assert!(retypes(&mut driver, sensors(clock_at(12, 12, 0), dublin)), "a correction");
+    // Both are an hour ahead of UTC in October.
+    let london = zone("Europe/London", ZoneMode::Automatic);
+    assert!(!retypes(&mut driver, sensors(clock_at(12, 12, 0), london)), "the same offset");
+    let berlin = zone("Europe/Berlin", ZoneMode::Automatic);
+    assert!(retypes(&mut driver, sensors(clock_at(12, 12, 0), berlin)), "a new offset");
+    let stopped = ClockState { stopped: true, ..clock_at(12, 12, 0) };
+    assert!(!retypes(&mut driver, sensors(stopped, berlin)), "dashes");
+    assert!(retypes(&mut driver, sensors(clock_at(12, 12, 1), berlin)), "leaving STOPPED");
+}

@@ -158,6 +158,7 @@ redraws the whole face, as the placeholder screens do.
 | Minutes, tens digit | every 10 min | one more cell |
 | Hours | every hour | one or two cells on `BLACK` |
 | Date row | at local midnight | the row |
+| Time and date row, typing in | during the reveal after the time is replaced | each part's cells, the row |
 | `UTC HH:MM` (NO ZONE) | every minute | the row |
 | Icon | on a state change; during its build | the 96 × 96 tile, or one row of it per build step |
 | Band label, plate, zone name | when their text changes; during their reveal | one character cell or plate cell per step |
@@ -197,8 +198,8 @@ Two primitives do all of it. Both are rectangles and upright text the firmware a
   character will be, so no frame shows a wrong character. Plate cells appear whole, one at a
   time, as their own k passes each cell's share.
 
-Digits never animate. The face never shows a time, date or zone value that is not the current
-one.
+Digits animate only when the time is replaced, below; a tick never animates them. The face
+never shows a time, date or zone value that is not the current one.
 
 ### Entry
 
@@ -239,7 +240,14 @@ progress and its exit progress, so nothing jumps forward.
 - Entering NO DATA is instant, with no build and no reveal. Leaving NO DATA runs the normal
   build.
 - A zone change, such as a new automatic lookup or a DST transition, re-reveals the plate and
-  the zone name. The hours change by hard replacement in the same frame.
+  the zone name.
+- A time that is replaced rather than ticked types in again by cell reveal. That covers a first
+  fix out of NO ZONE, a fix that corrects the clock, a zone change that moves the offset, and
+  leaving STOPPED or NO DATA. The hours, minutes and seconds reveal as one string of six cells
+  over 180 ms, and the date line over 160 ms from 120 ms. A shown time that moves more than 2 s
+  from the time elapsed since it last changed counts as replaced. A fix or zone change that
+  leaves the time as it was changes no digit. This replaces hard replacement of the hours, by
+  the owner's decision of 2026-09-24.
 
 ### Rejected option
 

@@ -88,6 +88,24 @@ const CLOCK_LABEL_REVEAL: Micros = 120_000;
 const CLOCK_PLATE_REVEAL: Micros = 120_000;
 const CLOCK_ZONE_REVEAL: Micros = 160_000;
 const CLOCK_MARK_REVEAL: Micros = 160_000;
+/// A time that a fix or a zone change replaces, rather than one that ticks, types in again:
+/// the hours, minutes and seconds over the first duration, and the date line after a delay.
+const CLOCK_TIME_REVEAL: Micros = 180_000;
+const CLOCK_DATE_DELAY: Micros = 120_000;
+const CLOCK_DATE_REVEAL: Micros = 160_000;
+/// How far, in seconds, the shown time may drift from the time elapsed since it last changed
+/// before it counts as replaced. Readings are whole seconds, taken up to about 250 ms late.
+const CLOCK_TICK_SLACK: i64 = 2;
+
+/// The clock page since it settled.
+struct ClockSettled {
+    times: ClockTimes,
+    shown: clock_screen::Keys,
+    /// The local time last shown, in seconds, and when it changed to that.
+    time: Option<(i64, Micros)>,
+    /// When the time last began to type in again.
+    retyped: Option<Micros>,
+}
 
 /// When each of the clock face's accents started, or starts. `None` shows it whole at once.
 #[derive(Clone, Copy, Debug, Default)]
@@ -146,7 +164,7 @@ pub struct Stage {
     changed: alloc::boxed::Box<Dirty>,
     dial_footprint: DialFootprint,
     /// When the clock page last settled into view, and what its accents re-reveal on.
-    clock_settled: Option<(ClockTimes, clock_screen::Keys)>,
+    clock_settled: Option<ClockSettled>,
     clock_accents: clock_screen::Accents,
     /// What the clock page showed after the last step, while it filled the panel.
     drawn_clock: Option<(ClockView, clock_screen::Accents)>,
@@ -452,7 +470,8 @@ impl Stage {
         }
         let view = self.pager.view();
         let keys = clock_screen::Keys::of(&self.peripherals.clock);
-        let (times, shown) = match &mut self.clock_settled {
+        let time = clock_screen::shown_time(&self.peripherals.clock);
+        let settled = match &mut self.clock_settled {
             Some(settled) => settled,
             None if view.offset == 0 => {
                 let start = |delay: Micros| Some(now + delay);
@@ -468,10 +487,16 @@ impl Stage {
                     // A fault shows at once.
                     (times.ring, times.icon, times.label) = (None, None, None);
                 }
-                self.clock_settled.insert((times, keys.clone()))
+                self.clock_settled.insert(ClockSettled {
+                    times,
+                    shown: keys.clone(),
+                    time: time.map(|time| (time, now)),
+                    retyped: None,
+                })
             }
             None => return Accents::HIDDEN,
         };
+        let ClockSettled { times, shown, .. } = settled;
         if *shown != keys {
             if keys.mode == clock_screen::Mode::NoData {
                 // A fault shows at once.
@@ -500,6 +525,21 @@ impl Stage {
             }
             *shown = keys;
         }
+        if time != settled.time.map(|(time, _)| time) {
+            let replaced = match (time, settled.time) {
+                (None, _) => false,
+                (Some(_), None) => true,
+                (Some(time), Some((was, since))) => {
+                    let elapsed = ((now - since) / 1_000_000) as i64;
+                    (time - was - elapsed).abs() > CLOCK_TICK_SLACK
+                }
+            };
+            // Dashes and faults replace the time at once.
+            settled.retyped = if replaced { Some(now) } else { settled.retyped.filter(|_| time.is_some()) };
+            settled.time = time.map(|time| (time, now));
+        }
+        let times = &settled.times;
+        let retyped = settled.retyped;
         let entry = Accents {
             ring: progress(now, times.ring, RING_FADE),
             icon_rows: rows_built(now, times.icon),
@@ -507,6 +547,8 @@ impl Stage {
             plate: progress(now, times.plate, CLOCK_PLATE_REVEAL),
             zone: progress(now, times.zone, CLOCK_ZONE_REVEAL),
             mark: progress(now, times.mark, CLOCK_MARK_REVEAL),
+            time: progress(now, retyped, CLOCK_TIME_REVEAL),
+            date: progress(now, retyped.map(|start| start + CLOCK_DATE_DELAY), CLOCK_DATE_REVEAL),
         };
         self.fading |= entry != Accents::FULL;
         let p = swipe_progress(view.offset);
@@ -517,6 +559,8 @@ impl Stage {
             plate: leaving(p, 0.1, 0.3),
             zone: leaving(p, 0.0, 0.2),
             mark: leaving(p, 0.05, 0.2),
+            time: u8::MAX,
+            date: u8::MAX,
         };
         entry.min(exit)
     }
