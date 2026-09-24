@@ -1,6 +1,7 @@
 /target
 /host-tests/target
 /crates/*/target
+/tools/*/target
 *.swp
 *.swo
 *~
