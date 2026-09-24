@@ -20,9 +20,9 @@ pub type Color = embedded_graphics::pixelcolor::Rgb565;
 pub const DISPLAY_SIZE: Size = Size::new(board::LCD_WIDTH as u32, board::LCD_HEIGHT as u32);
 pub const DISPLAY_BBOX: Rectangle = Rectangle::new(Point::new_equal(0), DISPLAY_SIZE);
 
-pub type FB = crate::drivers::framebuffer::Framebuffer<
+pub type FB = crate::framebuffer::Framebuffer<
     {
-        crate::drivers::framebuffer::buffer_size::<Color>(
+        crate::framebuffer::buffer_size::<Color>(
             board::LCD_WIDTH as usize,
             board::LCD_HEIGHT as usize,
         )
@@ -170,14 +170,11 @@ impl BlendRowWith for FB {
         let row = (y * WIDTH) as usize;
         let pixels = &mut self.buffer_mut()[(row + start as usize) * 2..(row + end as usize) * 2];
         let full = RawU16::from(color).into_inner().to_be_bytes();
-        for (pixel, &covered) in pixels.chunks_exact_mut(2).zip(coverage) {
+        for (pixel, &covered) in pixels.as_chunks_mut::<2>().0.iter_mut().zip(coverage) {
             match covered {
                 0 => {}
-                u8::MAX => pixel.copy_from_slice(&full),
-                _ => {
-                    let mixed = mix(pixel, covered);
-                    pixel.copy_from_slice(&RawU16::from(mixed).into_inner().to_be_bytes());
-                }
+                u8::MAX => *pixel = full,
+                _ => *pixel = RawU16::from(mix(pixel, covered)).into_inner().to_be_bytes(),
             }
         }
     }
@@ -294,7 +291,7 @@ impl<T: CoverageTarget> CoverageTarget for Window<'_, T> {
 
 fontdue_macros::fontdue_font_from_file!(
     MarathonShapiroFont,
-    "../assets/MarathonShapiro-Wide65_subset.ttf",
+    "../../../assets/MarathonShapiro-Wide65_subset.ttf",
     // Picked with some trial and effort to offer some of the lowest flash usage while looking
     // great. Making it lower makes rendering faster, at the cost of quality.
     scale: 2.1
@@ -302,7 +299,7 @@ fontdue_macros::fontdue_font_from_file!(
 
 fontdue_macros::fontdue_font_from_file!(
     FraktionMonoRegularFont,
-    "../assets/PPFraktion-Free for personal use v1.1/Mono/PPFraktionMono-Regular-subset.ttf",
+    "../../../assets/PPFraktion-Free for personal use v1.1/Mono/PPFraktionMono-Regular-subset.ttf",
     scale: 2.2
 );
 

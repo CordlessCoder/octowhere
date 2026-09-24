@@ -12,8 +12,7 @@ use embedded_hal::delay::DelayNs;
 pub const CACHE_LINE: usize = 64;
 
 // Display, CO5300
-pub const LCD_WIDTH: u16 = 466;
-pub const LCD_HEIGHT: u16 = 466;
+pub use octowhere_ui::board::{LCD_HEIGHT, LCD_WIDTH};
 pub const LCD_COL_OFFSET: u16 = 6;
 pub const LCD_ROW_OFFSET: u16 = 0;
 

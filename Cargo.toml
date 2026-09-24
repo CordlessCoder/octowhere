@@ -27,6 +27,7 @@ embedded-hal = "1.0"
 embedded-hal-bus = { version = "0.3", features = ["async"] }
 embedded-hal-async = "1.0.0"
 lc76g = { path = "crates/lc76g" }
+octowhere-ui = { path = "crates/octowhere-ui", features = ["allocator-api"] }
 sx127xlora = { path = "crates/sx127x-lora", features = ["defmt"] }
 embedded-io-async = "0.7"
 futures = { version = "0.3.32", default-features = false, features = ["async-await"] }
@@ -34,10 +35,6 @@ embassy-embedded-hal = "0.6.0"
 ph-qmi8658 = { version = "0.1.1", features = ["fixed"] }
 tca9554 = "0.2.0"
 heapless = { version = "0.9.3", features = ["nightly"] }
-fontdue = { version = "0.9.3", default-features = false, features = ["hashbrown"] }
-fontdue-macros = "0.9.3"
-embedded-layout = "0.4.2"
-libm = "0.2.16"
 
 [features]
 default = []
@@ -52,8 +49,6 @@ lora-link-rx = []
 
 [patch.crates-io]
 tca9554 = { git = "https://github.com/CordlessCoder/tca9554-rs", rev = "dd76e69" }
-fontdue = { git = "https://github.com/CordlessCoder/fontdue", rev = "a71751e3e94864c2608a481308fc906e6302dea2" }
-fontdue-macros = { git = "https://github.com/CordlessCoder/fontdue", rev = "a71751e3e94864c2608a481308fc906e6302dea2" }
 
 [profile.dev]
 opt-level = "s"

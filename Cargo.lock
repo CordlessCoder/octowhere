@@ -1514,24 +1514,35 @@ dependencies = [
  "embedded-hal-async",
  "embedded-hal-bus",
  "embedded-io-async 0.7.0",
- "embedded-layout",
  "esp-alloc",
  "esp-backtrace",
  "esp-bootloader-esp-idf",
  "esp-hal",
  "esp-println",
  "esp-rtos",
- "fontdue",
- "fontdue-macros",
  "futures",
  "heapless 0.9.3",
  "lc76g",
- "libm",
  "log",
+ "octowhere-ui",
  "ph-qmi8658",
  "static_cell",
  "sx127xlora",
  "tca9554",
+]
+
+[[package]]
+name = "octowhere-ui"
+version = "0.1.0"
+dependencies = [
+ "embassy-sync 0.8.0",
+ "embedded-graphics",
+ "embedded-graphics-core",
+ "embedded-layout",
+ "fontdue",
+ "fontdue-macros",
+ "heapless 0.9.3",
+ "libm",
 ]
 
 [[package]]

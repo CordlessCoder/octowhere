@@ -14,7 +14,7 @@ use esp_hal::gpio::{Input, Output};
 use esp_hal::spi::master::{Address, Command, DataMode};
 
 use crate::board::{self, delay_ms, delay_ms_async, delay_us, delay_us_async};
-use crate::chrome::RgbColorExt;
+use crate::framebuffer::PixelFormat;
 use crate::drivers::qspi_bus::{QSPIOperation, QspiBus};
 use crate::util::fill_buf_repeat;
 
@@ -128,11 +128,10 @@ mod sealed {
     pub trait Sealed {}
 }
 
-pub trait Co5300ColorMode: ToBytes + PixelColor + sealed::Sealed + RgbColorExt
+pub trait Co5300ColorMode: PixelFormat + sealed::Sealed
 where
     Self::Bytes: AsRef<[u8]>,
 {
-    const BYTES_PER_PIXEL: usize;
     const MODE_BYTE: u8;
 }
 
@@ -140,21 +139,18 @@ impl sealed::Sealed for Rgb888 {}
 
 impl Co5300ColorMode for Rgb888 {
     const MODE_BYTE: u8 = 0x77;
-    const BYTES_PER_PIXEL: usize = 3;
 }
 
 impl sealed::Sealed for Rgb565 {}
 
 impl Co5300ColorMode for Rgb565 {
     const MODE_BYTE: u8 = 0x55;
-    const BYTES_PER_PIXEL: usize = 2;
 }
 
 impl sealed::Sealed for Gray8 {}
 
 impl Co5300ColorMode for Gray8 {
     const MODE_BYTE: u8 = 0x11;
-    const BYTES_PER_PIXEL: usize = 1;
 }
 
 impl<'d, C: Co5300ColorMode> Co5300Display<'d, C>

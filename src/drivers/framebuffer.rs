@@ -1,137 +1,55 @@
-// PSRAM Framebuffer for CO5300 display
-// 466x466 RGB565 = 434.312 kB
-// Draws to RAM, then flushes entire screen via DMA QSPI
+// Streams a framebuffer to the CO5300 over DMA QSPI.
 
-use crate::board::CACHE_LINE;
-use crate::drivers::co5300::Co5300ColorMode;
-use crate::drivers::co5300::Co5300Display;
-use crate::drivers::co5300::DisplayError;
-use crate::ui::geometry::for_each_visible_color;
-use crate::util::{fill_buf_repeat, widening_copy};
-use alloc::alloc::Allocator;
-use alloc::boxed::Box;
-use core::marker::PhantomData;
-use embedded_graphics_core::draw_target::DrawTarget;
-use embedded_graphics_core::geometry::{OriginDimensions, Size};
-use embedded_graphics_core::prelude::*;
 use embedded_graphics_core::primitives::Rectangle;
-use esp_println::dbg;
 
-#[repr(align(64))]
-#[repr(C)]
-#[derive(Clone)]
-pub struct Framebuffer<const N: usize, const WIDTH: usize, const HEIGHT: usize, C: Co5300ColorMode>
+use crate::drivers::co5300::{Co5300ColorMode, Co5300Display, DisplayError};
+use crate::framebuffer::Framebuffer;
+
+/// Sends a framebuffer, or a region of it, to the panel.
+#[expect(async_fn_in_trait, reason = "only the display core calls it, from one executor")]
+pub trait Flush<C: Co5300ColorMode>
 where
-    <C as embedded_graphics::pixelcolor::raw::ToBytes>::Bytes: core::convert::AsRef<[u8]>,
+    C::Bytes: AsRef<[u8]>,
 {
-    buf: [u8; N],
-    color: PhantomData<C>,
-}
-
-/// Fills `bytes` with a repeated 2-byte pixel in whole words. A row that starts at an arbitrary
-/// pixel is not word-aligned, and a byte-wise copy into it runs well below the word rate.
-fn fill_pairs(bytes: &mut [u8], pixel: [u8; 2]) {
-    // SAFETY: every bit pattern is a valid `u32`, so viewing aligned bytes as words is sound.
-    let (head, words, tail) = unsafe { bytes.align_to_mut::<u32>() };
-    let word = u32::from_ne_bytes([pixel[0], pixel[1], pixel[0], pixel[1]]);
-    // The buffer is word-aligned and pixels are 2 bytes, so the ends are whole pixels.
-    for end in [head, tail] {
-        for pair in end.chunks_exact_mut(2) {
-            pair.copy_from_slice(&pixel);
-        }
-    }
-    words.fill(word);
-}
-
-/// Calculates the required buffer size.
-///
-/// This function is a workaround for current limitations in Rust const generics.
-/// It can be used to calculate the `N` parameter based on the size and color type of the framebuffer.
-pub const fn buffer_size<C: Co5300ColorMode>(width: usize, height: usize) -> usize
-where
-    <C as embedded_graphics::pixelcolor::raw::ToBytes>::Bytes: core::convert::AsRef<[u8]>,
-{
-    width * height * C::BYTES_PER_PIXEL
-}
-
-impl<const N: usize, const WIDTH: usize, const HEIGHT: usize, C: Co5300ColorMode>
-    Framebuffer<N, WIDTH, HEIGHT, C>
-where
-    <C as embedded_graphics::pixelcolor::raw::ToBytes>::Bytes: core::convert::AsRef<[u8]>,
-{
-    const PIXEL_COUNT: usize = WIDTH * HEIGHT;
-    const BUFFER_SIZE: usize = buffer_size::<C>(WIDTH, HEIGHT);
-
-    /// Static assertion that N is correct.
-    // MSRV: remove N when constant generic expressions are stabilized
-    const CHECK_N: () = assert!(
-        N == Self::BUFFER_SIZE,
-        "Invalid N: it must be equal to the output of buffer_size for the given width and height"
-    );
-
-    #[must_use]
-    pub fn alloc<A: Allocator>(alloc: A) -> Box<Self, A> {
-        let _: () = Self::CHECK_N;
-        unsafe {
-            // Initialize in-place on the heap
-            let mut alloc = Box::new_zeroed_in(alloc);
-            alloc.assume_init()
-        }
-    }
-
-    /// Clear the entire framebuffer with a color.
-    pub fn clear_color(&mut self, color: C) {
-        let raw = color.to_be_bytes();
-        fill_buf_repeat(self.buf.as_mut_slice(), raw.as_ref(), Self::PIXEL_COUNT);
-    }
-
-    /// Set a single pixel
-    ///
-    /// PERF: no panic for speed?
-    #[inline]
-    pub fn set_pixel(&mut self, x: usize, y: usize, color: C) {
-        if x < WIDTH && y < HEIGHT {
-            let idx = y * WIDTH + x;
-            unsafe {
-                self.buf
-                    .get_unchecked_mut(idx * C::BYTES_PER_PIXEL..)
-                    .get_unchecked_mut(..C::BYTES_PER_PIXEL)
-                    .copy_from_slice(color.to_be_bytes().as_ref());
-            }
-        }
-    }
-
-    /// Fill a rectangular region.
-    pub fn fill_rect(&mut self, x: usize, y: usize, w: usize, h: usize, raw: &[u8]) {
-        let x_end = (x + w).min(WIDTH);
-        let y_end = (y + h).min(HEIGHT);
-        for row in y..y_end {
-            let start = row * WIDTH + x;
-            let end = row * WIDTH + x_end;
-            let bytes = &mut self.buf[start * raw.len()..end * raw.len()];
-            if let &[first, second] = raw {
-                fill_pairs(bytes, [first, second]);
-            } else {
-                fill_buf_repeat(bytes, raw, end - start);
-            }
-        }
-    }
-
-    // /// VSync flush for watchface / menus.
-    // pub async fn flush_vsync(&self, display: &mut Co5300Display<'_, C>) {
-    //     display.wait_for_vsync().await;
-    //     self.flush(display).await;
-    // }
-
     /// Flush the entire framebuffer to the display via DMA QSPI.
-    pub async fn flush(
+    async fn flush(
+        &mut self,
+        display: &mut Co5300Display<'_, C>,
+        debug_damage: bool,
+    ) -> Result<(), DisplayError>;
+
+    /// Flush the entire framebuffer through the blocking pixel-stream path.
+    fn flush_blocking(
+        &mut self,
+        display: &mut Co5300Display<'_, C>,
+        debug_damage: bool,
+    ) -> Result<(), DisplayError>;
+
+    /// Flush only a rectangular region (dirty rect optimization).
+    async fn flush_region(
+        &mut self,
+        display: &mut Co5300Display<'_, C>,
+        x: u16,
+        y: u16,
+        w: u16,
+        h: u16,
+        debug_overlay: Option<Rectangle>,
+    ) -> Result<(), DisplayError>;
+}
+
+impl<const N: usize, const WIDTH: usize, const HEIGHT: usize, C: Co5300ColorMode> Flush<C>
+    for Framebuffer<N, WIDTH, HEIGHT, C>
+where
+    C::Bytes: AsRef<[u8]>,
+{
+    async fn flush(
         &mut self,
         display: &mut Co5300Display<'_, C>,
         debug_damage: bool,
     ) -> Result<(), DisplayError> {
         display.set_addr_window(0, 0, WIDTH as u16, HEIGHT as u16)?;
         let mut stream = display.begin_stream_async().await?;
-        let mut remaining = &mut self.buf[..];
+        let mut remaining = &mut self.buffer_mut()[..];
         let mut offset = 0;
 
         while !remaining.is_empty() {
@@ -153,15 +71,14 @@ where
         stream.end()
     }
 
-    /// Flush the entire framebuffer through the blocking pixel-stream path.
-    pub fn flush_blocking(
+    fn flush_blocking(
         &mut self,
         display: &mut Co5300Display<'_, C>,
         debug_damage: bool,
     ) -> Result<(), DisplayError> {
         display.set_addr_window(0, 0, WIDTH as u16, HEIGHT as u16)?;
         let mut stream = display.begin_stream()?;
-        let mut remaining = &mut self.buf[..];
+        let mut remaining = &mut self.buffer_mut()[..];
         let mut offset = 0;
 
         while !remaining.is_empty() {
@@ -183,8 +100,7 @@ where
         stream.end()
     }
 
-    /// Flush only a rectangular region (dirty rect optimization).
-    pub async fn flush_region(
+    async fn flush_region(
         &mut self,
         display: &mut Co5300Display<'_, C>,
         x: u16,
@@ -229,7 +145,7 @@ where
         display.set_addr_window(x0 as u16, y0 as u16, flush_w as u16, flush_h as u16)?;
         let mut stream = display.begin_stream_async().await?;
         let mut rows = self
-            .buf
+            .buffer_mut()
             .chunks_exact_mut(WIDTH * C::BYTES_PER_PIXEL)
             .skip(y0)
             .take(flush_h)
@@ -283,16 +199,6 @@ where
         stream.flush_buf_async(|_| 0).await?;
         stream.end()
     }
-
-    /// Get raw buffer for direct access.
-    pub fn buffer(&self) -> &[u8] {
-        &self.buf
-    }
-
-    /// Get mutable raw buffer for direct access (snapshot restore).
-    pub fn buffer_mut(&mut self) -> &mut [u8] {
-        &mut self.buf
-    }
 }
 
 #[cfg(feature = "damage-debug")]
@@ -338,66 +244,5 @@ fn debug_region_chunk<C: Co5300ColorMode>(
         if horizontal || vertical {
             pixel.fill(u8::MAX);
         }
-    }
-}
-
-impl<const N: usize, const WIDTH: usize, const HEIGHT: usize, C: Co5300ColorMode> OriginDimensions
-    for Framebuffer<N, WIDTH, HEIGHT, C>
-where
-    <C as embedded_graphics::pixelcolor::raw::ToBytes>::Bytes: core::convert::AsRef<[u8]>,
-{
-    fn size(&self) -> Size {
-        Size::new(WIDTH as u32, HEIGHT as u32)
-    }
-}
-
-impl<const N: usize, const WIDTH: usize, const HEIGHT: usize, C: Co5300ColorMode> DrawTarget
-    for Framebuffer<N, WIDTH, HEIGHT, C>
-where
-    <C as embedded_graphics::pixelcolor::raw::ToBytes>::Bytes: core::convert::AsRef<[u8]>,
-{
-    type Color = C;
-    type Error = DisplayError;
-
-    fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
-    where
-        I: IntoIterator<Item = Pixel<Self::Color>>,
-    {
-        for Pixel(coord, color) in pixels.into_iter() {
-            self.set_pixel(coord.x as usize, coord.y as usize, color);
-        }
-        Ok(())
-    }
-
-    #[inline]
-    fn fill_contiguous<I>(&mut self, area: &Rectangle, colors: I) -> Result<(), Self::Error>
-    where
-        I: IntoIterator<Item = Self::Color>,
-    {
-        for_each_visible_color(
-            Size::new(WIDTH as u32, HEIGHT as u32),
-            *area,
-            colors,
-            |x, y, color| self.set_pixel(x, y, color),
-        );
-        Ok(())
-    }
-
-    fn fill_solid(&mut self, area: &Rectangle, color: Self::Color) -> Result<(), Self::Error> {
-        let area = area.intersection(&Rectangle::new(
-            Point::zero(),
-            Size::new(WIDTH as u32, HEIGHT as u32),
-        ));
-        if area.size.width == 0 || area.size.height == 0 {
-            return Ok(());
-        }
-        self.fill_rect(
-            area.top_left.x as usize,
-            area.top_left.y as usize,
-            area.size.width as usize,
-            area.size.height as usize,
-            color.to_be_bytes().as_ref(),
-        );
-        Ok(())
     }
 }

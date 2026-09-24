@@ -42,7 +42,9 @@ use lc76g::{
 use octowhere::{
     board,
     chrome::{self, Color, Dirty, FB, FontdueRenderer, FontdueRendererCtx},
-    drivers::{co5300::Co5300Display, framebuffer::Framebuffer, qspi_bus::QspiBus},
+    drivers::{co5300::Co5300Display, framebuffer::Flush as _, qspi_bus::QspiBus},
+    fontdue,
+    framebuffer::Framebuffer,
     peripherals::{
         magnetometer::Bmm350,
         power::Axp2101Power,

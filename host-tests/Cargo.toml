@@ -17,4 +17,5 @@ futures = { version = "0.3.32", default-features = false, features = ["async-awa
 heapless = "0.9.3"
 log = "0.4"
 lc76g = { path = "../crates/lc76g" }
+octowhere-ui = { path = "../crates/octowhere-ui" }
 libm = "0.2.16"
