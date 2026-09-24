@@ -101,6 +101,16 @@ impl Zone {
         }
     }
 
+    /// The zone's reference point from the IANA tables, as latitude and longitude in 1e-7
+    /// degrees. `None` for the `Etc` zones and the few aliases the tables leave out.
+    #[must_use]
+    pub fn reference(&self) -> Option<(i32, i32)> {
+        let references = crate::references::REFERENCES;
+        let index = references.binary_search_by(|(name, ..)| name.cmp(&self.name)).ok()?;
+        let (_, latitude, longitude) = references[index];
+        Some((i32::from(latitude) * 100_000, i32::from(longitude) * 100_000))
+    }
+
     /// The rule as its POSIX `TZ` string.
     #[must_use]
     pub fn rule_text(&self) -> &'static str {
