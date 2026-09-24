@@ -396,8 +396,16 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
         .with_mode(spi::Mode::_0);
 
     let mut dma_tx_command = dma_tx_buffer!(64).unwrap();
+    #[cfg(not(feature = "flush-chunk"))]
     let mut dma_tx = dma_tx_buffer!(4095 * 2).unwrap();
+    #[cfg(not(feature = "flush-chunk"))]
     let mut dma_tx_swap = dma_tx_buffer!(4095 * 2).unwrap();
+    #[cfg(feature = "flush-chunk")]
+    let (mut dma_tx, mut dma_tx_swap) = {
+        let descriptors = option_env!("FLUSH_DESCRIPTORS").and_then(|n| n.parse().ok()).unwrap_or(4usize);
+        info!("[TEAR] flush chunk {} bytes", descriptors * 4092);
+        (heap_dma_buffer(descriptors), heap_dma_buffer(descriptors))
+    };
     let dma_burst = esp_hal::dma::BurstConfig {
         external_memory: esp_hal::dma::ExternalBurstConfig::Size64,
         internal_memory: esp_hal::dma::InternalBurstConfig::Enabled,
@@ -562,6 +570,24 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
     }
 }
 
+/// A DMA buffer of `descriptors` full descriptors, taken from the internal heap for good.
+#[cfg(feature = "flush-chunk")]
+fn heap_dma_buffer(descriptors: usize) -> esp_hal::dma::DmaTxBuf {
+    use alloc::vec;
+    use esp_hal::dma::DmaDescriptor;
+    let words = descriptors * 4092 / 4;
+    let buffer: &'static mut [u32] = alloc::vec![0u32; words].leak();
+    // SAFETY: u8 has no alignment or validity requirements, and the length covers the words.
+    let buffer = unsafe { core::slice::from_raw_parts_mut(buffer.as_mut_ptr().cast::<u8>(), words * 4) };
+    let descriptors: &'static mut [DmaDescriptor] = vec![DmaDescriptor::EMPTY; descriptors].leak();
+    use esp_hal::dma::aligned::DmaAlignedMut;
+    esp_hal::dma::DmaTxBuf::new(
+        DmaAlignedMut::new(descriptors).unwrap(),
+        DmaAlignedMut::new(buffer).unwrap(),
+    )
+    .unwrap()
+}
+
 /// Polls TE for a second and logs its period and high time, in microseconds.
 #[cfg(feature = "tearing-bench")]
 fn measure_te(te: &Input<'_>) {
@@ -683,9 +709,10 @@ impl TearStats {
                 let chunks = FLUSH_CHUNKS.swap(0, Relaxed).max(1);
                 let (copy, wait) = (FLUSH_COPY_US.swap(0, Relaxed), FLUSH_WAIT_US.swap(0, Relaxed));
                 info!(
-                    "[TEAR] per frame copy_us={} dma_wait_us={} chunks={}; per chunk copy_us={} wait_us={}",
+                    "[TEAR] per frame copy_us={} dma_wait_us={} chunks={}; per chunk copy_us={} wait_us={}; one transfer alone {}us",
                     copy / self.frames, wait / self.frames, chunks / self.frames,
                     copy / chunks, wait / chunks,
+                    octowhere::drivers::co5300::DMA_ALONE_US.load(Relaxed),
                 );
             }
             *self = Self::default();

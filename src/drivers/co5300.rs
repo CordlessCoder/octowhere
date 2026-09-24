@@ -402,6 +402,8 @@ pub static FLUSH_COPY_US: core::sync::atomic::AtomicU32 = core::sync::atomic::At
 #[cfg(feature = "tearing-bench")]
 pub static FLUSH_WAIT_US: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 #[cfg(feature = "tearing-bench")]
+pub static DMA_ALONE_US: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+#[cfg(feature = "tearing-bench")]
 pub static FLUSH_CHUNKS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
 pub struct PixelStream<'r, 'd, C: Co5300ColorMode>
@@ -480,6 +482,13 @@ where
                 return Err(DisplayError::from(error));
             }
         };
+        #[cfg(feature = "tearing-bench")]
+        if FLUSH_CHUNKS.load(core::sync::atomic::Ordering::Relaxed) % 64 == 7 && buffered > 8000 {
+            let start = embassy_time::Instant::now();
+            while !transfer.is_done() {}
+            let alone = start.elapsed().as_micros() as u32;
+            DMA_ALONE_US.store(alone, core::sync::atomic::Ordering::Relaxed);
+        }
         #[cfg(feature = "tearing-bench")]
         let copy_start = embassy_time::Instant::now();
         let new = fill_swap_with(swap.as_mut_slice());

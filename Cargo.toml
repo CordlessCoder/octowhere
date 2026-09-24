@@ -55,6 +55,8 @@ tearing-bench = []
 tearing-scanline = ["tearing-bench"]
 # Spin on each chunk's transfer instead of awaiting it.
 flush-spin = []
+# DMA chunk buffers from the heap, `FLUSH_DESCRIPTORS` x 4092 bytes each (build-time env).
+flush-chunk = []
 
 [patch.crates-io]
 tca9554 = { git = "https://github.com/CordlessCoder/tca9554-rs", rev = "dd76e69" }
