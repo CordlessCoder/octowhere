@@ -137,7 +137,9 @@ where
                 Rectangle::new(band.top_left + Point::new(offset, state.sheet), band.size)
             })
     };
+    crate::part_timing::start();
     clear_visible(target, &bounds, painted)?;
+    crate::part_timing::mark(0);
 
     if state.sheet > 0 {
         let visible = Rectangle::new(Point::zero(), Size::new(board::LCD_WIDTH.into(), state.sheet as u32));

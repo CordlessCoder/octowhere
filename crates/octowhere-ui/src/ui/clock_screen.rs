@@ -626,20 +626,27 @@ pub fn draw<D>(
 where
     D: CoverageTarget<Color = Color>,
 {
+    use crate::part_timing::mark;
+    mark(11);
     let parts = Parts::of(view, accents);
+    mark(1);
     if let Some(color) = parts.ring {
         super::smooth::perimeter().draw(&mut OnBackground::new(&mut *target, chrome::BLACK), color);
     }
+    mark(2);
     if let Some(hours) = parts.hours.as_ref().filter(|_| target.visible(&HOURS_INK)) {
         let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
         draw_revealed(&digits(font, chrome::WHITE), hours, HOURS, parts.time.part(0, 2), field)?;
     }
+    mark(3);
     let (glyph, color, rows) = parts.icon;
     if target.visible(&TILE.bounds()) {
         TILE.draw(glyph, color, rows, target)?;
     }
 
+    mark(4);
     band().draw(target, parts.band)?;
+    mark(5);
     {
         let band = &mut OnBackground::new(&mut *target, parts.band);
         let (label, reveal) = parts.label;
@@ -660,23 +667,28 @@ where
             draw_revealed(&seconds_style(font), seconds, SECONDS, parts.time.part(4, 2), band)?;
         }
     }
+    mark(6);
     if target.visible(&MARK_INK) {
         draw_mark(font, parts.mark, parts.band, target)?;
     }
 
+    mark(7);
     if let Some((text, line, reveal)) = parts.date.as_ref().filter(|_| target.visible(&DATE_INK)) {
         let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
         let (style, origin) = date_origin(font, text, *line);
         draw_revealed(&style, text, origin, *reveal, field)?;
     }
+    mark(8);
     if target.visible(&PLATE_INK) {
         let (plate, shown) = &parts.plate;
         draw_plate(font, plate, *shown, target)?;
     }
+    mark(9);
     if let Some((name, reveal)) = parts.zone.as_ref().filter(|_| target.visible(&ZONE_INK)) {
         let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
         draw_revealed(&zone_style(font), name, zone_pen(font, name), *reveal, field)?;
     }
+    mark(10);
     Ok(())
 }
 
