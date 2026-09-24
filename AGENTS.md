@@ -18,8 +18,9 @@ initialization or peripheral mappings.
   helper. The IMU comes from `ph-qmi8658` rather than a local module.
 - `crates/octowhere-ui/` is everything between the sensors and the pixels, with no board
   dependency, so it also builds for the host. `src/ui/` there owns dirty tracking, geometry,
-  touch input mapping, IMU presentation, the compass maths, the screen prototypes, and `stage`,
-  which holds the screen state and turns touch and readings into redraws. `src/chrome.rs` is the
+  gestures and paging, IMU unit conversion, the compass maths, the clock and compass screens with
+  the icon and cell reveal they share, and `stage`, which holds the screen state and turns touch
+  and readings into redraws. `src/chrome.rs` is the
   font and draw-target layer, and `src/framebuffer.rs` holds the pixels. The firmware re-exports
   its `chrome`, `framebuffer` and `ui` modules, so `octowhere::ui::…` paths still resolve.
 - `src/main.rs` holds both cores, the sensor and motion tasks, and the frame loop, which feeds
@@ -59,9 +60,12 @@ initialization or peripheral mappings.
   and [`context/compass-implementation-update.md`](context/compass-implementation-update.md)
   reports back what the firmware now does, with simulator captures in
   `context/compass-sim-states/`.
-- [`context/GRAPHICS-PROTOTYPES.md`](context/GRAPHICS-PROTOTYPES.md) explains the three renderer
-  architectures in `crates/octowhere-ui/src/ui/prototypes.rs` and the `ACTIVE_ARCHITECTURE`
-  constant that selects one.
+- [`context/clock_face_design/CLOCK-FACE-SPEC.md`](context/clock_face_design/CLOCK-FACE-SPEC.md)
+  is the approved design of the clock face, the zone picker and the compass's current layout,
+  with concept images and the renderer that drew them.
+  [`context/compass-animation/COMPASS-ANIMATION-ADDENDUM.md`](context/compass-animation/COMPASS-ANIMATION-ADDENDUM.md)
+  replaces the compass's motion. The firmware implements both, except the picker, which waits
+  for the settings panel.
 - [`context/HARDWARE-VERIFICATION.md`](context/HARDWARE-VERIFICATION.md) lists open hardware
   questions from static review. They are questions, not confirmed defects.
 - [`context/IMPLEMENTATION.md`](context/IMPLEMENTATION.md) is a finished multi-agent brief kept as
@@ -134,7 +138,7 @@ Weigh that cost before adding one.
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 964,784 bytes, 23.37% of the 4,128,768-byte app partition. The time zone
+The image is currently 950,512 bytes, 23.02% of the 4,128,768-byte app partition. The time zone
 data is about 390 KB of that, and its boundary tolerance in `tools/tz-data.py` is the lever: the
 bench branch `bench/tz-boundary-size` tabulates size against accuracy. PP Fraktion Mono Bold with
 all of printable ASCII is about 54 KB; subsetting it to the glyphs the compass uses is the other
@@ -185,7 +189,9 @@ holds in the real frame loop and logs the step, draw, flush, pixels and regions 
 flush's parts and both cores' stack high-water marks (`compass-sweep-bench`, with
 `compass-micro-bench` for startup timings of the span operations and the draw by part; the
 micro-benches hold large values on the main stack, so box any added), and a host profiling
-example (`examples/damage_profile.rs`).
+example (`examples/damage_profile.rs`); and `bench/face-draw`, which starts on the clock
+face with a fixed zone, reruns the clock's and the compass's entries in turn with a synthetic
+heading, and logs every draw's time and area (`face-draw-bench`).
 
 ## Concurrency
 
@@ -242,7 +248,7 @@ poisons the thread and a later `get()` panics.
   clips once per row, and stands in for embedded-graphics' `translated` and `clipped`, which go
   per pixel. `chrome::OnBackground` names a known background so edges skip the read-back. Nothing
   checks that promise.
-- `prototypes::render` clears only the round panel's visible circle. The square's corners are
+- `screens::render` clears only the round panel's visible circle. The square's corners are
   never cleared or seen.
 
 The display path is split across:
@@ -329,16 +335,15 @@ renderer.
 
 ## Design language
 
-The current UI is a first attempt at the design language and is not the intended look. A proper
-design is deferred until the functionality is further along. Treat the screens as a working surface
-for exercising real features, not as something to polish. Do not spend effort on visual refinement
-unless asked, and do not read the present layout as a decision. Functionality first.
+The firmware has two screens, the clock and the compass, and both follow approved designs: the
+clock face specification and the compass animation addendum listed above. Change how either looks
+or moves only against those documents or a new design round. A new screen, the settings panel
+included, starts from a design round rather than from a sketch in code.
 
 [`context/marathon-ui-cross-project-handoff.md`](context/marathon-ui-cross-project-handoff.md) is
-the doctrine those prototypes were designed from. It is project-agnostic and was carried in from an
+the doctrine the screens were designed from. It is project-agnostic and was carried in from an
 earlier product, so it describes the visual language and the working method, not this board's
-screens. Read it before changing how anything looks. These rules constrain the code directly, and
-they hold even while the design is provisional:
+screens. Read it before changing how anything looks. These rules constrain the code directly:
 
 - Colour tokens are a single source of truth. They live in
   [`crates/octowhere-ui/src/chrome.rs`](crates/octowhere-ui/src/chrome.rs) as
@@ -349,8 +354,7 @@ they hold even while the design is provisional:
 - `RED` means a fault. Do not spend it on a data series, an idle state or a prompt.
 - A screen must not imply data, capability or state the system does not have. No invented sensor
   readings, no status word without a condition behind it, no control with no implementation path.
-  Synthetic values are for visual exploration and must be recognisable as synthetic. The map
-  markers and coordinates in `prototypes.rs` are static fixtures, not a position fix.
+  Synthetic values are for visual exploration and must be recognisable as synthetic.
 - Saturated fills carry black knockout text and black symbols. That pairing is the look, so a
   bright slab with white text on it is a departure rather than a variation.
 - Symbols are built from primitives on integer geometry, not drawn as bitmaps. A new icon is
@@ -358,8 +362,9 @@ they hold even while the design is provisional:
 - A screen that suggests a new capability is a proposal about behaviour, not a visual change. Add
   the capability first, or leave the control out.
 
-`crates/octowhere-ui/src/ui/prototypes.rs` is the applied result, and
-[`context/GRAPHICS-PROTOTYPES.md`](context/GRAPHICS-PROTOTYPES.md) records how it is structured.
+`crates/octowhere-ui/src/ui/screens.rs` holds the ring of screens and draws a frame of them.
+Each screen's drawing and damage live in its own module, `clock_screen.rs` and
+`compass_screen.rs`.
 
 ## Dependencies and conventions
 
@@ -378,8 +383,7 @@ crates. `octowhere-tz` lives in `crates/tz`, and the firmware reaches it as `oct
 `crates/sx127x-lora` publishes the package name `sx127xlora`, so the manifest key and the directory
 differ. Check [`Cargo.toml`](Cargo.toml) before relying on a fork-only API or changing a dependency.
 
-`src/lib.rs` and `crates/octowhere-ui/src/lib.rs` deliberately carry `#![expect(unused)]` while
-the UI is being built. `PERF:` comments
+`src/lib.rs` deliberately carries `#![expect(unused)]` while the firmware is being built. `PERF:` comments
 mark measured or suspected hot spots and open questions; they are context, not a task list.
 
 ## Writing conventions

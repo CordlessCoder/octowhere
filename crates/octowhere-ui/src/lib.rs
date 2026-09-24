@@ -3,7 +3,6 @@
 #![cfg_attr(not(test), no_std)]
 #![cfg_attr(feature = "allocator-api", feature(allocator_api))]
 #![deny(clippy::mem_forget)]
-#![expect(unused)]
 #![warn(unused_must_use)]
 extern crate alloc;
 

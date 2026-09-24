@@ -1,4 +1,4 @@
-//! Renders every screen, and the compass in each of its states, to 466×466 PNGs through the
+//! Renders the clock and the compass in each of their states, to 466×466 PNGs through the
 //! firmware's own drawing code. From the repository root:
 //!
 //! ```text
@@ -19,9 +19,9 @@ use octowhere_ui::{
     board::{LCD_HEIGHT, LCD_WIDTH},
     chrome::FB,
     ui::{
-        clock::{DateTime, ZoneMode, ZoneState},
+        clock::{ClockState, DateTime, ZoneMode, ZoneState},
         compass::CompassView,
-        prototypes::{ClockState, PeripheralState, Screen},
+        screens::{PeripheralState, Screen},
         stage::{Input, Motion, Sensors, Stage, Touch},
     },
 };
@@ -106,7 +106,7 @@ fn main() {
             },
         ),
     ] {
-        let sensors = Sensors { clock, zone, ..fixture };
+        let sensors = Sensors { clock, zone };
         frames.push((format!("clock-{name}"), stage_with(Screen::Clock, calibrated, sensors, 1_000_000)));
     }
     // 200 ms into the clock's entry: the icon half built, the plate landing.
@@ -169,12 +169,6 @@ fn stage_at(screen: Screen, compass: CompassView, now: u64) -> Stage {
 /// clock.
 fn sensors() -> Sensors {
     Sensors {
-        battery_mv: Some(3_912),
-        vbus_mv: Some(5_020),
-        vsys_mv: Some(3_890),
-        gnss_bytes: 512,
-        gnss_fix: true,
-        lora_irq: 0,
         clock: ClockState {
             utc: Some(
                 DateTime { year: 2026, month: 9, day: 24, hour: 12, minute: 7, second: 42 }
@@ -192,22 +186,11 @@ fn sensors() -> Sensors {
 
 /// A stage on `screen` that settled at 1 µs and has stepped to `now`.
 fn stage_with(screen: Screen, compass: CompassView, sensors: Sensors, now: u64) -> Stage {
-    let mut stage = Stage::new(PeripheralState {
-        pmic_valid: true,
-        tca_valid: true,
-        lora_valid: true,
-        ..PeripheralState::default()
-    });
+    let mut stage = Stage::new(PeripheralState::default());
     stage.show(screen);
     stage.step(Input {
         now: 1,
-        motion: Some(Motion {
-            accel_micro_ms2: [120_000, -340_000, 9_790_000],
-            gyro_micro_rad_s: [1_200, -800, 300],
-            imu_valid: true,
-            magnetic_microtesla: [21_400, -3_100, -38_900],
-            compass,
-        }),
+        motion: Some(Motion { compass }),
         sensors: Some(sensors),
         ..Input::default()
     });

@@ -6,7 +6,6 @@ use embedded_graphics::{
     pixelcolor::{Gray8, Rgb565, Rgb888, raw::RawU16},
     prelude::{Dimensions, DrawTarget, GrayColor, PixelColor, Point, PointsIter, RawData, RgbColor, Size, Transform},
     primitives::Rectangle,
-    text::renderer::TextMetrics,
 };
 use embedded_layout::align::{HorizontalAlignment, VerticalAlignment};
 use fontdue::{FontRepr, layout::Layout};
@@ -623,9 +622,6 @@ pub struct FontdueRenderer<'f, C> {
     /// Text color.
     pub text_color: C,
 
-    /// Background color.
-    pub background_color: C,
-
     // /// Underline color.
     // pub underline_color: DecorationColor<C>,
     //
@@ -642,12 +638,10 @@ impl<'f, C: PixelColor> FontdueRenderer<'f, C> {
         ctx: Rc<RefCell<FontdueRendererCtx>>,
         font_size: u32,
         text_color: C,
-        background_color: C,
         fonts: &'f [&'f dyn FontRepr],
     ) -> Self {
         Self {
             text_color,
-            background_color,
             ctx,
             font_size,
             font_index: 0,
@@ -661,28 +655,8 @@ impl<'f, C: PixelColor> FontdueRenderer<'f, C> {
         ctx.layout.clear();
         ctx
     }
-
-    fn draw_background<D>(
-        &self,
-        width: u32,
-        position: Point,
-        target: &mut D,
-    ) -> Result<(), D::Error>
-    where
-        D: DrawTarget<Color = C>,
-    {
-        if width == 0 {
-            return Ok(());
-        }
-
-        target.fill_solid(
-            &Rectangle::new(position, Size::new(width, self.font_size)),
-            self.background_color,
-        )?;
-
-        Ok(())
-    }
 }
+
 impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
     fn union_rect(a: Rectangle, b: Rectangle) -> Rectangle {
         if a.is_zero_sized() {
@@ -697,64 +671,6 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
                 .unwrap()
                 .component_max(b.bottom_right().unwrap()),
         )
-    }
-
-    fn render_layout<D: DrawTarget<Color = C>>(
-        &self,
-        ctx: &mut FontdueRendererCtx,
-        position: Point,
-        target: &mut D,
-    ) -> Result<Rectangle, D::Error> {
-        let bbox = target.bounding_box();
-        let usable_width = bbox.top_left.x + bbox.size.width as i32 - position.x;
-        if usable_width <= 0 {
-            return Ok(Rectangle::zero());
-        }
-        let mut rendered = Rectangle::zero();
-        ctx.layout
-            .glyphs()
-            .iter()
-            .filter(|g| g.x < usable_width as f32 && g.char_data.rasterize())
-            .try_for_each(|g| {
-                let (metrics, bitmap) = self.fonts[g.font_index].rasterize_indexed(
-                    &mut ctx.canvas,
-                    g.key.glyph_index,
-                    g.key.px,
-                );
-                let x_off = g.x as i32;
-                let y_off = g.y as i32;
-                rendered = Self::union_rect(
-                    rendered,
-                    Rectangle::new(
-                        position + Point::new(x_off, y_off),
-                        Size::new(metrics.width as u32, metrics.height as u32),
-                    ),
-                );
-
-                let coverage_to_color =
-                    |coverage: u8| self.background_color.lerp(&self.text_color, coverage);
-
-                let width = metrics.width;
-                let pixels =
-                    bitmap
-                        .into_iter()
-                        .enumerate()
-                        .filter(|&(_, c)| c != 0)
-                        .map(|(idx, c)| {
-                            let y = idx / width;
-                            let x = idx % width;
-                            Pixel(
-                                position + Point::new(x_off + x as i32, y_off + y as i32),
-                                coverage_to_color(c),
-                            )
-                        });
-                target.draw_iter(pixels)
-            })?;
-        // self.draw_background(width as u32, position, target)?;
-        // target.draw_iter(pixels)?;
-        // self.draw_strikethrough(width as u32, position, target)?;
-        // self.draw_underline(width as u32, position, target)?;
-        Ok(rendered)
     }
 
     /// Where [`draw_rotated`](Self::draw_rotated) starts each glyph's pen, relative to `center`
@@ -1020,98 +936,5 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
                 )
             })
     }
-    #[inline]
-    pub fn render<D: DrawTarget<Color = C>>(
-        &self,
-        layout_cb: impl FnOnce(&mut Layout<()>, &[&dyn FontRepr]),
-        position: Point,
-        target: &mut D,
-    ) -> Result<Rectangle, D::Error> {
-        let ctx = &mut *self.borrow_ctx();
-        ctx.reset_layout();
-        layout_cb(&mut ctx.layout, self.fonts);
-        self.render_layout(ctx, position, target)
-    }
 }
 
-impl<C: PixelColor + RgbColorExt> embedded_graphics::text::renderer::TextRenderer
-    for FontdueRenderer<'_, C>
-{
-    type Color = C;
-
-    fn draw_string<D>(
-        &self,
-        text: &str,
-        position: Point,
-        _baseline: embedded_graphics::text::Baseline,
-        target: &mut D,
-    ) -> Result<Point, D::Error>
-    where
-        D: DrawTarget<Color = Self::Color>,
-    {
-        self.render(
-            |layout, fonts| {
-                layout.append(
-                    fonts,
-                    &fontdue::layout::TextStyle::new(text, self.font_size as f32, self.font_index),
-                );
-            },
-            position,
-            target,
-        )?;
-        let ctx = self.borrow_ctx();
-        let pos = position
-            + ctx
-                .layout
-                .glyphs()
-                .last()
-                .map(|g| Point::new(g.x as i32 + g.width as i32, g.y as i32 + g.height as i32))
-                .unwrap_or(Point::zero());
-
-        Ok(pos)
-    }
-
-    fn measure_string(
-        &self,
-        text: &str,
-        position: Point,
-        _baseline: embedded_graphics::text::Baseline,
-    ) -> embedded_graphics::text::renderer::TextMetrics {
-        let mut ctx = self.borrow_ctx();
-        ctx.reset_layout();
-        ctx.layout.append(
-            self.fonts,
-            &fontdue::layout::TextStyle::new(text, self.font_size as f32, self.font_index),
-        );
-        let bounding_box = Self::layout_bounds(&ctx, position);
-        let next_position = ctx
-            .layout
-            .glyphs()
-            .last()
-            .map(|g| position + Point::new(g.x as i32 + g.width as i32, 0))
-            .unwrap_or(position);
-
-        TextMetrics {
-            bounding_box,
-            next_position,
-        }
-    }
-
-    fn draw_whitespace<D>(
-        &self,
-        width: u32,
-        position: Point,
-        _baseline: embedded_graphics::text::Baseline,
-        target: &mut D,
-    ) -> Result<Point, D::Error>
-    where
-        D: DrawTarget<Color = Self::Color>,
-    {
-        self.draw_background(width, position, target)?;
-        Ok(position + Size::new(width, 0))
-    }
-
-    fn line_height(&self) -> u32 {
-        self.font_size
-    }
-}

@@ -1,4 +1,3 @@
-pub mod axis_check;
 pub mod clock;
 pub mod clock_screen;
 pub mod compass;
@@ -9,9 +8,8 @@ pub mod geometry;
 pub mod gesture;
 pub mod icon;
 pub mod imu;
-pub mod input;
 pub mod pager;
-pub mod prototypes;
 pub mod reveal;
+pub mod screens;
 pub mod smooth;
 pub mod stage;

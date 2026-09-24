@@ -721,7 +721,6 @@ mod tests {
             chrome::FontdueRendererCtx::new_rc(),
             20,
             chrome::WHITE,
-            chrome::BLACK,
             chrome::FONTS,
         )
     }

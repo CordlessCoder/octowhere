@@ -59,7 +59,7 @@ use octowhere::{
         compass::{AxisMap, Calibration, CalibrationEvent, CompassView, Vec3},
         fusion::Fusion,
         imu::{accel_micro_ms2, gyro_micro_rad_s},
-        prototypes::{self, Screen},
+        screens::PeripheralState,
         stage::{Input as StageInput, Motion, Sensors, Stage, Touch},
     },
     util::{Swap, SwapThread},
@@ -489,8 +489,9 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
     }
 }
 
-/// Sensor axes into the screen frame of `ui::compass`, fitted from the axis check screen's twelve
-/// poses by `tools/fit-sensor-axes.py`. Both chips sit face down on their boards.
+/// Sensor axes into the screen frame of `ui::compass`, fitted from twelve logged poses by the
+/// axis check screen and its fitting script, which git history keeps. Both chips sit face down on
+/// their boards.
 const IMU_AXES: AxisMap = AxisMap([(1, 1.0), (0, 1.0), (2, -1.0)]);
 const MAG_AXES: AxisMap = AxisMap([(0, -1.0), (1, -1.0), (2, 1.0)]);
 const MOTION_PERIOD: Duration = Duration::from_millis(250);
@@ -508,7 +509,6 @@ async fn motion_task(task: MotionTask) {
         accel_lsb_per_g,
         gyro_lsb_per_dps,
     } = task;
-    let mut state = Motion::default();
     let mut calibration = Calibration::new();
     let mut fusion = Fusion::new();
     // The heading is set straight from the field when calibration completes, not left to
@@ -562,7 +562,6 @@ async fn motion_task(task: MotionTask) {
                 compensated.y_microtesla,
                 compensated.z_microtesla,
             ];
-            state.magnetic_microtesla = sample.map(|value| (value * 1_000.0) as i32);
             let sample = MAG_AXES.apply(sample);
             let event = calibration.update(sample);
             let offset = calibration.offset();
@@ -581,35 +580,20 @@ async fn motion_task(task: MotionTask) {
         let mut accel = None;
         let mut gyro = None;
         if let Ok(sample) = imu.read_sync_sample(&mut embassy_time::Delay).await {
-            if let Some(raw) = sample.accel {
-                state.accel_micro_ms2 = [
-                    accel_micro_ms2(raw.x, accel_lsb_per_g),
-                    accel_micro_ms2(raw.y, accel_lsb_per_g),
-                    accel_micro_ms2(raw.z, accel_lsb_per_g),
-                ];
-                accel = Some(IMU_AXES.apply(
-                    state.accel_micro_ms2.map(|value| value as f32 / 1e6),
-                ));
-            }
-            if let Some(raw) = sample.gyro {
-                state.gyro_micro_rad_s = [
-                    gyro_micro_rad_s(raw.x, gyro_lsb_per_dps),
-                    gyro_micro_rad_s(raw.y, gyro_lsb_per_dps),
-                    gyro_micro_rad_s(raw.z, gyro_lsb_per_dps),
-                ];
-                gyro = Some(IMU_AXES.apply(
-                    state.gyro_micro_rad_s.map(|value| value as f32 / 1e6),
-                ));
-            }
-            state.imu_valid = sample.accel.is_some() || sample.gyro.is_some();
+            let accel_micro = sample.accel.map(|raw| {
+                [raw.x, raw.y, raw.z].map(|axis| accel_micro_ms2(axis, accel_lsb_per_g))
+            });
+            let gyro_micro = sample.gyro.map(|raw| {
+                [raw.x, raw.y, raw.z].map(|axis| gyro_micro_rad_s(axis, gyro_lsb_per_dps))
+            });
+            accel = accel_micro.map(|micro| IMU_AXES.apply(micro.map(|value| value as f32 / 1e6)));
+            gyro = gyro_micro.map(|micro| IMU_AXES.apply(micro.map(|value| value as f32 / 1e6)));
             if log {
                 println!(
                     "[IMU] sample accel={:?} gyro={:?} si_accel={:?} si_gyro={:?}",
-                    sample.accel, sample.gyro, state.accel_micro_ms2, state.gyro_micro_rad_s
+                    sample.accel, sample.gyro, accel_micro, gyro_micro
                 );
             }
-        } else {
-            state.imu_valid = false;
         }
 
         let now = Instant::now();
@@ -629,7 +613,7 @@ async fn motion_task(task: MotionTask) {
             }
             fusion.update(gyro, accel, raw_field, trusted_field, dt);
         }
-        state.compass = CompassView::new(fusion.attitude(), field, &calibration);
+        let compass = CompassView::new(fusion.attitude(), field, &calibration);
         if log && compass_active {
             println!(
                 "[COMPASS] screen accel={:?} field={:?}uT offset={:?}uT gyro_offset={:?} candidate={:?} view={:?}",
@@ -640,10 +624,10 @@ async fn motion_task(task: MotionTask) {
                 calibration
                     .candidate()
                     .map(|candidate| (candidate.progress(), candidate.residual())),
-                state.compass
+                compass
             );
         }
-        MOTION_STATE.signal(state);
+        MOTION_STATE.signal(Motion { compass });
     }
 }
 
@@ -1115,7 +1099,6 @@ async fn async_main(spawner: Spawner) {
         power.get_system_voltage().await,
     );
     let battery_present = power.is_battery_present().await.unwrap_or(false);
-    let pmic_valid = pmic_readings.0.is_ok() && pmic_readings.1.is_ok() && pmic_readings.2.is_ok();
 
     let mut exio = Tca9554::new(i2c.clone(), tca9554::Address::standard());
 
@@ -1508,16 +1491,7 @@ async fn async_main(spawner: Spawner) {
 
     start_display_core!(peripherals, fb_st);
 
-    let mut stage = Stage::new(prototypes::PeripheralState {
-        pmic_valid,
-        battery_mv: initial_sensor_state.battery_mv,
-        vbus_mv: initial_sensor_state.vbus_mv,
-        vsys_mv: initial_sensor_state.vsys_mv,
-        tca_valid: true,
-        gnss_valid: gnss_parse_ok,
-        lora_valid: lora_result == 0,
-        ..prototypes::PeripheralState::default()
-    });
+    let mut stage = Stage::new(PeripheralState::default());
     let mut touch_data = TouchData::default();
     println!(
         "[MEM] internal_used={} psram_used={}",
@@ -1587,12 +1561,6 @@ async fn async_main(spawner: Spawner) {
                 }),
                 motion: motion_state,
                 sensors: sensor_state.map(|state| Sensors {
-                    battery_mv: state.battery_mv,
-                    vbus_mv: state.vbus_mv,
-                    vsys_mv: state.vsys_mv,
-                    gnss_bytes: state.gnss_bytes,
-                    gnss_fix: state.gnss.fix.is_some(),
-                    lora_irq: state.lora_irq,
                     clock: state.clock,
                     zone: state.zone,
                 }),
@@ -1602,19 +1570,6 @@ async fn async_main(spawner: Spawner) {
                 COMPASS_RECALIBRATE.store(true, Ordering::Relaxed);
             }
             COMPASS_ACTIVE.store(update.samples_fast, Ordering::Relaxed);
-            if let Some(record) = update.pose {
-                println!(
-                    "[POSE] pose={} mag=({:.2}, {:.2}, {:.2})uT accel=({:.3}, {:.3}, {:.3}) samples={}",
-                    record.pose + 1,
-                    record.magnetic_microtesla[0],
-                    record.magnetic_microtesla[1],
-                    record.magnetic_microtesla[2],
-                    record.accel_ms2[0],
-                    record.accel_ms2[1],
-                    record.accel_ms2[2],
-                    record.samples
-                );
-            }
             let changed = stage.changed();
             (*repaint).clone_from(&previous_changed);
             repaint.extend(changed);

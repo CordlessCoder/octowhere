@@ -8,8 +8,8 @@ use octowhere_ui::{
         clock_screen::Accents as ClockAccents,
         compass::CompassView,
         gesture::{LIFT_SAMPLES, Micros},
-        prototypes::{COMPASS_CENTER, HEADER, PeripheralState, Screen},
-        compass_screen::Accents,
+        compass_screen::{Accents, CENTER as COMPASS_CENTER},
+        screens::{PeripheralState, Screen},
         stage::{Input, Motion, Sensors, Stage, Touch, Update},
     },
 };
@@ -105,24 +105,13 @@ impl Driver {
 
 fn heading(decidegrees: u16) -> Motion {
     Motion {
-        imu_valid: true,
         compass: CompassView {
             live: true,
             calibration_percent: 100,
             heading_decidegrees: Some(decidegrees),
             ..CompassView::default()
         },
-        ..Motion::default()
     }
-}
-
-#[test]
-fn a_tap_on_the_header_moves_to_the_next_screen() {
-    let mut driver = Driver::new();
-    driver.stroke(&[HEADER.center()]);
-    assert!(driver.stage.is_animating());
-    driver.settle();
-    assert_eq!(driver.stage.screen(), Screen::Map.next());
 }
 
 #[test]
@@ -131,12 +120,12 @@ fn a_swipe_left_moves_to_the_next_screen_and_right_moves_back() {
     let left: Vec<_> = (0..8).map(|step| Point::new(400 - step * 40, 233)).collect();
     driver.stroke(&left);
     driver.settle();
-    assert_eq!(driver.stage.screen(), Screen::Motion);
+    assert_eq!(driver.stage.screen(), Screen::Compass);
 
     let right: Vec<_> = left.iter().rev().copied().collect();
     driver.stroke(&right);
     driver.settle();
-    assert_eq!(driver.stage.screen(), Screen::Map);
+    assert_eq!(driver.stage.screen(), Screen::Clock);
 }
 
 #[test]
@@ -169,7 +158,7 @@ fn a_tap_on_the_compass_does_nothing() {
     let mut driver = Driver::settled_on_compass();
     let updates = driver.stroke(&[COMPASS_CENTER + Point::new(30, -40)]);
     assert!(updates.iter().all(|update| !update.recalibrate));
-    driver.stroke(&[HEADER.center()]);
+    driver.stroke(&[Point::new(233, 73)]);
     assert!(!driver.stage.is_animating());
     assert_eq!(driver.stage.screen(), Screen::Compass);
 }
@@ -233,7 +222,7 @@ fn a_swipe_off_the_compass_takes_its_accents_reversibly() {
 
 #[test]
 fn the_compass_accents_stay_hidden_while_it_slides_in() {
-    let mut driver = Driver::on(Screen::Navigation);
+    let mut driver = Driver::on(Screen::Clock);
     driver.motion(heading(470));
     driver.wait(500_000);
     driver.touch(Some(Point::new(400, 233)));
@@ -288,9 +277,9 @@ fn the_compass_asks_for_fast_samples_while_it_shows_or_slides_in() {
     let mut driver = Driver::on(Screen::Compass);
     assert!(driver.step(Input::default()).samples_fast);
 
-    let mut driver = Driver::on(Screen::Navigation);
+    let mut driver = Driver::on(Screen::Clock);
     assert!(!driver.step(Input::default()).samples_fast);
-    // Dragging left uncovers the compass, which follows navigation.
+    // Dragging left uncovers the compass, which follows the clock.
     driver.touch(Some(Point::new(400, 233)));
     driver.touch(Some(Point::new(340, 233)));
     assert!(driver.touch(Some(Point::new(300, 233))).samples_fast);
@@ -345,10 +334,7 @@ fn stages() -> Vec<(String, Stage)> {
         ),
     ] {
         let mut driver = Driver::on(Screen::Compass);
-        driver.motion(Motion {
-            compass,
-            ..Motion::default()
-        });
+        driver.motion(Motion { compass });
         driver.wait(500_000);
         stages.push((format!("compass {name}"), driver.stage));
     }
@@ -620,7 +606,7 @@ fn zone(name: &str, mode: ZoneMode) -> ZoneState {
 
 fn sensors(clock: ClockState, zone: ZoneState) -> Input {
     Input {
-        sensors: Some(Sensors { clock, zone, ..Sensors::default() }),
+        sensors: Some(Sensors { clock, zone }),
         ..Input::default()
     }
 }
@@ -741,7 +727,7 @@ fn the_clock_rebuilds_on_a_change_and_shows_a_fault_at_once() {
 fn a_tap_on_the_clock_does_nothing() {
     let mut driver = Driver::on(Screen::Clock);
     driver.wait(500_000);
-    driver.stroke(&[HEADER.center()]);
+    driver.stroke(&[Point::new(233, 73)]);
     driver.wait(500_000);
     assert_eq!(driver.stage.screen(), Screen::Clock);
 }

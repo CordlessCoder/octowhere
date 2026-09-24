@@ -40,7 +40,7 @@ use octowhere_ui::{
     ui::{
         clock::{ClockState, ZoneMode, ZoneState},
         compass::CompassView,
-        prototypes::PeripheralState,
+        screens::PeripheralState,
         stage::{Input, Motion, Sensors, Stage, Touch},
     },
 };
@@ -141,9 +141,7 @@ impl Readings {
 
     fn motion(&self) -> Motion {
         Motion {
-            imu_valid: self.live,
             compass: self.compass(),
-            ..Motion::default()
         }
     }
 }
@@ -167,12 +165,7 @@ fn main() {
     .expect("opening the window");
     window.set_target_fps(60);
 
-    let mut stage = Stage::new(PeripheralState {
-        pmic_valid: true,
-        tca_valid: true,
-        lora_valid: true,
-        ..PeripheralState::default()
-    });
+    let mut stage = Stage::new(PeripheralState::default());
     let mut readings = Readings {
         heading: 37.0,
         pitch: 0,
@@ -252,9 +245,6 @@ fn main() {
             readings.calibration = 0;
             readings_changed = true;
         }
-        if let Some(record) = update.pose {
-            println!("pose {} logged from {} samples", record.pose + 1, record.samples);
-        }
 
         let changed = stage.changed();
         if redraw || !changed.is_empty() {
@@ -308,18 +298,12 @@ fn to_pixels(fb: &FB, mask: &[bool], pixels: &mut [u32]) {
     }
 }
 
-/// Synthetic power and GNSS readings, with the host's UTC clock.
+/// The host's UTC clock, in the state R selects.
 fn sensors(zone: ZoneState, (gnss, stopped, readable): (bool, bool, bool)) -> Sensors {
     let seconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_secs());
     Sensors {
-        battery_mv: Some(3_912),
-        vbus_mv: Some(5_020),
-        vsys_mv: Some(3_890),
-        gnss_bytes: 512,
-        gnss_fix: true,
-        lora_irq: 0,
         clock: ClockState {
             utc: readable.then_some(seconds as i64),
             set_from_gnss: gnss,

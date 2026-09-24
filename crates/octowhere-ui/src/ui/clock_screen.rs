@@ -5,7 +5,6 @@
 use core::fmt::Write as _;
 
 use embedded_graphics::{
-    draw_target::DrawTarget,
     prelude::{Point, Size},
     primitives::Rectangle,
 };

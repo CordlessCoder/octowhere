@@ -5,15 +5,13 @@
 use embedded_graphics::prelude::Point;
 
 use super::{
-    axis_check::{self, AxisCheck},
-    clock::ZoneState,
+    clock::{ClockState, ZoneState},
     clock_screen,
     compass::CompassView,
     compass_screen::{self, Accents, DialFootprint, Mode},
     gesture::{GestureEvent, GestureTracker, Micros},
-    input::TouchState,
     pager::Pager,
-    prototypes::{self, ClockState, PeripheralState, Screen},
+    screens::{self, PeripheralState, Screen},
 };
 use crate::{
     board,
@@ -23,22 +21,12 @@ use crate::{
 /// What the motion task publishes each sample.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Motion {
-    pub accel_micro_ms2: [i32; 3],
-    pub gyro_micro_rad_s: [i32; 3],
-    pub imu_valid: bool,
-    pub magnetic_microtesla: [i32; 3],
     pub compass: CompassView,
 }
 
 /// The parts of the sensor task's snapshot the screens show.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Sensors {
-    pub battery_mv: Option<u16>,
-    pub vbus_mv: Option<u16>,
-    pub vsys_mv: Option<u16>,
-    pub gnss_bytes: u16,
-    pub gnss_fix: bool,
-    pub lora_irq: u8,
     pub clock: ClockState,
     pub zone: ZoneState,
 }
@@ -130,20 +118,15 @@ pub struct Input {
 pub struct Update {
     /// A cover over the settled compass page asked for the calibration to restart.
     pub recalibrate: bool,
-    /// The axis check finished capturing a pose.
-    pub pose: Option<axis_check::Record>,
     /// A screen that needs fast motion samples shows, or is sliding in.
     pub samples_fast: bool,
 }
 
 pub struct Stage {
     screen: Screen,
-    selected_node: Option<u8>,
     raw_touch: [Option<Point>; 2],
     gesture: GestureTracker,
     pager: Pager,
-    axis_check: AxisCheck,
-    touch_state: TouchState,
     peripherals: PeripheralState,
     renderer: FontdueRenderer<'static, Color>,
     /// When the last cover report arrived, while the hand that sent it may still be there.
@@ -170,19 +153,15 @@ impl Stage {
     #[must_use]
     pub fn new(peripherals: PeripheralState) -> Self {
         Self {
-            screen: Screen::Map,
-            selected_node: None,
+            screen: Screen::ALL[0],
             raw_touch: [None; 2],
             gesture: GestureTracker::default(),
             pager: Pager::new(0, Screen::ALL.len(), board::LCD_WIDTH as i32),
-            axis_check: AxisCheck::default(),
-            touch_state: TouchState::default(),
             peripherals,
             renderer: FontdueRenderer::new(
                 FontdueRendererCtx::new_rc(),
                 20,
                 chrome::WHITE,
-                chrome::BLACK,
                 chrome::FONTS,
             ),
             covered_at: None,
@@ -207,7 +186,6 @@ impl Stage {
             .expect("every screen is in the ring");
         self.pager = Pager::new(page, Screen::ALL.len(), board::LCD_WIDTH as i32);
         self.screen = screen;
-        self.selected_node = None;
         self.compass_settled = None;
         self.top_edge_since = None;
         self.drawn_compass = None;
@@ -226,7 +204,7 @@ impl Stage {
         self.screen
     }
 
-    /// How far the compass page's dial accents have faded in.
+    /// How far the compass page's accents have come in.
     #[must_use]
     pub fn accents(&self) -> Accents {
         self.accents
@@ -247,7 +225,7 @@ impl Stage {
     /// again soon even without an interrupt.
     #[must_use]
     pub fn in_contact(&self) -> bool {
-        self.peripherals.touch_position.is_some() || self.gesture.in_contact()
+        self.raw_touch[0].is_some() || self.gesture.in_contact()
     }
 
     /// A page slide or a fade is under way, so the next step should come without waiting for
@@ -267,43 +245,20 @@ impl Stage {
         self.changed.clear();
         let mut update = Update {
             recalibrate: false,
-            pose: None,
             samples_fast: false,
         };
         // Set where a change needs the whole panel redrawn. The settled compass works out its own
         // damage instead.
         let mut full = false;
-        let previous_touch = (
-            self.peripherals.touch_points,
-            self.peripherals.touch_position,
-            self.peripherals.touch_positions,
-        );
 
         if let Some(motion) = motion {
-            let peripherals = &mut self.peripherals;
-            peripherals.accel_micro_ms2 = motion.accel_micro_ms2;
-            peripherals.gyro_micro_rad_s = motion.gyro_micro_rad_s;
-            peripherals.imu_valid = motion.imu_valid;
-            peripherals.magnetic_microtesla = motion.magnetic_microtesla;
-            peripherals.compass = motion.compass;
-            if matches!(
-                self.screen,
-                Screen::Motion | Screen::Compass | Screen::AxisCheck
-            ) {
-                full = true;
-            }
+            self.peripherals.compass = motion.compass;
+            full |= self.screen == Screen::Compass;
         }
         if let Some(sensors) = sensors {
-            let peripherals = &mut self.peripherals;
-            peripherals.battery_mv = sensors.battery_mv;
-            peripherals.vbus_mv = sensors.vbus_mv;
-            peripherals.vsys_mv = sensors.vsys_mv;
-            peripherals.gnss_bytes = sensors.gnss_bytes;
-            peripherals.gnss_valid = sensors.gnss_fix;
-            peripherals.lora_irq = sensors.lora_irq;
-            peripherals.clock = sensors.clock;
-            peripherals.zone = sensors.zone;
-            full = true;
+            self.peripherals.clock = sensors.clock;
+            self.peripherals.zone = sensors.zone;
+            full |= self.screen == Screen::Clock;
         }
 
         if let Some(touch) = touch {
@@ -312,55 +267,20 @@ impl Stage {
                 Touch::Cover => [None; 2],
             };
         }
-        let (touch_points, touch_positions) = self.touch_state.update_positions(self.raw_touch);
-        self.peripherals.touch_points = touch_points;
-        self.peripherals.touch_position = touch_positions[0];
-        self.peripherals.touch_positions = touch_positions;
 
         let previous_view = self.pager.view();
-        let previous_selected_node = self.selected_node;
         let event = if touch.is_some() {
             self.gesture.update(self.raw_touch[0], now)
         } else {
             GestureEvent::None
         };
         self.pager.handle(&event, now);
-        if self.screen == Screen::AxisCheck {
-            if let GestureEvent::DragEnd(drag) = event {
-                let offset = drag.offset();
-                if offset.y.abs() > 60 && offset.y.abs() > offset.x.abs() {
-                    self.axis_check.step(offset.y < 0);
-                }
-            }
-            if let Some(motion) = motion {
-                update.pose = self.axis_check.sample(
-                    motion.magnetic_microtesla.map(|value| value as f32 / 1e3),
-                    motion.accel_micro_ms2.map(|value| value as f32 / 1e6),
-                    now,
-                );
-            }
-        }
-        if let GestureEvent::Tap(point) = event {
-            if self.screen == Screen::AxisCheck {
-                self.axis_check.start(now);
-            } else if matches!(self.screen, Screen::Compass | Screen::Clock) {
-                // Only a cover restarts calibration on the compass, and the clock takes no taps.
-            } else if prototypes::HEADER.contains(point) {
-                self.pager.advance(true, now);
-            } else if self.screen == Screen::Map
-                && let Some(node) = selected_node(point)
-            {
-                self.selected_node = Some(node);
-            }
-        }
+        // Taps do nothing on either screen: only a cover restarts the compass's calibration.
         self.pager.step(now);
         let view = self.pager.view();
         let screen = Screen::ALL[view.page];
-        if screen != self.screen {
-            self.screen = screen;
-            self.selected_node = None;
-        }
-        let samples_fast = |screen: Screen| matches!(screen, Screen::Compass | Screen::AxisCheck);
+        self.screen = screen;
+        let samples_fast = |screen: Screen| screen == Screen::Compass;
         update.samples_fast = samples_fast(screen)
             || view
                 .neighbour
@@ -400,20 +320,8 @@ impl Stage {
             full = true;
         }
 
-        let axis_check = self.axis_check.view();
-        if axis_check != self.peripherals.axis_check {
-            self.peripherals.axis_check = axis_check;
-            full = true;
-        }
-        if view != previous_view || self.selected_node != previous_selected_node {
-            full = true;
-        }
-        if self.screen == Screen::Touch
-            && (touch_points, touch_positions[0], touch_positions) != previous_touch
-        {
-            full = true;
-        }
-        // A settled compass or clock works out its own damage; anything else redraws in full.
+        full |= view != previous_view;
+        // A settled screen works out its own damage; a moving one redraws in full.
         let settled = view.offset == 0 && view.neighbour.is_none();
         let compass = (self.screen == Screen::Compass && settled)
             .then_some((self.peripherals.compass, self.accents));
@@ -613,11 +521,9 @@ impl Stage {
         D::Error: core::fmt::Debug,
     {
         let view = self.pager.view();
-        prototypes::render(
-            prototypes::ACTIVE_ARCHITECTURE,
-            prototypes::State {
+        screens::render(
+            screens::State {
                 screen: self.screen,
-                selected_node: self.selected_node,
                 peripherals: self.peripherals,
                 offset: view.offset,
                 neighbour: view
@@ -629,20 +535,7 @@ impl Stage {
             &self.renderer,
             target,
         )
-        .expect("prototype renderer failed")
-    }
-}
-
-fn selected_node(point: Point) -> Option<u8> {
-    let (x, y) = (point.x, point.y);
-    if (100..=164).contains(&x) && (146..=210).contains(&y) {
-        Some(1)
-    } else if (262..=326).contains(&x) && (206..=270).contains(&y) {
-        Some(2)
-    } else if (322..=386).contains(&x) && (284..=348).contains(&y) {
-        Some(3)
-    } else {
-        None
+        .expect("drawing a screen failed")
     }
 }
 
