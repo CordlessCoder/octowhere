@@ -11,6 +11,9 @@
 //! none of the host's speed. `--scenes` lists them. MP4 is encoded by `ffmpeg`, which must be on
 //! the path.
 //!
+//! A white disc marks where a finger is down, and fades as a ring for 300 ms after it lifts, so
+//! a recording shows taps and drags.
+//!
 //! The panel shows only its inscribed circle. The window paints the corners outside it grey, and
 //! screenshots and GIFs leave them transparent. An MP4 has no transparency and keeps the grey.
 //! `--unmasked`, or M in the window, shows the whole framebuffer instead, to see what is drawn
@@ -193,25 +196,86 @@ impl Readings {
 /// The framebuffer and what the window shows of it.
 struct Panel {
     fb: Box<FB>,
+    /// What the window shows of the framebuffer, before the touch marker.
+    base: Vec<u32>,
+    /// `base` with the touch marker over it.
     pixels: Vec<u32>,
     /// Whether each pixel shows on the panel.
     mask: Vec<bool>,
     masked: bool,
+    /// Where a finger is down, or where one lifted and when, while its marker fades.
+    contact: Option<Point>,
+    lifted: Option<(Point, u64)>,
 }
+
+/// The touch marker's radius, and how long it fades after a lift, in microseconds.
+const MARKER_RADIUS: f32 = 16.0;
+const MARKER_FADE: u64 = 300_000;
 
 impl Panel {
     fn new(masked: bool) -> Self {
         Self {
             fb: FB::boxed(),
+            base: vec![OFF_PANEL; WIDTH * HEIGHT],
             pixels: vec![OFF_PANEL; WIDTH * HEIGHT],
             mask: panel_mask(),
             masked,
+            contact: None,
+            lifted: None,
         }
     }
 
     fn set_masked(&mut self, masked: bool) {
         self.masked = masked;
-        to_pixels(&self.fb, self.masked.then_some(&self.mask), &mut self.pixels);
+        to_pixels(&self.fb, self.masked.then_some(&self.mask), &mut self.base);
+        self.compose(0);
+    }
+
+    /// Follows the stage's contact, and puts a marker where it is: a disc while a finger is
+    /// down, and a ring that fades after it lifts, so a one-step tap still shows in a recording.
+    fn touch(&mut self, stage: &Stage, now: u64) {
+        let contact = stage.contact();
+        if let (None, Some(was)) = (contact, self.contact) {
+            self.lifted = Some((was, now));
+        }
+        if contact.is_some() {
+            self.lifted = None;
+        }
+        self.contact = contact;
+        self.compose(now);
+    }
+
+    fn compose(&mut self, now: u64) {
+        self.pixels.copy_from_slice(&self.base);
+        let (center, fill, ring) = match (self.contact, self.lifted) {
+            (Some(point), _) => (point, 0.45, 0.9),
+            (None, Some((point, at))) if now.saturating_sub(at) < MARKER_FADE => {
+                let left = 1.0 - now.saturating_sub(at) as f32 / MARKER_FADE as f32;
+                (point, 0.0, 0.9 * left)
+            }
+            _ => return,
+        };
+        // White, with a dark outline so it shows on white too.
+        let reach = MARKER_RADIUS as i32 + 4;
+        for y in (center.y - reach).max(0)..(center.y + reach).min(HEIGHT as i32) {
+            for x in (center.x - reach).max(0)..(center.x + reach).min(WIDTH as i32) {
+                let distance = ((x - center.x) as f32).hypot((y - center.y) as f32);
+                let band = |radius: f32| (1.0 - (distance - radius).abs() / 1.5).clamp(0.0, 1.0);
+                let inside = (MARKER_RADIUS - distance + 0.5).clamp(0.0, 1.0);
+                let light = (ring * band(MARKER_RADIUS)).max(fill * inside);
+                let dark = ring * band(MARKER_RADIUS + 2.0) * (1.0 - light);
+                if light <= 0.0 && dark <= 0.0 {
+                    continue;
+                }
+                let index = y as usize * WIDTH + x as usize;
+                let [_, r, g, b] = self.pixels[index].to_be_bytes();
+                let mix = |channel: u8| {
+                    let lit = f32::from(channel) + (255.0 - f32::from(channel)) * light;
+                    (lit * (1.0 - dark)) as u8
+                };
+                self.pixels[index] = u32::from_be_bytes([0, mix(r), mix(g), mix(b)]);
+            }
+        }
     }
 
     /// Which pixels an image of the panel should leave out.
@@ -237,7 +301,8 @@ impl Panel {
             changed.pixels()
         };
         let took = drawing.elapsed();
-        to_pixels(&self.fb, self.masked.then_some(&self.mask), &mut self.pixels);
+        to_pixels(&self.fb, self.masked.then_some(&self.mask), &mut self.base);
+        self.compose(0);
         Some((pixels_drawn, took))
     }
 }
@@ -292,6 +357,7 @@ fn record(scene: &scenes::Scene, path: PathBuf, masked: bool) {
     driver.observe(|stage, now| match &mut recording {
         None => {
             panel.draw(stage, true);
+            panel.touch(stage, now);
             recording = Some(record::Recording::start(
                 path.clone(),
                 now,
@@ -303,6 +369,7 @@ fn record(scene: &scenes::Scene, path: PathBuf, masked: bool) {
             // Samples due before this step show the step before.
             recording.sample(now - 1, &panel.pixels);
             panel.draw(stage, false);
+            panel.touch(stage, now);
             recording.sample(now, &panel.pixels);
         }
     });
@@ -329,6 +396,7 @@ fn play(window: &mut Window, scene: &scenes::Scene, masked: bool) {
         let mut driver = Driver::new();
         driver.observe(|stage, now| {
             panel.draw(stage, now == script::FRAME);
+            panel.touch(stage, now);
             let due = start + Duration::from_micros(now);
             thread::sleep(due.saturating_duration_since(Instant::now()));
             show(window, &panel.pixels);
@@ -485,6 +553,7 @@ fn interact(mut window: Window, masked: bool, extension: &str) {
             window.set_title(&format!("{drawn}{unmasked}{recording}"));
             title_changed = false;
         }
+        panel.touch(&stage, now);
         if let Some(recording) = &mut recording {
             recording.sample(now, &panel.pixels);
         }

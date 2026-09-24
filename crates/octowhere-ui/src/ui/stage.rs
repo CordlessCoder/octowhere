@@ -372,6 +372,12 @@ impl Stage {
         &self.peripherals
     }
 
+    /// Where the last touch reading put the first finger, if one was down.
+    #[must_use]
+    pub fn contact(&self) -> Option<Point> {
+        self.raw_touch[0]
+    }
+
     /// A finger is down, or the gesture tracker has not yet seen it lift. Touch should be read
     /// again soon even without an interrupt.
     #[must_use]

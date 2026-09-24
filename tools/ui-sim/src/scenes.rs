@@ -42,7 +42,7 @@ pub const SCENES: &[Scene] = &[
     },
     Scene {
         name: "tour",
-        about: "the clock finding a fix, the compass calibration walk, and back",
+        about: "the clock finding a fix, the compass calibration walk, back, and the settings panel",
         run: tour,
     },
 ];
@@ -186,6 +186,7 @@ fn tour(driver: &mut Driver) {
     compass_walk(driver);
     page_right(driver);
     driver.wait(ms(1_500));
+    settings_walk(driver);
 }
 
 fn tap(driver: &mut Driver, x: i32, y: i32) {
@@ -197,6 +198,12 @@ fn settings(driver: &mut Driver) {
     start(driver, Screen::Clock);
     driver.motion(calibrating(54));
     driver.wait(ms(1_200));
+    settings_walk(driver);
+}
+
+/// From the clock face into the settings panel, through brightness and the zone picker, and
+/// back to the face.
+fn settings_walk(driver: &mut Driver) {
     // Down from the face, then along the grid and back.
     driver.swipe(Point::new(233, 70), Point::new(233, 420), ms(300));
     driver.settle();
