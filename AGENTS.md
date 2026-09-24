@@ -64,8 +64,10 @@ initialization or peripheral mappings.
   is the approved design of the clock face, the zone picker and the compass's current layout,
   with concept images and the renderer that drew them.
   [`context/compass-animation/COMPASS-ANIMATION-ADDENDUM.md`](context/compass-animation/COMPASS-ANIMATION-ADDENDUM.md)
-  replaces the compass's motion. The firmware implements both, except the picker, which waits
-  for the settings panel.
+  replaces the compass's motion, and
+  [`context/clock-wordmark/CLOCK-WORDMARK-ADDENDUM.md`](context/clock-wordmark/CLOCK-WORDMARK-ADDENDUM.md)
+  adds the wordmark to the clock face. The firmware implements all three, except the picker,
+  which waits for the settings panel.
 - [`context/HARDWARE-VERIFICATION.md`](context/HARDWARE-VERIFICATION.md) lists open hardware
   questions from static review. They are questions, not confirmed defects.
 - [`context/IMPLEMENTATION.md`](context/IMPLEMENTATION.md) is a finished multi-agent brief kept as
@@ -138,7 +140,7 @@ Weigh that cost before adding one.
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 950,512 bytes, 23.02% of the 4,128,768-byte app partition. The time zone
+The image is currently 958,832 bytes, 23.22% of the 4,128,768-byte app partition. The time zone
 data is about 390 KB of that, and its boundary tolerance in `tools/tz-data.py` is the lever: the
 bench branch `bench/tz-boundary-size` tabulates size against accuracy. PP Fraktion Mono Bold with
 all of printable ASCII is about 54 KB; subsetting it to the glyphs the compass uses is the other
@@ -336,9 +338,10 @@ renderer.
 ## Design language
 
 The firmware has two screens, the clock and the compass, and both follow approved designs: the
-clock face specification and the compass animation addendum listed above. Change how either looks
-or moves only against those documents or a new design round. A new screen, the settings panel
-included, starts from a design round rather than from a sketch in code.
+clock face specification with its wordmark addendum, and the compass animation addendum, all
+listed above. Change how either looks or moves only against those documents or a new design
+round. A new screen, the settings panel included, starts from a design round rather than from a
+sketch in code.
 
 [`context/marathon-ui-cross-project-handoff.md`](context/marathon-ui-cross-project-handoff.md) is
 the doctrine the screens were designed from. It is project-agnostic and was carried in from an

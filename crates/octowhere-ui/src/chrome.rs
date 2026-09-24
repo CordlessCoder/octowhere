@@ -749,6 +749,51 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
         Ok(())
     }
 
+    /// Each glyph of `text` with its pen's distance from the first along the baseline, and its
+    /// metrics.
+    pub fn pens<'s>(&'s self, text: &'s str) -> impl Iterator<Item = (u16, f32, fontdue::Metrics)> + 's {
+        let font = self.fonts[self.font_index];
+        let px = self.font_size as f32;
+        fontdue::PenOffsets::new(font, text, px)
+            .map(move |(index, offset)| (index, offset, font.metrics_indexed(index, px)))
+    }
+
+    /// Draws `text` a quarter turn clockwise, reading down, with the first glyph's pen at `pen`.
+    /// Letter tops face right, so the baseline is the column's left edge.
+    pub fn draw_turned<D: CoverageTarget<Color = C>>(
+        &self,
+        text: &str,
+        pen: (f32, f32),
+        target: &mut D,
+    ) -> Result<(), D::Error> {
+        let font = self.fonts[self.font_index];
+        let px = self.font_size as f32;
+        let transform = fontdue::Transform::rotation(0.0, 1.0);
+        let ctx = &mut *self.ctx.borrow_mut();
+        for (index, offset, metrics) in self.pens(text) {
+            if metrics.width == 0 || metrics.height == 0 {
+                continue;
+            }
+            let pen = (pen.0, pen.1 + offset);
+            // The upright bitmap box turned, a pixel wider each way for the pen's fraction.
+            let turned = Rectangle::new(
+                Point::new(libm::floorf(pen.0) as i32 + metrics.ymin - 1, libm::floorf(pen.1) as i32 + metrics.xmin - 1),
+                Size::new(metrics.height as u32 + 2, metrics.width as u32 + 2),
+            );
+            if !target.visible(&turned) {
+                continue;
+            }
+            let (metrics, bitmap) =
+                font.rasterize_indexed_transformed(&mut ctx.canvas, index, px, transform, pen);
+            ctx.coverage.resize(metrics.width, 0);
+            let color = self.text_color;
+            bitmap.rows(&mut ctx.coverage, |y, x, row| {
+                target.blend_row(metrics.x + x as i32, metrics.y + y as i32, row, color);
+            });
+        }
+        Ok(())
+    }
+
     fn lay_out(&self, ctx: &mut FontdueRendererCtx, text: &str) {
         ctx.reset_layout();
         ctx.layout.append(

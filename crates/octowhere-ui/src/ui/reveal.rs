@@ -25,6 +25,16 @@ impl Reveal {
             block: glyphs < n && glyphs * 255 < shown,
         }
     }
+
+    /// How many characters show as glyphs.
+    pub fn glyphs(self) -> usize {
+        self.glyphs
+    }
+
+    /// How many cells show anything, glyph or block.
+    pub fn cells(self) -> usize {
+        self.glyphs + usize::from(self.block)
+    }
 }
 
 /// The block that stands in cell `index` of a mono line, from the baseline up to cap height and

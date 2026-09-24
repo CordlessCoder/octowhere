@@ -121,6 +121,10 @@ fn main() {
     let mut entering = stage_at(Screen::Clock, calibrated, 200_000);
     entering.step(Input { now: 200_001, ..Input::default() });
     frames.push(("clock-entering".into(), entering));
+    // 380 ms in: the wordmark typing, OCTO in and a block standing for the W.
+    let mut marking = stage_at(Screen::Clock, calibrated, 380_000);
+    marking.step(Input { now: 380_001, ..Input::default() });
+    frames.push(("clock-marking".into(), marking));
     let mut swiping = stage(Screen::Clock, calibrated);
     for (step, x) in [400, 340, 280].into_iter().enumerate() {
         swiping.step(Input {

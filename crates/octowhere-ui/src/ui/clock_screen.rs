@@ -5,6 +5,7 @@
 use core::fmt::Write as _;
 
 use embedded_graphics::{
+    draw_target::DrawTarget as _,
     prelude::{Point, Size},
     primitives::Rectangle,
 };
@@ -16,7 +17,7 @@ use super::{
     reveal::{Reveal, draw_revealed, revealed_bounds},
 };
 use crate::chrome::{
-    self, Color, CoverageTarget, FontdueRenderer, OnBackground, RgbColorExt as _, FRAKTION,
+    self, Color, CoverageTarget, FontdueRenderer, OnBackground, RgbColorExt as _, Window, FRAKTION,
     FRAKTION_BOLD, SHAPIRO,
 };
 
@@ -48,6 +49,13 @@ const PLATE_BASELINE: i32 = 375;
 const PLATE_PADDING: i32 = 6;
 const PLATE_GAP: i32 = 4;
 const ZONE_BASELINE: i32 = 398;
+const MARK: &str = "OCTOWHERE";
+const MARK_PX: u32 = 26;
+/// The caps' baseline column. A round letter's overshoot reaches just left of it.
+const MARK_BASELINE: i32 = 366;
+/// The mark's first letters sit on the field and the rest on the band, and the gap between the
+/// two halves is centred on the band's top row. No cell crosses that row.
+const MARK_ON_FIELD: usize = 4;
 
 const GNSS: Glyph = [0b00100, 0b01010, 0b10101, 0b01010, 0b00100];
 const RTC: Glyph = [0b11111, 0b10001, 0b10101, 0b10001, 0b11111];
@@ -55,8 +63,8 @@ const STOPPED: Glyph = [0b01010, 0b01010, 0b01010, 0b01010, 0b01010];
 const NO_ZONE: Glyph = [0b01110, 0b10001, 0b00110, 0b00000, 0b00100];
 
 /// How far each of the face's accents has come in: the ring's fade, 0 to 255; how many rows of
-/// the icon's modules show, 0 to 5; and the band label's, the plate's and the zone name's
-/// reveals, 0 to 255. The centre content always shows whole.
+/// the icon's modules show, 0 to 5; and the band label's, the plate's, the zone name's and the
+/// wordmark's reveals, 0 to 255. The centre content always shows whole.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Accents {
     pub ring: u8,
@@ -64,6 +72,7 @@ pub struct Accents {
     pub label: u8,
     pub plate: u8,
     pub zone: u8,
+    pub mark: u8,
 }
 
 impl Accents {
@@ -73,6 +82,7 @@ impl Accents {
         label: u8::MAX,
         plate: u8::MAX,
         zone: u8::MAX,
+        mark: u8::MAX,
     };
     pub const HIDDEN: Self = Self {
         ring: 0,
@@ -80,6 +90,7 @@ impl Accents {
         label: 0,
         plate: 0,
         zone: 0,
+        mark: 0,
     };
 
     /// Each accent at the lesser of the two.
@@ -91,6 +102,7 @@ impl Accents {
             label: self.label.min(other.label),
             plate: self.plate.min(other.plate),
             zone: self.zone.min(other.zone),
+            mark: self.mark.min(other.mark),
         }
     }
 }
@@ -231,6 +243,7 @@ struct Parts {
     /// The plate, and how many of its cells show.
     plate: (Plate, usize),
     zone: Option<(String<32>, Reveal)>,
+    mark: Reveal,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -329,6 +342,7 @@ impl Parts {
                 (0..cells).take_while(|&i| i * 255 < usize::from(accents.plate) * cells).count(),
             ),
             zone: zone_name,
+            mark: Reveal::of(accents.mark, MARK.len()),
         }
     }
 }
@@ -394,6 +408,98 @@ fn no_data_origin(font: &FontdueRenderer<'static, Color>) -> Point {
 
 fn zone_pen(font: &FontdueRenderer<'static, Color>, name: &str) -> Point {
     Point::new(centred_left(&zone_style(font), name, CENTER.x), ZONE_BASELINE)
+}
+
+fn mark_style(font: &FontdueRenderer<'static, Color>, color: Color) -> FontdueRenderer<'static, Color> {
+    style(font, color, MARK_PX, SHAPIRO)
+}
+
+/// Where the mark sits along the column: the rows each letter's cell spans, and how far either
+/// side of the baseline its caps and its ink reach.
+struct MarkLayout {
+    pens: [f32; MARK.len() + 1],
+    cap: f32,
+    below: f32,
+    above: f32,
+}
+
+impl MarkLayout {
+    fn of(font: &FontdueRenderer<'static, Color>) -> Self {
+        let style = mark_style(font, chrome::WHITE);
+        let mut pens = [0.0; MARK.len() + 1];
+        let (mut below, mut above, mut cap) = (0.0_f32, 0.0_f32, 0.0_f32);
+        let (mut field_end, mut band_start) = (0.0, 0.0);
+        for (i, (_, offset, metrics)) in style.pens(MARK).enumerate() {
+            let bounds = metrics.bounds;
+            pens[i] = offset;
+            below = below.min(bounds.ymin);
+            above = above.max(bounds.ymin + bounds.height);
+            if bounds.ymin == 0.0 {
+                cap = cap.max(bounds.height);
+            }
+            if i + 1 == MARK_ON_FIELD {
+                field_end = offset + bounds.xmin + bounds.width;
+            } else if i == MARK_ON_FIELD {
+                band_start = offset + bounds.xmin;
+            }
+        }
+        pens[MARK.len()] = style.advance(MARK);
+        let top = BAND_ROWS.start as f32 - (field_end + band_start) / 2.0;
+        Self {
+            pens: pens.map(|pen| top + pen),
+            cap,
+            below,
+            above,
+        }
+    }
+
+    /// Letter `index`'s advance along the column less a pixel at each end, across the caps.
+    fn cell(&self, index: usize) -> Rectangle {
+        let (top, bottom) = (self.pens[index] + 1.0, self.pens[index + 1] - 1.0);
+        let round = |value: f32| libm::roundf(value) as i32;
+        Rectangle::with_corners(
+            Point::new(MARK_BASELINE, round(top)),
+            Point::new(MARK_BASELINE + round(self.cap) - 1, round(bottom) - 1),
+        )
+    }
+
+    /// Everything letters `from..to` or their cells can cover.
+    fn span(&self, from: usize, to: usize) -> Rectangle {
+        let floor = |value: f32| libm::floorf(value) as i32;
+        Rectangle::with_corners(
+            Point::new(MARK_BASELINE + floor(self.below) - 1, floor(self.pens[from]) - 1),
+            Point::new(MARK_BASELINE + floor(self.above) + 1, floor(self.pens[to]) + 1),
+        )
+    }
+}
+
+/// The wordmark, inverting what is under it: white on the field and black on the band.
+fn draw_mark<D: CoverageTarget<Color = Color>>(
+    font: &FontdueRenderer<'static, Color>,
+    reveal: Reveal,
+    band: Color,
+    target: &mut D,
+) -> Result<(), D::Error> {
+    let layout = MarkLayout::of(font);
+    let whole = layout.span(0, reveal.cells());
+    let text = &MARK[..reveal.glyphs()];
+    let block = (reveal.cells() > reveal.glyphs()).then(|| layout.cell(reveal.glyphs()));
+    for (rows, color, background) in [
+        (0..BAND_ROWS.start, chrome::WHITE, chrome::BLACK),
+        (BAND_ROWS, chrome::BLACK, band),
+    ] {
+        let clip = Rectangle::new(Point::new(0, rows.start), Size::new(466, rows.len() as u32));
+        let window = &mut Window::new(&mut *target, Point::zero(), clip);
+        if !window.visible(&whole) {
+            continue;
+        }
+        let on = &mut OnBackground::new(window, background);
+        mark_style(font, color).draw_turned(text, (MARK_BASELINE as f32, layout.pens[0]), on)?;
+        if let Some(block) = block {
+            on.fill_solid(&block, color)?;
+        }
+    }
+    Ok(())
 }
 
 /// Each cell of `plate` with its box and its text's pen.
@@ -488,6 +594,7 @@ where
             seconds_style(font).draw_on_baseline(seconds, SECONDS, band)?;
         }
     }
+    draw_mark(font, parts.mark, parts.band, target)?;
 
     let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
     if let Some((text, line)) = &parts.date {
@@ -564,6 +671,11 @@ pub fn damage(
         damage.add(plate_bounds(font, &old.plate.0));
         damage.add(plate_bounds(font, &new.plate.0));
     }
+    if old.mark != new.mark {
+        let from = old.mark.glyphs().min(new.mark.glyphs());
+        let to = old.mark.cells().max(new.mark.cells());
+        damage.add(MarkLayout::of(font).span(from, to));
+    }
     if old.zone != new.zone {
         for (name, _) in [&old.zone, &new.zone].into_iter().flatten() {
             damage.add(revealed_bounds(&zone_style(font), name, zone_pen(font, name)));
@@ -605,6 +717,25 @@ mod tests {
             let later = ClockView { known: trusted.known, ..view(stopped, readable, "Europe/Dublin") }.remembering();
             assert_eq!(values(&later), ["IST", "+01:00"], "stopped {stopped}, readable {readable}");
         }
+    }
+
+    #[test]
+    fn the_mark_splits_between_field_and_band_on_the_band_edge() {
+        let font = FontdueRenderer::new(chrome::FontdueRendererCtx::new_rc(), 20, chrome::WHITE, chrome::FONTS);
+        let layout = MarkLayout::of(&font);
+        for index in 0..MARK.len() {
+            let cell = layout.cell(index);
+            let bottom = cell.bottom_right().unwrap().y;
+            if index < MARK_ON_FIELD {
+                assert!(bottom < BAND_ROWS.start, "cell {index} ends on row {bottom}");
+            } else {
+                assert!(cell.top_left.y >= BAND_ROWS.start, "cell {index} starts on row {}", cell.top_left.y);
+                assert!(bottom < BAND_ROWS.end, "cell {index} ends on row {bottom}");
+            }
+        }
+        let ink = mark_style(&font, chrome::WHITE).baseline_bounds("OCTOWHERE", Point::zero());
+        let last = layout.pens[0] + ink.bottom_right().unwrap().x as f32;
+        assert!(last < BAND_ROWS.end as f32, "the ink ends on row {last}");
     }
 
     #[test]

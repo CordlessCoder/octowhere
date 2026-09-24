@@ -82,10 +82,12 @@ const CLOCK_ENTRY: ClockTimes<Micros> = ClockTimes {
     label: 100_000,
     plate: 160_000,
     zone: 240_000,
+    mark: 300_000,
 };
 const CLOCK_LABEL_REVEAL: Micros = 120_000;
 const CLOCK_PLATE_REVEAL: Micros = 120_000;
 const CLOCK_ZONE_REVEAL: Micros = 160_000;
+const CLOCK_MARK_REVEAL: Micros = 160_000;
 
 /// When each of the clock face's accents started, or starts. `None` shows it whole at once.
 #[derive(Clone, Copy, Debug, Default)]
@@ -95,6 +97,7 @@ struct ClockTimes<T = Option<Micros>> {
     label: T,
     plate: T,
     zone: T,
+    mark: T,
 }
 
 /// How long without a cover report before another cover is a new hand. The controller does not
@@ -459,6 +462,7 @@ impl Stage {
                     label: start(CLOCK_ENTRY.label),
                     plate: start(CLOCK_ENTRY.plate),
                     zone: start(CLOCK_ENTRY.zone),
+                    mark: start(CLOCK_ENTRY.mark),
                 };
                 if keys.mode == clock_screen::Mode::NoData {
                     // A fault shows at once.
@@ -502,6 +506,7 @@ impl Stage {
             label: progress(now, times.label, CLOCK_LABEL_REVEAL),
             plate: progress(now, times.plate, CLOCK_PLATE_REVEAL),
             zone: progress(now, times.zone, CLOCK_ZONE_REVEAL),
+            mark: progress(now, times.mark, CLOCK_MARK_REVEAL),
         };
         self.fading |= entry != Accents::FULL;
         let p = swipe_progress(view.offset);
@@ -511,6 +516,7 @@ impl Stage {
             label: leaving(p, 0.2, 0.3),
             plate: leaving(p, 0.1, 0.3),
             zone: leaving(p, 0.0, 0.2),
+            mark: leaving(p, 0.05, 0.2),
         };
         entry.min(exit)
     }
