@@ -923,6 +923,9 @@ pub const COMPASS_CENTER: Point = Point::new(233, 233);
 /// The dial's edge, just inside the panel's.
 const COMPASS_INSET: i32 = 1;
 const COMPASS_RADIUS: i32 = LCD_WIDTH as i32 / 2 - COMPASS_INSET;
+/// The dial's ring, whose coverage is computed on first use.
+static COMPASS_RING: embassy_sync::once_lock::OnceLock<super::smooth::Ring> =
+    embassy_sync::once_lock::OnceLock::new();
 const CARDINALS: [&str; 16] = [
     "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW",
     "NNW",
@@ -939,7 +942,9 @@ where
     let view = state.peripherals.compass;
     let center = (COMPASS_CENTER.x as f32, COMPASS_CENTER.y as f32);
     let radius = COMPASS_RADIUS as f32;
-    super::smooth::ring(target, COMPASS_CENTER, radius - 2.0, radius, chrome::GRAY);
+    COMPASS_RING
+        .get_or_init(|| super::smooth::Ring::new(COMPASS_CENTER, radius - 2.0, radius))
+        .draw(target, chrome::GRAY);
 
     // Without a trusted heading the dial holds still and carries no bearings, so it cannot be
     // read as pointing anywhere.

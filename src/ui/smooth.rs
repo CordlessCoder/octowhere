@@ -17,43 +17,68 @@ fn coverage(inside: f32) -> u8 {
     ((inside + 0.5).clamp(0.0, 1.0) * 255.0 + 0.5) as u8
 }
 
-/// A ring between `inner` and `outer` radius about `center`. One eighth of it is computed and
-/// mirrored to the rest, and each column visits only the pixels the ring covers. The distance
-/// from the ring's middle comes from the squared distance, `(d² - m²) / 2m`, which is a few
-/// hundredths of a pixel from exact across a band a few pixels wide.
-pub fn ring<D: CoverageTarget>(
-    target: &mut D,
+/// A ring between two radii about a pixel corner, with its coverage computed once. It is stored
+/// as one run per row of the top-left quarter, and each draw blends every run at its four mirror
+/// positions.
+pub struct Ring {
     center: Point,
-    inner: f32,
-    outer: f32,
-    color: D::Color,
-) {
-    let middle = (inner + outer) / 2.0;
-    let (half, scale) = ((outer - inner) / 2.0, 1.0 / (2.0 * middle));
-    // Coverage is nonzero only within half a pixel of either edge.
-    let (low, high) = (inner - 0.5, outer + 0.5);
-    // Offsets (i, j) are whole pixels from the centre corner, with the pixel's centre at
-    // (i + 0.5, j + 0.5). The octant is 0 <= i <= j.
-    let last_column = libm::floorf(high / core::f32::consts::SQRT_2) as i32;
-    for i in 0..=last_column {
-        let x = i as f32 + 0.5;
-        let top = libm::sqrtf((high * high - x * x).max(0.0));
-        let bottom = libm::sqrtf((low * low - x * x).max(0.0));
-        let first = (libm::floorf(bottom - 0.5) as i32).max(i);
-        let last = libm::ceilf(top - 0.5) as i32;
-        for j in first..=last {
+    /// Per row of the quarter: its offset above the centre, the leftmost pixel's offset left of
+    /// the centre, and the run's place in `forward`.
+    runs: Vec<(i32, i32, usize, usize)>,
+    /// Coverage left to right across the top-left quarter's runs, and the same runs reversed
+    /// for the right half.
+    forward: Vec<u8>,
+    reversed: Vec<u8>,
+}
+
+impl Ring {
+    /// The distance from the ring's middle comes from the squared distance, `(d² - m²) / 2m`,
+    /// which is a few hundredths of a pixel from exact across a band a few pixels wide.
+    #[must_use]
+    pub fn new(center: Point, inner: f32, outer: f32) -> Self {
+        let middle = (inner + outer) / 2.0;
+        let (half, scale) = ((outer - inner) / 2.0, 1.0 / (2.0 * middle));
+        // Coverage is nonzero only within half a pixel of either edge.
+        let (low, high) = (inner - 0.5, outer + 0.5);
+        let (mut runs, mut forward) = (Vec::new(), Vec::new());
+        // Offsets (i, j) are whole pixels left of and above the centre corner, with the pixel's
+        // centre at (i + 0.5, j + 0.5) from it.
+        for j in 0..=libm::ceilf(high) as i32 {
             let y = j as f32 + 0.5;
-            let off = (x * x + y * y - middle * middle) * scale;
-            let covered = coverage(half - off.abs());
-            if covered == 0 {
-                continue;
+            if y >= high {
+                break;
             }
-            let (a, b) = (-1 - i, -1 - j);
-            let mirrors = [(i, j), (a, j), (i, b), (a, b), (j, i), (b, i), (j, a), (b, a)];
-            // On the diagonal the last four repeat the first four.
-            let count = if i == j { 4 } else { 8 };
-            for &(dx, dy) in &mirrors[..count] {
-                target.blend_pixel(center + Point::new(dx, dy), covered, color);
+            let first = libm::floorf(libm::sqrtf((low * low - y * y).max(0.0)) - 0.5).max(0.0) as i32;
+            let last = libm::ceilf(libm::sqrtf(high * high - y * y) - 0.5) as i32;
+            let start = forward.len();
+            // Left to right is from the outermost offset in.
+            forward.extend((first..=last).rev().map(|i| {
+                let x = i as f32 + 0.5;
+                coverage(half - ((x * x + y * y - middle * middle) * scale).abs())
+            }));
+            runs.push((j, last, start, forward.len() - start));
+        }
+        let reversed = runs
+            .iter()
+            .flat_map(|&(_, _, start, length)| forward[start..start + length].iter().rev().copied())
+            .collect();
+        Self {
+            center,
+            runs,
+            forward,
+            reversed,
+        }
+    }
+
+    pub fn draw<D: CoverageTarget>(&self, target: &mut D, color: D::Color) {
+        let Point { x: cx, y: cy } = self.center;
+        for &(j, last, start, length) in &self.runs {
+            let (left, right) = (cx - 1 - last, cx + last + 1 - length as i32);
+            let forward = &self.forward[start..start + length];
+            let reversed = &self.reversed[start..start + length];
+            for y in [cy - 1 - j, cy + j] {
+                target.blend_row(left, y, forward, color);
+                target.blend_row(right, y, reversed, color);
             }
         }
     }
