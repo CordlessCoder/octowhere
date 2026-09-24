@@ -9,14 +9,15 @@ until the feature set is complete, because profiling an incomplete firmware pric
   comes first: the radio moves into its own task, and I2C gets a single owning task.
 
 - Take the framebuffer clear off the drawing core. On the compass it is now the largest cost,
-  about 8.3 ms of an 18 ms frame, and it is paid per 64-byte PSRAM cache line: clearing only the
+  about 8.3 ms of a 16–17 ms frame, and it is paid per 64-byte PSRAM cache line: clearing only the
   visible circle saved 0.6 ms, not the 21% its area suggests. The candidates are a GDMA
   memory-to-memory clear, or core 1 clearing a buffer after flushing it. Either changes the
   buffer hand-off in `util::Swap`, and partial redraws rely on a buffer keeping its own pixels,
-  so only regions due for a full redraw may be cleared. Measure with `bench/compass-draw-rows`.
-- Build the fonts from the full font files with fontdue's `chars:` option instead of the
-  hand-made ASCII subsets under `assets/`. Both full files contain `°`, which the compass could
-  then use.
+  so only regions due for a full redraw may be cleared. Measure with `bench/compass-states`.
+- Build Shapiro and PP Fraktion Mono Regular from their full font files with fontdue's `chars:`
+  option, as PP Fraktion Mono Bold already is, instead of the hand-made ASCII subsets under
+  `assets/`. Subsetting Bold to the glyphs in use would also recover some of the 54 KB it
+  added.
 
 ## Deferred, with detail elsewhere
 

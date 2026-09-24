@@ -39,8 +39,13 @@ initialization or peripheral mappings.
 - [`context/BACKLOG.md`](context/BACKLOG.md) lists open work that is not in progress, and says
   where each entry's detail lives. Read it when choosing what to do next.
 - [`context/COMPASS-SCREEN-HANDOFF.md`](context/COMPASS-SCREEN-HANDOFF.md) briefs a design
-  agent on the compass screen: its states, current layout, the panel's physical size and what
-  the renderer can draw.
+  agent on the compass screen: what it does, the panel's physical size, what the renderer can
+  draw and what each state costs to draw.
+- [`context/compass-implementation-handoff.md`](context/compass-implementation-handoff.md) is
+  the design agent's specification of the compass screen, which the firmware implements, and
+  [`context/compass-concept-states.png`](context/compass-concept-states.png) is the approved
+  concept. [`context/compass-design-questions.md`](context/compass-design-questions.md) holds
+  what the implementation asked back.
 - [`context/GRAPHICS-PROTOTYPES.md`](context/GRAPHICS-PROTOTYPES.md) explains the three renderer
   architectures in `crates/octowhere-ui/src/ui/prototypes.rs` and the `ACTIVE_ARCHITECTURE`
   constant that selects one.
@@ -113,7 +118,9 @@ Weigh that cost before adding one.
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 464,496 bytes, 11.25% of the 4,128,768-byte app partition.
+The image is currently 518,560 bytes, 12.56% of the 4,128,768-byte app partition. Most of the
+last 54 KB is PP Fraktion Mono Bold with all of printable ASCII; subsetting it to the glyphs the
+compass uses is the lever if that matters.
 
 `panic = "immediate-abort"` is the size lever, and it is not taken. It needs
 `cargo-features = ["panic-immediate-abort"]` restored to unlock it, which costs the drift check
@@ -144,7 +151,9 @@ on-demand calibration (`gyro-cod-bench`); `bench/compass-draw`, the compass scre
 per part before the coverage-row rewrite, with the antialiased ring variants and fontdue's share
 of the text (`compass-draw-bench`); and `bench/compass-draw-rows`, the same bench on the
 rewritten draw path, with pixel checks of the precomputed ring and the turned ticks, the clear
-variants and the text split (`compass-draw-bench`).
+variants and the text split (`compass-draw-bench`); and `bench/compass-states`, the implemented
+compass design's full draw in each state, entering, and early and halfway through a swipe
+(`compass-state-bench`).
 
 ## Concurrency
 
