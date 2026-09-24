@@ -1,5 +1,6 @@
 //! Horizontal switching between a ring of pages, driven by drags and animated to rest.
 
+use super::ease::Ease;
 use super::gesture::{Drag, GestureEvent, Micros};
 
 /// A release past this fraction of the width moves to the next page.
@@ -7,10 +8,6 @@ const COMMIT_FRACTION: i32 = 4;
 /// A release faster than this, in pixels per second, moves to the next page in its direction
 /// however short the drag.
 const FLICK_VELOCITY: f32 = 600.0;
-/// Time constant of the settle: the remaining distance shrinks by a factor of e every this.
-const SETTLE_TIME_CONSTANT: f32 = 35_000.0;
-/// Distance from rest, in pixels, at which the settle snaps to it.
-const SETTLE_SNAP: f32 = 1.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Motion {
@@ -20,11 +17,7 @@ enum Motion {
     /// A vertical drag, which the pager leaves alone until it lifts.
     Ignoring,
     /// Moving toward `target`: 0 to stay, or one width either way to change page.
-    Settling {
-        offset: f32,
-        target: i32,
-        last: Micros,
-    },
+    Settling { ease: Ease, offset: f32 },
 }
 
 /// What to draw: the current page shifted right by `offset` pixels, and while it is shifted, the
@@ -73,8 +66,8 @@ impl Pager {
 
     /// Settles any motion in progress at once, as though it had finished.
     fn finish(&mut self) {
-        if let Motion::Settling { target, .. } = self.motion {
-            self.land(target);
+        if let Motion::Settling { ease, .. } = self.motion {
+            self.land(ease.to());
         }
         self.motion = Motion::Rest;
     }
@@ -89,11 +82,7 @@ impl Pager {
     }
 
     fn settle(&mut self, offset: f32, target: i32, now: Micros) {
-        self.motion = Motion::Settling {
-            offset,
-            target,
-            last: now,
-        };
+        self.motion = Motion::Settling { ease: Ease::new(offset, target, now), offset };
     }
 
     /// Animates one page along, as a drag released past the commit point would.
@@ -151,20 +140,12 @@ impl Pager {
 
     /// Advances a settle to `now`. Call it before taking each frame's view.
     pub fn step(&mut self, now: Micros) {
-        let Motion::Settling {
-            offset,
-            target,
-            last,
-        } = self.motion
-        else {
+        let Motion::Settling { ease, .. } = self.motion else {
             return;
         };
-        let elapsed = now.saturating_sub(last) as f32;
-        let remaining = (target as f32 - offset) * libm::expf(-elapsed / SETTLE_TIME_CONSTANT);
-        if remaining.abs() <= SETTLE_SNAP {
-            self.land(target);
-        } else {
-            self.settle(target as f32 - remaining, target, now);
+        match ease.at(now) {
+            (_, true) => self.land(ease.to()),
+            (offset, false) => self.motion = Motion::Settling { ease, offset },
         }
     }
 
@@ -195,6 +176,7 @@ mod tests {
     use embedded_graphics_core::geometry::Point;
 
     use super::*;
+    use crate::ui::ease::SETTLE;
 
     const WIDTH: i32 = 466;
 
@@ -256,14 +238,16 @@ mod tests {
     }
 
     #[test]
-    fn the_settle_eases_toward_rest() {
+    fn the_settle_lands_after_a_fixed_time() {
         let mut pager = Pager::new(0, 7, WIDTH);
         pager.handle(&GestureEvent::DragStart(drag(-20, 0, 0.0)), 0);
         pager.handle(&GestureEvent::DragEnd(drag(-200, 0, 0.0)), 0);
-        pager.step(35_000);
-        // One time constant: the remaining 266 px shrink by a factor of e.
-        let expected = -WIDTH + libm::roundf(266.0 / core::f32::consts::E) as i32;
-        assert!((pager.view().offset - expected).abs() <= 1);
+        pager.step(SETTLE / 2);
+        assert!(pager.is_moving());
+        assert!(pager.view().offset > -WIDTH);
+        pager.step(SETTLE);
+        assert!(!pager.is_moving());
+        assert_eq!(pager.page(), 1);
     }
 
     #[test]

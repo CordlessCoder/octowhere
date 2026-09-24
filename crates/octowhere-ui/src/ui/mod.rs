@@ -3,6 +3,7 @@ pub mod clock_screen;
 pub mod compass;
 pub mod compass_screen;
 pub mod dirty;
+pub mod ease;
 pub mod fusion;
 pub mod geometry;
 pub mod gesture;

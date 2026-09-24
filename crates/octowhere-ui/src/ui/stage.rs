@@ -9,6 +9,7 @@ use super::{
     clock_screen,
     compass::CompassView,
     compass_screen::{self, Accents, DialFootprint, Mode},
+    ease::Ease,
     gesture::{Drag, GestureEvent, GestureTracker, Micros},
     pager::Pager,
     panel::{self, Cell},
@@ -134,8 +135,6 @@ const PANEL_STAGGER: Micros = 30_000;
 const PANEL_MARKERS: Micros = 200_000;
 const PANEL_HINT: Micros = 260_000;
 const PANEL_HINT_REVEAL: Micros = 160_000;
-/// The grid's snap to a rest position after a scroll.
-const SNAP: Micros = 160_000;
 /// A release faster than this, in pixels per second, scrolls the grid on in its direction.
 const SNAP_FLICK: f32 = 600.0;
 
@@ -202,10 +201,9 @@ impl Grid {
         let Some((from, to, start)) = self.snap else {
             return;
         };
-        let t = (now.saturating_sub(start) as f32 / SNAP as f32).min(1.0);
-        let eased = 1.0 - (1.0 - t) * (1.0 - t) * (1.0 - t);
-        self.scroll = libm::roundf(from as f32 + (to - from) as f32 * eased) as i32;
-        if t >= 1.0 {
+        let (scroll, arrived) = Ease::new(from as f32, to, start).at(now);
+        self.scroll = libm::roundf(scroll) as i32;
+        if arrived {
             self.snap = None;
         }
     }

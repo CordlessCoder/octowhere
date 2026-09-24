@@ -1,22 +1,20 @@
 //! The settings panel's vertical travel over the faces: it follows a drag, and settles open or
 //! closed on release.
 
+use super::ease::Ease;
 use super::gesture::{Drag, Micros};
 
 /// A release past this fraction of the height completes the open or the close.
 const COMMIT_FRACTION: i32 = 4;
 /// A release faster than this, in pixels per second, completes it however short the drag.
 const FLICK_VELOCITY: f32 = 600.0;
-/// As the pager's, so the panel moves like a page.
-const SETTLE_TIME_CONSTANT: f32 = 35_000.0;
-const SETTLE_SNAP: f32 = 1.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Motion {
     Rest,
     /// Following a drag, which started at `from`.
     Dragging { from: i32, offset: i32 },
-    Settling { offset: f32, target: i32, last: Micros },
+    Settling { ease: Ease, offset: f32 },
 }
 
 /// How far the panel has come down over the faces: 0 closed, the height open.
@@ -72,8 +70,8 @@ impl Sheet {
 
     /// Completes a settle in progress at once.
     pub fn finish(&mut self) {
-        if let Motion::Settling { target, .. } = self.motion {
-            self.open = target == self.height;
+        if let Motion::Settling { ease, .. } = self.motion {
+            self.open = ease.to() == self.height;
             self.motion = Motion::Rest;
         }
     }
@@ -127,24 +125,21 @@ impl Sheet {
     fn settle_to(&mut self, open: bool, offset: f32, now: Micros) {
         let target = if open { self.height } else { 0 };
         self.open = open;
-        self.motion = if libm::fabsf(target as f32 - offset) <= SETTLE_SNAP {
+        self.motion = if target as f32 == offset {
             Motion::Rest
         } else {
-            Motion::Settling { offset, target, last: now }
+            Motion::Settling { ease: Ease::new(offset, target, now), offset }
         };
     }
 
     /// Advances a settle to `now`. Call it before taking each frame's offset.
     pub fn step(&mut self, now: Micros) {
-        let Motion::Settling { offset, target, last } = self.motion else {
+        let Motion::Settling { ease, .. } = self.motion else {
             return;
         };
-        let elapsed = now.saturating_sub(last) as f32;
-        let remaining = (target as f32 - offset) * libm::expf(-elapsed / SETTLE_TIME_CONSTANT);
-        self.motion = if libm::fabsf(remaining) <= SETTLE_SNAP {
-            Motion::Rest
-        } else {
-            Motion::Settling { offset: target as f32 - remaining, target, last: now }
+        self.motion = match ease.at(now) {
+            (_, true) => Motion::Rest,
+            (offset, false) => Motion::Settling { ease, offset },
         };
     }
 }
