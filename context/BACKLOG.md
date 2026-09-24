@@ -78,6 +78,10 @@ What is established:
   on target. It saved 1,546–1,973 cycles per glyph against about 1,370 for the divisions alone,
   so the calls also cost through the float spills around them. The results are in
   `~/git/fontdue/MEASURE-COMPACT-RECIP-ON-TARGET-HANDOFF.md`.
+- At opt-level `s`, a closure passed to fontdue's `BitmapIter::fold` was not inlined: the
+  disassembly showed a `callx8` per cell, and a per-pixel blend through it ran slower than
+  collecting a row and blending it. Hot per-pixel work belongs in a plain loop over a slice, or
+  behind a per-row callback such as `BitmapIter::rows`. Branch `bench/compass-draw-rows`.
 - `recip0.s`, `madd.s` and `msub.s` are verified on the core. The rest of the FP option, such as
   `rsqrt0.s`, `sqrt0.s` and `div0.s`, and every `esp32s3ops` instruction, are not.
 
