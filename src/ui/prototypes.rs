@@ -13,7 +13,7 @@ use embedded_layout::{
 };
 
 use crate::{
-    board::LCD_WIDTH,
+    board::{self, LCD_WIDTH},
     chrome::{self, Color, Dirty},
 };
 
@@ -170,7 +170,7 @@ where
 {
     let mut dirty = Dirty::new();
     let bounds = target.bounding_box();
-    target.fill_solid(&bounds, chrome::BLACK)?;
+    clear_visible(target, &bounds)?;
 
     render_page(architecture, state, state.offset, font, target)?;
     if let Some((screen, offset)) = state.neighbour {
@@ -179,6 +179,28 @@ where
 
     dirty.add(bounds);
     Ok(dirty)
+}
+
+/// Clears the part of `area` on the round panel. The corners outside it are never seen, and
+/// the clear is bound by memory bandwidth, so skipping them saves in proportion.
+fn clear_visible<D: DrawTarget<Color = Color>>(
+    target: &mut D,
+    area: &Rectangle,
+) -> Result<(), D::Error> {
+    const RADIUS: f32 = board::LCD_WIDTH as f32 / 2.0;
+    let Some(bottom_right) = area.bottom_right() else {
+        return Ok(());
+    };
+    for y in area.top_left.y.max(0)..=bottom_right.y.min(board::LCD_HEIGHT as i32 - 1) {
+        let dy = y as f32 + 0.5 - RADIUS;
+        let half = libm::sqrtf((RADIUS * RADIUS - dy * dy).max(0.0));
+        let row = Rectangle::with_corners(
+            Point::new(libm::floorf(RADIUS - half) as i32, y),
+            Point::new(libm::ceilf(RADIUS + half) as i32 - 1, y),
+        );
+        target.fill_solid(&row.intersection(area), chrome::BLACK)?;
+    }
+    Ok(())
 }
 
 /// Draws one screen shifted right by `offset`, clipped to the part of it that is on the panel.

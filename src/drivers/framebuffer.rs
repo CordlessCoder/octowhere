@@ -28,6 +28,21 @@ where
     color: PhantomData<C>,
 }
 
+/// Fills `bytes` with a repeated 2-byte pixel in whole words. A row that starts at an arbitrary
+/// pixel is not word-aligned, and a byte-wise copy into it runs well below the word rate.
+fn fill_pairs(bytes: &mut [u8], pixel: [u8; 2]) {
+    // SAFETY: every bit pattern is a valid `u32`, so viewing aligned bytes as words is sound.
+    let (head, words, tail) = unsafe { bytes.align_to_mut::<u32>() };
+    let word = u32::from_ne_bytes([pixel[0], pixel[1], pixel[0], pixel[1]]);
+    // The buffer is word-aligned and pixels are 2 bytes, so the ends are whole pixels.
+    for end in [head, tail] {
+        for pair in end.chunks_exact_mut(2) {
+            pair.copy_from_slice(&pixel);
+        }
+    }
+    words.fill(word);
+}
+
 /// Calculates the required buffer size.
 ///
 /// This function is a workaround for current limitations in Rust const generics.
@@ -93,11 +108,12 @@ where
         for row in y..y_end {
             let start = row * WIDTH + x;
             let end = row * WIDTH + x_end;
-            fill_buf_repeat(
-                &mut self.buf[start * raw.len()..end * raw.len()],
-                raw,
-                end - start,
-            );
+            let bytes = &mut self.buf[start * raw.len()..end * raw.len()];
+            if let &[first, second] = raw {
+                fill_pairs(bytes, [first, second]);
+            } else {
+                fill_buf_repeat(bytes, raw, end - start);
+            }
         }
     }
 
