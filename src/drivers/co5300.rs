@@ -39,6 +39,14 @@ const CMD_WCTRLD1: u8 = 0x53;
 const CMD_BRIGHTNESS: u8 = 0x51;
 const CMD_BRIGHTNESS_HBM: u8 = 0x63;
 const CMD_WCE: u8 = 0x58;
+const CMD_TEON: u8 = 0x35;
+const CMD_STESL: u8 = 0x44;
+/// The scan line TE pulses at, counted from the first line of vertical sync. A full flush takes
+/// about as long as the panel's scan, so one started at the blanking races the scan and tears
+/// wherever it falls behind. Starting this far behind the scan keeps the whole write on the far
+/// side of it: the lead must exceed the scan time less the shortest full flush, and the flush
+/// must end before the next scan reaches the rows it is writing.
+const TE_LINE: u16 = 150;
 // const CMD_ALLPOFF: u8 = 0x22; // All pixels off
 // const CMD_ALLPON: u8 = 0x23; // All pixels on
 
@@ -109,7 +117,7 @@ static CO5300_INIT_PRE_COLOR: [QSPIOperation; 7] = [
     QSPIOperation::CommandD8(CMD_BRIGHTNESS, 0xD0),
 ];
 
-static CO5300_INIT_POST_COLOR: [QSPIOperation; 6] = [
+static CO5300_INIT_POST_COLOR: [QSPIOperation; 7] = [
     // Display on
     QSPIOperation::Command(CMD_DISPON),
     // Contrast enhancement off
@@ -119,9 +127,9 @@ static CO5300_INIT_POST_COLOR: [QSPIOperation; 6] = [
     QSPIOperation::Delay(10),
     // Inversion off (standard for this panel)
     QSPIOperation::Command(CMD_INVOFF),
-    // Enable Tearing Effect output on CO5300 (TE pin = GPIO13)
-    // Command 0x35 = TEARON, param 0x00 = VBlank only
-    QSPIOperation::CommandD8(0x35, 0x00),
+    // TE on, as a pulse at `TE_LINE` rather than high through the blanking.
+    QSPIOperation::CommandD8(CMD_TEON, 0x00),
+    QSPIOperation::CommandD16(CMD_STESL, TE_LINE),
 ];
 
 mod sealed {
@@ -330,8 +338,10 @@ where
         self.write_repeat(bytes.as_ref(), w as usize * h as usize)
     }
 
+    /// Waits for the scan to reach `TE_LINE`. It waits for the edge: a flush started later in
+    /// the pulse, or after it, has less of the lead.
     pub fn wait_for_vsync(&mut self) -> impl Future<Output = ()> {
-        self.te_pin.wait_for_high()
+        self.te_pin.wait_for_rising_edge()
     }
 
     /// Set display brightness (0x00 = off, 0xD0 = default, 0xFF = max).

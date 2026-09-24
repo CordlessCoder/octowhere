@@ -463,7 +463,8 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
             } else {
                 match select(
                     display.wait_for_vsync(),
-                    Timer::after(Duration::from_millis(17)),
+                    // A wait that starts just after a pulse lasts a whole frame.
+                    Timer::after(Duration::from_millis(40)),
                 )
                 .await
                 {

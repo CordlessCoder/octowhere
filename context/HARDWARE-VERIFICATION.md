@@ -4,10 +4,10 @@ These questions came from static review. None is a confirmed hardware defect.
 
 ## Frame synchronisation
 
-Does waiting for TE to be high synchronise each transfer to a new frame?
-Check whether a transfer can reach the next wait while TE is still high.
-Compare the current level wait with a rising-edge wait or low-then-high wait.
-Record the observed TE and transfer timing before choosing a change.
+Answered on 2026-09-24 by `bench/tearing`; `docs/hardware-notes.md` has the timing. A full
+flush took about as long as the panel's scan, so a flush started at the blanking raced the scan
+and tore. TE now pulses at scan line 150, and the display core flushes from its rising edge,
+behind the scan. The owner saw no tearing during drags.
 
 ## Panel wake sequence
 
