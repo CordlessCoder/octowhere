@@ -14,10 +14,11 @@ until the feature set is complete, because profiling an incomplete firmware pric
   command transactions a region), starting the stream 0.7 ms, and moving the rows 6 ms, about
   three times the per-pixel rate of a region flushed alone. The display core copies each short
   row out of PSRAM itself while core 0 draws into the other buffer, and the two slow each other:
-  the draw runs 2.4 ms faster with flushing held off. The candidates are DMA straight from the
-  framebuffer with a descriptor per row, which needs a cache write-back of the region first, and
-  sending the first quad write as `RAMWR` rather than a separate `RAMWR` then `0x3C`. Both change
-  the display path, so they need a look at the panel. Measure with `bench/row-span-damage`.
+  the draw runs 2.4 ms faster with flushing held off. DMA straight from the PSRAM framebuffer is
+  ruled out: the owner says it does not work on this path. The remaining candidate is sending the
+  first quad write as `RAMWR` rather than a separate `RAMWR` then `0x3C`, which saves one command
+  transaction a region; it changes the display path, so it needs a look at the panel. Measure
+  with `bench/row-span-damage`.
 - Take the framebuffer clear off the drawing core. It is paid per 64-byte PSRAM cache line:
   clearing only the visible circle saved 0.6 ms, not the 21% its area suggests. Partial redraws
   now clear only the damage, about 2.3 ms of a one-degree turn on the compass, much of it spread
@@ -32,8 +33,8 @@ until the feature set is complete, because profiling an incomplete firmware pric
 ## Deferred, with detail elsewhere
 
 - The partial-flush hardware check, in [`HARDWARE-VERIFICATION.md`](HARDWARE-VERIFICATION.md).
-  Partial flushing is the default and the check has never been run. The compass now flushes
-  dozens of small regions a frame while turning, so it exercises the path far more than before.
+  Partial flushing is the default. The owner has checked the compass by eye; the rest of the
+  check has not been run.
 - CAD, flash encryption, delta coordinates and temperature-compensated RTC calibration, in the
   "Deferred" section of [`LORA-PROTOCOL.md`](LORA-PROTOCOL.md).
 - `panic = "immediate-abort"`, in the "Binary size" section of [`AGENTS.md`](../AGENTS.md).

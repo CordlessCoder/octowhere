@@ -22,7 +22,9 @@ After the geometry fixes pass host checks, does partial flushing preserve both
 alternating framebuffers? Exercise moving touch marks, changing text, screen
 edges and regions crossing dirty-grid boundaries. Look for stale pixels and
 tearing. Verify the panel accepts the aligned transfer windows.
-Partial flushing is now the default and no record says this check was run.
+Partial flushing is now the default. On 2026-09-24 the owner watched the compass with row-span
+damage, which flushes dozens of small regions a frame while the dial turns, and it looked
+correct. The other screens, touch marks and the cases above have not been checked.
 
 ## Failure recovery
 
