@@ -94,3 +94,36 @@ fn a_polygon_marks_every_pixel_it_touches() {
     }
     assert!(!spans.contains(Point::new(14, 14)));
 }
+
+#[test]
+fn rectangles_cover_every_damaged_pixel_at_any_overhead() {
+    type Wide = RowSpans<64, 32, 3>;
+    let mut seed = 0x2545_f491_u32;
+    let mut next = |below: u32| {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        seed % below
+    };
+    for _ in 0..200 {
+        let mut spans = Wide::new();
+        for _ in 0..next(12) {
+            let (x, y) = (next(64) as i32, next(64) as i32);
+            spans.add(Rectangle::new(Point::new(x, y), Size::new(next(20) + 1, next(20) + 1)));
+        }
+        for overhead in [0, 16, 200, 2400, 1 << 20] {
+            let rects: Vec<_> = spans.rectangles(overhead).collect();
+            for y in 0..64 {
+                for x in 0..64 {
+                    let point = Point::new(x, y);
+                    if spans.contains(point) {
+                        assert!(
+                            rects.iter().any(|rect| rect.contains(point)),
+                            "{point:?} missed at overhead {overhead}: {rects:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}

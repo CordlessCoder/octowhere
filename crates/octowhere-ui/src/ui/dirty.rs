@@ -308,17 +308,18 @@ impl<const WIDTH: usize, const BANDS: usize, const K: usize> RowSpans<WIDTH, BAN
             .sum()
     }
 
-    /// Rectangles covering the damage. A rectangle grows over the next band's span when that
-    /// wastes at most `overhead` pixels, the cost of starting another region; otherwise a new one
-    /// starts. Every corner lands on the grain.
+    /// Rectangles covering the damage, for a flush where starting a region costs as much as
+    /// sending `overhead` pixels. Each span joins the open rectangle it widens least, across
+    /// any gap, when the pixels that adds beyond the span's own cost less than a region.
+    /// Rectangles may overlap. Every corner lands on the grain.
     #[must_use]
     pub fn rectangles(&self, overhead: u32) -> Rectangles<'_, WIDTH, BANDS, K> {
         Rectangles {
             spans: self,
             overhead,
             band: self.used().start,
-            open: [None; K],
-            ready: [None; K],
+            open: [None; OPEN],
+            ready: [None; OPEN],
         }
     }
 }
@@ -333,18 +334,39 @@ impl<const WIDTH: usize, const BANDS: usize, const K: usize> Default
     }
 }
 
+/// How many rectangles [`RowSpans::rectangles`] keeps open at once.
+const OPEN: usize = 8;
+
 #[derive(Clone, Copy, Debug)]
 struct Open {
     span: Span,
     first_band: usize,
-    bands: u32,
+    last_band: usize,
 }
 
 impl Open {
+    fn pixels(&self) -> u32 {
+        self.span.len() * (self.last_band - self.first_band + 1) as u32 * GRAIN as u32
+    }
+
+    fn with(&self, span: Span, band: usize) -> Self {
+        Self {
+            span: Span {
+                start: self.span.start.min(span.start),
+                end: self.span.end.max(span.end),
+            },
+            first_band: self.first_band,
+            last_band: self.last_band.max(band),
+        }
+    }
+
     fn rectangle(self) -> Rectangle {
         Rectangle::new(
             Point::new(i32::from(self.span.start) * GRAIN, self.first_band as i32 * GRAIN),
-            Size::new(self.span.len(), self.bands * GRAIN as u32),
+            Size::new(
+                self.span.len(),
+                (self.last_band - self.first_band + 1) as u32 * GRAIN as u32,
+            ),
         )
     }
 }
@@ -353,72 +375,72 @@ pub struct Rectangles<'a, const WIDTH: usize, const BANDS: usize, const K: usize
     spans: &'a RowSpans<WIDTH, BANDS, K>,
     overhead: u32,
     band: usize,
-    open: [Option<Open>; K],
-    ready: [Option<Rectangle>; K],
+    open: [Option<Open>; OPEN],
+    ready: [Option<Rectangle>; OPEN],
 }
 
 impl<const WIDTH: usize, const BANDS: usize, const K: usize> Rectangles<'_, WIDTH, BANDS, K> {
-    fn close(&mut self, open: Open) {
-        let slot = self
-            .ready
-            .iter_mut()
-            .find(|slot| slot.is_none())
-            .expect("at most K rectangles close per band");
-        *slot = Some(open.rectangle());
+    fn close(&mut self, index: usize) {
+        if let Some(open) = self.open[index].take() {
+            let slot = self
+                .ready
+                .iter_mut()
+                .find(|slot| slot.is_none())
+                .expect("no more rectangles close than are open");
+            *slot = Some(open.rectangle());
+        }
     }
 
-    /// Extends or closes the open rectangles over the next band's spans.
+    /// Adds the next band's spans to the open rectangles.
     fn advance(&mut self) {
         let band = self.band;
         self.band += 1;
-        let mut next = [None; K];
-        let mut taken = [false; K];
+        // A rectangle whose gap alone would cost more than a region can never take a span.
+        for index in 0..OPEN {
+            if let Some(open) = self.open[index] {
+                let gap = (band - open.last_band - 1) as u32 * GRAIN as u32 * open.span.len();
+                if gap > self.overhead {
+                    self.close(index);
+                }
+            }
+        }
         let spans = self.spans;
-        for (slot, (start, end)) in spans.band(band).enumerate() {
+        for (start, end) in spans.band(band) {
             let span = Span {
                 start: (start / GRAIN) as u8,
                 end: (end / GRAIN) as u8,
             };
-            // The first open rectangle over this span, if any. Spans and rectangles are both
-            // sorted, so this pairs them left to right.
-            let over = (0..K).find(|&index| {
-                !taken[index]
-                    && self.open[index]
-                        .is_some_and(|open| open.span.start < span.end && span.start < open.span.end)
-            });
-            let grown = over.and_then(|index| {
-                taken[index] = true;
-                let open = self.open[index].expect("found above");
-                let wide = Span {
-                    start: open.span.start.min(span.start),
-                    end: open.span.end.max(span.end),
-                };
-                let waste = (wide.len() - span.len()) + (wide.len() - open.span.len()) * open.bands;
-                if waste * GRAIN as u32 <= self.overhead {
-                    Some(Open {
-                        span: wide,
-                        bands: open.bands + 1,
-                        ..open
-                    })
-                } else {
-                    None
+            let own = span.len() * GRAIN as u32;
+            let best = (0..OPEN)
+                .filter_map(|index| {
+                    let open = self.open[index]?;
+                    let added = open.with(span, band).pixels() - open.pixels();
+                    Some((index, added.saturating_sub(own)))
+                })
+                .min_by_key(|&(_, waste)| waste);
+            match best {
+                Some((index, waste)) if waste <= self.overhead => {
+                    self.open[index] = self.open[index].map(|open| open.with(span, band));
                 }
-            });
-            next[slot] = Some(grown.unwrap_or(Open {
-                span,
-                first_band: band,
-                bands: 1,
-            }));
-            if grown.is_some() {
-                self.open[over.expect("grown")] = None;
+                _ => {
+                    let index = match self.open.iter().position(Option::is_none) {
+                        Some(index) => index,
+                        None => {
+                            let oldest = (0..OPEN)
+                                .min_by_key(|&index| self.open[index].map_or(0, |open| open.last_band))
+                                .expect("OPEN is not zero");
+                            self.close(oldest);
+                            oldest
+                        }
+                    };
+                    self.open[index] = Some(Open {
+                        span,
+                        first_band: band,
+                        last_band: band,
+                    });
+                }
             }
         }
-        for index in 0..K {
-            if let Some(open) = self.open[index].take() {
-                self.close(open);
-            }
-        }
-        self.open = next;
     }
 }
 
