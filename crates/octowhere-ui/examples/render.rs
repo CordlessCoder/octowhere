@@ -69,6 +69,14 @@ fn main() {
             },
         ),
         (
+            "interference-350",
+            CompassView {
+                disturbed: true,
+                heading_decidegrees: Some(3500),
+                ..calibrated
+            },
+        ),
+        (
             "heading-359",
             CompassView {
                 heading_decidegrees: Some(3599),

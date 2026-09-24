@@ -18,15 +18,16 @@ every state come from the command in `COMPASS-SCREEN-HANDOFF.md`; ask the owner 
    readout's first pen position, with no suffix. Should it carry a `°`, or sit centred in the
    slab instead?
 5. **Weights not stated.** The firmware sets the readout, suffix, captions, direction
-   abbreviation and `MAG INTERFERENCE` in Bold, and `TURN ALL WAYS`, `TOP EDGE UP`, the tilt and
+   abbreviation and `INTERFERENCE` in Bold, and `TURN ALL WAYS`, `TOP EDGE UP`, the tilt and
    the hint in Regular. The concept looks the same. Confirm.
 6. **Caption colours.** `MAGNETIC` and `COMPASS` are `GRAY` and `CALIBRATION` is `ORANGE`, as in
    the concept. The NO DATA caption could be `RED` instead. Which?
 7. **Icon and caption position.** At the owner's request the icon moved to y 87 and the caption
    baseline to 138, so the icon, caption and slab inks stand 7 px apart. The handoff's 83 and
    132 gave gaps of 5 and 13 px. Likewise the direction abbreviation grew from 32 to 36 px on
-   the same baseline, so it sits 16 px from both the slab and the tilt line. Keep both in future
-   revisions. Should `MAG INTERFERENCE` be spaced the same way?
+   the same baseline, so it sits 16 px from both the slab and the tilt line. The interference
+   line got the same 36 px, shortened to `INTERFERENCE`: `MAG INTERFERENCE` at that size
+   reaches the turning `E` or `W`. Keep all of these in future revisions.
 
 ## Motion
 

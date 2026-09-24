@@ -32,9 +32,9 @@ const CAPTION_BASELINE: i32 = 138;
 const READOUT: Point = Point::new(143, 224);
 const SUFFIX: Point = Point::new(298, 188);
 const STATUS_BASELINE: i32 = 277;
-/// The direction abbreviation's size, which leaves it evenly spaced between the slab and the
-/// tilt line.
-const CARDINAL_SIZE: u32 = 36;
+/// The size of the direction abbreviation and `INTERFERENCE`, which leaves either evenly spaced
+/// between the slab and the tilt line.
+const STATUS_SIZE: u32 = 36;
 const TILT_BASELINE: i32 = 309;
 const DIVIDER: Rectangle = Rectangle::new(Point::new(138, 321), Size::new(191, 1));
 const HINT_BASELINE: i32 = 338;
@@ -244,10 +244,10 @@ where
         Mode::Heading(_) => (
             cardinal(view.heading_decidegrees.unwrap_or(0)),
             chrome::LIME,
-            CARDINAL_SIZE,
+            STATUS_SIZE,
             FRAKTION_BOLD,
         ),
-        Mode::Interference(_) => ("MAG INTERFERENCE", chrome::ORANGE, 24, FRAKTION_BOLD),
+        Mode::Interference(_) => ("INTERFERENCE", chrome::ORANGE, STATUS_SIZE, FRAKTION_BOLD),
         Mode::Calibrating(_) => ("TURN ALL WAYS", chrome::GRAY, 19, FRAKTION),
         _ => ("TOP EDGE UP", chrome::GRAY, 20, FRAKTION),
     };
@@ -468,25 +468,21 @@ mod tests {
     }
 
     #[test]
-    fn the_status_lines_stay_on_the_panel() {
+    fn the_status_lines_clear_the_letters_at_any_heading() {
         let font = renderer();
         for (text, size, index) in [
-            ("MAG INTERFERENCE", 24, FRAKTION_BOLD),
-            ("WNW", CARDINAL_SIZE, FRAKTION_BOLD),
+            ("INTERFERENCE", STATUS_SIZE, FRAKTION_BOLD),
+            ("WNW", STATUS_SIZE, FRAKTION_BOLD),
             ("TURN ALL WAYS", 19, FRAKTION),
         ] {
             let style = style(&font, chrome::BLACK, size, index);
             let left = CENTER.x - libm::roundf(style.advance(text) / 2.0) as i32;
             let ink = style.baseline_bounds(text, Point::new(left, STATUS_BASELINE));
-            // The panel's chord at the line's top, where it is narrowest.
-            let dy = (ink.top_left.y - CENTER.y) as f32;
-            let half = libm::sqrtf(233.0 * 233.0 - dy * dy);
-            assert!(
-                (ink.top_left.x as f32) > CENTER.x as f32 - half + 20.0
-                    && ((ink.top_left.x + ink.size.width as i32) as f32)
-                        < CENTER.x as f32 + half - 20.0,
-                "{text} runs into the panel's edge: {ink:?}"
-            );
+            // The letters turn with the heading, so one can sit at any angle; a 40 px letter
+            // reaches about 20 px inside its centre's radius.
+            let corner = ink.bottom_right().unwrap() - CENTER;
+            let reach = libm::hypotf(corner.x as f32, corner.y as f32);
+            assert!(reach < LETTER_RADIUS - 20.0, "{text} reaches r {reach}: {ink:?}");
         }
     }
 }
