@@ -328,11 +328,17 @@ impl<T: CoverageTarget> CoverageTarget for Window<'_, T> {
 pub struct Clip<'a, T> {
     parent: &'a mut T,
     damage: &'a Dirty,
+    bounds: Rectangle,
 }
 
-impl<'a, T> Clip<'a, T> {
+impl<'a, T: DrawTarget> Clip<'a, T> {
     pub fn new(parent: &'a mut T, damage: &'a Dirty) -> Self {
-        Self { parent, damage }
+        let bounds = damage.bounding_box().intersection(&parent.bounding_box());
+        Self {
+            parent,
+            damage,
+            bounds,
+        }
     }
 }
 
@@ -353,7 +359,7 @@ fn damaged_parts(
 
 impl<T: DrawTarget> Dimensions for Clip<'_, T> {
     fn bounding_box(&self) -> Rectangle {
-        self.damage.bounding_box().intersection(&self.parent.bounding_box())
+        self.bounds
     }
 }
 
@@ -391,7 +397,7 @@ impl<T: DrawTarget> DrawTarget for Clip<'_, T> {
             return Ok(());
         };
         let (left, right) = (area.top_left.x, bottom_right.x + 1);
-        let bounds = self.damage.bounding_box();
+        let bounds = self.bounds;
         let Some(last) = bounds.bottom_right() else {
             return Ok(());
         };

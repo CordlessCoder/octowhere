@@ -30,6 +30,9 @@ impl Span {
 pub struct RowSpans<const WIDTH: usize, const BANDS: usize, const K: usize> {
     spans: [[Span; K]; BANDS],
     counts: [u8; BANDS],
+    /// The first and last bands that hold a span; `first > last` when none does.
+    first: u16,
+    last: u16,
     full: bool,
 }
 
@@ -46,6 +49,8 @@ impl<const WIDTH: usize, const BANDS: usize, const K: usize> RowSpans<WIDTH, BAN
         Self {
             spans: [[Span { start: 0, end: 0 }; K]; BANDS],
             counts: [0; BANDS],
+            first: u16::MAX,
+            last: 0,
             full: false,
         }
     }
@@ -58,8 +63,20 @@ impl<const WIDTH: usize, const BANDS: usize, const K: usize> RowSpans<WIDTH, BAN
     }
 
     pub fn clear(&mut self) {
-        self.counts = [0; BANDS];
+        for band in self.used() {
+            self.counts[band] = 0;
+        }
+        (self.first, self.last) = (u16::MAX, 0);
         self.full = false;
+    }
+
+    /// The bands that can hold a span.
+    fn used(&self) -> core::ops::Range<usize> {
+        if self.full {
+            0..BANDS
+        } else {
+            usize::from(self.first)..usize::from(self.last) + 1
+        }
     }
 
     #[inline(always)]
@@ -74,7 +91,7 @@ impl<const WIDTH: usize, const BANDS: usize, const K: usize> RowSpans<WIDTH, BAN
 
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        !self.full && self.counts.iter().all(|&count| count == 0)
+        !self.full && self.first > self.last
     }
 
     /// The spans of band `band`, as column ranges.
@@ -118,10 +135,6 @@ impl<const WIDTH: usize, const BANDS: usize, const K: usize> RowSpans<WIDTH, BAN
         }
     }
 
-    fn add_row(&mut self, y: i32, start: i32, end: i32) {
-        self.add_bands(y.div_euclid(GRAIN), y.div_euclid(GRAIN), start, end);
-    }
-
     fn insert(&mut self, band: usize, mut new: Span) {
         let mut merged = [Span::default(); MAX_K + 1];
         let mut count = 0;
@@ -157,6 +170,8 @@ impl<const WIDTH: usize, const BANDS: usize, const K: usize> RowSpans<WIDTH, BAN
         }
         self.spans[band][..count].copy_from_slice(&merged[..count]);
         self.counts[band] = count as u8;
+        self.first = self.first.min(band as u16);
+        self.last = self.last.max(band as u16);
     }
 
     pub fn add(&mut self, rect: Rectangle) {
@@ -172,41 +187,40 @@ impl<const WIDTH: usize, const BANDS: usize, const K: usize> RowSpans<WIDTH, BAN
     }
 
     /// Marks every pixel a convex polygon through `corners` touches, and `margin` pixels more
-    /// either side along each row.
+    /// either side along each row. At most eight corners.
     pub fn add_polygon(&mut self, corners: &[(f32, f32)], margin: i32) {
         if self.full || corners.is_empty() {
             return;
         }
-        let (top, bottom) = corners
-            .iter()
-            .fold((f32::MAX, f32::MIN), |(top, bottom), &(_, y)| (top.min(y), bottom.max(y)));
-        let first = libm::floorf(top) as i32;
-        let last = libm::ceilf(bottom) as i32 - 1;
-        for y in first..=last.max(first) {
-            let (low, high) = (y as f32, y as f32 + 1.0);
+        // Each edge from its top end: that end, its bottom's y, and its run per unit of y.
+        let mut edges = [(0.0f32, 0.0f32, 0.0f32, 0.0f32); 8];
+        let count = corners.len().min(edges.len());
+        let (mut top, mut bottom) = (f32::MAX, f32::MIN);
+        for index in 0..count {
+            let (a, b) = (corners[index], corners[(index + 1) % count]);
+            let (from, to) = if a.1 <= b.1 { (a, b) } else { (b, a) };
+            let run = if to.1 > from.1 { (to.0 - from.0) / (to.1 - from.1) } else { 0.0 };
+            edges[index] = (from.0, from.1, to.1, run);
+            (top, bottom) = (top.min(from.1), bottom.max(to.1));
+        }
+        let first = (libm::floorf(top) as i32).div_euclid(GRAIN);
+        let last = (libm::ceilf(bottom) as i32 - 1).max(first * GRAIN).div_euclid(GRAIN);
+        for band in first..=last {
+            let (low, high) = ((band * GRAIN) as f32, ((band + 1) * GRAIN) as f32);
             let (mut left, mut right) = (f32::MAX, f32::MIN);
-            for (index, &(x0, y0)) in corners.iter().enumerate() {
-                let (x1, y1) = corners[(index + 1) % corners.len()];
-                // The edge clipped to this row's height.
-                let (from, to) = if y0 <= y1 { ((x0, y0), (x1, y1)) } else { ((x1, y1), (x0, y0)) };
-                if to.1 < low || from.1 > high {
+            for &(x, from, to, run) in &edges[..count] {
+                if to < low || from > high {
                     continue;
                 }
-                let at = |y: f32| {
-                    if to.1 == from.1 {
-                        from.0
-                    } else {
-                        from.0 + (to.0 - from.0) * ((y - from.1) / (to.1 - from.1)).clamp(0.0, 1.0)
-                    }
-                };
-                for x in [at(low.max(from.1)), at(high.min(to.1))] {
-                    left = left.min(x);
-                    right = right.max(x);
+                for y in [low.max(from), high.min(to)] {
+                    let at = x + run * (y - from);
+                    (left, right) = (left.min(at), right.max(at));
                 }
             }
             if left <= right {
-                self.add_row(
-                    y,
+                self.add_bands(
+                    band,
+                    band,
                     libm::floorf(left) as i32 - margin,
                     libm::ceilf(right) as i32 + margin,
                 );
@@ -219,14 +233,16 @@ impl<const WIDTH: usize, const BANDS: usize, const K: usize> RowSpans<WIDTH, BAN
         if self.full {
             return;
         }
-        let first = libm::floorf(center.1 - radius) as i32;
-        let last = libm::ceilf(center.1 + radius) as i32 - 1;
-        for y in first..=last {
-            // The row's widest point is its nearest to the centre.
-            let dy = (center.1 - (y as f32 + 0.5)).abs() - 0.5;
-            let half = libm::sqrtf((radius * radius - dy.max(0.0) * dy.max(0.0)).max(0.0));
-            self.add_row(
-                y,
+        let first = (libm::floorf(center.1 - radius) as i32).div_euclid(GRAIN);
+        let last = (libm::ceilf(center.1 + radius) as i32 - 1).div_euclid(GRAIN);
+        for band in first..=last {
+            // The band's widest point is its nearest to the centre.
+            let (low, high) = ((band * GRAIN) as f32, ((band + 1) * GRAIN) as f32);
+            let dy = (low - center.1).max(center.1 - high).max(0.0);
+            let half = libm::sqrtf((radius * radius - dy * dy).max(0.0));
+            self.add_bands(
+                band,
+                band,
                 libm::floorf(center.0 - half) as i32,
                 libm::ceilf(center.0 + half) as i32,
             );
@@ -238,7 +254,7 @@ impl<const WIDTH: usize, const BANDS: usize, const K: usize> RowSpans<WIDTH, BAN
         if self.full {
             return;
         }
-        for band in 0..BANDS {
+        for band in other.used() {
             for index in 0..usize::from(other.counts[band]) {
                 self.insert(band, other.spans[band][index]);
             }
@@ -268,11 +284,10 @@ impl<const WIDTH: usize, const BANDS: usize, const K: usize> RowSpans<WIDTH, BAN
 
     #[must_use]
     pub fn bounding_box(&self) -> Rectangle {
-        let mut bands = (0..BANDS).filter(|&band| self.band(band).next().is_some());
-        let Some(first) = bands.next() else {
+        if self.is_empty() {
             return Rectangle::zero();
-        };
-        let last = bands.next_back().unwrap_or(first);
+        }
+        let (first, last) = (self.used().start, self.used().end - 1);
         let (left, right) = (first..=last)
             .flat_map(|band| self.band(band))
             .fold((i32::MAX, i32::MIN), |(left, right), (start, end)| {
@@ -287,7 +302,7 @@ impl<const WIDTH: usize, const BANDS: usize, const K: usize> RowSpans<WIDTH, BAN
     /// How many pixels are damaged.
     #[must_use]
     pub fn pixels(&self) -> u32 {
-        (0..BANDS)
+        self.used()
             .flat_map(|band| self.band(band))
             .map(|(start, end)| (end - start) as u32 * GRAIN as u32)
             .sum()
@@ -301,7 +316,7 @@ impl<const WIDTH: usize, const BANDS: usize, const K: usize> RowSpans<WIDTH, BAN
         Rectangles {
             spans: self,
             overhead,
-            band: 0,
+            band: self.used().start,
             open: [None; K],
             ready: [None; K],
         }
@@ -417,7 +432,7 @@ impl<const WIDTH: usize, const BANDS: usize, const K: usize> Iterator
             if let Some(ready) = self.ready.iter_mut().find_map(Option::take) {
                 return Some(ready);
             }
-            if self.band < BANDS {
+            if self.band < self.spans.used().end {
                 self.advance();
                 continue;
             }
