@@ -97,6 +97,17 @@ impl Stage {
         }
     }
 
+    /// Jumps to `screen` as though the pager had come to rest on it.
+    pub fn show(&mut self, screen: Screen) {
+        let page = Screen::ALL
+            .iter()
+            .position(|&each| each == screen)
+            .expect("every screen is in the ring");
+        self.pager = Pager::new(page, Screen::ALL.len(), board::LCD_WIDTH as i32);
+        self.screen = screen;
+        self.selected_node = None;
+    }
+
     #[must_use]
     pub fn screen(&self) -> Screen {
         self.screen

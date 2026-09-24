@@ -134,6 +134,20 @@ impl CoverageTarget for FB {
     }
 }
 
+impl FB {
+    /// The colour stored at `point`, or `None` outside the panel.
+    #[must_use]
+    pub fn pixel(&self, point: Point) -> Option<Color> {
+        let (width, height) = (board::LCD_WIDTH as i32, board::LCD_HEIGHT as i32);
+        if !(0..width).contains(&point.x) || !(0..height).contains(&point.y) {
+            return None;
+        }
+        let at = ((point.y * width + point.x) * 2) as usize;
+        let bytes = [self.buffer()[at], self.buffer()[at + 1]];
+        Some(Rgb565::from(RawU16::new(u16::from_be_bytes(bytes))))
+    }
+}
+
 trait BlendRowWith {
     /// Clips the row to the framebuffer, skips uncovered pixels, stores `color` over fully covered
     /// ones, and stores what `mix` returns for the rest, given the pixel's bytes.

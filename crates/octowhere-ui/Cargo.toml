@@ -20,3 +20,7 @@ fontdue = { git = "https://github.com/CordlessCoder/fontdue", rev = "a71751e3e94
 fontdue-macros = { git = "https://github.com/CordlessCoder/fontdue", rev = "a71751e3e94864c2608a481308fc906e6302dea2" }
 heapless = "0.9.3"
 libm = "0.2.16"
+
+[dev-dependencies]
+critical-section = { version = "1.2.0", features = ["std"] }
+png = "0.18.1"
