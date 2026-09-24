@@ -127,6 +127,26 @@ impl<const WIDTH: usize, const BANDS: usize, const K: usize> RowSpans<WIDTH, BAN
         spans.iter().map(Span::columns)
     }
 
+    /// Calls `part` with each damaged piece of row `y` within columns `x..x + len`: its first
+    /// column, and where it starts and ends counted from `x`.
+    #[inline]
+    pub fn for_each_part(&self, x: i32, y: i32, len: usize, mut part: impl FnMut(i32, usize, usize)) {
+        if !(0..Self::HEIGHT as i32).contains(&y) {
+            return;
+        }
+        let end = x.saturating_add(len as i32);
+        for span in self.band_spans((y / GRAIN) as usize) {
+            let (start, stop) = span.columns();
+            if start >= end {
+                break;
+            }
+            let (from, to) = (x.max(start), end.min(stop));
+            if from < to {
+                part(from, (from - x) as usize, (to - x) as usize);
+            }
+        }
+    }
+
     /// Marks columns `start..end` of bands `first..=last`, widened to the grain and clipped.
     fn add_bands(&mut self, first: i32, last: i32, start: i32, end: i32) {
         if self.full {

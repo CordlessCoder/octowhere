@@ -121,10 +121,12 @@ impl<T: CoverageTarget> CoverageTarget for OnBackground<'_, T> {
         self.parent.visible(area)
     }
 
+    #[inline]
     fn blend_row(&mut self, x: i32, y: i32, coverage: &[u8], color: Self::Color) {
         self.parent.blend_row_over(x, y, coverage, color, self.background);
     }
 
+    #[inline]
     fn blend_row_over(
         &mut self,
         x: i32,
@@ -284,6 +286,7 @@ impl<T: DrawTarget> DrawTarget for Window<'_, T> {
 impl<T: CoverageTarget> Window<'_, T> {
     /// Shifts a row into the parent's coordinates and clips it: the parent's start column and the
     /// part of `coverage` that is visible.
+    #[inline]
     fn clip_row<'c>(&self, x: i32, y: i32, coverage: &'c [u8]) -> Option<(i32, i32, &'c [u8])> {
         let (x, y) = (x + self.offset.x, y + self.offset.y);
         let top = self.clip.top_left;
@@ -304,6 +307,7 @@ impl<T: CoverageTarget> CoverageTarget for Window<'_, T> {
         !area.is_zero_sized() && self.parent.visible(&area)
     }
 
+    #[inline]
     fn blend_row_over(
         &mut self,
         x: i32,
@@ -317,6 +321,7 @@ impl<T: CoverageTarget> CoverageTarget for Window<'_, T> {
         }
     }
 
+    #[inline]
     fn blend_row(&mut self, x: i32, y: i32, coverage: &[u8], color: Self::Color) {
         if let Some((x, y, coverage)) = self.clip_row(x, y, coverage) {
             self.parent.blend_row(x, y, coverage, color);
@@ -340,21 +345,6 @@ impl<'a, T: DrawTarget> Clip<'a, T> {
             bounds,
         }
     }
-}
-
-/// Each damaged part of row `y` that `x..x + len` covers, as its start and its range within the
-/// row.
-fn damaged_parts(
-    damage: &Dirty,
-    x: i32,
-    y: i32,
-    len: usize,
-) -> impl Iterator<Item = (i32, core::ops::Range<usize>)> + '_ {
-    let end = x.saturating_add(len as i32);
-    damage.spans(y).filter_map(move |(start, stop)| {
-        let (from, to) = (x.max(start), end.min(stop));
-        (from < to).then(|| (from, (from - x) as usize..(to - x) as usize))
-    })
 }
 
 impl<T: DrawTarget> Dimensions for Clip<'_, T> {
@@ -401,16 +391,17 @@ impl<T: DrawTarget> DrawTarget for Clip<'_, T> {
         let Some(last) = bounds.bottom_right() else {
             return Ok(());
         };
+        let mut result = Ok(());
         for y in area.top_left.y.max(bounds.top_left.y)..=bottom_right.y.min(last.y) {
-            for (start, end) in self.damage.spans(y) {
-                let (from, to) = (left.max(start), right.min(end));
-                if from < to {
-                    let row = Rectangle::new(Point::new(from, y), Size::new((to - from) as u32, 1));
-                    self.parent.fill_solid(&row, color)?;
+            let parent = &mut *self.parent;
+            self.damage.for_each_part(left, y, (right - left) as usize, |start, from, to| {
+                let row = Rectangle::new(Point::new(start, y), Size::new((to - from) as u32, 1));
+                if result.is_ok() {
+                    result = parent.fill_solid(&row, color);
                 }
-            }
+            });
         }
-        Ok(())
+        result
     }
 }
 
@@ -419,12 +410,15 @@ impl<T: CoverageTarget> CoverageTarget for Clip<'_, T> {
         self.damage.intersects(area) && self.parent.visible(area)
     }
 
+    #[inline]
     fn blend_row(&mut self, x: i32, y: i32, coverage: &[u8], color: Self::Color) {
-        for (start, range) in damaged_parts(self.damage, x, y, coverage.len()) {
-            self.parent.blend_row(start, y, &coverage[range], color);
-        }
+        let parent = &mut *self.parent;
+        self.damage.for_each_part(x, y, coverage.len(), |start, from, to| {
+            parent.blend_row(start, y, &coverage[from..to], color);
+        });
     }
 
+    #[inline]
     fn blend_row_over(
         &mut self,
         x: i32,
@@ -433,9 +427,10 @@ impl<T: CoverageTarget> CoverageTarget for Clip<'_, T> {
         color: Self::Color,
         background: Self::Color,
     ) {
-        for (start, range) in damaged_parts(self.damage, x, y, coverage.len()) {
-            self.parent.blend_row_over(start, y, &coverage[range], color, background);
-        }
+        let parent = &mut *self.parent;
+        self.damage.for_each_part(x, y, coverage.len(), |start, from, to| {
+            parent.blend_row_over(start, y, &coverage[from..to], color, background);
+        });
     }
 }
 
