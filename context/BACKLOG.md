@@ -5,6 +5,19 @@ until the feature set is complete, because profiling an incomplete firmware pric
 
 ## Next
 
+- Find the tearing while dragging between screens. The owner saw it on 2026-09-24 during page
+  and panel drags, which redraw and flush the whole panel every frame. The display core waits
+  for the TE pulse, or 17 ms and a `te_timeout` warning, then flushes; a full flush took about
+  14.8 ms when last measured, against a frame of about 16.7 ms. Check whether the flush starts
+  at the TE edge the panel means (its TE mode and scan line), whether it overtakes the panel's
+  scan, and whether a timeout flush is involved. The code is `second_core` in `src/main.rs` and
+  `src/drivers/co5300.rs`.
+- Smoother transitions between the compass's states, such as interference coming and going
+  (owner, 2026-09-24). Today the slab recolours, the state line appears and the icon swaps in one
+  frame, as the compass animation addendum specifies ("the state line is never animated").
+  Changing that is a design change to an approved screen, so it starts with a design round
+  against `context/compass-animation/COMPASS-ANIMATION-ADDENDUM.md`.
+
 - Shorten settings saves. Settings are in ekv now, and each write transaction starts a new file
   that erases a whole 4 KiB page first, so every save erases. The first saved brightness took
   331 ms, all of it with core 1 held, so the display stopped updating for that long. The

@@ -70,6 +70,9 @@ initialization or peripheral mappings.
 - [`context/settings-panel/SETTINGS-PANEL-SPEC.md`](context/settings-panel/SETTINGS-PANEL-SPEC.md)
   is the approved design of the settings panel and the screens it opens, with the owner's
   decisions since. The firmware implements it.
+  [`context/settings-panel/IMPLEMENTATION-RESPONSE.md`](context/settings-panel/IMPLEMENTATION-RESPONSE.md)
+  tells the design agent what was built, where the build interpreted the spec, and the UI's
+  state for a next round.
 - [`context/HARDWARE-VERIFICATION.md`](context/HARDWARE-VERIFICATION.md) lists open hardware
   questions from static review. They are questions, not confirmed defects.
 - [`context/IMPLEMENTATION.md`](context/IMPLEMENTATION.md) is a finished multi-agent brief kept as
