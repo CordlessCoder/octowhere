@@ -432,6 +432,9 @@ struct Buffers {
     drawn: [bool; 2],
     /// Pixels repainted, over every step.
     pixels: u64,
+    /// What the panel shows: each buffer's flush rectangles copied in after it is drawn.
+    panel: Box<FB>,
+    flushed: bool,
 }
 
 impl Buffers {
@@ -442,6 +445,8 @@ impl Buffers {
             previous: Dirty::new_full(),
             drawn: [false; 2],
             pixels: 0,
+            panel: FB::boxed(),
+            flushed: false,
         }
     }
 
@@ -460,6 +465,26 @@ impl Buffers {
         } else if !repaint.is_empty() {
             self.pixels += u64::from(repaint.pixels());
             stage.draw(&mut Clip::new(fb, &repaint));
+        }
+        // The panel shows the step before, so the flush sends only this step's damage.
+        let flush = if self.flushed { changed.clone() } else { Dirty::new_full() };
+        self.flushed = true;
+        let rows = |rect: Rectangle| {
+            (rect.top_left.y..rect.top_left.y + rect.size.height as i32).map(move |y| {
+                let start = (y * 466 + rect.top_left.x) as usize * 2;
+                start..start + rect.size.width as usize * 2
+            })
+        };
+        let whole = Rectangle::new(Point::zero(), Size::new(466, 466));
+        let rects: Vec<_> = if flush.is_full() {
+            vec![whole]
+        } else {
+            flush.rectangles(octowhere_ui::chrome::FLUSH_OVERHEAD).collect()
+        };
+        for rect in rects {
+            for range in rows(rect) {
+                self.panel.buffer_mut()[range.clone()].copy_from_slice(&fb.buffer()[range]);
+            }
         }
         &self.fbs[index]
     }
@@ -517,6 +542,8 @@ fn compass_damage_redraws_what_changed() {
             let whole = render(&driver.stage);
             let wrong = differing(partial, &whole);
             assert_eq!(wrong, 0, "{name}, frame {frame}: {wrong} pixels differ");
+            let wrong = differing(&buffers.panel, &whole);
+            assert_eq!(wrong, 0, "{name}, frame {frame}: {wrong} pixels differ on the panel");
             update = driver.step(Input::default());
         }
     }

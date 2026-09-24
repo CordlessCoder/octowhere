@@ -192,28 +192,39 @@ impl<const WIDTH: usize, const BANDS: usize, const K: usize> RowSpans<WIDTH, BAN
         if self.full || corners.is_empty() {
             return;
         }
-        // Each edge from its top end: that end, its bottom's y, and its run per unit of y.
-        let mut edges = [(0.0f32, 0.0f32, 0.0f32, 0.0f32); 8];
+        // In 1/256 px, so the per-band work is integer. Rounding moves an edge by at most
+        // 1/512 px, less than any margin.
+        const ONE: i32 = 256;
+        let fixed = |value: f32| (value * ONE as f32) as i32;
+        // Each edge from its top end: that end's x and y, its bottom's y, and its run per unit
+        // of y in 1/65536.
+        let mut edges = [(0i32, 0i32, 0i32, 0i64); 8];
         let count = corners.len().min(edges.len());
-        let (mut top, mut bottom) = (f32::MAX, f32::MIN);
+        let (mut top, mut bottom) = (i32::MAX, i32::MIN);
         for index in 0..count {
             let (a, b) = (corners[index], corners[(index + 1) % count]);
+            let (a, b) = ((fixed(a.0), fixed(a.1)), (fixed(b.0), fixed(b.1)));
             let (from, to) = if a.1 <= b.1 { (a, b) } else { (b, a) };
-            let run = if to.1 > from.1 { (to.0 - from.0) / (to.1 - from.1) } else { 0.0 };
+            let run = if to.1 > from.1 {
+                (i64::from(to.0 - from.0) << 16) / i64::from(to.1 - from.1)
+            } else {
+                0
+            };
             edges[index] = (from.0, from.1, to.1, run);
             (top, bottom) = (top.min(from.1), bottom.max(to.1));
         }
-        let first = (libm::floorf(top) as i32).div_euclid(GRAIN);
-        let last = (libm::ceilf(bottom) as i32 - 1).max(first * GRAIN).div_euclid(GRAIN);
+        let band_height = GRAIN * ONE;
+        let first = top.div_euclid(band_height);
+        let last = (bottom - 1).max(top).div_euclid(band_height);
         for band in first..=last {
-            let (low, high) = ((band * GRAIN) as f32, ((band + 1) * GRAIN) as f32);
-            let (mut left, mut right) = (f32::MAX, f32::MIN);
+            let (low, high) = (band * band_height, (band + 1) * band_height);
+            let (mut left, mut right) = (i32::MAX, i32::MIN);
             for &(x, from, to, run) in &edges[..count] {
                 if to < low || from > high {
                     continue;
                 }
                 for y in [low.max(from), high.min(to)] {
-                    let at = x + run * (y - from);
+                    let at = x + ((run * i64::from(y - from)) >> 16) as i32;
                     (left, right) = (left.min(at), right.max(at));
                 }
             }
@@ -221,8 +232,8 @@ impl<const WIDTH: usize, const BANDS: usize, const K: usize> RowSpans<WIDTH, BAN
                 self.add_bands(
                     band,
                     band,
-                    libm::floorf(left) as i32 - margin,
-                    libm::ceilf(right) as i32 + margin,
+                    left.div_euclid(ONE) - margin,
+                    (right + ONE - 1).div_euclid(ONE) + margin,
                 );
             }
         }
@@ -314,10 +325,12 @@ impl<const WIDTH: usize, const BANDS: usize, const K: usize> RowSpans<WIDTH, BAN
     /// Rectangles may overlap. Every corner lands on the grain.
     #[must_use]
     pub fn rectangles(&self, overhead: u32) -> Rectangles<'_, WIDTH, BANDS, K> {
+        let used = self.used();
         Rectangles {
             spans: self,
             overhead,
-            band: self.used().start,
+            band: used.start,
+            end: used.end,
             open: [None; OPEN],
             ready: [None; OPEN],
         }
@@ -335,7 +348,7 @@ impl<const WIDTH: usize, const BANDS: usize, const K: usize> Default
 }
 
 /// How many rectangles [`RowSpans::rectangles`] keeps open at once.
-const OPEN: usize = 8;
+const OPEN: usize = 6;
 
 #[derive(Clone, Copy, Debug)]
 struct Open {
@@ -375,6 +388,7 @@ pub struct Rectangles<'a, const WIDTH: usize, const BANDS: usize, const K: usize
     spans: &'a RowSpans<WIDTH, BANDS, K>,
     overhead: u32,
     band: usize,
+    end: usize,
     open: [Option<Open>; OPEN],
     ready: [Option<Rectangle>; OPEN],
 }
@@ -454,7 +468,7 @@ impl<const WIDTH: usize, const BANDS: usize, const K: usize> Iterator
             if let Some(ready) = self.ready.iter_mut().find_map(Option::take) {
                 return Some(ready);
             }
-            if self.band < self.spans.used().end {
+            if self.band < self.end {
                 self.advance();
                 continue;
             }

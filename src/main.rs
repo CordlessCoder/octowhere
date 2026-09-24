@@ -1403,8 +1403,8 @@ async fn async_main(spawner: Spawner) {
         PSRAM_HEAP.used(),
     );
     let mut prev_swap_draw = Duration::MIN;
-    // The other buffer last saw the frame before this one, so it needs this step's damage and
-    // the one before.
+    // The buffer drawn next last held the frame before the current one, so it repaints the
+    // current step's damage as well as its own.
     let mut previous_changed = Dirty::new_full();
     #[cfg(feature = "damage-debug")]
     let mut outlined = Dirty::new();
@@ -1492,30 +1492,30 @@ async fn async_main(spawner: Spawner) {
                 );
             }
             let changed = update.changed;
-            let repaint = dirty;
-            *repaint = previous_changed;
+            let mut repaint = previous_changed;
             repaint.extend(&changed);
+            if !*drawn {
+                repaint.make_full();
+                *drawn = true;
+            }
+            if repaint.is_full() {
+                stage.draw(fb);
+            } else if !repaint.is_empty() {
+                stage.draw(&mut chrome::Clip::new(fb, &repaint));
+            }
+            // The panel already shows the step before, so only this step's pixels change on it.
+            dirty.clone_from(&changed);
             #[cfg(feature = "damage-debug")]
             {
                 // Erase the outlines the last flush drew, and outline this step's damage.
-                repaint.extend(&outlined);
+                dirty.extend(&outlined);
                 outlined.clear();
-                for region in repaint.rectangles(chrome::FLUSH_OVERHEAD) {
+                for region in dirty.rectangles(chrome::FLUSH_OVERHEAD) {
                     if changed.intersects(&region) {
                         add_outline(&mut outlined, region);
                     }
                 }
                 *debug_changed = changed.clone();
-            }
-            if !*drawn {
-                repaint.make_full();
-                *drawn = true;
-            }
-
-            if repaint.is_full() {
-                stage.draw(fb);
-            } else if !repaint.is_empty() {
-                stage.draw(&mut chrome::Clip::new(fb, repaint));
             }
             previous_changed = changed;
 
