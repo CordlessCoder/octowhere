@@ -24,7 +24,8 @@ until the feature set is complete, because profiling an incomplete firmware pric
   the draw runs 2.4 ms faster with flushing held off. DMA straight from the PSRAM framebuffer is
   ruled out: the owner says it does not work on this path. Opening each stream with `RAMWR`
   instead of a separate command, now in place, took the address window from 2.1 to 1.8 ms a
-  frame. What remains is the row copies. Measure with `bench/row-span-damage`.
+  frame. What remains is the row copies. The bench that measured this,
+  `bench/row-span-damage`, was deleted; its last commit was `e92ff49`.
 - Take the framebuffer clear off the drawing core. It is paid per 64-byte PSRAM cache line:
   clearing only the visible circle saved 0.6 ms, not the 21% its area suggests. Partial redraws
   now clear only the damage, about 2.3 ms of a one-degree turn on the compass, much of it spread

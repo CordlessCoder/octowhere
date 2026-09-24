@@ -46,20 +46,13 @@ initialization or peripheral mappings.
 
 - [`context/BACKLOG.md`](context/BACKLOG.md) lists open work that is not in progress, and says
   where each entry's detail lives. Read it when choosing what to do next.
-- [`context/COMPASS-SCREEN-HANDOFF.md`](context/COMPASS-SCREEN-HANDOFF.md) briefs a design
-  agent on the compass screen: what it does, the panel's physical size, what the renderer can
-  draw and what each state costs to draw.
-- [`context/compass-implementation-handoff.md`](context/compass-implementation-handoff.md) is
-  the design agent's specification of the compass screen, which the firmware implements, and
-  [`context/compass-concept-states.png`](context/compass-concept-states.png) is the approved
-  concept. [`context/compass-design-questions.md`](context/compass-design-questions.md) holds
-  what the implementation asked back, and
-  [`context/compass-design-answers.md`](context/compass-design-answers.md) the designer's answers
-  with the owner's overrides. The designer then sent
-  [`context/compass-design-changes-since-answers.md`](context/compass-design-changes-since-answers.md),
-  and [`context/compass-implementation-update.md`](context/compass-implementation-update.md)
-  reports back what the firmware now does, with simulator captures in
-  `context/compass-sim-states/`.
+- [`context/SCREEN-DESIGN-BRIEF.md`](context/SCREEN-DESIGN-BRIEF.md) briefs a design agent on
+  a new screen, currently the settings panel: the hardware, what the renderer draws and what it
+  costs, what data the screens receive, and the two approved screens. Captures of their states
+  are in `context/screen-captures/`, drawn by the `render` example. Keep it current when the renderer,
+  the costs or the screens' data change. The compass's earlier specification and the design
+  round's questions and answers were removed once the firmware implemented them; git history
+  has them.
 - [`context/clock_face_design/CLOCK-FACE-SPEC.md`](context/clock_face_design/CLOCK-FACE-SPEC.md)
   is the approved design of the clock face, the zone picker and the compass's current layout,
   with concept images and the renderer that drew them.
@@ -192,12 +185,9 @@ cache, and `tools/font-scale-sweep.sh`, which reruns it at each fontdue `scale`;
 logs every touch report and polls during a cover (`touch-report-log`); and `bench/zone-lookup`,
 which replaces the GNSS position with a tour of synthetic fixes and logs each zone lookup's
 steps and time, each settings write, and how long it held core 1 (`zone-lookup-bench`); and
-`bench/row-span-damage`, which drives the settled compass through synthetic turns, tilts and
-holds in the real frame loop and logs the step, draw, flush, pixels and regions per phase, the
-flush's parts and both cores' stack high-water marks (`compass-sweep-bench`, with
-`compass-micro-bench` for startup timings of the span operations and the draw by part; the
-micro-benches hold large values on the main stack, so box any added), and a host profiling
-example (`examples/damage_profile.rs`); and `bench/face-draw`, which starts on the clock
+`bench/tz-boundary-size`, a host script that simplifies timezone-boundary-builder's zone
+polygons at several tolerances, sizes their encoding and checks every GeoNames city of over
+15,000 people against the full set (`tools/tz-boundary-size.py`, usage in its header); and `bench/face-draw`, which starts on the clock
 face with a fixed zone, reruns the clock's and the compass's entries in turn with a synthetic
 heading, and logs every draw's time and area (`face-draw-bench`).
 

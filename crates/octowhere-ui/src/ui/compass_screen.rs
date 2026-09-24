@@ -1,6 +1,6 @@
 //! The compass screen: a fixed slab carrying the heading or the calibration progress, a status
-//! icon, and a dial that turns with the heading. `context/compass-implementation-handoff.md` is
-//! the design this implements.
+//! icon, and a dial that turns with the heading. `context/SCREEN-DESIGN-BRIEF.md` describes it
+//! for design work.
 
 use core::fmt::Write as _;
 
