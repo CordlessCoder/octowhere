@@ -2,7 +2,8 @@
 target = "xtensa-esp32s3-none-elf"
 
 [target.xtensa-esp32s3-none-elf]
-runner = "espflash flash --monitor --log-format defmt"
+# The partition table path is relative, so run cargo from the repository root.
+runner = "espflash flash --monitor --log-format defmt --partition-table partitions.csv"
 rustflags = ["-C", "link-arg=-Tlinkall.x", "-C", "link-arg=-Tdefmt.x"]
 
 [unstable]
