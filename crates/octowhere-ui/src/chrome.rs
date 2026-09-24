@@ -305,7 +305,7 @@ impl<T: CoverageTarget> CoverageTarget for Window<'_, T> {
 
 // `scale` is the size in px per em the outlines are flattened for; larger text shows the facets.
 // At 24 the compass readout matches a much finer flattening. Raising it costs rasterization time
-// on every glyph that misses the cache, and turned glyphs always do.
+// on every glyph drawn.
 fontdue_macros::fontdue_font_from_file!(
     MarathonShapiroFont,
     "../../../assets/MarathonShapiro-Wide65_subset.ttf",
@@ -382,22 +382,6 @@ pub const fn lerp_u8(a: u8, b: u8, factor: u8) -> u8 {
     ((a as u16 * (u8::MAX - factor) as u16 + b as u16 * factor as u16 + u8::MAX as u16) >> 8) as u8
 }
 
-/// Blends a row-major coverage bitmap `width` pixels wide with its top-left pixel at `origin`.
-fn blend_bitmap<D: CoverageTarget>(
-    target: &mut D,
-    origin: Point,
-    width: usize,
-    coverage: &[u8],
-    color: D::Color,
-) {
-    if width == 0 {
-        return;
-    }
-    for (row, line) in coverage.chunks_exact(width).enumerate() {
-        target.blend_row(origin.x, origin.y + row as i32, line, color);
-    }
-}
-
 pub trait RgbColorExt {
     fn lerp(&self, other: &Self, factor: u8) -> Self;
 }
@@ -431,40 +415,27 @@ impl RgbColorExt for Gray8 {
 pub struct FontdueRendererCtx {
     layout: fontdue::layout::Layout,
     canvas: fontdue::raster::Raster<'static>,
-    /// One row of a rotated glyph's coverage.
+    /// One row of a glyph's coverage, as `BitmapIter::rows` fills it.
     coverage: alloc::vec::Vec<u8>,
-    glyphs: GlyphCache,
 }
 
-/// Most of the heap the upright glyph cache may hold. Filling it empties it, and the glyphs on
-/// screen come back on their next draw.
-const GLYPH_CACHE_BYTES: usize = 32 * 1024;
-
-/// Coverage of upright glyphs by font, glyph index and size, as each rasterizes to the same bytes
-/// every time. Each entry holds the glyph's width and its coverage, row by row.
-#[derive(Default)]
-struct GlyphCache {
-    glyphs: alloc::collections::BTreeMap<(usize, u16, u32), (usize, alloc::vec::Vec<u8>)>,
-    bytes: usize,
-}
-
-impl GlyphCache {
-    fn get_or_insert(
-        &mut self,
-        key: (usize, u16, u32),
-        rasterize: impl FnOnce() -> (usize, alloc::vec::Vec<u8>),
-    ) -> &(usize, alloc::vec::Vec<u8>) {
-        if !self.glyphs.contains_key(&key) {
-            let glyph = rasterize();
-            if self.bytes + glyph.1.len() > GLYPH_CACHE_BYTES {
-                self.glyphs.clear();
-                self.bytes = 0;
-            }
-            self.bytes += glyph.1.len();
-            self.glyphs.insert(key, glyph);
-        }
-        &self.glyphs[&key]
-    }
+/// Rasterizes one upright glyph and blends it with its top-left pixel at `corner`.
+#[expect(clippy::too_many_arguments)]
+fn blend_glyph<D: CoverageTarget>(
+    canvas: &mut fontdue::raster::Raster<'static>,
+    row: &mut alloc::vec::Vec<u8>,
+    font: &dyn FontRepr,
+    index: u16,
+    px: f32,
+    corner: Point,
+    color: D::Color,
+    target: &mut D,
+) {
+    let (metrics, bitmap) = font.rasterize_indexed(canvas, index, px);
+    row.resize(metrics.width, 0);
+    bitmap.rows(row, |y, x, span| {
+        target.blend_row(corner.x + x as i32, corner.y + y as i32, span, color);
+    });
 }
 
 impl Default for FontdueRendererCtx {
@@ -481,7 +452,6 @@ impl FontdueRendererCtx {
             layout: Layout::new(fontdue::layout::CoordinateSystem::PositiveYDown),
             canvas: fontdue::raster::Raster::empty(),
             coverage: alloc::vec::Vec::new(),
-            glyphs: GlyphCache::default(),
         }
     }
     #[inline]
@@ -734,27 +704,18 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
         let FontdueRendererCtx {
             layout,
             canvas,
-            glyphs,
-            ..
+            coverage,
         } = &mut *ctx;
         for glyph in layout.glyphs().iter().filter(|g| g.char_data.rasterize()) {
-            let key = (glyph.font_index, glyph.key.glyph_index, glyph.key.px.to_bits());
-            let (width, coverage) = glyphs.get_or_insert(key, || {
-                let (metrics, bitmap) = self.fonts[glyph.font_index].rasterize_indexed(
-                    canvas,
-                    glyph.key.glyph_index,
-                    glyph.key.px,
-                );
-                let mut coverage = alloc::vec::Vec::with_capacity(metrics.width * metrics.height);
-                bitmap.for_each(|covered| coverage.push(covered));
-                (metrics.width, coverage)
-            });
-            blend_bitmap(
-                target,
-                position + Point::new(glyph.x as i32, glyph.y as i32),
-                *width,
+            blend_glyph(
+                canvas,
                 coverage,
+                self.fonts[glyph.font_index],
+                glyph.key.glyph_index,
+                glyph.key.px,
+                position + Point::new(glyph.x as i32, glyph.y as i32),
                 self.text_color,
+                target,
             );
         }
         Ok(bounds.translate(position))
@@ -812,19 +773,15 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
         let px = self.font_size as f32;
         let font = self.fonts[self.font_index];
         let mut ctx = self.ctx.borrow_mut();
-        let FontdueRendererCtx { canvas, glyphs, .. } = &mut *ctx;
+        let FontdueRendererCtx {
+            canvas, coverage, ..
+        } = &mut *ctx;
         for (index, corner, metrics) in self.glyphs_on_baseline(text, origin) {
             if metrics.width == 0 || metrics.height == 0 {
                 continue;
             }
-            let key = (self.font_index, index, px.to_bits());
-            let (width, coverage) = glyphs.get_or_insert(key, || {
-                let (metrics, bitmap) = font.rasterize_indexed(canvas, index, px);
-                let mut coverage = alloc::vec::Vec::with_capacity(metrics.width * metrics.height);
-                bitmap.for_each(|covered| coverage.push(covered));
-                (metrics.width, coverage)
-            });
-            blend_bitmap(target, corner, *width, coverage, self.text_color);
+            let color = self.text_color;
+            blend_glyph(canvas, coverage, font, index, px, corner, color, target);
         }
         Ok(())
     }
