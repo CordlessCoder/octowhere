@@ -98,6 +98,9 @@ Where the implementation differs from the handoff, or fills a gap in it:
 
 - The icon sits at y 87 and the caption's baseline at 138, not 83 and 132. The owner asked for
   even gaps between icon, caption and slab; the inks now stand 7 px apart.
+- The direction abbreviation is 36 px, not 32, with its baseline unchanged. The owner asked for
+  it to sit evenly between the slab and the tilt line; it now has 16 px of space above and below.
+  `MAG INTERFERENCE` keeps 24 px on the same baseline.
 - Unstated sizes were chosen to match the concept: `NO DATA` in Shapiro 28 px, the cardinal
   letters in Shapiro 40 px, `---` in the readout's own style, captions `GRAY` except
   `CALIBRATION`. `TURN ALL WAYS`, `TOP EDGE UP`, the tilt and the hint are PP Fraktion Mono

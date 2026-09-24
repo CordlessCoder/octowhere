@@ -32,6 +32,9 @@ const CAPTION_BASELINE: i32 = 138;
 const READOUT: Point = Point::new(143, 224);
 const SUFFIX: Point = Point::new(298, 188);
 const STATUS_BASELINE: i32 = 277;
+/// The direction abbreviation's size, which leaves it evenly spaced between the slab and the
+/// tilt line.
+const CARDINAL_SIZE: u32 = 36;
 const TILT_BASELINE: i32 = 309;
 const DIVIDER: Rectangle = Rectangle::new(Point::new(138, 321), Size::new(191, 1));
 const HINT_BASELINE: i32 = 338;
@@ -241,7 +244,7 @@ where
         Mode::Heading(_) => (
             cardinal(view.heading_decidegrees.unwrap_or(0)),
             chrome::LIME,
-            32,
+            CARDINAL_SIZE,
             FRAKTION_BOLD,
         ),
         Mode::Interference(_) => ("MAG INTERFERENCE", chrome::ORANGE, 24, FRAKTION_BOLD),
@@ -469,7 +472,7 @@ mod tests {
         let font = renderer();
         for (text, size, index) in [
             ("MAG INTERFERENCE", 24, FRAKTION_BOLD),
-            ("NNW", 32, FRAKTION_BOLD),
+            ("WNW", CARDINAL_SIZE, FRAKTION_BOLD),
             ("TURN ALL WAYS", 19, FRAKTION),
         ] {
             let style = style(&font, chrome::BLACK, size, index);

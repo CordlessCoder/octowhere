@@ -24,7 +24,9 @@ every state come from the command in `COMPASS-SCREEN-HANDOFF.md`; ask the owner 
    the concept. The NO DATA caption could be `RED` instead. Which?
 7. **Icon and caption position.** At the owner's request the icon moved to y 87 and the caption
    baseline to 138, so the icon, caption and slab inks stand 7 px apart. The handoff's 83 and
-   132 gave gaps of 5 and 13 px. Keep this in future revisions.
+   132 gave gaps of 5 and 13 px. Likewise the direction abbreviation grew from 32 to 36 px on
+   the same baseline, so it sits 16 px from both the slab and the tilt line. Keep both in future
+   revisions. Should `MAG INTERFERENCE` be spaced the same way?
 
 ## Motion
 
