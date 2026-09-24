@@ -6,6 +6,7 @@ use embedded_graphics::prelude::Point;
 
 use super::{
     axis_check::{self, AxisCheck},
+    clock::ZoneState,
     compass::CompassView,
     compass_screen::{self, Accents, DialFootprint, Mode},
     gesture::{GestureEvent, GestureTracker, Micros},
@@ -38,6 +39,7 @@ pub struct Sensors {
     pub gnss_fix: bool,
     pub lora_irq: u8,
     pub clock: ClockState,
+    pub zone: ZoneState,
 }
 
 /// One read of the touch controller.
@@ -247,6 +249,7 @@ impl Stage {
             peripherals.gnss_valid = sensors.gnss_fix;
             peripherals.lora_irq = sensors.lora_irq;
             peripherals.clock = sensors.clock;
+            peripherals.zone = sensors.zone;
             full = true;
         }
 

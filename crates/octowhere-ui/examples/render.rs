@@ -19,6 +19,7 @@ use octowhere_ui::{
     board::{LCD_HEIGHT, LCD_WIDTH},
     chrome::FB,
     ui::{
+        clock::{DateTime, ZoneMode, ZoneState},
         compass::CompassView,
         prototypes::{ClockState, PeripheralState, Screen},
         stage::{Input, Motion, Sensors, Stage, Touch},
@@ -144,13 +145,16 @@ fn stage_at(screen: Screen, compass: CompassView, now: u64) -> Stage {
             gnss_fix: true,
             lora_irq: 0,
             clock: ClockState {
-                hours: 14,
-                minutes: 7,
-                seconds: 32,
-                day: 24,
-                month: 9,
-                year: 26,
-                valid: true,
+                utc: Some(
+                    DateTime { year: 2026, month: 9, day: 24, hour: 14, minute: 7, second: 32 }
+                        .to_unix(),
+                ),
+                set_from_gnss: true,
+                stopped: false,
+            },
+            zone: ZoneState {
+                mode: ZoneMode::Automatic,
+                zone: octowhere_ui::tz::DATABASE.find("Europe/Dublin").map(|zone| zone.id),
             },
         }),
         ..Input::default()

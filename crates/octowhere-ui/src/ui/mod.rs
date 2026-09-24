@@ -1,4 +1,5 @@
 pub mod axis_check;
+pub mod clock;
 pub mod compass;
 pub mod compass_screen;
 pub mod dirty;

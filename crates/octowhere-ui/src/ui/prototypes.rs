@@ -103,16 +103,7 @@ impl Screen {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct ClockState {
-    pub hours: u8,
-    pub minutes: u8,
-    pub seconds: u8,
-    pub day: u8,
-    pub month: u8,
-    pub year: u8,
-    pub valid: bool,
-}
+pub use super::clock::ClockState;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct PeripheralState {
@@ -120,6 +111,7 @@ pub struct PeripheralState {
     pub gyro_micro_rad_s: [i32; 3],
     pub imu_valid: bool,
     pub clock: ClockState,
+    pub zone: super::clock::ZoneState,
     pub touch_points: u8,
     pub touch_position: Option<Point>,
     pub touch_positions: [Option<Point>; 2],
@@ -649,23 +641,48 @@ where
     let panel = Rectangle::new(Point::new(64, 136), Size::new(338, 178));
     panel.into_styled(frame).draw(target)?;
     let clock = state.peripherals.clock;
+    let local = clock.local(state.peripherals.zone);
     let mut time = heapless::String::<16>::new();
     let mut date = heapless::String::<24>::new();
-    if clock.valid {
-        _ = write!(
-            time,
-            "{:02}:{:02}:{:02}",
-            clock.hours, clock.minutes, clock.seconds
-        );
+    let mut zone = heapless::String::<40>::new();
+    // Without a zone the clock shows UTC, labelled as such.
+    let shown = local
+        .map(|local| (local.time, local.offset.abbreviation))
+        .or_else(|| clock.utc_time().map(|utc| (utc, "UTC")));
+    if let Some((shown, abbreviation)) = shown {
+        _ = write!(time, "{:02}:{:02}:{:02}", shown.hour, shown.minute, shown.second);
         _ = write!(
             date,
-            "20{:02}-{:02}-{:02}",
-            clock.year, clock.month, clock.day
+            "{:04}-{:02}-{:02} {}",
+            shown.year,
+            shown.month,
+            shown.day,
+            abbreviation
         );
     } else {
         time.push_str("--:--:--").unwrap();
         date.push_str("RTC UNAVAILABLE").unwrap();
     }
+    let status_color = match local {
+        _ if clock.utc.is_none() => {
+            zone.push_str("RTC / ERROR").unwrap();
+            chrome::RED
+        }
+        _ if clock.stopped => {
+            zone.push_str("CLOCK NOT SET").unwrap();
+            chrome::ORANGE
+        }
+        Some(local) => {
+            for c in local.zone.chars() {
+                _ = zone.push(c.to_ascii_uppercase());
+            }
+            chrome::GRAY
+        }
+        None => {
+            zone.push_str("ZONE UNKNOWN").unwrap();
+            chrome::ORANGE
+        }
+    };
     aligned_text(
         time.as_str(),
         &Rectangle::new(Point::new(76, 158), Size::new(314, 62)),
@@ -691,18 +708,10 @@ where
         target,
     )?;
     aligned_text(
-        if clock.valid {
-            "RTC / LIVE"
-        } else {
-            "RTC / ERROR"
-        },
+        zone.as_str(),
         &Rectangle::new(Point::new(76, 278), Size::new(314, 24)),
         font,
-        if clock.valid {
-            chrome::GRAY
-        } else {
-            chrome::RED
-        },
+        status_color,
         chrome::BLACK,
         16,
         1,
@@ -1117,12 +1126,13 @@ where
     )?;
     target.fill_solid(&FOOTER_SYNC, chrome::BLACK)?;
     let mut sync = heapless::String::<16>::new();
-    if state.peripherals.clock.valid {
-        _ = write!(
-            sync,
-            "SYNC {:02}:{:02}",
-            state.peripherals.clock.hours, state.peripherals.clock.minutes
-        );
+    let clock = state.peripherals.clock;
+    let shown = clock
+        .local(state.peripherals.zone)
+        .map(|local| local.time)
+        .or_else(|| clock.utc_time());
+    if let Some(shown) = shown {
+        _ = write!(sync, "SYNC {:02}:{:02}", shown.hour, shown.minute);
     } else {
         sync.push_str("SYNC --:--").unwrap();
     }

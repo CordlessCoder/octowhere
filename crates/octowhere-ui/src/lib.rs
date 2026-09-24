@@ -8,6 +8,7 @@
 extern crate alloc;
 
 pub use fontdue;
+pub use octowhere_tz as tz;
 
 pub mod board;
 pub mod chrome;

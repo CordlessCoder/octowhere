@@ -12,6 +12,8 @@
 //! - C: calibration through none, part-way and complete. T: top edge vertical or not, which
 //!   withholds the heading.
 //! - D: magnetic disturbance on or off. L: sensors live or silent.
+//! - Z: the clock's zone, through unknown, automatic in Dublin, and chosen by hand in New York
+//!   and Kolkata.
 //! - Hold H: a hand covering the screen, which restarts calibration on the settled compass.
 //! - Tab: next screen without the slide. P: save the window to `ui-sim-<n>.png` in the current
 //!   directory. Esc: quit.
@@ -35,8 +37,9 @@ use octowhere_ui::{
     board::{LCD_HEIGHT, LCD_WIDTH},
     chrome::{Clip, FB},
     ui::{
+        clock::{ClockState, ZoneMode, ZoneState},
         compass::CompassView,
-        prototypes::{ClockState, PeripheralState},
+        prototypes::PeripheralState,
         stage::{Input, Motion, Sensors, Stage, Touch},
     },
 };
@@ -60,7 +63,18 @@ struct Readings {
     live: bool,
     spinning: bool,
     vertical: bool,
+    /// Which of [`ZONES`] the clock shows.
+    zone: usize,
 }
+
+/// The zones Z steps through, and whether each was chosen by hand. `None` is automatic mode
+/// before any fix.
+const ZONES: [Option<(&str, ZoneMode)>; 4] = [
+    None,
+    Some(("Europe/Dublin", ZoneMode::Automatic)),
+    Some(("America/New_York", ZoneMode::Manual)),
+    Some(("Asia/Kolkata", ZoneMode::Manual)),
+];
 
 impl Readings {
     fn compass(&self) -> CompassView {
@@ -103,9 +117,17 @@ impl Readings {
             Key::L => self.live = !self.live,
             Key::T => self.vertical = !self.vertical,
             Key::Space => self.spinning = !self.spinning,
+            Key::Z => self.zone = (self.zone + 1) % ZONES.len(),
             _ => return false,
         }
         true
+    }
+
+    fn zone_state(&self) -> ZoneState {
+        ZONES[self.zone].map_or(ZoneState::default(), |(name, mode)| ZoneState {
+            mode,
+            zone: octowhere_ui::tz::DATABASE.find(name).map(|zone| zone.id),
+        })
     }
 
     fn motion(&self) -> Motion {
@@ -151,6 +173,7 @@ fn main() {
         live: true,
         spinning: false,
         vertical: false,
+        zone: 1,
     };
     let mut fb = FB::boxed();
     let mut pixels = vec![0u32; WIDTH * HEIGHT];
@@ -161,6 +184,7 @@ fn main() {
     let mut readings_changed = true;
     let mut redraw = true;
     let mut screenshots = 0;
+    let mut zone_changed = false;
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
         let now = start.elapsed().as_micros() as u64 + 1;
@@ -177,7 +201,11 @@ fn main() {
                     write_png(&pixels, Path::new(&path));
                     println!("saved {path}");
                 }
-                key => readings_changed |= readings.press(key, shift),
+                key => {
+                    let zone = readings.zone;
+                    readings_changed |= readings.press(key, shift);
+                    zone_changed |= readings.zone != zone;
+                }
             }
         }
         if readings.spinning {
@@ -190,9 +218,10 @@ fn main() {
             next_motion = now + if samples_fast { FAST_SAMPLE_US } else { SLOW_SAMPLE_US };
             readings_changed = false;
         }
-        let sensors_due = now >= next_sensors;
+        let sensors_due = now >= next_sensors || zone_changed;
         if sensors_due {
             next_sensors = now + SENSOR_PERIOD_US;
+            zone_changed = false;
         }
         let contact = window
             .get_mouse_pos(MouseMode::Discard)
@@ -206,7 +235,7 @@ fn main() {
                 Touch::Contacts([contact, None])
             }),
             motion: motion_due.then(|| readings.motion()),
-            sensors: sensors_due.then(sensors),
+            sensors: sensors_due.then(|| sensors(readings.zone_state())),
         });
         samples_fast = update.samples_fast;
         if update.recalibrate {
@@ -270,11 +299,10 @@ fn to_pixels(fb: &FB, mask: &[bool], pixels: &mut [u32]) {
 }
 
 /// Synthetic power and GNSS readings, with the host's UTC clock.
-fn sensors() -> Sensors {
+fn sensors(zone: ZoneState) -> Sensors {
     let seconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_secs());
-    let of_day = seconds % 86_400;
     Sensors {
         battery_mv: Some(3_912),
         vbus_mv: Some(5_020),
@@ -283,12 +311,11 @@ fn sensors() -> Sensors {
         gnss_fix: true,
         lora_irq: 0,
         clock: ClockState {
-            hours: (of_day / 3_600) as u8,
-            minutes: (of_day / 60 % 60) as u8,
-            seconds: (of_day % 60) as u8,
-            valid: true,
-            ..ClockState::default()
+            utc: Some(seconds as i64),
+            set_from_gnss: true,
+            stopped: false,
         },
+        zone,
     }
 }
 
