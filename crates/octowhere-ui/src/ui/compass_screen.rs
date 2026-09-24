@@ -18,6 +18,10 @@ use crate::chrome::{
 };
 
 pub const CENTER: Point = Point::new(233, 233);
+// The dial's damage is worked out for half of it and turned about the panel's centre for the rest.
+const _: () = assert!(
+    CENTER.x * 2 == crate::board::LCD_WIDTH as i32 && CENTER.y * 2 == crate::board::LCD_HEIGHT as i32
+);
 /// The perimeter ring's middle radius and stroke.
 const RING_RADIUS: f32 = 231.0;
 const RING_STROKE: f32 = 2.0;
@@ -355,6 +359,7 @@ pub fn damage(
     before: (&CompassView, Accents),
     after: (&CompassView, Accents),
     font: &FontdueRenderer<'static, Color>,
+    footprint: &mut DialFootprint,
     damage: &mut chrome::Dirty,
 ) {
     let (old, new) = (Parts::of(before.0, before.1), Parts::of(after.0, after.1));
@@ -367,8 +372,9 @@ pub fn damage(
         return;
     }
     if old.dial != new.dial {
+        // The old place first: the last step worked it out as its new one.
         for dial in [old.dial, new.dial].into_iter().flatten() {
-            dial_damage(dial, font, damage);
+            footprint.mark(dial, font, damage);
         }
     }
     if old.icon != new.icon {
@@ -401,29 +407,70 @@ pub fn damage(
     }
 }
 
-/// The pixels a dial turned to `heading` covers.
-fn dial_damage(
-    (heading, ticks, letters): (u16, u8, u8),
+/// Where the dial last drew, kept so that a turn marks the old place without working it out
+/// again.
+pub struct DialFootprint {
+    /// The heading, and whether the ticks and the letters showed.
+    key: Option<(u16, bool, bool)>,
+    /// Half the dial's pixels. The other half is this turned by half a turn.
+    half: alloc::boxed::Box<chrome::Dirty>,
+}
+
+impl Default for DialFootprint {
+    fn default() -> Self {
+        Self {
+            key: None,
+            half: alloc::boxed::Box::new(chrome::Dirty::new()),
+        }
+    }
+}
+
+impl DialFootprint {
+    /// Marks the pixels a dial turned to `heading` covers.
+    fn mark(
+        &mut self,
+        (heading, ticks, letters): (u16, u8, u8),
+        font: &FontdueRenderer<'static, Color>,
+        damage: &mut chrome::Dirty,
+    ) {
+        let key = (heading, ticks > 0, letters > 0);
+        if self.key != Some(key) {
+            self.half.clear();
+            half_dial(key, font, &mut self.half);
+            self.key = Some(key);
+        }
+        damage.extend(&self.half);
+        damage.extend_reflected(&self.half);
+    }
+}
+
+/// The pixels the first two quarters of a dial turned to `heading` cover, taking each letter as
+/// the larger of it and the one opposite.
+fn half_dial(
+    (heading, ticks, letters): (u16, bool, bool),
     font: &FontdueRenderer<'static, Color>,
-    damage: &mut chrome::Dirty,
+    half: &mut chrome::Dirty,
 ) {
     let turn = f32::from(heading);
-    if ticks > 0 {
+    if ticks {
         let (cx, cy) = (CENTER.x as f32, CENTER.y as f32);
         for tick in 0..9 {
             let (mut corners, _, _) = tick_shape(tick, turn);
-            for _ in 0..4 {
-                damage.add_polygon(&corners, 1);
+            for _ in 0..2 {
+                half.add_polygon(&corners, 1);
                 // A quarter turn clockwise about the centre, y down.
                 corners = corners.map(|(x, y)| (cx - (y - cy), cy + (x - cx)));
             }
         }
     }
-    if letters > 0 {
-        for (quarter, letter) in LETTERS.into_iter().enumerate() {
+    if letters {
+        let style = letter_style(font, chrome::WHITE);
+        for quarter in 0..2 {
             let (at, _, _) = letter_place(quarter, turn);
-            let reach = letter_style(font, chrome::WHITE).rotated_reach(letter);
-            damage.add_disc((at.x as f32, at.y as f32), reach);
+            let reach = style
+                .rotated_reach(LETTERS[quarter])
+                .max(style.rotated_reach(LETTERS[quarter + 2]));
+            half.add_disc((at.x as f32, at.y as f32), reach);
         }
     }
 }

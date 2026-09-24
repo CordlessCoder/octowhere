@@ -7,7 +7,7 @@ use embedded_graphics::prelude::Point;
 use super::{
     axis_check::{self, AxisCheck},
     compass::CompassView,
-    compass_screen::{self, Accents, Mode},
+    compass_screen::{self, Accents, DialFootprint, Mode},
     gesture::{GestureEvent, GestureTracker, Micros},
     input::TouchState,
     pager::Pager,
@@ -117,6 +117,7 @@ pub struct Stage {
     drawn_compass: Option<(CompassView, Accents)>,
     /// The pixels the last step changed. Boxed so the frame loop's stack never holds it.
     changed: alloc::boxed::Box<Dirty>,
+    dial_footprint: DialFootprint,
 }
 
 impl Stage {
@@ -146,6 +147,7 @@ impl Stage {
             fading: false,
             drawn_compass: None,
             changed: alloc::boxed::Box::new(Dirty::new()),
+            dial_footprint: DialFootprint::default(),
         }
     }
 
@@ -357,6 +359,7 @@ impl Stage {
                 (&before.0, before.1),
                 (&after.0, after.1),
                 &self.renderer,
+                &mut self.dial_footprint,
                 &mut self.changed,
             ),
             _ if full => self.changed.make_full(),

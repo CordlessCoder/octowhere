@@ -288,6 +288,24 @@ impl<const WIDTH: usize, const BANDS: usize, const K: usize> RowSpans<WIDTH, BAN
         }
     }
 
+    /// Adds `other` turned by half a turn about the panel's centre.
+    pub fn extend_reflected(&mut self, other: &Self) {
+        self.full |= other.full;
+        if self.full {
+            return;
+        }
+        let columns = (WIDTH / GRAIN as usize) as u8;
+        for band in other.used() {
+            for &span in other.band_spans(band) {
+                let turned = Span {
+                    start: columns - span.end,
+                    end: columns - span.start,
+                };
+                self.insert(BANDS - 1 - band, turned);
+            }
+        }
+    }
+
     /// Whether any damaged pixel lies in `area`.
     #[must_use]
     pub fn intersects(&self, area: &Rectangle) -> bool {

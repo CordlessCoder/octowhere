@@ -36,7 +36,7 @@ pub type FB = crate::framebuffer::Framebuffer<
 pub const DAMAGE_SPANS: usize = 4;
 /// What starting another flush region costs, in pixels sent. A flush rectangle grows over a
 /// neighbouring span while that wastes no more than this.
-pub const FLUSH_OVERHEAD: u32 = 512;
+pub const FLUSH_OVERHEAD: u32 = 128;
 pub type Dirty =
     RowSpans<{ board::LCD_WIDTH as usize }, { board::LCD_HEIGHT as usize / 2 }, DAMAGE_SPANS>;
 

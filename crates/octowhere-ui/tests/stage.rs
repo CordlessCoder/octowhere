@@ -567,17 +567,18 @@ fn a_turning_dial_repaints_a_fraction_of_the_panel() {
     }
     let share = buffers.pixels as f64 / (STEPS * 466 * 466) as f64;
     println!("a degree a step repaints {:.1}% of the panel", share * 100.0);
-    // What the flush would send for the last step, at a few region costs.
+    // What the flush would send for the last step, at a few region costs, and what that takes
+    // at the cost per pixel and per region measured on the target.
     let mut repaint = buffers.previous.clone();
     driver.motion(heading(470 + STEPS as u16 * 10 + 10));
     repaint.extend(driver.stage.changed());
-    for overhead in [0, 512, 1200, 2400, 4800, 9600] {
+    for overhead in [0, 64, 128, 256, 512, 1024] {
         let (regions, pixels) = repaint
             .rectangles(overhead)
             .fold((0, 0), |(regions, pixels), rect| (regions + 1, pixels + rect.size.width * rect.size.height));
         println!(
             "overhead {overhead}: {regions} regions, {pixels} px, modelled {:.2} ms",
-            f64::from(pixels) * 64e-6 + f64::from(regions) * 0.155
+            f64::from(pixels) * 59e-6 + f64::from(regions) * 0.056
         );
     }
     assert!(share < 0.5, "{:.1}%", share * 100.0);

@@ -127,3 +127,13 @@ fn rectangles_cover_every_damaged_pixel_at_any_overhead() {
         }
     }
 }
+
+#[test]
+fn a_reflection_turns_damage_half_a_turn_about_the_centre() {
+    let mut spans = Spans::new();
+    spans.add(Rectangle::new(Point::new(2, 4), Size::new(4, 2)));
+    let mut turned = Spans::new();
+    turned.extend_reflected(&spans);
+    // Pixel (x, y) lands on (15 - x, 15 - y) on a 16 × 16 panel.
+    assert_eq!(turned.bounding_box(), Rectangle::new(Point::new(10, 10), Size::new(4, 2)));
+}
