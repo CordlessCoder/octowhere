@@ -45,10 +45,118 @@ pub trait CoverageTarget: DrawTarget {
     fn blend_pixel(&mut self, point: Point, coverage: u8, color: Self::Color) {
         self.blend_row(point.x, point.y, &[coverage], color);
     }
+
+    /// As [`blend_row`](Self::blend_row), for a caller that knows every pixel it touches is
+    /// `background`. A target can then mix without reading its pixels back.
+    fn blend_row_over(
+        &mut self,
+        x: i32,
+        y: i32,
+        coverage: &[u8],
+        color: Self::Color,
+        background: Self::Color,
+    ) {
+        let _ = background;
+        self.blend_row(x, y, coverage, color);
+    }
+}
+
+/// A coverage target whose pixels under anything drawn through it are all `background`, so
+/// partly covered pixels are mixed with that colour instead of read back. Nothing checks the
+/// promise: drawn over anything else, edges come out mixed with the wrong colour.
+pub struct OnBackground<'a, T: CoverageTarget> {
+    parent: &'a mut T,
+    background: T::Color,
+}
+
+impl<'a, T: CoverageTarget> OnBackground<'a, T> {
+    pub fn new(parent: &'a mut T, background: T::Color) -> Self {
+        Self { parent, background }
+    }
+}
+
+impl<T: CoverageTarget> Dimensions for OnBackground<'_, T> {
+    fn bounding_box(&self) -> Rectangle {
+        self.parent.bounding_box()
+    }
+}
+
+impl<T: CoverageTarget> DrawTarget for OnBackground<'_, T> {
+    type Color = T::Color;
+    type Error = T::Error;
+
+    fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = Pixel<Self::Color>>,
+    {
+        self.parent.draw_iter(pixels)
+    }
+
+    fn fill_contiguous<I>(&mut self, area: &Rectangle, colors: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = Self::Color>,
+    {
+        self.parent.fill_contiguous(area, colors)
+    }
+
+    fn fill_solid(&mut self, area: &Rectangle, color: Self::Color) -> Result<(), Self::Error> {
+        self.parent.fill_solid(area, color)
+    }
+}
+
+impl<T: CoverageTarget> CoverageTarget for OnBackground<'_, T> {
+    fn blend_row(&mut self, x: i32, y: i32, coverage: &[u8], color: Self::Color) {
+        self.parent.blend_row_over(x, y, coverage, color, self.background);
+    }
+
+    fn blend_row_over(
+        &mut self,
+        x: i32,
+        y: i32,
+        coverage: &[u8],
+        color: Self::Color,
+        background: Self::Color,
+    ) {
+        self.parent.blend_row_over(x, y, coverage, color, background);
+    }
 }
 
 impl CoverageTarget for FB {
     fn blend_row(&mut self, x: i32, y: i32, coverage: &[u8], color: Color) {
+        self.blend_row_with(x, y, coverage, color, |pixel, covered| {
+            let under = Rgb565::from(RawU16::new(u16::from_be_bytes([pixel[0], pixel[1]])));
+            under.lerp(&color, covered)
+        });
+    }
+
+    fn blend_row_over(&mut self, x: i32, y: i32, coverage: &[u8], color: Color, background: Color) {
+        self.blend_row_with(x, y, coverage, color, |_, covered| background.lerp(&color, covered));
+    }
+}
+
+trait BlendRowWith {
+    /// Clips the row to the framebuffer, skips uncovered pixels, stores `color` over fully covered
+    /// ones, and stores what `mix` returns for the rest, given the pixel's bytes.
+    fn blend_row_with(
+        &mut self,
+        x: i32,
+        y: i32,
+        coverage: &[u8],
+        color: Color,
+        mix: impl Fn(&[u8], u8) -> Color,
+    );
+}
+
+impl BlendRowWith for FB {
+    #[inline(always)]
+    fn blend_row_with(
+        &mut self,
+        x: i32,
+        y: i32,
+        coverage: &[u8],
+        color: Color,
+        mix: impl Fn(&[u8], u8) -> Color,
+    ) {
         const WIDTH: i32 = board::LCD_WIDTH as i32;
         if !(0..board::LCD_HEIGHT as i32).contains(&y) {
             return;
@@ -67,8 +175,7 @@ impl CoverageTarget for FB {
                 0 => {}
                 u8::MAX => pixel.copy_from_slice(&full),
                 _ => {
-                    let under = Rgb565::from(RawU16::new(u16::from_be_bytes([pixel[0], pixel[1]])));
-                    let mixed = under.lerp(&color, covered);
+                    let mixed = mix(pixel, covered);
                     pixel.copy_from_slice(&RawU16::from(mixed).into_inner().to_be_bytes());
                 }
             }
@@ -147,24 +254,40 @@ impl<T: DrawTarget> DrawTarget for Window<'_, T> {
     }
 }
 
-impl<T: CoverageTarget> CoverageTarget for Window<'_, T> {
-    fn blend_row(&mut self, x: i32, y: i32, coverage: &[u8], color: Self::Color) {
+impl<T: CoverageTarget> Window<'_, T> {
+    /// Shifts a row into the parent's coordinates and clips it: the parent's start column and the
+    /// part of `coverage` that is visible.
+    fn clip_row<'c>(&self, x: i32, y: i32, coverage: &'c [u8]) -> Option<(i32, i32, &'c [u8])> {
         let (x, y) = (x + self.offset.x, y + self.offset.y);
         let top = self.clip.top_left;
         if y < top.y || y >= top.y + self.clip.size.height as i32 {
-            return;
+            return None;
         }
         let start = x.max(top.x);
         let end = x
             .saturating_add(coverage.len() as i32)
             .min(top.x + self.clip.size.width as i32);
-        if start < end {
-            self.parent.blend_row(
-                start,
-                y,
-                &coverage[(start - x) as usize..(end - x) as usize],
-                color,
-            );
+        (start < end).then(|| (start, y, &coverage[(start - x) as usize..(end - x) as usize]))
+    }
+}
+
+impl<T: CoverageTarget> CoverageTarget for Window<'_, T> {
+    fn blend_row_over(
+        &mut self,
+        x: i32,
+        y: i32,
+        coverage: &[u8],
+        color: Self::Color,
+        background: Self::Color,
+    ) {
+        if let Some((x, y, coverage)) = self.clip_row(x, y, coverage) {
+            self.parent.blend_row_over(x, y, coverage, color, background);
+        }
+    }
+
+    fn blend_row(&mut self, x: i32, y: i32, coverage: &[u8], color: Self::Color) {
+        if let Some((x, y, coverage)) = self.clip_row(x, y, coverage) {
+            self.parent.blend_row(x, y, coverage, color);
         }
     }
 }

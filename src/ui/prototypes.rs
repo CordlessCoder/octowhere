@@ -942,14 +942,16 @@ where
     let view = state.peripherals.compass;
     let center = (COMPASS_CENTER.x as f32, COMPASS_CENTER.y as f32);
     let radius = COMPASS_RADIUS as f32;
-    COMPASS_RING
-        .get_or_init(|| super::smooth::Ring::new(COMPASS_CENTER, radius - 2.0, radius))
-        .draw(target, chrome::GRAY);
-
     // Without a trusted heading the dial holds still and carries no bearings, so it cannot be
     // read as pointing anywhere.
     let heading = view.heading_decidegrees;
     let turn = heading.map_or(0.0, |decidegrees| decidegrees as f32 / 10.0);
+
+    // The ring, ticks and labels land on the cleared field and do not overlap.
+    let dial = &mut chrome::OnBackground::new(&mut *target, chrome::BLACK);
+    COMPASS_RING
+        .get_or_init(|| super::smooth::Ring::new(COMPASS_CENTER, radius - 2.0, radius))
+        .draw(dial, chrome::GRAY);
     // One quarter of the ticks is filled, and each is drawn at all four quarter turns: ticks nine
     // apart are a quarter turn apart and all major or all minor alike.
     let mut raster = fontdue::raster::Raster::empty();
@@ -965,7 +967,7 @@ where
         };
         let (outer, inner) = (radius - 6.0, radius - inner);
         super::smooth::polygon_quarters(
-            target,
+            dial,
             &mut raster,
             &mut coverage,
             &[
@@ -1001,7 +1003,7 @@ where
             ),
         };
         font_style(font, color, chrome::BLACK, size, font_index)
-            .draw_rotated(label, at(radius), cos, sin, target)?;
+            .draw_rotated(label, at(radius), cos, sin, dial)?;
     }
     // The lubber mark: the top edge's direction, which the dial turns under. Drawn after the
     // dial so the bearings pass beneath it.
@@ -1024,7 +1026,7 @@ where
             0,
             horizontal::Center,
             vertical::Center,
-            target,
+            &mut chrome::OnBackground::new(&mut *target, chrome::BLACK),
         );
     }
     let mut primary = heapless::String::<16>::new();
@@ -1070,7 +1072,7 @@ where
             &primary_region,
             horizontal::Center,
             vertical::Center,
-            target,
+            &mut chrome::OnBackground::new(&mut *target, chrome::BLACK),
         )?;
     } else {
         aligned_text(
@@ -1083,7 +1085,7 @@ where
             0,
             horizontal::Center,
             vertical::Center,
-            target,
+            &mut chrome::OnBackground::new(&mut *target, chrome::BLACK),
         )?;
     }
     aligned_text(
@@ -1096,7 +1098,7 @@ where
         1,
         horizontal::Center,
         vertical::Center,
-        target,
+        &mut chrome::OnBackground::new(&mut *target, chrome::BLACK),
     )?;
     let mut tilt = heapless::String::<24>::new();
     _ = write!(tilt, "P {:+03}  R {:+03}", view.pitch_deg, view.roll_deg);
@@ -1110,7 +1112,7 @@ where
         1,
         horizontal::Center,
         vertical::Center,
-        target,
+        &mut chrome::OnBackground::new(&mut *target, chrome::BLACK),
     )?;
     aligned_text(
         "TAP CENTRE TO RECAL",
@@ -1122,7 +1124,7 @@ where
         1,
         horizontal::Center,
         vertical::Center,
-        target,
+        &mut chrome::OnBackground::new(&mut *target, chrome::BLACK),
     )
 }
 
