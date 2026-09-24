@@ -217,16 +217,17 @@ fn main() {
             println!("pose {} logged from {} samples", record.pose + 1, record.samples);
         }
 
-        if redraw || !update.changed.is_empty() {
+        let changed = stage.changed();
+        if redraw || !changed.is_empty() {
             // One buffer, so each step repaints only its own damage, as the firmware's buffers
             // would with the step before added.
             let drawing = Instant::now();
-            let pixels_drawn = if redraw || update.changed.is_full() {
+            let pixels_drawn = if redraw || changed.is_full() {
                 stage.draw(&mut *fb);
                 LCD_WIDTH as u32 * LCD_HEIGHT as u32
             } else {
-                stage.draw(&mut Clip::new(&mut *fb, &update.changed));
-                update.changed.pixels()
+                stage.draw(&mut Clip::new(&mut *fb, changed));
+                changed.pixels()
             };
             let took = drawing.elapsed();
             window.set_title(&format!(

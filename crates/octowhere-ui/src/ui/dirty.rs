@@ -30,7 +30,7 @@ impl Span {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct RowSpans<const WIDTH: usize, const BANDS: usize, const K: usize> {
     spans: [[Span; K]; BANDS],
     counts: [u8; BANDS],
@@ -361,6 +361,25 @@ impl<const WIDTH: usize, const BANDS: usize, const K: usize> RowSpans<WIDTH, BAN
 }
 
 const MAX_K: usize = 7;
+
+impl<const WIDTH: usize, const BANDS: usize, const K: usize> Clone for RowSpans<WIDTH, BANDS, K> {
+    fn clone(&self) -> Self {
+        let mut copy = Self::new();
+        copy.clone_from(self);
+        copy
+    }
+
+    /// Copies in place, so that a large value never passes through the stack.
+    fn clone_from(&mut self, source: &Self) {
+        self.clear();
+        for band in source.used() {
+            let count = usize::from(source.counts[band]);
+            self.spans[band][..count].copy_from_slice(&source.spans[band][..count]);
+            self.counts[band] = source.counts[band];
+        }
+        (self.first, self.last, self.full) = (source.first, source.last, source.full);
+    }
+}
 
 impl<const WIDTH: usize, const BANDS: usize, const K: usize> Default
     for RowSpans<WIDTH, BANDS, K>

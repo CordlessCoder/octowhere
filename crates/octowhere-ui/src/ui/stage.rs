@@ -82,11 +82,9 @@ pub struct Input {
     pub sensors: Option<Sensors>,
 }
 
-/// What the frame loop owes after a step.
+/// What the frame loop owes after a step. [`Stage::changed`] holds the pixels it changed.
 #[derive(Debug)]
 pub struct Update {
-    /// The pixels that changed.
-    pub changed: Dirty,
     /// A cover over the settled compass page asked for the calibration to restart.
     pub recalibrate: bool,
     /// The axis check finished capturing a pose.
@@ -117,6 +115,8 @@ pub struct Stage {
     fading: bool,
     /// What the compass page showed after the last step, while it filled the panel.
     drawn_compass: Option<(CompassView, Accents)>,
+    /// The pixels the last step changed. Boxed so the frame loop's stack never holds it.
+    changed: alloc::boxed::Box<Dirty>,
 }
 
 impl Stage {
@@ -145,6 +145,7 @@ impl Stage {
             accents: Accents::FULL,
             fading: false,
             drawn_compass: None,
+            changed: alloc::boxed::Box::new(Dirty::new()),
         }
     }
 
@@ -161,6 +162,12 @@ impl Stage {
         self.heading_since = None;
         self.top_edge_since = None;
         self.drawn_compass = None;
+    }
+
+    /// The pixels the last [`step`](Self::step) changed.
+    #[must_use]
+    pub fn changed(&self) -> &Dirty {
+        &self.changed
     }
 
     #[must_use]
@@ -200,8 +207,8 @@ impl Stage {
             motion,
             sensors,
         } = input;
+        self.changed.clear();
         let mut update = Update {
-            changed: Dirty::new(),
             recalibrate: false,
             pose: None,
             samples_fast: false,
@@ -350,9 +357,9 @@ impl Stage {
                 (&before.0, before.1),
                 (&after.0, after.1),
                 &self.renderer,
-                &mut update.changed,
+                &mut self.changed,
             ),
-            _ if full => update.changed.make_full(),
+            _ if full => self.changed.make_full(),
             _ => {}
         }
         self.drawn_compass = compass;

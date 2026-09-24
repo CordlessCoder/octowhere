@@ -1405,7 +1405,8 @@ async fn async_main(spawner: Spawner) {
     let mut prev_swap_draw = Duration::MIN;
     // The buffer drawn next last held the frame before the current one, so it repaints the
     // current step's damage as well as its own.
-    let mut previous_changed = Dirty::new_full();
+    let mut previous_changed = Box::new(Dirty::new_full());
+    let mut repaint = Box::new(Dirty::new());
     #[cfg(feature = "damage-debug")]
     let mut outlined = Dirty::new();
     let mut last_touch_poll = Instant::now();
@@ -1491,9 +1492,9 @@ async fn async_main(spawner: Spawner) {
                     record.samples
                 );
             }
-            let changed = update.changed;
-            let mut repaint = previous_changed;
-            repaint.extend(&changed);
+            let changed = stage.changed();
+            (*repaint).clone_from(&previous_changed);
+            repaint.extend(changed);
             if !*drawn {
                 repaint.make_full();
                 *drawn = true;
@@ -1504,7 +1505,7 @@ async fn async_main(spawner: Spawner) {
                 stage.draw(&mut chrome::Clip::new(fb, &repaint));
             }
             // The panel already shows the step before, so only this step's pixels change on it.
-            dirty.clone_from(&changed);
+            dirty.clone_from(changed);
             #[cfg(feature = "damage-debug")]
             {
                 // Erase the outlines the last flush drew, and outline this step's damage.
@@ -1515,9 +1516,9 @@ async fn async_main(spawner: Spawner) {
                         add_outline(&mut outlined, region);
                     }
                 }
-                *debug_changed = changed.clone();
+                debug_changed.clone_from(changed);
             }
-            previous_changed = changed;
+            (*previous_changed).clone_from(changed);
 
             timings.frametime = start.elapsed();
             timings.swap_draw = prev_swap_draw;

@@ -269,10 +269,12 @@ fn a_heading_after_calibration_reveals_the_ticks_then_the_letters() {
 #[test]
 fn motion_redraws_only_the_screens_that_show_it() {
     let mut driver = Driver::on(Screen::Compass);
-    assert!(driver.motion(heading(900)).changed.is_full());
+    driver.motion(heading(900));
+    assert!(driver.stage.changed().is_full());
 
     let mut driver = Driver::on(Screen::Clock);
-    assert!(!driver.motion(heading(900)).changed.is_full());
+    driver.motion(heading(900));
+    assert!(!driver.stage.changed().is_full());
 }
 
 #[test]
@@ -536,15 +538,15 @@ fn compass_damage_redraws_what_changed() {
     }
     for (name, motion) in compass_walk() {
         // Each reading, then a few quiet steps for any fade it starts.
-        let mut update = driver.motion(motion);
+        driver.motion(motion);
         for frame in 0..6 {
-            let partial = buffers.draw(&driver.stage, &update.changed);
+            let partial = buffers.draw(&driver.stage, driver.stage.changed());
             let whole = render(&driver.stage);
             let wrong = differing(partial, &whole);
             assert_eq!(wrong, 0, "{name}, frame {frame}: {wrong} pixels differ");
             let wrong = differing(&buffers.panel, &whole);
             assert_eq!(wrong, 0, "{name}, frame {frame}: {wrong} pixels differ on the panel");
-            update = driver.step(Input::default());
+            driver.step(Input::default());
         }
     }
 }
@@ -560,14 +562,15 @@ fn a_turning_dial_repaints_a_fraction_of_the_panel() {
     buffers.pixels = 0;
     const STEPS: u64 = 90;
     for step in 0..STEPS {
-        let update = driver.motion(heading((470 + step * 10) as u16));
-        buffers.draw(&driver.stage, &update.changed);
+        driver.motion(heading((470 + step * 10) as u16));
+        buffers.draw(&driver.stage, driver.stage.changed());
     }
     let share = buffers.pixels as f64 / (STEPS * 466 * 466) as f64;
     println!("a degree a step repaints {:.1}% of the panel", share * 100.0);
     // What the flush would send for the last step, at a few region costs.
     let mut repaint = buffers.previous.clone();
-    repaint.extend(&driver.motion(heading(470 + STEPS as u16 * 10 + 10)).changed);
+    driver.motion(heading(470 + STEPS as u16 * 10 + 10));
+    repaint.extend(driver.stage.changed());
     for overhead in [0, 512, 1200, 2400, 4800, 9600] {
         let (regions, pixels) = repaint
             .rectangles(overhead)
