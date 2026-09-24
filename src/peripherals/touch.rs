@@ -124,6 +124,9 @@ pub struct TouchPoint {
 pub enum TouchData {
     CoverGesture,
     Points(heapless::Vec<TouchPoint, 2, u8>),
+    /// No report since the last read: the controller has not replaced the acknowledgement the
+    /// last read left. Whatever the last report said still holds.
+    Stale,
 }
 impl Default for TouchData {
     fn default() -> Self {
@@ -181,8 +184,10 @@ impl<I: I2c, RST, INT, DELAY> Cst9217<I, INT, RST, DELAY> {
             CST92XX_ACK,
         ];
         self.i2c.write(self.addr, &ack).await?;
-        if !valid_touch_report(&buf) {
-            return Ok(TouchData::Points(heapless::Vec::new()));
+        match report_kind(&buf) {
+            Report::Stale => return Ok(TouchData::Stale),
+            Report::Lifted => return Ok(TouchData::Points(heapless::Vec::new())),
+            Report::Fresh => {}
         }
         // Check for cover screen gesture
         if buf[4] >> 7 == 1 {
@@ -285,8 +290,23 @@ impl<I: I2c, RST: OutputPin, INT, DELAY: embedded_hal_async::delay::DelayNs>
     }
 }
 
-fn valid_touch_report(buf: &[u8; READ_BUF_SIZE]) -> bool {
-    buf[0] != CST92XX_ACK && buf[0] != 0 && buf[6] == CST92XX_ACK
+#[derive(Debug, PartialEq, Eq)]
+enum Report {
+    Fresh,
+    /// Written as a finger lifts, before anything else.
+    Lifted,
+    Stale,
+}
+
+/// A read before the controller writes its next report returns our acknowledgement in byte 0.
+/// A still finger is reported less often than the frame loop polls, so these arrive mid-contact.
+fn report_kind(buf: &[u8; READ_BUF_SIZE]) -> Report {
+    match buf[0] {
+        _ if buf[6] != CST92XX_ACK => Report::Stale,
+        CST92XX_ACK => Report::Stale,
+        0 => Report::Lifted,
+        _ => Report::Fresh,
+    }
 }
 
 impl<I: I2c, RST, INT: Wait, DELAY> Cst9217<I, INT, RST, DELAY> {
@@ -297,7 +317,7 @@ impl<I: I2c, RST, INT: Wait, DELAY> Cst9217<I, INT, RST, DELAY> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CST92XX_ACK, Cst9217Config, READ_BUF_SIZE, TouchPoint, valid_touch_report};
+    use super::{CST92XX_ACK, Cst9217Config, READ_BUF_SIZE, Report, TouchPoint, report_kind};
     use embedded_hal::digital::OutputPin;
     use embedded_hal_async::{
         delay::DelayNs,
@@ -424,19 +444,18 @@ mod tests {
     }
 
     #[test]
-    fn rejects_empty_or_unacknowledged_reports() {
+    fn tells_a_lift_from_a_read_before_the_next_report() {
         let mut report = [0u8; READ_BUF_SIZE];
-        assert!(!valid_touch_report(&report));
+        report[6] = CST92XX_ACK;
+        assert_eq!(report_kind(&report), Report::Lifted);
 
         report[0] = CST92XX_ACK;
-        report[6] = CST92XX_ACK;
-        assert!(!valid_touch_report(&report));
+        assert_eq!(report_kind(&report), Report::Stale);
 
         report[0] = 0x06;
+        assert_eq!(report_kind(&report), Report::Fresh);
         report[6] = 0;
-        assert!(!valid_touch_report(&report));
-        report[6] = CST92XX_ACK;
-        assert!(valid_touch_report(&report));
+        assert_eq!(report_kind(&report), Report::Stale);
     }
 
     #[test]

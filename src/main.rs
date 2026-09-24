@@ -1480,7 +1480,12 @@ async fn async_main(spawner: Spawner) {
     start_display_core!(peripherals, fb_st);
 
     let mut stage = Stage::new(PeripheralState::default());
+    // The last report the controller wrote, which a stale read repeats.
     let mut touch_data = TouchData::default();
+    let mut last_report = Instant::now();
+    /// A contact with no fresh report for this long has ended without its lift report. Held
+    /// fingers were reported at most 101 ms apart.
+    const LIFT_WITHOUT_REPORT: Duration = Duration::from_millis(300);
     info!(
         "[MEM] internal_used={} psram_used={}",
         esp_alloc::HEAP.used(),
@@ -1532,7 +1537,14 @@ async fn async_main(spawner: Spawner) {
                 Either4::Fourth(()) => (touch_repoll_due, None, None),
             };
             if touch_ready {
-                touch_data = touch.read_touch_data().await.unwrap();
+                match touch.read_touch_data().await.unwrap() {
+                    TouchData::Stale if last_report.elapsed() < LIFT_WITHOUT_REPORT => {}
+                    TouchData::Stale => touch_data = TouchData::default(),
+                    fresh => {
+                        touch_data = fresh;
+                        last_report = Instant::now();
+                    }
+                }
                 last_touch_poll = Instant::now();
             }
             let update = stage.step(StageInput {
@@ -1546,6 +1558,7 @@ async fn async_main(spawner: Spawner) {
                         Touch::Contacts(positions)
                     }
                     TouchData::CoverGesture => Touch::Cover,
+                    TouchData::Stale => unreachable!("a stale read keeps the last report"),
                 }),
                 motion: motion_state,
                 sensors: sensor_state.map(|state| Sensors {
