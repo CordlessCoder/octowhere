@@ -549,7 +549,7 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
         timings.spi_time = start.elapsed() - timings.vsync_wait;
         #[cfg(feature = "tearing-bench")]
         if !dirty.is_empty() {
-            bench.record(timings.vsync_wait, timings.spi_time, dirty.is_full());
+            bench.record(timings.vsync_wait, timings.spi_time, dirty.is_full(), timings.frametime);
         }
 
         timings.swap_spi = prev_swap_spi;
@@ -681,12 +681,20 @@ struct TearStats {
     flush_max: u64,
     flush_sum: u64,
     over_16ms: u32,
+    draw_sum: u64,
+    draw_max: u64,
+    started: Option<Instant>,
 }
 
 #[cfg(feature = "tearing-bench")]
 impl TearStats {
-    fn record(&mut self, wait: Duration, flush: Duration, full: bool) {
+    fn record(&mut self, wait: Duration, flush: Duration, full: bool, draw: Duration) {
         let (wait, flush) = (wait.as_micros(), flush.as_micros());
+        self.draw_sum += draw.as_micros();
+        self.draw_max = self.draw_max.max(draw.as_micros());
+        if self.frames == 0 {
+            self.started = Some(Instant::now());
+        }
         if self.frames == 0 {
             self.flush_min = u64::MAX;
         }
@@ -702,6 +710,11 @@ impl TearStats {
                 "[TEAR] frames={} full={} te_high_at_wait={} timeouts={} wait_max_us={} flush_us={}..{} mean={} over_16ms={}",
                 self.frames, self.full, self.high_at_wait, self.timeouts, self.wait_max,
                 self.flush_min, self.flush_max, self.flush_sum / u64::from(self.frames), self.over_16ms,
+            );
+            info!(
+                "[TEAR] core 0 step and draw mean={}us max={}us; {} frames in {}ms",
+                self.draw_sum / u64::from(self.frames), self.draw_max, self.frames,
+                self.started.map_or(0, |started| started.elapsed().as_millis()),
             );
             {
                 use core::sync::atomic::Ordering::Relaxed;
