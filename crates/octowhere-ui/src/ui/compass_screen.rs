@@ -397,8 +397,18 @@ pub fn damage(
         }
     }
     if old.tilt != new.tilt {
-        for tilt in [&old.tilt, &new.tilt].into_iter().flatten() {
-            damage.add(centred_bounds(&tilt_style(font), tilt, CENTER.x, TILT_BASELINE));
+        let style = tilt_style(font);
+        match (&old.tilt, &new.tilt) {
+            (Some(was), Some(now)) => style.glyph_damage(
+                (was, Point::new(centred_left(&style, was, CENTER.x), TILT_BASELINE)),
+                (now, Point::new(centred_left(&style, now, CENTER.x), TILT_BASELINE)),
+                damage,
+            ),
+            (was, now) => {
+                for tilt in [was, now].into_iter().flatten() {
+                    damage.add(centred_bounds(&style, tilt, CENTER.x, TILT_BASELINE));
+                }
+            }
         }
     }
     if old.footer != new.footer {
