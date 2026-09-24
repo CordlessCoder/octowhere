@@ -435,6 +435,12 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
 
     let mut prev_swap_spi = Duration::MIN;
     let mut first_flush = true;
+    #[cfg(feature = "tearing-scanline")]
+    {
+        let line = option_env!("TE_LINE").and_then(|line| line.parse().ok()).unwrap_or(150);
+        display.set_tear_scanline(line).expect("scan line command failed");
+        info!("[TEAR] te at scan line {}", line);
+    }
     #[cfg(feature = "tearing-bench")]
     measure_te(&display.te_pin);
     #[cfg(feature = "tearing-bench")]
@@ -469,8 +475,12 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
                 {
                     bench.high_at_wait += u32::from(display.te_pin.is_high());
                 }
+                #[cfg(feature = "tearing-scanline")]
+                let te = display.wait_for_te_edge();
+                #[cfg(not(feature = "tearing-scanline"))]
+                let te = display.wait_for_vsync();
                 match select(
-                    display.wait_for_vsync(),
+                    te,
                     Timer::after(Duration::from_millis(17)),
                 )
                 .await

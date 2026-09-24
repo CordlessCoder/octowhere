@@ -51,6 +51,8 @@ lora-link-tx = []
 lora-link-rx = []
 # Drags a synthetic finger between the faces, and logs TE and flush timing on core 1.
 tearing-bench = []
+# With the bench: TE at scan line `TE_LINE` (build-time env, default 150), waited on by edge.
+tearing-scanline = ["tearing-bench"]
 
 [patch.crates-io]
 tca9554 = { git = "https://github.com/CordlessCoder/tca9554-rs", rev = "dd76e69" }

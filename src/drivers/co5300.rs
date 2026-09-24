@@ -334,6 +334,17 @@ where
         self.te_pin.wait_for_high()
     }
 
+    /// Moves TE to a one-line pulse when the scan reaches `line` (mode 3), counted from the
+    /// first line of vertical sync.
+    pub fn set_tear_scanline(&mut self, line: u16) -> Result<(), DisplayError> {
+        self.bus.execute(&QSPIOperation::CommandD16(0x44, line))?;
+        Ok(())
+    }
+
+    pub fn wait_for_te_edge(&mut self) -> impl Future<Output = ()> {
+        self.te_pin.wait_for_rising_edge()
+    }
+
     /// Set display brightness (0x00 = off, 0xD0 = default, 0xFF = max).
     pub fn set_brightness(&mut self, brightness: u8) -> Result<(), DisplayError> {
         self.bus

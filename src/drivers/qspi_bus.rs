@@ -21,6 +21,7 @@ pub enum QSPIOperation {
     Delay(u32),
     Command(u8),
     CommandD8(u8, u8),
+    CommandD16(u8, u16),
     CommandD16D16(u8, u16, u16),
 }
 
@@ -46,6 +47,10 @@ impl<'d> QspiBus<'d> {
                 self.tx.as_mut().unwrap().as_mut_slice()[0] = byte;
                 1
             }),
+            &QSPIOperation::CommandD16(cmd, d) => {
+                self.tx.as_mut().unwrap().as_mut_slice()[..2].copy_from_slice(&d.to_be_bytes());
+                (cmd, 2)
+            }
             &QSPIOperation::CommandD16D16(cmd, d1, d2) => {
                 let data = [(d1 >> 8) as u8, d1 as u8, (d2 >> 8) as u8, d2 as u8];
                 self.tx.as_mut().unwrap().as_mut_slice()[..data.len()].copy_from_slice(&data);
@@ -62,6 +67,7 @@ impl<'d> QspiBus<'d> {
             }
             QSPIOperation::Command(..)
             | QSPIOperation::CommandD8(..)
+            | QSPIOperation::CommandD16(..)
             | QSPIOperation::CommandD16D16(..) => self.command_to_bytes(op),
         };
         #[cfg(feature = "timing-log")]
@@ -135,6 +141,7 @@ impl<'d> QspiBus<'d> {
             }
             QSPIOperation::Command(..)
             | QSPIOperation::CommandD8(..)
+            | QSPIOperation::CommandD16(..)
             | QSPIOperation::CommandD16D16(..) => self.command_to_bytes(op),
         };
         #[cfg(feature = "timing-log")]
