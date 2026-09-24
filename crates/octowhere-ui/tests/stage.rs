@@ -9,98 +9,18 @@ use octowhere_ui::{
         compass::CompassView,
         gesture::{LIFT_SAMPLES, Micros},
         compass_screen::{Accents, CENTER as COMPASS_CENTER},
-        screens::{PeripheralState, Screen},
-        stage::{Input, Motion, Sensors, Stage, Touch, Update},
+        screens::Screen,
+        script::Driver,
+        stage::{Input, Motion, Sensors, Stage},
     },
 };
 
-const FRAME: Micros = 16_667;
-
-/// Drives a stage on a clock that advances one frame per step.
-struct Driver {
-    stage: Stage,
-    now: Micros,
-}
-
-impl Driver {
-    fn new() -> Self {
-        Self {
-            stage: Stage::new(PeripheralState::default()),
-            now: 0,
-        }
-    }
-
-    fn on(screen: Screen) -> Self {
-        let mut driver = Self::new();
-        driver.stage.show(screen);
-        driver
-    }
-
-    fn step(&mut self, input: Input) -> Update {
-        self.now += FRAME;
-        self.stage.step(Input {
-            now: self.now,
-            ..input
-        })
-    }
-
-    fn touch(&mut self, contact: Option<Point>) -> Update {
-        self.read(Touch::Contacts([contact, None]))
-    }
-
-    fn read(&mut self, touch: Touch) -> Update {
-        self.step(Input {
-            touch: Some(touch),
-            ..Input::default()
-        })
-    }
-
-    fn cover(&mut self) -> Update {
-        self.read(Touch::Cover)
-    }
-
-    /// Steps without input for at least `duration`.
-    fn wait(&mut self, duration: Micros) -> Update {
-        let end = self.now + duration;
-        let mut update = self.step(Input::default());
-        while self.now < end {
-            update = self.step(Input::default());
-        }
-        update
-    }
-
-    /// Steps until the compass page's entry has faded in.
-    fn settled_on_compass() -> Self {
-        let mut driver = Self::on(Screen::Compass);
-        driver.motion(heading(470));
-        driver.wait(500_000);
-        driver
-    }
-
-    fn motion(&mut self, motion: Motion) -> Update {
-        self.step(Input {
-            motion: Some(motion),
-            ..Input::default()
-        })
-    }
-
-    /// A contact along `path`, then the empty reads that count as a lift. Returns every update.
-    fn stroke(&mut self, path: &[Point]) -> Vec<Update> {
-        let mut updates: Vec<_> = path.iter().map(|&point| self.touch(Some(point))).collect();
-        updates.extend((0..LIFT_SAMPLES).map(|_| self.touch(None)));
-        updates
-    }
-
-    /// Steps without input until the pager comes to rest.
-    fn settle(&mut self) {
-        for _ in 0..120 {
-            if !self.stage.is_animating() {
-                return;
-            }
-            self.step(Input::default());
-        }
-        panic!("the pager never came to rest");
-    }
+/// Steps until the compass page's entry has faded in.
+fn settled_on_compass() -> Driver<'static> {
+    let mut driver = Driver::on(Screen::Compass);
+    driver.motion(heading(470));
+    driver.wait(500_000);
+    driver
 }
 
 fn heading(decidegrees: u16) -> Motion {
@@ -130,7 +50,7 @@ fn a_swipe_left_moves_to_the_next_screen_and_right_moves_back() {
 
 #[test]
 fn a_cover_on_the_settled_compass_asks_for_recalibration_once_per_hand() {
-    let mut driver = Driver::settled_on_compass();
+    let mut driver = settled_on_compass();
     assert!(driver.cover().recalibrate);
     // The dial goes at once, before the motion task confirms the reset.
     assert_eq!(driver.stage.peripherals().compass.heading_decidegrees, None);
@@ -147,7 +67,7 @@ fn a_cover_on_the_settled_compass_asks_for_recalibration_once_per_hand() {
 
 #[test]
 fn a_finger_rearms_the_cover_at_once() {
-    let mut driver = Driver::settled_on_compass();
+    let mut driver = settled_on_compass();
     assert!(driver.cover().recalibrate);
     driver.touch(Some(COMPASS_CENTER));
     assert!(driver.cover().recalibrate, "a cover after a touch was ignored");
@@ -155,7 +75,7 @@ fn a_finger_rearms_the_cover_at_once() {
 
 #[test]
 fn a_tap_on_the_compass_does_nothing() {
-    let mut driver = Driver::settled_on_compass();
+    let mut driver = settled_on_compass();
     let updates = driver.stroke(&[COMPASS_CENTER + Point::new(30, -40)]);
     assert!(updates.iter().all(|update| !update.recalibrate));
     driver.stroke(&[Point::new(233, 73)]);
@@ -170,7 +90,7 @@ fn a_cover_is_ignored_without_data_or_off_a_settled_compass() {
     driver.wait(500_000);
     assert!(!driver.cover().recalibrate, "NO DATA accepted a cover");
 
-    let mut driver = Driver::settled_on_compass();
+    let mut driver = settled_on_compass();
     driver.touch(Some(Point::new(400, 233)));
     driver.touch(Some(Point::new(340, 233)));
     assert!(!driver.cover().recalibrate, "a cover mid-drag was accepted");
@@ -203,7 +123,7 @@ fn the_compass_accents_build_after_the_page_settles() {
 
 #[test]
 fn a_swipe_off_the_compass_takes_its_accents_reversibly() {
-    let mut driver = Driver::settled_on_compass();
+    let mut driver = settled_on_compass();
     driver.touch(Some(Point::new(400, 233)));
     driver.touch(Some(Point::new(360, 233)));
     driver.touch(Some(Point::new(340, 233)));
@@ -399,7 +319,7 @@ fn top_edge_up() -> Motion {
 
 /// A settled compass that loses its heading to `absence` for `gap`, then gets it back.
 fn heading_back_after(absence: Motion, gap: Micros) -> Accents {
-    let mut driver = Driver::settled_on_compass();
+    let mut driver = settled_on_compass();
     driver.motion(absence);
     driver.wait(gap);
     driver.motion(heading(470));
@@ -536,7 +456,7 @@ fn compass_walk() -> Vec<(String, Motion)> {
 /// fades, turns and every state change.
 #[test]
 fn compass_damage_redraws_what_changed() {
-    let mut driver = Driver::settled_on_compass();
+    let mut driver = settled_on_compass();
     let mut buffers = Buffers::new();
     for _ in 0..2 {
         buffers.draw(&driver.stage, &Dirty::new_full());
@@ -559,7 +479,7 @@ fn compass_damage_redraws_what_changed() {
 /// How many pixels a turning dial repaints per step, against the full panel.
 #[test]
 fn a_turning_dial_repaints_a_fraction_of_the_panel() {
-    let mut driver = Driver::settled_on_compass();
+    let mut driver = settled_on_compass();
     let mut buffers = Buffers::new();
     for _ in 0..2 {
         buffers.draw(&driver.stage, &Dirty::new_full());
@@ -735,7 +655,7 @@ fn a_tap_on_the_clock_does_nothing() {
 
 #[test]
 fn interference_swaps_the_icon_without_replaying_anything() {
-    let mut driver = Driver::settled_on_compass();
+    let mut driver = settled_on_compass();
     let mut disturbed = heading(470);
     disturbed.compass.disturbed = true;
     driver.motion(disturbed);
@@ -750,8 +670,33 @@ fn a_fault_on_the_compass_shows_at_once() {
     driver.motion(Motion::default());
     let entering = accents(&driver);
     assert_eq!((entering.ring, entering.icon_rows, entering.caption), (255, 5, 255));
-    let mut driver = Driver::settled_on_compass();
+    let mut driver = settled_on_compass();
     driver.motion(Motion::default());
     let fault = accents(&driver);
     assert_eq!((fault.ring, fault.icon_rows, fault.caption), (255, 5, 255));
+}
+
+#[test]
+fn a_running_clock_ticks_each_second_unless_stopped() {
+    let dublin = zone("Europe/Dublin", ZoneMode::Automatic);
+    let mut driver = Driver::on(Screen::Clock);
+    driver.run_clock();
+    driver.step(sensors(clock_at(12, 7, 41), dublin));
+    driver.wait(500_000);
+    assert!(driver.stage.changed().is_empty());
+    driver.wait(600_000);
+    assert_eq!(driver.stage.peripherals().clock.clock.utc, clock_at(12, 7, 42).utc);
+
+    driver.step(sensors(ClockState { stopped: true, ..clock_at(12, 7, 50) }, dublin));
+    driver.wait(1_500_000);
+    assert_eq!(driver.stage.peripherals().clock.clock.utc, clock_at(12, 7, 50).utc);
+}
+
+#[test]
+fn a_swipe_takes_its_duration_and_turns_the_page() {
+    let mut driver = Driver::new();
+    let updates = driver.swipe(Point::new(400, 233), Point::new(60, 233), 300_000);
+    assert_eq!(updates.len(), 18 + 1 + usize::from(LIFT_SAMPLES));
+    driver.settle();
+    assert_eq!(driver.stage.screen(), Screen::Compass);
 }

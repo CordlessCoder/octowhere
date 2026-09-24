@@ -11,5 +11,6 @@ pub mod imu;
 pub mod pager;
 pub mod reveal;
 pub mod screens;
+pub mod script;
 pub mod smooth;
 pub mod stage;
