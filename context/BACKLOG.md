@@ -36,9 +36,9 @@ until the feature set is complete, because profiling an incomplete firmware pric
   uncommenting it.
 - fontdue's compressed line store, on fontdue master since `2ad75496` and not taken while flash is
   plentiful. It is one macro argument, `store: true` (optionally `grid: 16`), on
-  `fontdue_font_from_file!`. For MarathonShapiro at 2.1 it stores the lines in about a third of
-  their flash, draws 27%, 17% and 11% slower at 12, 32 and 64 px, and differs from raw lines by at
-  most 1 unit. The earlier spike results are in
+  `fontdue_font_from_file!`. For MarathonShapiro at scale 2.1, before every font moved to 24, it
+  stores the lines in about a third of their flash, draws 27%, 17% and 11% slower at 12, 32 and
+  64 px, and differs from raw lines by at most 1 unit. The earlier spike results are in
   `~/git/fontdue/MEASURE-LINE-STORE{,-V2,-V3}-ON-TARGET-HANDOFF.md`. The bench is the
   `fontdue-line-store` feature on `bench/fontdue`, which does not build against the current pin:
   its `line_store_bench.rs` needs the API port in fontdue's

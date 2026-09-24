@@ -118,8 +118,8 @@ Weigh that cost before adding one.
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 518,560 bytes, 12.56% of the 4,128,768-byte app partition. Most of the
-last 54 KB is PP Fraktion Mono Bold with all of printable ASCII; subsetting it to the glyphs the
+The image is currently 524,976 bytes, 12.72% of the 4,128,768-byte app partition. PP Fraktion
+Mono Bold with all of printable ASCII is about 54 KB of that; subsetting it to the glyphs the
 compass uses is the lever if that matters.
 
 `panic = "immediate-abort"` is the size lever, and it is not taken. It needs
@@ -153,7 +153,8 @@ of the text (`compass-draw-bench`); and `bench/compass-draw-rows`, the same benc
 rewritten draw path, with pixel checks of the precomputed ring and the turned ticks, the clear
 variants and the text split (`compass-draw-bench`); and `bench/compass-states`, the implemented
 compass design's full draw in each state, entering, and early and halfway through a swipe
-(`compass-state-bench`).
+(`compass-state-bench`); and `bench/font-scale`, the same draw with a warm and a cold glyph
+cache, and `tools/font-scale-sweep.sh`, which reruns it at each fontdue `scale`.
 
 ## Concurrency
 

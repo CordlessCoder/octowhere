@@ -303,24 +303,25 @@ impl<T: CoverageTarget> CoverageTarget for Window<'_, T> {
     }
 }
 
+// `scale` is the size in px per em the outlines are flattened for; larger text shows the facets.
+// At 24 the compass readout matches a much finer flattening. Raising it costs rasterization time
+// on every glyph that misses the cache, and turned glyphs always do.
 fontdue_macros::fontdue_font_from_file!(
     MarathonShapiroFont,
     "../../../assets/MarathonShapiro-Wide65_subset.ttf",
-    // Picked with some trial and effort to offer some of the lowest flash usage while looking
-    // great. Making it lower makes rendering faster, at the cost of quality.
-    scale: 2.1
+    scale: 24.0
 );
 
 fontdue_macros::fontdue_font_from_file!(
     FraktionMonoRegularFont,
     "../../../assets/PPFraktion-Free for personal use v1.1/Mono/PPFraktionMono-Regular-subset.ttf",
-    scale: 2.2
+    scale: 24.0
 );
 
 fontdue_macros::fontdue_font_from_file!(
     FraktionMonoBoldFont,
     "../../../assets/PPFraktion-Free for personal use v1.1/Mono/PPFraktionMono-Bold.otf",
-    scale: 2.2,
+    scale: 24.0,
     chars: " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\u{b0}"
 );
 
