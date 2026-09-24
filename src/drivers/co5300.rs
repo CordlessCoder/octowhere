@@ -485,7 +485,9 @@ where
         let new = fill_swap_with(swap.as_mut_slice());
         #[cfg(feature = "tearing-bench")]
         let wait_start = embassy_time::Instant::now();
+        #[cfg(not(feature = "flush-spin"))]
         let mut transfer = transfer;
+        #[cfg(not(feature = "flush-spin"))]
         transfer.wait_for_done().await;
         let (spi, active) = transfer.wait();
         #[cfg(feature = "tearing-bench")]
