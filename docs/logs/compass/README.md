@@ -20,8 +20,8 @@ Files:
   while the board was turned level through a full circle. Its field jumps by 100 to 170 µT for
   about a second at a time, most likely a phone close by: the interference that spoiled a
   min/max calibration.
-- `axischeck-…` holds the twelve `[POSE]` captures that `tools/fit-sensor-axes.py` fits the
-  mappings from, and the raw samples around them.
+- `axischeck-…` holds the twelve `[POSE]` captures that `tools/fit-sensor-axes.py`, since
+  removed and kept in git history, fitted the mappings from, and the raw samples around them.
 - `verify-…` is with the fitted mappings and the min/max calibration, several recalibrations
   and a lot of tilting. Replaying its raw samples since the last recalibration showed the
   min/max z offset 9.7 µT out and a sphere fit 2.6 µT out, against the pose fit.
