@@ -47,7 +47,11 @@ initialization or peripheral mappings.
   concept. [`context/compass-design-questions.md`](context/compass-design-questions.md) holds
   what the implementation asked back, and
   [`context/compass-design-answers.md`](context/compass-design-answers.md) the designer's answers
-  with the owner's overrides.
+  with the owner's overrides. The designer then sent
+  [`context/compass-design-changes-since-answers.md`](context/compass-design-changes-since-answers.md),
+  and [`context/compass-implementation-update.md`](context/compass-implementation-update.md)
+  reports back what the firmware now does, with simulator captures in
+  `context/compass-sim-states/`.
 - [`context/GRAPHICS-PROTOTYPES.md`](context/GRAPHICS-PROTOTYPES.md) explains the three renderer
   architectures in `crates/octowhere-ui/src/ui/prototypes.rs` and the `ACTIVE_ARCHITECTURE`
   constant that selects one.
