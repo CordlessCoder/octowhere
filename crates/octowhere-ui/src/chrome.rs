@@ -317,8 +317,20 @@ fontdue_macros::fontdue_font_from_file!(
     scale: 2.2
 );
 
+fontdue_macros::fontdue_font_from_file!(
+    FraktionMonoBoldFont,
+    "../../../assets/PPFraktion-Free for personal use v1.1/Mono/PPFraktionMono-Bold.otf",
+    scale: 2.2,
+    chars: " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\u{b0}"
+);
+
 /// The fonts a `FontdueRenderer` indexes with `font_index`.
-pub const FONTS: &[&dyn FontRepr] = &[&MarathonShapiroFont, &FraktionMonoRegularFont];
+pub const FONTS: &[&dyn FontRepr] =
+    &[&MarathonShapiroFont, &FraktionMonoRegularFont, &FraktionMonoBoldFont];
+/// Indices into [`FONTS`].
+pub const SHAPIRO: usize = 0;
+pub const FRAKTION: usize = 1;
+pub const FRAKTION_BOLD: usize = 2;
 
 const fn color_from_rgb(r: u8, g: u8, b: u8) -> Color {
     Color::new(
@@ -745,6 +757,75 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
             );
         }
         Ok(bounds.translate(position))
+    }
+
+    /// How far the pen moves across `text`.
+    #[must_use]
+    pub fn advance(&self, text: &str) -> f32 {
+        let mut offsets =
+            fontdue::PenOffsets::new(self.fonts[self.font_index], text, self.font_size as f32);
+        offsets.by_ref().for_each(drop);
+        offsets.advance()
+    }
+
+    /// Each glyph's top-left corner and metrics, for `text` whose pen starts at `origin` on the
+    /// baseline.
+    fn glyphs_on_baseline<'s>(
+        &'s self,
+        text: &'s str,
+        origin: Point,
+    ) -> impl Iterator<Item = (u16, Point, fontdue::Metrics)> + 's {
+        let font = self.fonts[self.font_index];
+        let px = self.font_size as f32;
+        fontdue::PenOffsets::new(font, text, px).map(move |(index, offset)| {
+            let metrics = font.metrics_indexed(index, px);
+            let corner = Point::new(
+                origin.x + libm::roundf(offset) as i32 + metrics.xmin,
+                origin.y - metrics.ymin - metrics.height as i32,
+            );
+            (index, corner, metrics)
+        })
+    }
+
+    /// The ink bounds [`draw_on_baseline`](Self::draw_on_baseline) would cover.
+    #[must_use]
+    pub fn baseline_bounds(&self, text: &str, origin: Point) -> Rectangle {
+        self.glyphs_on_baseline(text, origin)
+            .filter(|(_, _, metrics)| metrics.width > 0 && metrics.height > 0)
+            .fold(Rectangle::zero(), |bounds, (_, corner, metrics)| {
+                Self::union_rect(
+                    bounds,
+                    Rectangle::new(corner, Size::new(metrics.width as u32, metrics.height as u32)),
+                )
+            })
+    }
+
+    /// Draws `text` with its pen starting at `origin` on the baseline, and blends its edges over
+    /// whatever is already drawn.
+    pub fn draw_on_baseline<D: CoverageTarget<Color = C>>(
+        &self,
+        text: &str,
+        origin: Point,
+        target: &mut D,
+    ) -> Result<(), D::Error> {
+        let px = self.font_size as f32;
+        let font = self.fonts[self.font_index];
+        let mut ctx = self.ctx.borrow_mut();
+        let FontdueRendererCtx { canvas, glyphs, .. } = &mut *ctx;
+        for (index, corner, metrics) in self.glyphs_on_baseline(text, origin) {
+            if metrics.width == 0 || metrics.height == 0 {
+                continue;
+            }
+            let key = (self.font_index, index, px.to_bits());
+            let (width, coverage) = glyphs.get_or_insert(key, || {
+                let (metrics, bitmap) = font.rasterize_indexed(canvas, index, px);
+                let mut coverage = alloc::vec::Vec::with_capacity(metrics.width * metrics.height);
+                bitmap.for_each(|covered| coverage.push(covered));
+                (metrics.width, coverage)
+            });
+            blend_bitmap(target, corner, *width, coverage, self.text_color);
+        }
+        Ok(())
     }
 
     fn layout_bounds(ctx: &FontdueRendererCtx, position: Point) -> Rectangle {
