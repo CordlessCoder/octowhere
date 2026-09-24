@@ -27,6 +27,13 @@ initialization or peripheral mappings.
 - `src/board.rs` holds display geometry, the TCA9554 line indices, and the I2C addresses that
   external crates take. GPIO numbers are not there: they live at the binding sites in `main.rs`,
   and `docs/hardware-notes.md` has the pin map.
+- `crates/tz/` finds the time zone under a position and converts UTC to local time, from zone
+  data built into the binary. `tools/tz-data.py` rebuilds `crates/tz/data/zones.bin` and the
+  crate's test vectors from timezone-boundary-builder's boundaries and the IANA rules; its header
+  has the command. The boundaries are ODbL, and `crates/tz/data/NOTICE.md` carries the
+  attribution the licence asks for.
+- `src/settings.rs` keeps settings in flash across restarts. Today that is the time zone mode,
+  the manually chosen zone, and the zone GNSS last placed the device in.
 - `crates/` also holds the local `lc76g`, `sx127x-lora` and `sx127x-common` crates.
 - `host-tests/` is the std test harness for the board-side modules.
 - `tools/ui-sim/` runs the stage in a desktop window. `tools/` also holds the bench scripts.
@@ -88,6 +95,9 @@ cargo +stable test --manifest-path crates/octowhere-ui/Cargo.toml \
   --target x86_64-unknown-linux-gnu --locked
 cargo +stable clippy --manifest-path crates/octowhere-ui/Cargo.toml \
   --target x86_64-unknown-linux-gnu --locked --all-targets -- -D warnings
+cargo +stable test --manifest-path crates/tz/Cargo.toml --target x86_64-unknown-linux-gnu
+cargo +stable clippy --manifest-path crates/tz/Cargo.toml \
+  --target x86_64-unknown-linux-gnu --all-targets -- -D warnings
 cargo +stable clippy --release --manifest-path tools/ui-sim/Cargo.toml \
   --target x86_64-unknown-linux-gnu --locked -- -D warnings
 ```
@@ -124,9 +134,11 @@ Weigh that cost before adding one.
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 536,992 bytes, 13.01% of the 4,128,768-byte app partition. PP Fraktion
-Mono Bold with all of printable ASCII is about 54 KB of that; subsetting it to the glyphs the
-compass uses is the lever if that matters.
+The image is currently 964,784 bytes, 23.37% of the 4,128,768-byte app partition. The time zone
+data is about 390 KB of that, and its boundary tolerance in `tools/tz-data.py` is the lever: the
+bench branch `bench/tz-boundary-size` tabulates size against accuracy. PP Fraktion Mono Bold with
+all of printable ASCII is about 54 KB; subsetting it to the glyphs the compass uses is the other
+lever.
 
 `panic = "immediate-abort"` is the size lever, and it is not taken. It needs
 `cargo-features = ["panic-immediate-abort"]` restored to unlock it, which costs the drift check
@@ -137,7 +149,8 @@ It was measured at 43,632 bytes of code and data but only 9,568 bytes of image, 
 partition. Most of the saving is in `.rodata`, which the linker pads to a 196,608-byte window
 either way. The saving is headroom rather than occupancy: `.rodata` has 31,992 bytes left in that
 window and would have 59,936 with the setting, and crossing the window costs a further 65,536 bytes
-in one step. Reach for it if the image nears that boundary. It costs every panic message, location
+in one step. Those figures predate the time zone data, which added about 390 KB to `.rodata`, so
+remeasure before relying on them. It costs every panic message, location
 and backtrace, so it is a poor trade before the feature set is complete.
 
 ## Measurement code
@@ -164,7 +177,9 @@ cache, and `tools/font-scale-sweep.sh`, which reruns it at each fontdue `scale`;
 `bench/glyph-cache`, which counted the removed glyph cache's contents on the host
 (`examples/glyph_cache.rs`) and the heap on the board (`glyph-cache-bench`); and
 `bench/no-glyph-cache`, both benches on the uncached draw path; and `bench/touch-cover`, which
-logs every touch report and polls during a cover (`touch-report-log`); and
+logs every touch report and polls during a cover (`touch-report-log`); and `bench/zone-lookup`,
+which replaces the GNSS position with a tour of synthetic fixes and logs each zone lookup's
+steps and time, each settings write, and how long it held core 1 (`zone-lookup-bench`); and
 `bench/row-span-damage`, which drives the settled compass through synthetic turns, tilts and
 holds in the real frame loop and logs the step, draw, flush, pixels and regions per phase, the
 flush's parts and both cores' stack high-water marks (`compass-sweep-bench`, with
@@ -181,13 +196,25 @@ core 1 owns the display SPI/DMA path.
   values from `SENSOR_STATE` and `MOTION_STATE`, draws into its current framebuffer, records
   `dirty`, and hands the state to core 1.
 - `sensor_task`, also on core 0, owns the PMIC, RTC, GNSS and LoRa. It publishes a whole
-  `SensorSnapshot` through the `SENSOR_STATE` signal.
+  `SensorSnapshot` through the `SENSOR_STATE` signal. In automatic zone mode it looks the zone
+  up again whenever a fix moves about a kilometre, a zone at a time with a yield between, and
+  queues a new zone for `settings_task`.
+- `settings_task`, also on core 0, owns the flash and saves what `SETTINGS_WRITES` queues.
 - `motion_task`, also on core 0, owns the IMU and magnetometer, the compass calibration and the
   sensor fusion. It samples every 250 ms, or every 20 ms while the frame loop sets
   `COMPASS_ACTIVE`, and publishes a `MotionSnapshot` through `MOTION_STATE`. The frame loop
   never touches these devices.
 - `second_core` on core 1 waits for display TE with a timeout, flushes the handed-off regions
   through `Co5300Display`, and returns the other framebuffer.
+
+A flash write stops the cache both cores run from, so core 1 must not touch flash while one
+runs. Reads through `esp-storage` may not need it, but the settings store holds core 1 for them
+too. `settings::with_display_core_held` asks core 1 to wait, and core 1's loop calls
+`settings::hold_display_core_if_asked` before each frame, which spins in IRAM with its
+interrupts masked until core 0 is done. The request is answered only at core 1's next frame, so
+it must never come from the frame loop, which would then stop handing frames over. Anything else
+that touches flash at run time goes through the same pair. Loading at boot happens before core 1
+starts.
 
 The I2C bus is an `embassy_sync` `Mutex<NoopRawMutex, _>`. Every I2C user must stay on core 0; a
 `NoopRawMutex` gives no cross-core exclusion. Moving an I2C device to core 1 needs a different
@@ -272,6 +299,9 @@ errata workaround, are in [`docs/hardware-notes.md`](docs/hardware-notes.md).
 - The current RGB565 configuration uses 466 × 466 × 2 = 434,312 bytes per framebuffer, with two
   framebuffers.
 - Core 1 uses the 8 KiB `CORE1_STACK` static.
+- Settings are a sequential-storage map in the partition table's `nvs` partition, 24 KiB at
+  `0x9000`. It is not ESP-IDF's NVS format, and nothing else uses the partition.
+  `espflash erase-region 0x9000 0x6000` clears them.
 
 Check the allocator and framebuffer definitions in [`src/main.rs`](src/main.rs) and
 [`crates/octowhere-ui/src/chrome.rs`](crates/octowhere-ui/src/chrome.rs) when changing memory
@@ -343,7 +373,8 @@ pin, and the firmware reaches them as `octowhere::fontdue`. `tca9554` is forked 
 atomic register masks with a mutex-guarded cache and a `RawMutex` type parameter, and is a patch
 in the root manifest. Dropping either will not compile.
 
-`octowhere-ui`, `lc76g`, `sx127x-lora` and `sx127x-common` are local path crates.
+`octowhere-ui`, `octowhere-tz`, `lc76g`, `sx127x-lora` and `sx127x-common` are local path
+crates. `octowhere-tz` lives in `crates/tz`, and the firmware reaches it as `octowhere::tz`.
 `crates/sx127x-lora` publishes the package name `sx127xlora`, so the manifest key and the directory
 differ. Check [`Cargo.toml`](Cargo.toml) before relying on a fork-only API or changing a dependency.
 

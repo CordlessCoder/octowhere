@@ -5,6 +5,13 @@ until the feature set is complete, because profiling an incomplete firmware pric
 
 ## Next
 
+- A settings pane. Its first job is the time zone: choosing automatic or a zone by hand, which
+  `settings::Write` and `ZoneTracker` in `src/main.rs` need a variant and a method for, and the
+  zone picker, which the clock face design round is to propose. The ODbL attribution for the
+  zone boundaries (`crates/tz/data/NOTICE.md`) belongs on the device too, in an about page there.
+- Measure a settings write that erases a flash sector. `bench/zone-lookup` saw only writes into
+  a sector with room, which held core 1 for about 1.3 ms; an erase holds it for the erase.
+
 - Build the protocol in [`LORA-PROTOCOL.md`](LORA-PROTOCOL.md). Its "Firmware structure" section
   comes first: the radio moves into its own task, and I2C gets a single owning task.
 
