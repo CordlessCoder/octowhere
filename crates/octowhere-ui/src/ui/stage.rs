@@ -7,6 +7,7 @@ use embedded_graphics::prelude::Point;
 use super::{
     axis_check::{self, AxisCheck},
     clock::ZoneState,
+    clock_screen,
     compass::CompassView,
     compass_screen::{self, Accents, DialFootprint, Mode},
     gesture::{GestureEvent, GestureTracker, Micros},
@@ -68,6 +69,31 @@ const REVEAL_LETTERS: Micros = 70_000;
 const TOP_EDGE_GRACE: Micros = 750_000;
 /// Dragging the compass this fraction of the panel's width fades its accents out entirely.
 const SWIPE_FADE: f32 = 0.35;
+/// When each of the clock face's accents starts after the page settles. The icon's modules land
+/// a row per step, and the reveals run over their durations.
+const CLOCK_ENTRY: ClockTimes = ClockTimes {
+    ring: 0,
+    icon: 60_000,
+    label: 100_000,
+    plate: 160_000,
+    zone: 240_000,
+};
+const CLOCK_RING_FADE: Micros = 110_000;
+const CLOCK_ICON_ROW: Micros = 30_000;
+const CLOCK_LABEL_REVEAL: Micros = 120_000;
+const CLOCK_PLATE_REVEAL: Micros = 120_000;
+const CLOCK_ZONE_REVEAL: Micros = 160_000;
+
+/// When each of the clock face's accents started, or starts.
+#[derive(Clone, Copy, Debug, Default)]
+struct ClockTimes {
+    ring: Micros,
+    icon: Micros,
+    label: Micros,
+    plate: Micros,
+    zone: Micros,
+}
+
 /// How long without a cover report before another cover is a new hand. The controller does not
 /// always report the hand lifting, and a held hand repeats its report up to about 180 ms apart.
 /// Covering again after lifting took about 350 ms.
@@ -120,6 +146,11 @@ pub struct Stage {
     /// The pixels the last step changed. Boxed so the frame loop's stack never holds it.
     changed: alloc::boxed::Box<Dirty>,
     dial_footprint: DialFootprint,
+    /// When the clock page last settled into view, and what its accents re-reveal on.
+    clock_settled: Option<(ClockTimes, clock_screen::Keys)>,
+    clock_accents: clock_screen::Accents,
+    /// What the clock page showed after the last step, while it filled the panel.
+    drawn_clock: Option<(ClockState, ZoneState, clock_screen::Accents)>,
 }
 
 impl Stage {
@@ -150,6 +181,9 @@ impl Stage {
             drawn_compass: None,
             changed: alloc::boxed::Box::new(Dirty::new()),
             dial_footprint: DialFootprint::default(),
+            clock_settled: None,
+            clock_accents: clock_screen::Accents::FULL,
+            drawn_clock: None,
         }
     }
 
@@ -166,6 +200,8 @@ impl Stage {
         self.heading_since = None;
         self.top_edge_since = None;
         self.drawn_compass = None;
+        self.clock_settled = None;
+        self.drawn_clock = None;
     }
 
     /// The pixels the last [`step`](Self::step) changed.
@@ -183,6 +219,12 @@ impl Stage {
     #[must_use]
     pub fn accents(&self) -> Accents {
         self.accents
+    }
+
+    /// How far the clock face's accents have come in.
+    #[must_use]
+    pub fn clock_accents(&self) -> clock_screen::Accents {
+        self.clock_accents
     }
 
     #[must_use]
@@ -290,8 +332,8 @@ impl Stage {
         if let GestureEvent::Tap(point) = event {
             if self.screen == Screen::AxisCheck {
                 self.axis_check.start(now);
-            } else if self.screen == Screen::Compass {
-                // Only a cover restarts calibration here.
+            } else if matches!(self.screen, Screen::Compass | Screen::Clock) {
+                // Only a cover restarts calibration on the compass, and the clock takes no taps.
             } else if prototypes::HEADER.contains(point) {
                 self.pager.advance(true, now);
             } else if self.screen == Screen::Map
@@ -341,6 +383,11 @@ impl Stage {
             self.accents = accents;
             full = true;
         }
+        let clock_accents = self.advance_clock_accents(now);
+        if clock_accents != self.clock_accents {
+            self.clock_accents = clock_accents;
+            full = true;
+        }
 
         let axis_check = self.axis_check.view();
         if axis_check != self.peripherals.axis_check {
@@ -355,20 +402,35 @@ impl Stage {
         {
             full = true;
         }
-        let compass = (self.screen == Screen::Compass && view.offset == 0 && view.neighbour.is_none())
+        // A settled compass or clock works out its own damage; anything else redraws in full.
+        let settled = view.offset == 0 && view.neighbour.is_none();
+        let compass = (self.screen == Screen::Compass && settled)
             .then_some((self.peripherals.compass, self.accents));
-        match (self.drawn_compass, compass) {
-            (Some(before), Some(after)) => compass_screen::damage(
+        let clock = (self.screen == Screen::Clock && settled).then_some((
+            self.peripherals.clock,
+            self.peripherals.zone,
+            self.clock_accents,
+        ));
+        if let (Some(before), Some(after)) = (self.drawn_compass, compass) {
+            compass_screen::damage(
                 (&before.0, before.1),
                 (&after.0, after.1),
                 &self.renderer,
                 &mut self.dial_footprint,
                 &mut self.changed,
-            ),
-            _ if full => self.changed.make_full(),
-            _ => {}
+            );
+        } else if let (Some(before), Some(after)) = (self.drawn_clock, clock) {
+            clock_screen::damage(
+                (&before.0, &before.1, before.2),
+                (&after.0, &after.1, after.2),
+                &self.renderer,
+                &mut self.changed,
+            );
+        } else if full {
+            self.changed.make_full();
         }
         self.drawn_compass = compass;
+        self.drawn_clock = clock;
         update
     }
 
@@ -432,6 +494,82 @@ impl Stage {
         }
     }
 
+    /// Advances the clock face's builds and reveals to `now`, and returns how far each has come.
+    fn advance_clock_accents(&mut self, now: Micros) -> clock_screen::Accents {
+        use clock_screen::Accents;
+        if self.screen != Screen::Clock {
+            self.clock_settled = None;
+            return Accents::FULL;
+        }
+        let view = self.pager.view();
+        let keys = clock_screen::Keys::of(&self.peripherals.clock, &self.peripherals.zone);
+        let (times, shown) = match &mut self.clock_settled {
+            Some(settled) => settled,
+            None if view.offset == 0 => {
+                let start = |delay: Micros| now + delay;
+                let times = ClockTimes {
+                    ring: start(CLOCK_ENTRY.ring),
+                    icon: start(CLOCK_ENTRY.icon),
+                    label: start(CLOCK_ENTRY.label),
+                    plate: start(CLOCK_ENTRY.plate),
+                    zone: start(CLOCK_ENTRY.zone),
+                };
+                self.clock_settled.insert((times, keys.clone()))
+            }
+            None => return Accents::HIDDEN,
+        };
+        if *shown != keys {
+            if keys.mode == clock_screen::Mode::NoData {
+                // A fault shows at once.
+                *times = ClockTimes::default();
+            } else {
+                // The icon rebuilds on any change of state, the label on a change of text, and
+                // the plate and the zone name together on any change of zone. One the entry has
+                // not reached yet shows the new text when it gets there.
+                if shown.mode != keys.mode && times.icon <= now {
+                    times.icon = now;
+                }
+                if shown.mode.label() != keys.mode.label() && times.label <= now {
+                    times.label = now;
+                }
+                if (&shown.plate, shown.zone) != (&keys.plate, keys.zone) && times.plate <= now {
+                    times.plate = now;
+                    times.zone = times.zone.max(now + (CLOCK_ENTRY.zone - CLOCK_ENTRY.plate));
+                }
+            }
+            *shown = keys;
+        }
+        let since = |start: Micros| (now >= start).then(|| now - start);
+        let fraction = |start: Micros, duration: Micros| {
+            since(start).map_or(0, |elapsed| fade(elapsed, duration))
+        };
+        let entry = Accents {
+            ring: fraction(times.ring, CLOCK_RING_FADE),
+            icon_rows: since(times.icon).map_or(0, |elapsed| (elapsed / CLOCK_ICON_ROW + 1).min(5) as u8),
+            label: fraction(times.label, CLOCK_LABEL_REVEAL),
+            plate: fraction(times.plate, CLOCK_PLATE_REVEAL),
+            zone: fraction(times.zone, CLOCK_ZONE_REVEAL),
+        };
+        let done = |start: Micros, duration: Micros| now >= start + duration;
+        self.fading |= !(done(times.ring, CLOCK_RING_FADE)
+            && done(times.icon, 4 * CLOCK_ICON_ROW)
+            && done(times.label, CLOCK_LABEL_REVEAL)
+            && done(times.plate, CLOCK_PLATE_REVEAL)
+            && done(times.zone, CLOCK_ZONE_REVEAL));
+        // Going out, the accents follow the page's offset instead, so reversing restores them.
+        let p = view.offset.unsigned_abs() as f32 / board::LCD_WIDTH as f32 / SWIPE_FADE;
+        let left = |from: f32, over: f32| 1.0 - ((p - from) / over).clamp(0.0, 1.0);
+        let amount = |from: f32, over: f32| libm::roundf(left(from, over) * 255.0) as u8;
+        let exit = Accents {
+            ring: amount(0.6, 0.4),
+            icon_rows: libm::roundf(5.0 * left(0.3, 0.5)) as u8,
+            label: amount(0.2, 0.3),
+            plate: amount(0.1, 0.3),
+            zone: amount(0.0, 0.2),
+        };
+        entry.min(exit)
+    }
+
     /// Draws the current state into `target`.
     pub fn draw<D>(&self, target: &mut D)
     where
@@ -450,6 +588,7 @@ impl Stage {
                     .neighbour
                     .map(|(page, offset)| (Screen::ALL[page], offset)),
                 compass_accents: self.accents,
+                clock_accents: self.clock_accents,
             },
             &self.renderer,
             target,

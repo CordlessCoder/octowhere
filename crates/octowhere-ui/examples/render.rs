@@ -88,6 +88,41 @@ fn main() {
         frames.push((format!("compass-{name}"), stage(Screen::Compass, compass)));
     }
 
+    let fixture = sensors();
+    for (name, clock, zone) in [
+        ("rtc", ClockState { set_from_gnss: false, ..fixture.clock }, fixture.zone),
+        ("manual", fixture.clock, ZoneState { mode: ZoneMode::Manual, ..fixture.zone }),
+        ("stopped", ClockState { stopped: true, ..fixture.clock }, fixture.zone),
+        ("no-zone", fixture.clock, ZoneState { zone: None, ..fixture.zone }),
+        ("no-data", ClockState { utc: None, ..fixture.clock }, fixture.zone),
+        (
+            "longest-zone",
+            fixture.clock,
+            ZoneState {
+                mode: ZoneMode::Manual,
+                zone: octowhere_ui::tz::DATABASE
+                    .find("America/Argentina/Buenos_Aires")
+                    .map(|zone| zone.id),
+            },
+        ),
+    ] {
+        let sensors = Sensors { clock, zone, ..fixture };
+        frames.push((format!("clock-{name}"), stage_with(Screen::Clock, calibrated, sensors, 1_000_000)));
+    }
+    // 200 ms into the clock's entry: the icon half built, the plate landing.
+    let mut entering = stage_at(Screen::Clock, calibrated, 200_000);
+    entering.step(Input { now: 200_001, ..Input::default() });
+    frames.push(("clock-entering".into(), entering));
+    let mut swiping = stage(Screen::Clock, calibrated);
+    for (step, x) in [400, 340, 280].into_iter().enumerate() {
+        swiping.step(Input {
+            now: 1_000_000 + step as u64 * 16_667,
+            touch: Some(Touch::Contacts([Some(Point::new(x, 233)), None])),
+            ..Input::default()
+        });
+    }
+    frames.push(("clock-swiping".into(), swiping));
+
     // Partway through the entry fades: the ring is in, the icon arriving, the dial not yet.
     let mut entering = stage_at(Screen::Compass, calibrated, 150_000);
     entering.step(Input {
@@ -119,8 +154,37 @@ fn stage(screen: Screen, compass: CompassView) -> Stage {
     stage_at(screen, compass, 1_000_000)
 }
 
-/// A stage on `screen` that settled at 1 µs and has stepped to `now`.
 fn stage_at(screen: Screen, compass: CompassView, now: u64) -> Stage {
+    stage_with(screen, compass, sensors(), now)
+}
+
+/// 13:07:42 on Thu 24 Sep 2026 in Europe/Dublin, found automatically, with GNSS having set the
+/// clock.
+fn sensors() -> Sensors {
+    Sensors {
+        battery_mv: Some(3_912),
+        vbus_mv: Some(5_020),
+        vsys_mv: Some(3_890),
+        gnss_bytes: 512,
+        gnss_fix: true,
+        lora_irq: 0,
+        clock: ClockState {
+            utc: Some(
+                DateTime { year: 2026, month: 9, day: 24, hour: 12, minute: 7, second: 42 }
+                    .to_unix(),
+            ),
+            set_from_gnss: true,
+            stopped: false,
+        },
+        zone: ZoneState {
+            mode: ZoneMode::Automatic,
+            zone: octowhere_ui::tz::DATABASE.find("Europe/Dublin").map(|zone| zone.id),
+        },
+    }
+}
+
+/// A stage on `screen` that settled at 1 µs and has stepped to `now`.
+fn stage_with(screen: Screen, compass: CompassView, sensors: Sensors, now: u64) -> Stage {
     let mut stage = Stage::new(PeripheralState {
         pmic_valid: true,
         tca_valid: true,
@@ -137,26 +201,7 @@ fn stage_at(screen: Screen, compass: CompassView, now: u64) -> Stage {
             magnetic_microtesla: [21_400, -3_100, -38_900],
             compass,
         }),
-        sensors: Some(Sensors {
-            battery_mv: Some(3_912),
-            vbus_mv: Some(5_020),
-            vsys_mv: Some(3_890),
-            gnss_bytes: 512,
-            gnss_fix: true,
-            lora_irq: 0,
-            clock: ClockState {
-                utc: Some(
-                    DateTime { year: 2026, month: 9, day: 24, hour: 14, minute: 7, second: 32 }
-                        .to_unix(),
-                ),
-                set_from_gnss: true,
-                stopped: false,
-            },
-            zone: ZoneState {
-                mode: ZoneMode::Automatic,
-                zone: octowhere_ui::tz::DATABASE.find("Europe/Dublin").map(|zone| zone.id),
-            },
-        }),
+        sensors: Some(sensors),
         ..Input::default()
     });
     stage.step(Input {

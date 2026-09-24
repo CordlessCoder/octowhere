@@ -2,12 +2,15 @@ use embedded_graphics::prelude::{Point, Size};
 use embedded_graphics::primitives::Rectangle;
 use octowhere_ui::{
     chrome::{Clip, Dirty, Window, FB},
+    tz::DATABASE,
     ui::{
+        clock::{ClockState, DateTime, ZoneMode, ZoneState},
+        clock_screen::Accents as ClockAccents,
         compass::CompassView,
         gesture::{LIFT_SAMPLES, Micros},
         prototypes::{COMPASS_CENTER, HEADER, PeripheralState, Screen},
         compass_screen::Accents,
-        stage::{Input, Motion, Stage, Touch, Update},
+        stage::{Input, Motion, Sensors, Stage, Touch, Update},
     },
 };
 
@@ -273,8 +276,9 @@ fn motion_redraws_only_the_screens_that_show_it() {
     assert!(driver.stage.changed().is_full());
 
     let mut driver = Driver::on(Screen::Clock);
+    driver.wait(500_000);
     driver.motion(heading(900));
-    assert!(!driver.stage.changed().is_full());
+    assert!(driver.stage.changed().is_empty());
 }
 
 #[test]
@@ -345,6 +349,12 @@ fn stages() -> Vec<(String, Stage)> {
         });
         driver.wait(500_000);
         stages.push((format!("compass {name}"), driver.stage));
+    }
+    for (name, input) in clock_walk() {
+        let mut driver = Driver::on(Screen::Clock);
+        driver.step(input);
+        driver.wait(500_000);
+        stages.push((format!("clock {name}"), driver.stage));
     }
     stages
 }
@@ -589,4 +599,147 @@ fn a_turning_dial_repaints_a_fraction_of_the_panel() {
         );
     }
     assert!(share < 0.5, "{:.1}%", share * 100.0);
+}
+
+fn clock_at(hour: u8, minute: u8, second: u8) -> ClockState {
+    ClockState {
+        utc: Some(DateTime { year: 2026, month: 10, day: 24, hour, minute, second }.to_unix()),
+        set_from_gnss: true,
+        stopped: false,
+    }
+}
+
+fn zone(name: &str, mode: ZoneMode) -> ZoneState {
+    ZoneState {
+        mode,
+        zone: DATABASE.find(name).map(|zone| zone.id),
+    }
+}
+
+fn sensors(clock: ClockState, zone: ZoneState) -> Input {
+    Input {
+        sensors: Some(Sensors { clock, zone, ..Sensors::default() }),
+        ..Input::default()
+    }
+}
+
+fn clock_accents(driver: &Driver) -> ClockAccents {
+    let mut fb = FB::boxed();
+    driver.stage.draw(&mut *fb);
+    driver.stage.clock_accents()
+}
+
+/// Readings that walk the clock through ticks, rollovers and every state.
+fn clock_walk() -> Vec<(String, Input)> {
+    let dublin = zone("Europe/Dublin", ZoneMode::Automatic);
+    let mut walk = Vec::new();
+    for second in 55..60 {
+        walk.push((format!("second {second}"), sensors(clock_at(22, 59, second), dublin)));
+    }
+    // Into the next hour, then across local midnight.
+    walk.push(("hour".into(), sensors(clock_at(23, 0, 0), dublin)));
+    walk.push(("midnight".into(), sensors(clock_at(23, 0, 1), zone("Europe/Berlin", ZoneMode::Automatic))));
+    walk.push(("manual".into(), sensors(clock_at(23, 0, 2), zone("Europe/Berlin", ZoneMode::Manual))));
+    walk.push((
+        "rtc".into(),
+        sensors(ClockState { set_from_gnss: false, ..clock_at(23, 0, 3) }, dublin),
+    ));
+    walk.push(("gnss".into(), sensors(clock_at(23, 0, 4), dublin)));
+    walk.push((
+        "stopped".into(),
+        sensors(ClockState { stopped: true, ..clock_at(0, 0, 0) }, dublin),
+    ));
+    walk.push(("set again".into(), sensors(clock_at(23, 0, 5), dublin)));
+    walk.push(("no zone".into(), sensors(clock_at(23, 0, 6), ZoneState::default())));
+    walk.push(("no zone tick".into(), sensors(clock_at(23, 1, 6), ZoneState::default())));
+    walk.push(("found".into(), sensors(clock_at(23, 1, 7), zone("America/Argentina/Buenos_Aires", ZoneMode::Automatic))));
+    walk.push(("no data".into(), sensors(ClockState { utc: None, ..clock_at(0, 0, 0) }, dublin)));
+    walk.push(("back".into(), sensors(clock_at(23, 1, 8), dublin)));
+    walk
+}
+
+#[test]
+fn clock_damage_redraws_what_changed() {
+    let mut driver = Driver::on(Screen::Clock);
+    let mut buffers = Buffers::new();
+    for (name, input) in clock_walk() {
+        // Each reading, then quiet steps through the builds and reveals it starts.
+        driver.step(input);
+        for frame in 0..30 {
+            let partial = buffers.draw(&driver.stage, driver.stage.changed());
+            let whole = render(&driver.stage);
+            let wrong = differing(partial, &whole);
+            assert_eq!(wrong, 0, "{name}, frame {frame}: {wrong} pixels differ");
+            let wrong = differing(&buffers.panel, &whole);
+            assert_eq!(wrong, 0, "{name}, frame {frame}: {wrong} pixels differ on the panel");
+            driver.step(Input::default());
+        }
+    }
+}
+
+#[test]
+fn a_second_repaints_one_small_region() {
+    let dublin = zone("Europe/Dublin", ZoneMode::Automatic);
+    let mut driver = Driver::on(Screen::Clock);
+    driver.step(sensors(clock_at(12, 7, 41), dublin));
+    driver.wait(500_000);
+    driver.step(sensors(clock_at(12, 7, 42), dublin));
+    let pixels = driver.stage.changed().pixels();
+    assert!(pixels > 0 && pixels < 1_500, "{pixels} px");
+    driver.step(sensors(clock_at(12, 7, 42), dublin));
+    assert!(driver.stage.changed().is_empty(), "an unchanged reading repainted");
+}
+
+#[test]
+fn the_clock_accents_build_after_the_page_settles_and_leave_with_the_offset() {
+    let dublin = zone("Europe/Dublin", ZoneMode::Automatic);
+    let mut driver = Driver::on(Screen::Clock);
+    driver.step(sensors(clock_at(12, 7, 42), dublin));
+    driver.wait(100_000);
+    let early = clock_accents(&driver);
+    assert!(early.icon_rows > 0 && early.icon_rows < 5, "{early:?}");
+    assert_eq!(early.zone, 0);
+    driver.wait(400_000);
+    assert_eq!(clock_accents(&driver), ClockAccents::FULL);
+    assert!(!driver.stage.is_animating());
+
+    driver.touch(Some(Point::new(400, 233)));
+    driver.touch(Some(Point::new(380, 233)));
+    let part = clock_accents(&driver);
+    assert!(part.zone < 255 && part.ring == 255, "{part:?}");
+    driver.touch(Some(Point::new(200, 233)));
+    assert_eq!(clock_accents(&driver).icon_rows, 0);
+    driver.touch(Some(Point::new(399, 233)));
+    for _ in 0..LIFT_SAMPLES {
+        driver.touch(None);
+    }
+    driver.settle();
+    assert_eq!(driver.stage.screen(), Screen::Clock);
+    assert_eq!(clock_accents(&driver), ClockAccents::FULL, "the entry replayed");
+}
+
+#[test]
+fn the_clock_rebuilds_on_a_change_and_shows_a_fault_at_once() {
+    let dublin = zone("Europe/Dublin", ZoneMode::Automatic);
+    let mut driver = Driver::on(Screen::Clock);
+    driver.step(sensors(ClockState { set_from_gnss: false, ..clock_at(12, 7, 42) }, dublin));
+    driver.wait(500_000);
+    driver.step(sensors(clock_at(12, 7, 43), dublin));
+    let resync = clock_accents(&driver);
+    assert_eq!((resync.icon_rows, resync.label, resync.plate), (1, 255, 255), "{resync:?}");
+    driver.wait(500_000);
+    driver.step(sensors(ClockState { utc: None, ..clock_at(12, 7, 43) }, dublin));
+    assert_eq!(clock_accents(&driver), ClockAccents::FULL);
+    driver.step(sensors(clock_at(12, 7, 44), dublin));
+    let back = clock_accents(&driver);
+    assert!(back.icon_rows < 5 && back.label < 255 && back.plate < 255, "{back:?}");
+}
+
+#[test]
+fn a_tap_on_the_clock_does_nothing() {
+    let mut driver = Driver::on(Screen::Clock);
+    driver.wait(500_000);
+    driver.stroke(&[HEADER.center()]);
+    driver.wait(500_000);
+    assert_eq!(driver.stage.screen(), Screen::Clock);
 }

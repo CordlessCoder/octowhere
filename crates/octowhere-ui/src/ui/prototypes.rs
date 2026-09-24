@@ -71,7 +71,7 @@ impl Screen {
     /// without them.
     #[must_use]
     const fn has_chrome(self) -> bool {
-        !matches!(self, Self::Compass | Self::AxisCheck)
+        !matches!(self, Self::Clock | Self::Compass | Self::AxisCheck)
     }
 
     #[must_use]
@@ -142,6 +142,8 @@ pub struct State {
     pub neighbour: Option<(Screen, i32)>,
     /// How far the compass's dial accents have faded in, when `screen` is the compass.
     pub compass_accents: super::compass_screen::Accents,
+    /// How far the clock face's accents have come in, when `screen` is the clock.
+    pub clock_accents: super::clock_screen::Accents,
 }
 
 pub const HEADER: Rectangle = Rectangle::new(Point::new(92, 48), Size::new(282, 50));
@@ -176,6 +178,7 @@ where
             State {
                 screen,
                 compass_accents: super::compass_screen::Accents::HIDDEN,
+                clock_accents: super::clock_screen::Accents::HIDDEN,
                 ..state
             },
             offset,
@@ -637,86 +640,12 @@ fn draw_clock<D>(
 where
     D: chrome::CoverageTarget<Color = Color>,
 {
-    let frame = PrimitiveStyle::with_stroke(chrome::GRAY, 2);
-    let panel = Rectangle::new(Point::new(64, 136), Size::new(338, 178));
-    panel.into_styled(frame).draw(target)?;
-    let clock = state.peripherals.clock;
-    let local = clock.local(state.peripherals.zone);
-    let mut time = heapless::String::<16>::new();
-    let mut date = heapless::String::<24>::new();
-    let mut zone = heapless::String::<40>::new();
-    // Without a zone the clock shows UTC, labelled as such.
-    let shown = local
-        .map(|local| (local.time, local.offset.abbreviation))
-        .or_else(|| clock.utc_time().map(|utc| (utc, "UTC")));
-    if let Some((shown, abbreviation)) = shown {
-        _ = write!(time, "{:02}:{:02}:{:02}", shown.hour, shown.minute, shown.second);
-        _ = write!(
-            date,
-            "{:04}-{:02}-{:02} {}",
-            shown.year,
-            shown.month,
-            shown.day,
-            abbreviation
-        );
-    } else {
-        time.push_str("--:--:--").unwrap();
-        date.push_str("RTC UNAVAILABLE").unwrap();
-    }
-    let status_color = match local {
-        _ if clock.utc.is_none() => {
-            zone.push_str("RTC / ERROR").unwrap();
-            chrome::RED
-        }
-        _ if clock.stopped => {
-            zone.push_str("CLOCK NOT SET").unwrap();
-            chrome::ORANGE
-        }
-        Some(local) => {
-            for c in local.zone.chars() {
-                _ = zone.push(c.to_ascii_uppercase());
-            }
-            chrome::GRAY
-        }
-        None => {
-            zone.push_str("ZONE UNKNOWN").unwrap();
-            chrome::ORANGE
-        }
-    };
-    aligned_text(
-        time.as_str(),
-        &Rectangle::new(Point::new(76, 158), Size::new(314, 62)),
+    let peripherals = &state.peripherals;
+    super::clock_screen::draw(
+        &peripherals.clock,
+        &peripherals.zone,
+        state.clock_accents,
         font,
-        chrome::WHITE,
-        chrome::BLACK,
-        28,
-        1,
-        horizontal::Center,
-        vertical::Center,
-        target,
-    )?;
-    aligned_text(
-        date.as_str(),
-        &Rectangle::new(Point::new(76, 232), Size::new(314, 34)),
-        font,
-        chrome::LIME,
-        chrome::BLACK,
-        16,
-        1,
-        horizontal::Center,
-        vertical::Center,
-        target,
-    )?;
-    aligned_text(
-        zone.as_str(),
-        &Rectangle::new(Point::new(76, 278), Size::new(314, 24)),
-        font,
-        status_color,
-        chrome::BLACK,
-        16,
-        1,
-        horizontal::Center,
-        vertical::Center,
         target,
     )
 }

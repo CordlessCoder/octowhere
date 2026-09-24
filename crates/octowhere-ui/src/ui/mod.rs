@@ -1,11 +1,13 @@
 pub mod axis_check;
 pub mod clock;
+pub mod clock_screen;
 pub mod compass;
 pub mod compass_screen;
 pub mod dirty;
 pub mod fusion;
 pub mod geometry;
 pub mod gesture;
+pub mod icon;
 pub mod imu;
 pub mod input;
 pub mod pager;

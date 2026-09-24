@@ -102,6 +102,62 @@ impl Ring {
     }
 }
 
+/// The perimeter ring every round screen draws, 2 px wide about radius 231, computed on first use.
+pub fn perimeter() -> &'static Ring {
+    static RING: embassy_sync::once_lock::OnceLock<Ring> = embassy_sync::once_lock::OnceLock::new();
+    RING.get_or_init(|| Ring::new(Point::new(233, 233), 230.0, 232.0))
+}
+
+/// Fills rows `rows` of the disc of `radius` about the pixel corner `center`, one span per row
+/// with its end pixels blended over what is there.
+pub fn disc_rows<D: CoverageTarget>(
+    target: &mut D,
+    rows: core::ops::Range<i32>,
+    center: Point,
+    radius: f32,
+    color: D::Color,
+) -> Result<(), D::Error> {
+    let bounds = target.bounding_box();
+    let mut edge: heapless::Vec<u8, 8> = heapless::Vec::new();
+    for y in rows {
+        if !target.visible(&Rectangle::new(Point::new(bounds.top_left.x, y), Size::new(bounds.size.width, 1))) {
+            continue;
+        }
+        let dy = y as f32 + 0.5 - center.y as f32;
+        if dy.abs() >= radius + 0.5 {
+            continue;
+        }
+        // Columns are offsets left of the centre corner; pixel `i` has its centre at `i + 0.5`.
+        let covered = |i: i32| coverage(radius - libm::hypotf(i as f32 + 0.5, dy));
+        let reach = libm::sqrtf((radius * radius - dy * dy).max(0.0));
+        let mut i = libm::ceilf(reach + 1.0) as i32;
+        edge.clear();
+        while i >= 0 && covered(i) < u8::MAX {
+            if covered(i) > 0 {
+                // Past the band's few edge pixels the row is solid.
+                if edge.push(covered(i)).is_err() {
+                    break;
+                }
+            }
+            i -= 1;
+        }
+        // `i` is now the outermost solid offset, and `edge` runs from the outside in.
+        let left = center.x - 1 - i;
+        let right = center.x + i;
+        if i >= 0 {
+            target.fill_solid(
+                &Rectangle::with_corners(Point::new(left, y), Point::new(right, y)),
+                color,
+            )?;
+        }
+        let length = edge.len() as i32;
+        target.blend_row(left - length, y, &edge, color);
+        edge.reverse();
+        target.blend_row(right + 1, y, &edge, color);
+    }
+    Ok(())
+}
+
 /// Fills the polygon through `corners`, then draws it and its turns by one, two and three
 /// quarters clockwise about `center`, so one fill serves all four. `raster` and `coverage` are
 /// scratch, reused across calls.
