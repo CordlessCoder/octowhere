@@ -104,6 +104,14 @@ impl Mode {
             Self::Heading(_) | Self::TopEdgeUp => chrome::WHITE,
         }
     }
+
+    /// The status icon's fill: the slab's colour, except that a heading marks its icon blue.
+    fn icon_color(self) -> Color {
+        match self {
+            Self::Heading(_) => chrome::BLUE,
+            _ => self.color(),
+        }
+    }
 }
 
 /// Whole degrees, truncated so that 359.9° reads 359.
@@ -348,7 +356,7 @@ fn draw_icon<D: DrawTarget<Color = Color>>(
     let side = ICON_SIDE;
     target.fill_solid(
         &Rectangle::new(ICON, Size::new_equal(side as u32)),
-        faded(mode.color(), amount),
+        faded(mode.icon_color(), amount),
     )?;
     for (row, bits) in mode.icon().iter().enumerate() {
         for column in (0..5).filter(|column| bits & (0b10000 >> column) != 0) {

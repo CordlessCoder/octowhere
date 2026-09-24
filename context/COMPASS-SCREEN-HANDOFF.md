@@ -128,11 +128,11 @@ board's swatches.
 
 | Token | Hex | Role today |
 | --- | --- | --- |
-| `LIME` | `#C0FE04` | Accent, ok and live states; the heading icon |
+| `LIME` | `#C0FE04` | Accent, ok and live states on other screens; unused on the compass |
 | `RED` | `#F24723` | Faults only: the NO DATA ring, slab and icon |
 | `ORANGE` | `#F1710D` | Attention: calibrating, interference, the `N` letter |
 | `PURPLE` | `#5500E4` | Header slab on other screens |
-| `BLUE` | `#409DE4` | Unused since the lubber mark went |
+| `BLUE` | `#409DE4` | The status icon while a heading shows |
 | `GRAY` | `#888E98` | The ring, minor ticks, captions and secondary text |
 | `WHITE` | `#D2D3D6` | Major ticks, most cardinal letters, the heading and top-edge slabs |
 | `BLACK` | `#000000` | The field; knockout text |
