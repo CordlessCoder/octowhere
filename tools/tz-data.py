@@ -5,12 +5,13 @@
 
 Usage, from the repository root:
 
-    uv run tools/tz-data.py <combined-with-oceans-1970.json> <cities15000.txt>
+    uv run tools/tz-data.py <combined-with-oceans.json> <cities15000.txt>
 
-The boundaries are timezone-boundary-builder's `timezones-with-oceans-1970.geojson.zip`
-release, the cities GeoNames' `cities15000.zip`, and the rules the `tzdata` package's IANA
-release. Writes `crates/tz/data/zones.bin` and the test vectors under `crates/tz/tests/data/`.
-The format is described in `crates/tz/src/data.rs`.
+The boundaries are timezone-boundary-builder's `timezones-with-oceans.geojson.zip` release,
+which keeps every zone apart. Its `-1970` and `-now` sets merge zones whose clocks agree, and
+would name Dublin's zone London's. The cities are GeoNames' `cities15000.zip`, and the rules the
+`tzdata` package's IANA release. Writes `crates/tz/data/zones.bin` and the test vectors under
+`crates/tz/tests/data/`. The format is described in `crates/tz/src/data.rs`.
 """
 import datetime as dt
 import importlib.resources
