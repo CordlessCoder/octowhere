@@ -54,10 +54,9 @@ initialization or peripheral mappings.
   where each entry's detail lives. Read it when choosing what to do next.
 - [`context/SCREEN-DESIGN-BRIEF.md`](context/SCREEN-DESIGN-BRIEF.md) briefs a design agent on
   a new screen: the hardware, what the renderer draws and what it costs, what data the screens
-  receive, and the approved screens. It was written for the settings panel's round and does
-  not yet describe the panel as built; refresh it before the next round. Captures of their states
-  are in `context/screen-captures/`, drawn by the `render` example. Keep it current when the renderer,
-  the costs or the screens' data change. The compass's earlier specification and the design
+  receive, and the approved screens. It describes the screens as built, including the
+  settings panel. Captures of their states are in `context/screen-captures/`, drawn by the
+  `render` example. Keep it current when the renderer, the costs or the screens' data change. The compass's earlier specification and the design
   round's questions and answers were removed once the firmware implemented them; git history
   has them.
 - [`context/clock_face_design/CLOCK-FACE-SPEC.md`](context/clock_face_design/CLOCK-FACE-SPEC.md)
@@ -73,6 +72,9 @@ initialization or peripheral mappings.
   [`context/settings-panel/IMPLEMENTATION-RESPONSE.md`](context/settings-panel/IMPLEMENTATION-RESPONSE.md)
   tells the design agent what was built, where the build interpreted the spec, and the UI's
   state for a next round.
+  [`context/settings-panel/SETTINGS-DESIGN-RESPONSE.md`](context/settings-panel/SETTINGS-DESIGN-RESPONSE.md)
+  is the design's reply, whose two changes are built: a fixed-time settle for pages and the
+  panel, and a save that starts after its confirming frame.
 - [`context/HARDWARE-VERIFICATION.md`](context/HARDWARE-VERIFICATION.md) lists open hardware
   questions from static review. They are questions, not confirmed defects.
 - [`context/IMPLEMENTATION.md`](context/IMPLEMENTATION.md) is a finished multi-agent brief kept as

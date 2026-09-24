@@ -127,7 +127,8 @@ As approved in `settings-brightness.png`. Layout, as for the zone picker:
 - A horizontal drag anywhere in the field sets the level from the finger's x over the track:
   p = clamp(round(100 (x − 66) / 334), 10, 100). Each change applies to the controller at once,
   so the panel shows the level live.
-- A tap in the field (rows 186–329) stores the level and returns to the panel.
+- A tap anywhere below the top cap stores the level and returns to the panel, as the owner
+  decided (2026-09-24): the hint under the field said to tap, and a tap on it did nothing.
 - `CANCEL` (top cap, rows 0–150) restores the level the editor opened with, and returns to the
   panel. A cover restores it too, then goes to the clock face.
 - The stored level applies at boot. Today the firmware sets 120 at boot.
@@ -209,6 +210,11 @@ leave as in a sideways swipe out, driven by the vertical offset (clock face spec
 
 Closing reverses it. The face returns from below with its accents hidden and runs its own entry
 once it settles.
+
+After a release, the panel, like a page, eases out cubically over 160 ms to open or closed,
+whatever the distance, and the entry starts on the frame it lands (design response,
+2026-09-24). A stored setting's write starts only once the panel showing the new value has
+reached the screen, so the pause while it saves follows the confirmation.
 
 ### Panel entry
 
@@ -309,6 +315,8 @@ The owner settled these on 24 Sep 2026.
 9. A cover on any screen goes to the clock face, discarding any edit. The compass loses its
    cover-to-recalibrate gesture, its `COVER SCREEN TO RECAL` hint and the divider above it.
    Recalibration is from the COMPASS cell only.
+10. On the brightness editor, a tap anywhere below the top cap keeps the level, not only a tap
+    in the field.
 
 ## Verification record
 

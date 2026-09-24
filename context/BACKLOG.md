@@ -12,18 +12,20 @@ until the feature set is complete, because profiling an incomplete firmware pric
   at the TE edge the panel means (its TE mode and scan line), whether it overtakes the panel's
   scan, and whether a timeout flush is involved. The code is `second_core` in `src/main.rs` and
   `src/drivers/co5300.rs`.
+- Shorten settings saves, ahead of other work that touches settings (design response,
+  2026-09-24). Settings are in ekv now, and each write transaction starts a new file that
+  erases a whole 4 KiB page first, so every save erases. The first saved brightness took
+  331 ms, all of it with core 1 held, so the display stopped updating for that long. The frame
+  loop now queues the write only once the frame confirming it has been flushed, so the freeze
+  follows the confirmation rather than hiding it. The sequential-storage map it replaced took
+  about 1.3 ms for a write into a sector with room (`bench/zone-lookup`). Options: hold core 1
+  only around each flash operation rather than the whole transaction, erase a spare page ahead
+  of time, defer the write until the panel is idle, or batch saves.
 - Smoother transitions between the compass's states, such as interference coming and going
   (owner, 2026-09-24). Today the slab recolours, the state line appears and the icon swaps in one
   frame, as the compass animation addendum specifies ("the state line is never animated").
   Changing that is a design change to an approved screen, so it starts with a design round
   against `context/compass-animation/COMPASS-ANIMATION-ADDENDUM.md`.
-
-- Shorten settings saves. Settings are in ekv now, and each write transaction starts a new file
-  that erases a whole 4 KiB page first, so every save erases. The first saved brightness took
-  331 ms, all of it with core 1 held, so the display stopped updating for that long. The
-  sequential-storage map it replaced took about 1.3 ms for a write into a sector with room
-  (`bench/zone-lookup`). Options: hold core 1 only around each flash operation rather than the
-  whole transaction, erase a spare page ahead of time, or batch saves.
 
 - Lay out the 512 KiB of SRAM deliberately. esp-hal's linker script gives `.data`, `.bss` and
   core 0's stack 341,760 bytes (`0x3FC88000` to `0x3FCDB700`); the stack is whatever the other
