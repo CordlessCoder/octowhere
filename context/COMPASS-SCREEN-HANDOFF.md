@@ -96,19 +96,18 @@ geometry, icon patterns and colour mapping are constants at the top of the file.
 
 Where the implementation differs from the handoff, or fills a gap in it:
 
-- The icon sits at y 87 and the caption's baseline at 138, not 83 and 132. The owner asked for
-  even gaps between icon, caption and slab; the inks now stand 7 px apart.
-- The direction abbreviation is 36 px, not 32, with its baseline unchanged. The owner asked for
-  it to sit evenly between the slab and the tilt line; it now has 16 px of space above and below.
-  The interference line reads `INTERFERENCE` rather than `MAG INTERFERENCE`, at the same 36 px
-  and spacing. `MAG INTERFERENCE` at that size is 330 px wide and runs into an `E` or `W` letter
-  within about 10° either side of north or south, so the owner shortened it. A unit test keeps
-  the status lines inside the letters' reach.
+- The layout follows [`compass-design-changes-since-answers.md`](compass-design-changes-since-answers.md):
+  no direction abbreviation, and one slab for every state at y 186–276, 16 px above the tilt
+  line. The icon, caption, state line and slab stack as one group with 7 px between their inks.
+  The state line (`INTERFERENCE`, `TURN ALL WAYS`, `TOP EDGE UP`) is centred by its ink in an
+  18 px band above the slab. Heading and NO DATA leave the band empty, so the icon and caption
+  never move. The owner reviewed this in the simulator. A unit test keeps the state lines in
+  their band and inside the turning letters' reach.
 - Unstated sizes were chosen to match the concept: `NO DATA` in Shapiro 28 px, the cardinal
   letters in Shapiro 40 px, `---` in the readout's own style with its ink centred in the slab
-  on both axes, captions `GRAY` except
-  `CALIBRATION`. `TURN ALL WAYS`, `TOP EDGE UP`, the tilt and the hint are PP Fraktion Mono
-  Regular; the readout, captions and the cardinal and interference lines are Bold.
+  on both axes, captions `GRAY` except `CALIBRATION`. `TURN ALL WAYS`, `TOP EDGE UP`, the tilt
+  and the hint are PP Fraktion Mono Regular; the readout, captions and `INTERFERENCE` (24 px)
+  are Bold.
 - A cover is taken only on the compass page at rest with `live` set, once per hand. A held hand
   keeps reporting the cover, and the controller does not always report it lifting, so another
   cover counts once 260 ms pass without a cover report, or after a finger touches. An ordinary
@@ -129,7 +128,7 @@ board's swatches.
 
 | Token | Hex | Role today |
 | --- | --- | --- |
-| `LIME` | `#C0FE04` | Accent, ok and live states; the heading icon and cardinal line |
+| `LIME` | `#C0FE04` | Accent, ok and live states; the heading icon |
 | `RED` | `#F24723` | Faults only: the NO DATA ring, slab and icon |
 | `ORANGE` | `#F1710D` | Attention: calibrating, interference, the `N` letter |
 | `PURPLE` | `#5500E4` | Header slab on other screens |

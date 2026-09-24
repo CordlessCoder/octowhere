@@ -21,20 +21,29 @@ pub const CENTER: Point = Point::new(233, 233);
 /// The perimeter ring's middle radius and stroke.
 const RING_RADIUS: f32 = 231.0;
 const RING_STROKE: f32 = 2.0;
-const SLAB: Rectangle = Rectangle::new(Point::new(135, 145), Size::new(196, 91));
-/// The icon, caption and slab stack with even 7 px gaps between their inks.
-const ICON: Point = Point::new(217, 87);
+/// Every state shares the slab, so a state change does not move it. It ends 16 px above the tilt
+/// line's ink.
+const SLAB: Rectangle = Rectangle::new(Point::new(135, 186), Size::new(196, 91));
+/// The gap between the inks of the icon, caption, state line and slab, which stack as one group.
+const GROUP_GAP: i32 = 7;
+/// Where a state's line of text sits between the caption and the slab, centred by its ink. It is
+/// as tall as the tallest such line, `INTERFERENCE`.
+const STATUS_BAND: Rectangle =
+    Rectangle::new(Point::new(0, SLAB.top_left.y - GROUP_GAP - 18), Size::new(466, 18));
+/// The caption's antialiased ink reaches its baseline row.
+const CAPTION_BASELINE: i32 = STATUS_BAND.top_left.y - GROUP_GAP - 1;
+const CAPTION_HEIGHT: i32 = 12;
 const ICON_MODULE: i32 = 5;
 const ICON_PADDING: i32 = 4;
-const CAPTION_BASELINE: i32 = 138;
+const ICON_SIDE: i32 = 2 * ICON_PADDING + 5 * ICON_MODULE;
+const ICON: Point = Point::new(
+    217,
+    CAPTION_BASELINE + 1 - CAPTION_HEIGHT - GROUP_GAP - ICON_SIDE,
+);
 /// The readout's first pen position and its suffix's, both on their baselines. Heading and
 /// calibration share them, so completing a calibration does not move the digits.
-const READOUT: Point = Point::new(143, 224);
-const SUFFIX: Point = Point::new(298, 188);
-const STATUS_BASELINE: i32 = 277;
-/// The size of the direction abbreviation and `INTERFERENCE`, which leaves either evenly spaced
-/// between the slab and the tilt line.
-const STATUS_SIZE: u32 = 36;
+const READOUT: Point = Point::new(143, SLAB.top_left.y + 79);
+const SUFFIX: Point = Point::new(298, SLAB.top_left.y + 43);
 const TILT_BASELINE: i32 = 309;
 const DIVIDER: Rectangle = Rectangle::new(Point::new(138, 321), Size::new(191, 1));
 const HINT_BASELINE: i32 = 338;
@@ -43,11 +52,6 @@ const LETTER_RADIUS: f32 = 172.0;
 /// The ring's coverage, computed on first use.
 static RING: embassy_sync::once_lock::OnceLock<super::smooth::Ring> =
     embassy_sync::once_lock::OnceLock::new();
-
-const CARDINALS: [&str; 16] = [
-    "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW",
-    "NNW",
-];
 
 /// What the screen shows, in the order that decides between them.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -106,12 +110,6 @@ impl Mode {
 #[must_use]
 pub fn degrees(decidegrees: u16) -> u16 {
     decidegrees / 10 % 360
-}
-
-/// The 16-point abbreviation whose sector, 22.5° wide and centred on it, holds the heading.
-#[must_use]
-pub fn cardinal(decidegrees: u16) -> &'static str {
-    CARDINALS[usize::from((decidegrees % 3600 + 112) / 225 % 16)]
 }
 
 /// One value for each group of the dial's accents: by default how far it has faded in, 0 to
@@ -240,18 +238,9 @@ where
     }
 
     let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
-    let (status, color, size, index) = match mode {
-        Mode::Heading(_) => (
-            cardinal(view.heading_decidegrees.unwrap_or(0)),
-            chrome::LIME,
-            STATUS_SIZE,
-            FRAKTION_BOLD,
-        ),
-        Mode::Interference(_) => ("INTERFERENCE", chrome::ORANGE, STATUS_SIZE, FRAKTION_BOLD),
-        Mode::Calibrating(_) => ("TURN ALL WAYS", chrome::GRAY, 19, FRAKTION),
-        _ => ("TOP EDGE UP", chrome::GRAY, 20, FRAKTION),
-    };
-    centred(&style(font, color, size, index), status, CENTER.x, STATUS_BASELINE, field)?;
+    if let Some((status, style, baseline)) = status_line(mode, font) {
+        centred(&style, status, CENTER.x, baseline, field)?;
+    }
     let mut tilt = heapless::String::<24>::new();
     _ = write!(tilt, "P {:+03}  R {:+03}", view.pitch_deg, view.roll_deg);
     centred(&style(font, chrome::GRAY, 23, FRAKTION), &tilt, CENTER.x, TILT_BASELINE, field)?;
@@ -263,6 +252,26 @@ where
         HINT_BASELINE,
         field,
     )
+}
+
+/// The line of text a state puts above the slab, if it has one, with the baseline that centres its
+/// ink in the status band.
+fn status_line(
+    mode: Mode,
+    font: &FontdueRenderer<'static, Color>,
+) -> Option<(&'static str, FontdueRenderer<'static, Color>, i32)> {
+    let (text, color, size, index) = match mode {
+        Mode::Interference(_) => ("INTERFERENCE", chrome::ORANGE, 24, FRAKTION_BOLD),
+        Mode::Calibrating(_) => ("TURN ALL WAYS", chrome::GRAY, 19, FRAKTION),
+        Mode::TopEdgeUp => ("TOP EDGE UP", chrome::GRAY, 20, FRAKTION),
+        Mode::Heading(_) | Mode::NoData => return None,
+    };
+    let style = style(font, color, size, index);
+    let ink = style.baseline_bounds(text, Point::zero());
+    let baseline = STATUS_BAND.top_left.y
+        + (STATUS_BAND.size.height as i32 - ink.size.height as i32) / 2
+        - ink.top_left.y;
+    Some((text, style, baseline))
 }
 
 /// The ticks and the cardinal letters, turned so the top edge reads `heading`.
@@ -336,7 +345,7 @@ fn draw_icon<D: DrawTarget<Color = Color>>(
     if amount == 0 {
         return Ok(());
     }
-    let side = 2 * ICON_PADDING + 5 * ICON_MODULE;
+    let side = ICON_SIDE;
     target.fill_solid(
         &Rectangle::new(ICON, Size::new_equal(side as u32)),
         faded(mode.color(), amount),
@@ -423,14 +432,9 @@ mod tests {
     }
 
     #[test]
-    fn headings_truncate_and_sectors_split_halfway() {
+    fn headings_truncate() {
         assert_eq!(degrees(3599), 359);
         assert_eq!(degrees(0), 0);
-        assert_eq!(cardinal(3599), "N");
-        assert_eq!(cardinal(112), "N");
-        assert_eq!(cardinal(113), "NNE");
-        assert_eq!(cardinal(470), "NE");
-        assert_eq!(cardinal(1800), "S");
     }
 
     fn renderer() -> FontdueRenderer<'static, Color> {
@@ -482,19 +486,21 @@ mod tests {
     }
 
     #[test]
-    fn the_status_lines_clear_the_letters_at_any_heading() {
+    fn the_status_lines_sit_in_their_band_and_clear_the_letters() {
         let font = renderer();
-        for (text, size, index) in [
-            ("INTERFERENCE", STATUS_SIZE, FRAKTION_BOLD),
-            ("WNW", STATUS_SIZE, FRAKTION_BOLD),
-            ("TURN ALL WAYS", 19, FRAKTION),
-        ] {
-            let style = style(&font, chrome::BLACK, size, index);
+        for mode in [Mode::Interference(0), Mode::Calibrating(0), Mode::TopEdgeUp] {
+            let (text, style, baseline) = status_line(mode, &font).unwrap();
             let left = CENTER.x - libm::roundf(style.advance(text) / 2.0) as i32;
-            let ink = style.baseline_bounds(text, Point::new(left, STATUS_BASELINE));
+            let ink = style.baseline_bounds(text, Point::new(left, baseline));
+            let band = STATUS_BAND;
+            assert!(
+                ink.top_left.y >= band.top_left.y
+                    && ink.bottom_right().unwrap().y <= band.bottom_right().unwrap().y,
+                "{text} leaves the status band: {ink:?}"
+            );
             // The letters turn with the heading, so one can sit at any angle; a 40 px letter
             // reaches about 20 px inside its centre's radius.
-            let corner = ink.bottom_right().unwrap() - CENTER;
+            let corner = ink.top_left - CENTER;
             let reach = libm::hypotf(corner.x as f32, corner.y as f32);
             assert!(reach < LETTER_RADIUS - 20.0, "{text} reaches r {reach}: {ink:?}");
         }
