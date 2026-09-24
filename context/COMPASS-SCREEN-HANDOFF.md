@@ -6,8 +6,17 @@ with [`marathon-ui-cross-project-handoff.md`](marathon-ui-cross-project-handoff.
 aesthetic doctrine, and the "Design language" section of [`AGENTS.md`](../AGENTS.md), whose rules
 bind the code.
 
-The owner reviews every change on the physical device. There is no simulator or screenshot path:
-a change is judged by building, flashing and looking at the panel.
+The owner reviews every change on the physical device. Two host tools render the same drawing
+code first, pixel for pixel, at the panel's resolution:
+
+- `cargo +stable run --manifest-path crates/octowhere-ui/Cargo.toml --target host-tuple --example
+  render` writes every screen, and the compass in each state, to PNGs under
+  `crates/octowhere-ui/target/renders/`. Add a state to `examples/render.rs` to see it.
+- `cargo +stable run --release --manifest-path tools/ui-sim/Cargo.toml --target host-tuple` opens
+  a window: the mouse is the touchscreen, and the keys set heading, tilt, calibration and
+  disturbance. The source's header lists the keys, and P saves a PNG.
+
+Neither says anything about draw time on the target, or about how colours look on the AMOLED.
 
 ## Device
 
@@ -56,7 +65,7 @@ read correctly when cut off by a vertical edge anywhere across it.
 
 ### Data
 
-`CompassView` in `src/ui/compass.rs` is everything the screen receives:
+`CompassView` in `crates/octowhere-ui/src/ui/compass.rs` is everything the screen receives:
 
 | Field | Meaning |
 | --- | --- |
@@ -158,8 +167,9 @@ Open questions about the current layout:
 
 ## Colour tokens
 
-Colours come only from these tokens in `src/chrome.rs`. A new colour is added there, with a value
-from [`palette-reference.md`](palette-reference.md), which records the reference board's swatches.
+Colours come only from these tokens in `crates/octowhere-ui/src/chrome.rs`. A new colour is added
+there, with a value from [`palette-reference.md`](palette-reference.md), which records the reference
+board's swatches.
 
 | Token | Hex | Role today |
 | --- | --- | --- |
@@ -178,8 +188,9 @@ green, pale green, and a neutral ramp.
 ## What the renderer can draw
 
 The firmware is `no_std` Rust. The screen is one function, `draw_compass` in
-`src/ui/prototypes.rs`. It draws into a `chrome::CoverageTarget`: an embedded-graphics
-`DrawTarget` over an RGB565 framebuffer that also takes antialiased coverage a row at a time.
+`crates/octowhere-ui/src/ui/prototypes.rs`. It draws into a `chrome::CoverageTarget`: an
+embedded-graphics `DrawTarget` over an RGB565 framebuffer that also takes antialiased coverage a
+row at a time.
 
 - **Fonts:** two, both limited to printable ASCII (space to `~`). There is no `°` or other symbol
   glyph. A degree mark would have to be drawn as a shape. The full font files do contain `°`, and
@@ -196,8 +207,8 @@ The firmware is `no_std` Rust. The screen is one function, `draw_compass` in
 - **Filled rectangles:** axis-aligned, solid, no antialiasing needed.
 - **embedded-graphics primitives:** circles, arcs, lines, triangles, polygons and rounded
   rectangles. These are not antialiased and look stepped at this density.
-- **`smooth::Ring`** (`src/ui/smooth.rs`): an antialiased ring between two radii about a pixel
-  corner. Its coverage is computed once and redrawn each frame.
+- **`smooth::Ring`** (`crates/octowhere-ui/src/ui/smooth.rs`): an antialiased ring between two radii
+  about a pixel corner. Its coverage is computed once and redrawn each frame.
 - **`smooth::polygon_quarters`:** fills any polygon with fontdue's antialiased path fill, then
   draws it at all four quarter turns about a pixel corner. Built for the ticks, where each fill
   serves four ticks.

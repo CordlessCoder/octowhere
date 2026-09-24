@@ -1,6 +1,6 @@
 # Graphics prototypes
 
-`src/ui/prototypes.rs` renders one map/status screen through three architecture
+`crates/octowhere-ui/src/ui/prototypes.rs` renders one map/status screen through three architecture
 boundaries. `ACTIVE_ARCHITECTURE` selects the version flashed by the firmware.
 
 | Architecture | Ownership model | Strength | Risk to measure |

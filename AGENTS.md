@@ -12,18 +12,24 @@ initialization or peripheral mappings.
 
 ## Repository map
 
-- `src/drivers/` owns the display path: QSPI, the CO5300 panel, and the PSRAM framebuffer.
+- `src/drivers/` owns the display path: QSPI, the CO5300 panel, and flushing the framebuffer to
+  it.
 - `src/peripherals/` owns the I2C devices: touch, power, RTC, magnetometer, and the shared-bus
   helper. The IMU comes from `ph-qmi8658` rather than a local module.
-- `src/ui/` owns dirty tracking, geometry, touch input mapping, IMU presentation, and the screen
-  prototypes.
-- `src/chrome.rs` is the font and draw-target layer. `src/main.rs` holds both cores, the sensor
-  task, and the frame loop.
+- `crates/octowhere-ui/` is everything between the sensors and the pixels, with no board
+  dependency, so it also builds for the host. `src/ui/` there owns dirty tracking, geometry,
+  touch input mapping, IMU presentation, the compass maths, the screen prototypes, and `stage`,
+  which holds the screen state and turns touch and readings into redraws. `src/chrome.rs` is the
+  font and draw-target layer, and `src/framebuffer.rs` holds the pixels. The firmware re-exports
+  its `chrome`, `framebuffer` and `ui` modules, so `octowhere::ui::…` paths still resolve.
+- `src/main.rs` holds both cores, the sensor and motion tasks, and the frame loop, which feeds
+  the stage and flushes what it draws.
 - `src/board.rs` holds display geometry, the TCA9554 line indices, and the I2C addresses that
   external crates take. GPIO numbers are not there: they live at the binding sites in `main.rs`,
   and `docs/hardware-notes.md` has the pin map.
-- `crates/` holds the local `lc76g`, `sx127x-lora` and `sx127x-common` crates.
-- `host-tests/` is the std test harness.
+- `crates/` also holds the local `lc76g`, `sx127x-lora` and `sx127x-common` crates.
+- `host-tests/` is the std test harness for the board-side modules.
+- `tools/ui-sim/` runs the stage in a desktop window. `tools/` also holds the bench scripts.
 - `docs/` holds hardware reference: the topology notes, the datasheet pack, and captured GNSS,
   LoRa and compass traces under `docs/logs/`.
 - `context/` holds the agent-facing documents below. This file stays at the root.
@@ -36,7 +42,8 @@ initialization or peripheral mappings.
   agent on the compass screen: its states, current layout, the panel's physical size and what
   the renderer can draw.
 - [`context/GRAPHICS-PROTOTYPES.md`](context/GRAPHICS-PROTOTYPES.md) explains the three renderer
-  architectures in `src/ui/prototypes.rs` and the `ACTIVE_ARCHITECTURE` constant that selects one.
+  architectures in `crates/octowhere-ui/src/ui/prototypes.rs` and the `ACTIVE_ARCHITECTURE`
+  constant that selects one.
 - [`context/HARDWARE-VERIFICATION.md`](context/HARDWARE-VERIFICATION.md) lists open hardware
   questions from static review. They are questions, not confirmed defects.
 - [`context/IMPLEMENTATION.md`](context/IMPLEMENTATION.md) is a finished multi-agent brief kept as
@@ -47,7 +54,7 @@ initialization or peripheral mappings.
 - [`context/marathon-ui-cross-project-handoff.md`](context/marathon-ui-cross-project-handoff.md)
   is the design doctrine. See "Design language" below.
 - [`context/palette-reference.md`](context/palette-reference.md) records the colour values from the
-  reference board and the role each one plays in `src/chrome.rs`.
+  reference board and the role each one plays in `chrome.rs`.
 
 `IMPLEMENTATION.md` tells the reader to keep full-frame flushing until a hardware check passes. It
 is a record of what that round was told, not current instruction, and the firmware now flushes
@@ -66,17 +73,34 @@ cargo +stable test --manifest-path host-tests/Cargo.toml \
   --target x86_64-unknown-linux-gnu --locked
 cargo +stable clippy --manifest-path host-tests/Cargo.toml \
   --target x86_64-unknown-linux-gnu --locked --all-targets -- -D warnings
+cargo +stable test --manifest-path crates/octowhere-ui/Cargo.toml \
+  --target x86_64-unknown-linux-gnu --locked
+cargo +stable clippy --manifest-path crates/octowhere-ui/Cargo.toml \
+  --target x86_64-unknown-linux-gnu --locked --all-targets -- -D warnings
+cargo +stable clippy --release --manifest-path tools/ui-sim/Cargo.toml \
+  --target x86_64-unknown-linux-gnu --locked -- -D warnings
 ```
+
+The firmware's clippy run does not reach `crates/octowhere-ui`, because a path dependency is not
+a workspace member. Its own clippy line above is what lints it. The stable clippy there is newer
+than the `esp` one and flags more.
 
 `cargo run --release` uses the configured `espflash` runner to flash and monitor the board.
 
 Every release build emits one `linker_messages` warning about a LOAD segment with RWX permissions.
 It is expected for this target and is not a regression.
 
-The host harness pulls production modules in by `#[path]` rather than copying them, so a module
-reachable from `host-tests/src/lib.rs` must keep compiling for std on x86. Adding a host test for
-new logic means wiring that module in the same way. Board-only drivers stay out of the harness.
-See [`host-tests/README.md`](host-tests/README.md).
+The UI runs on the host through `crates/octowhere-ui`. Its tests drive a `Stage` with taps,
+swipes and readings, and check that a redraw clipped to tiles matches a full one. The `render`
+example writes every screen to PNG, and `tools/ui-sim` is the interactive window. Both render
+through the firmware's own drawing code, so they show what the panel will show, but they say
+nothing about draw time on the target. Commands are in the headers of `examples/render.rs` and
+`tools/ui-sim/src/main.rs`. Keep the crate free of board dependencies: that is what lets the host
+build it, and its manifest enforces it.
+
+`host-tests` pulls the board-side modules it can test (`util` and the I2C peripherals) in by
+`#[path]` rather than copying them, so those must keep compiling for std on x86. Board-only
+drivers stay out of it. See [`host-tests/README.md`](host-tests/README.md).
 
 The data-cache settings in [`.cargo/config.toml`](.cargo/config.toml) affect drawing and SPI flush
 timings. Change them only with a measurement.
@@ -89,7 +113,7 @@ Weigh that cost before adding one.
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 464,192 bytes, 11.24% of the 4,128,768-byte app partition.
+The image is currently 464,496 bytes, 11.25% of the 4,128,768-byte app partition.
 
 `panic = "immediate-abort"` is the size lever, and it is not taken. It needs
 `cargo-features = ["panic-immediate-abort"]` restored to unlock it, which costs the drift check
@@ -165,8 +189,10 @@ The display path is split across:
 - [`src/drivers/qspi_bus.rs`](src/drivers/qspi_bus.rs), which owns QSPI command transfers.
 - [`src/drivers/co5300.rs`](src/drivers/co5300.rs), which initializes the panel, handles TE,
   address windows, brightness, and double-buffered DMA pixel streaming.
-- [`src/drivers/framebuffer.rs`](src/drivers/framebuffer.rs), which stores draw-target pixels in
-  PSRAM and aligns partial flushes to the controller's pixel granularity.
+- [`crates/octowhere-ui/src/framebuffer.rs`](crates/octowhere-ui/src/framebuffer.rs), which
+  stores draw-target pixels. The firmware allocates it in PSRAM.
+- [`src/drivers/framebuffer.rs`](src/drivers/framebuffer.rs), whose `Flush` trait streams the
+  framebuffer to the panel and aligns partial flushes to the controller's pixel granularity.
 
 `chrome::Color` selects the framebuffer and panel colour format. Keep the format consistent through
 the QSPI, display, framebuffer, and UI layers.
@@ -214,7 +240,8 @@ errata workaround, are in [`docs/hardware-notes.md`](docs/hardware-notes.md).
 - Core 1 uses the 8 KiB `CORE1_STACK` static.
 
 Check the allocator and framebuffer definitions in [`src/main.rs`](src/main.rs) and
-[`src/chrome.rs`](src/chrome.rs) when changing memory placement.
+[`crates/octowhere-ui/src/chrome.rs`](crates/octowhere-ui/src/chrome.rs) when changing memory
+placement.
 
 ## Cargo features
 
@@ -230,8 +257,9 @@ All default off. None belongs in normal firmware behavior.
 
 ## Fonts and layout
 
-The active UI uses the compile-time fontdue renderer in [`src/chrome.rs`](src/chrome.rs), with the
-Marathon Shapiro and PPFraktion font data under `assets/`. `embedded-layout` supplies the current
+The active UI uses the compile-time fontdue renderer in
+[`crates/octowhere-ui/src/chrome.rs`](crates/octowhere-ui/src/chrome.rs), with the Marathon Shapiro
+and PPFraktion font data under `assets/`. `embedded-layout` supplies the current
 text alignment helpers. The legacy u8g2 conversion files under `assets/` are not part of the active
 renderer.
 
@@ -248,7 +276,8 @@ earlier product, so it describes the visual language and the working method, not
 screens. Read it before changing how anything looks. These rules constrain the code directly, and
 they hold even while the design is provisional:
 
-- Colour tokens are a single source of truth. They live in [`src/chrome.rs`](src/chrome.rs) as
+- Colour tokens are a single source of truth. They live in
+  [`crates/octowhere-ui/src/chrome.rs`](crates/octowhere-ui/src/chrome.rs) as
   `LIME`, `RED`, `ORANGE`, `PURPLE`, `BLUE`, `GRAY`, `WHITE`, `BLACK`. Every one is a value from the
   reference board except `BLACK`, which stays pure for panel contrast. Define a new colour there,
   not at the call site, and take its value from
@@ -257,7 +286,7 @@ they hold even while the design is provisional:
 - A screen must not imply data, capability or state the system does not have. No invented sensor
   readings, no status word without a condition behind it, no control with no implementation path.
   Synthetic values are for visual exploration and must be recognisable as synthetic. The map
-  markers and coordinates in `src/ui/prototypes.rs` are static fixtures, not a position fix.
+  markers and coordinates in `prototypes.rs` are static fixtures, not a position fix.
 - Saturated fills carry black knockout text and black symbols. That pairing is the look, so a
   bright slab with white text on it is a departure rather than a variation.
 - Symbols are built from primitives on integer geometry, not drawn as bitmaps. A new icon is
@@ -265,23 +294,27 @@ they hold even while the design is provisional:
 - A screen that suggests a new capability is a proposal about behaviour, not a visual change. Add
   the capability first, or leave the control out.
 
-`src/ui/prototypes.rs` is the applied result, and
+`crates/octowhere-ui/src/ui/prototypes.rs` is the applied result, and
 [`context/GRAPHICS-PROTOTYPES.md`](context/GRAPHICS-PROTOTYPES.md) records how it is structured.
 
 ## Dependencies and conventions
 
-The root manifest owns dependency versions, features, and git patches.
+The root manifest owns the firmware's dependency versions, features, and git patches. Each local
+crate owns its own, and the host crates keep their own lockfiles.
 
-Two patches are load-bearing. `fontdue` and `fontdue-macros` are forked for the
+Two forks are load-bearing. `fontdue` and `fontdue-macros` are forked for the
 `fontdue_font_from_file!` compile-time font macro, `FontRepr`, and the `raster` module, none of
-which exist upstream. `tca9554` is forked to replace the atomic register masks with a mutex-guarded
-cache and a `RawMutex` type parameter. Dropping either patch will not compile.
+which exist upstream. They are git dependencies of `crates/octowhere-ui`, whose manifest holds the
+pin, and the firmware reaches them as `octowhere::fontdue`. `tca9554` is forked to replace the
+atomic register masks with a mutex-guarded cache and a `RawMutex` type parameter, and is a patch
+in the root manifest. Dropping either will not compile.
 
-`lc76g`, `sx127x-lora` and `sx127x-common` are local path crates. `crates/sx127x-lora` publishes
-the package name `sx127xlora`, so the manifest key and the directory differ. Check
-[`Cargo.toml`](Cargo.toml) before relying on a fork-only API or changing a dependency.
+`octowhere-ui`, `lc76g`, `sx127x-lora` and `sx127x-common` are local path crates.
+`crates/sx127x-lora` publishes the package name `sx127xlora`, so the manifest key and the directory
+differ. Check [`Cargo.toml`](Cargo.toml) before relying on a fork-only API or changing a dependency.
 
-`src/lib.rs` deliberately carries `#![expect(unused)]` while the UI is being built. `PERF:` comments
+`src/lib.rs` and `crates/octowhere-ui/src/lib.rs` deliberately carry `#![expect(unused)]` while
+the UI is being built. `PERF:` comments
 mark measured or suspected hot spots and open questions; they are context, not a task list.
 
 ## Writing conventions

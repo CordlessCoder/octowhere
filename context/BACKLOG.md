@@ -87,11 +87,13 @@ What is established:
 
 Candidates to measure:
 
-- Glyph coverage blending. `lerp_u8` in [`src/chrome.rs`](../src/chrome.rs) runs three scalar
+- Glyph coverage blending. `lerp_u8` in
+  [`crates/octowhere-ui/src/chrome.rs`](../crates/octowhere-ui/src/chrome.rs) runs three scalar
   channel lerps per covered pixel. The SIMD extension could blend many at once.
-- Framebuffer fills, copies and flush staging in
-  [`src/drivers/framebuffer.rs`](../src/drivers/framebuffer.rs). 128-bit loads and stores help only
-  where PSRAM bandwidth is not the limit, so measure the bandwidth first.
+- Framebuffer fills and copies in
+  [`crates/octowhere-ui/src/framebuffer.rs`](../crates/octowhere-ui/src/framebuffer.rs), and flush
+  staging in [`src/drivers/framebuffer.rs`](../src/drivers/framebuffer.rs). 128-bit loads and stores
+  help only where PSRAM bandwidth is not the limit, so measure the bandwidth first.
 - fontdue rasterisation. The rotated-label path is the fontdue session's call, using the numbers
   above. Its outline accumulation is the other candidate.
 - Screen-rotation maths from the magnetometer: heading, `atan2`, vector normalisation. `rsqrt0.s`

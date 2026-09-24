@@ -43,7 +43,8 @@ The board does not say what they are for.
 
 ## What the code uses
 
-Every constant in [`src/chrome.rs`](../src/chrome.rs) is a board value except `BLACK`.
+Every constant in [`crates/octowhere-ui/src/chrome.rs`](../crates/octowhere-ui/src/chrome.rs) is a
+board value except `BLACK`.
 
 | Token | Hex | Board position | Role |
 | --- | --- | --- | --- |
