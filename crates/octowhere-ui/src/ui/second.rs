@@ -285,7 +285,7 @@ impl Brightness {
                 self.restore(effects);
                 Next::Panel
             }
-            GestureEvent::Tap(point) if in_field(point) => {
+            GestureEvent::Tap(_) => {
                 effects.store = Some(Store::Brightness(self.level));
                 Next::Panel
             }

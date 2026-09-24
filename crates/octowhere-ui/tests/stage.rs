@@ -871,7 +871,7 @@ fn the_compass_cell_restarts_calibration_and_closes_to_the_compass() {
 }
 
 #[test]
-fn the_brightness_editor_shows_each_step_live_and_stores_on_a_tap() {
+fn the_brightness_editor_shows_each_step_live_and_stores_on_a_tap_on_its_hint() {
     let mut driver = open_panel(Screen::Clock);
     tap(&mut driver, 150, 300);
     assert!(matches!(driver.stage.page(), Some(Page::Brightness(_))));
@@ -879,7 +879,7 @@ fn the_brightness_editor_shows_each_step_live_and_stores_on_a_tap() {
     let levels: Vec<_> = updates.iter().filter_map(|update| update.brightness).collect();
     assert!(levels.len() > 3 && levels.last() == Some(&255), "{levels:?}");
     assert_eq!(driver.stage.peripherals().brightness, 120, "the level was stored before a tap");
-    let updates = tap(&mut driver, 233, 250);
+    let updates = tap(&mut driver, 233, 378);
     assert_eq!(stored(&updates), Some(Store::Brightness(255)));
     assert!(driver.stage.page().is_none());
     assert_eq!(driver.stage.peripherals().brightness, 255);
