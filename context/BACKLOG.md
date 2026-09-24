@@ -10,15 +10,14 @@ until the feature set is complete, because profiling an incomplete firmware pric
 
 - Make the partial flush cheaper. With the compass redrawing only what changed, a one-degree turn
   flushes about 28,000 pixels in about 42 regions and takes about 10 ms, against 14.8 ms for the
-  whole panel. In the frame loop, per frame: the address window takes 2.1 ms (three separate
+  whole panel. In the frame loop, per frame: the address window took 2.1 ms (three separate
   command transactions a region), starting the stream 0.7 ms, and moving the rows 6 ms, about
   three times the per-pixel rate of a region flushed alone. The display core copies each short
   row out of PSRAM itself while core 0 draws into the other buffer, and the two slow each other:
   the draw runs 2.4 ms faster with flushing held off. DMA straight from the PSRAM framebuffer is
-  ruled out: the owner says it does not work on this path. The remaining candidate is sending the
-  first quad write as `RAMWR` rather than a separate `RAMWR` then `0x3C`, which saves one command
-  transaction a region; it changes the display path, so it needs a look at the panel. Measure
-  with `bench/row-span-damage`.
+  ruled out: the owner says it does not work on this path. Opening each stream with `RAMWR`
+  instead of a separate command, now in place, took the address window from 2.1 to 1.8 ms a
+  frame. What remains is the row copies. Measure with `bench/row-span-damage`.
 - Take the framebuffer clear off the drawing core. It is paid per 64-byte PSRAM cache line:
   clearing only the visible circle saved 0.6 ms, not the 21% its area suggests. Partial redraws
   now clear only the damage, about 2.3 ms of a one-degree turn on the compass, much of it spread
