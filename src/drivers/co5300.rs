@@ -473,8 +473,8 @@ where
             }
         };
         let new = fill_swap_with(swap.as_mut_slice());
-        let mut transfer = transfer;
-        transfer.wait_for_done().await;
+        // Spins rather than awaiting: waking from the interrupt added tens of microseconds a
+        // chunk, and the display core has nothing else to run meanwhile.
         let (spi, active) = transfer.wait();
         self.disp.bus.spi = Some(spi);
         self.active = Some(swap);
