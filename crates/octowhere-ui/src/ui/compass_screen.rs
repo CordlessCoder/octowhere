@@ -487,24 +487,8 @@ fn readout_damage(
         damage.add(SLAB);
         return;
     };
-    if old_unit != new_unit {
-        let suffix = suffix(font);
-        damage.add(suffix.baseline_bounds(old_unit, SUFFIX));
-        damage.add(suffix.baseline_bounds(new_unit, SUFFIX));
-    }
-    // The numerals are monospaced, so a digit that did not change did not move.
-    let numerals = numerals(font);
-    let old_glyphs = numerals.glyph_bounds(old_digits, READOUT);
-    let new_glyphs = numerals.glyph_bounds(new_digits, READOUT);
-    for ((a, b), (was, now)) in old_digits.chars().zip(new_digits.chars()).zip(old_glyphs.zip(new_glyphs)) {
-        if a != b {
-            damage.add(was);
-            damage.add(now);
-        }
-    }
-    if old_digits.len() != new_digits.len() {
-        damage.add(SLAB);
-    }
+    suffix(font).glyph_damage((old_unit, SUFFIX), (new_unit, SUFFIX), damage);
+    numerals(font).glyph_damage((old_digits, READOUT), (new_digits, READOUT), damage);
 }
 
 fn centred_left(style: &FontdueRenderer<'static, Color>, text: &str, x: i32) -> i32 {

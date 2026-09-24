@@ -937,13 +937,40 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
         })
     }
 
-    /// Each glyph's ink bounds, one per character, for `text` whose pen starts at `origin` on the
-    /// baseline. A glyph with no ink has zero-sized bounds.
-    pub fn glyph_bounds<'s>(&'s self, text: &'s str, origin: Point) -> impl Iterator<Item = Rectangle> + 's {
-        self.glyphs_on_baseline(text, origin)
-            .map(|(_, corner, metrics)| {
-                Rectangle::new(corner, Size::new(metrics.width as u32, metrics.height as u32))
-            })
+    /// Marks in `damage` the ink of each glyph that differs between `old` drawn from `old_origin`
+    /// and `new` from `new_origin`, pens on the baseline. A glyph differs when its character or
+    /// its pen does, so a proportional font's shifted tail counts. Metrics are worked out only
+    /// for those glyphs.
+    pub fn glyph_damage(
+        &self,
+        (old, old_origin): (&str, Point),
+        (new, new_origin): (&str, Point),
+        damage: &mut Dirty,
+    ) {
+        let font = self.fonts[self.font_index];
+        let px = self.font_size as f32;
+        let pens = |text, origin: Point| {
+            fontdue::PenOffsets::new(font, text, px)
+                .map(move |(index, offset)| (index, origin.x + libm::roundf(offset) as i32))
+        };
+        let mut mark = |glyph: Option<(u16, i32)>, baseline: i32| {
+            if let Some((index, pen)) = glyph {
+                let metrics = font.metrics_indexed(index, px);
+                let corner = Point::new(pen + metrics.xmin, baseline - metrics.ymin - metrics.height as i32);
+                damage.add(Rectangle::new(corner, Size::new(metrics.width as u32, metrics.height as u32)));
+            }
+        };
+        let (mut olds, mut news) = (pens(old, old_origin), pens(new, new_origin));
+        loop {
+            let (was, now) = (olds.next(), news.next());
+            if was.is_none() && now.is_none() {
+                return;
+            }
+            if was != now || old_origin.y != new_origin.y {
+                mark(was, old_origin.y);
+                mark(now, new_origin.y);
+            }
+        }
     }
 
     /// The ink bounds [`draw_on_baseline`](Self::draw_on_baseline) would cover.

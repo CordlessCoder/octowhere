@@ -514,6 +514,13 @@ fn compass_walk() -> Vec<(String, Motion)> {
         motion.compass.disturbed = step % 3 == 0;
         walk.push((format!("tilted {step}"), motion));
     }
+    // A degree at a time, through zero and across a change in the line's length.
+    for (pitch, roll) in [(5, -12), (6, -12), (6, -11), (1, -1), (0, 0), (-1, 1), (9, 99), (10, 100), (-10, -100)] {
+        let mut motion = heading(1800);
+        motion.compass.pitch_deg = pitch;
+        motion.compass.roll_deg = roll;
+        walk.push((format!("tilt {pitch} {roll}"), motion));
+    }
     walk.push(("top edge up".into(), top_edge_up()));
     walk.push(("back from top edge".into(), heading(900)));
     for percent in [0, 9, 10, 54, 99] {

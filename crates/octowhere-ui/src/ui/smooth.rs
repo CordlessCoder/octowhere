@@ -75,13 +75,28 @@ impl Ring {
 
     pub fn draw<D: CoverageTarget>(&self, target: &mut D, color: D::Color) {
         let Point { x: cx, y: cy } = self.center;
+        // Rows and runs outside the target are skipped here, since a clipped target can take
+        // longer to reject a row than this does.
+        let bounds = target.bounding_box();
+        let Some(corner) = bounds.bottom_right() else {
+            return;
+        };
+        let (top, bottom) = (bounds.top_left.y, corner.y);
+        let reaches = |x: i32, length: usize| x <= corner.x && x + length as i32 > bounds.top_left.x;
         for &(j, last, start, length) in &self.runs {
             let (left, right) = (cx - 1 - last, cx + last + 1 - length as i32);
             let forward = &self.forward[start..start + length];
             let reversed = &self.reversed[start..start + length];
             for y in [cy - 1 - j, cy + j] {
-                target.blend_row(left, y, forward, color);
-                target.blend_row(right, y, reversed, color);
+                if y < top || y > bottom {
+                    continue;
+                }
+                if reaches(left, length) {
+                    target.blend_row(left, y, forward, color);
+                }
+                if reaches(right, length) {
+                    target.blend_row(right, y, reversed, color);
+                }
             }
         }
     }
