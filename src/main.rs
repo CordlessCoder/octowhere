@@ -54,7 +54,6 @@ use octowhere::{
     ui::{
         compass::{AxisMap, Calibration, CalibrationEvent, CompassView, Vec3},
         fusion::Fusion,
-        dirty::DirtyAreas,
         imu::{accel_micro_ms2, gyro_micro_rad_s},
         prototypes::{self, Screen},
         stage::{Input as StageInput, Motion, Sensors, Stage, Touch},
@@ -210,22 +209,18 @@ macro_rules! start_display_core {
             Swap::new(
                 SwapState {
                     fb: FB::alloc(&PSRAM_HEAP),
-                    dirty: DirtyAreas::new(),
-                    needs_full_redraw: DirtyAreas::new_full(),
+                    dirty: Dirty::new(),
+                    drawn: false,
                     #[cfg(feature = "damage-debug")]
-                    debug_repaint: DirtyAreas::new(),
-                    #[cfg(feature = "damage-debug")]
-                    debug_damage: DirtyAreas::new(),
+                    debug_changed: Dirty::new(),
                     timings: Timings::default(),
                 },
                 SwapState {
                     fb: FB::alloc(&PSRAM_HEAP),
-                    dirty: DirtyAreas::new(),
-                    needs_full_redraw: DirtyAreas::new_full(),
+                    dirty: Dirty::new(),
+                    drawn: false,
                     #[cfg(feature = "damage-debug")]
-                    debug_repaint: DirtyAreas::new(),
-                    #[cfg(feature = "damage-debug")]
-                    debug_damage: DirtyAreas::new(),
+                    debug_changed: Dirty::new(),
                     timings: Timings::default(),
                 },
             )
@@ -328,97 +323,77 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
 
     let mut prev_swap_spi = Duration::MIN;
     let mut first_flush = true;
-    #[cfg(feature = "damage-debug")]
-    let mut previous_debug = Dirty::new();
     loop {
         let state = swap.get();
         let SwapState {
             fb,
             timings,
             dirty,
-            needs_full_redraw: _,
+            drawn: _,
             #[cfg(feature = "damage-debug")]
-            debug_repaint,
-            #[cfg(feature = "damage-debug")]
-            debug_damage,
+            debug_changed,
         } = state;
 
         let start = Instant::now();
 
         let is_first_flush = first_flush;
-        if is_first_flush {
-            println!("[DISPLAY] first_flush_without_te");
-            first_flush = false;
+        if dirty.is_empty() && !is_first_flush {
+            timings.vsync_wait = Duration::MIN;
         } else {
-            match select(
-                display.wait_for_vsync(),
-                Timer::after(Duration::from_millis(17)),
-            )
-            .await
-            {
-                Either::First(()) => {}
-                Either::Second(()) => println!("[DISPLAY] te_timeout"),
+            if is_first_flush {
+                println!("[DISPLAY] first_flush_without_te");
+                first_flush = false;
+            } else {
+                match select(
+                    display.wait_for_vsync(),
+                    Timer::after(Duration::from_millis(17)),
+                )
+                .await
+                {
+                    Either::First(()) => {}
+                    Either::Second(()) => println!("[DISPLAY] te_timeout"),
+                }
             }
+            timings.vsync_wait = start.elapsed();
         }
 
-        timings.vsync_wait = start.elapsed();
-
-        #[cfg(feature = "damage-debug")]
-        let mut flush_damage = dirty.clone();
-        #[cfg(feature = "damage-debug")]
-        flush_damage.extend(&previous_debug);
-        #[cfg(not(feature = "damage-debug"))]
-        let flush_damage = dirty.clone();
-
-        if is_first_flush || flush_damage.is_full() {
+        #[cfg(feature = "timing-log")]
+        let (mut regions, mut pixels) = (0u32, 0u32);
+        if is_first_flush || dirty.is_full() {
             #[cfg(feature = "damage-debug")]
-            let debug_full = debug_damage.is_full();
+            let debug_full = debug_changed.is_full();
             #[cfg(not(feature = "damage-debug"))]
             let debug_full = false;
             fb.flush(&mut display, debug_full)
                 .await
                 .expect("display flush failed");
-        } else {
-            #[cfg(feature = "damage-debug")]
-            for (region, overlay) in dirty.iter_merged_with_overlay(debug_damage, &previous_debug) {
-                fb.flush_region(
-                    &mut display,
-                    region.top_left.x as u16,
-                    region.top_left.y as u16,
-                    region.size.width as u16,
-                    region.size.height as u16,
-                    (!overlay.is_zero_sized()).then_some(overlay),
-                )
-                .await
-                .expect("display region flush failed");
+            #[cfg(feature = "timing-log")]
+            {
+                (regions, pixels) = (1, board::LCD_WIDTH as u32 * board::LCD_HEIGHT as u32);
             }
-
-            #[cfg(not(feature = "damage-debug"))]
-            for region in dirty.iter() {
+        } else {
+            for region in dirty.rectangles(chrome::FLUSH_OVERHEAD) {
+                #[cfg(feature = "damage-debug")]
+                let overlay = debug_changed.intersects(&region).then_some(region);
+                #[cfg(not(feature = "damage-debug"))]
+                let overlay = None;
+                #[cfg(feature = "timing-log")]
+                {
+                    regions += 1;
+                    pixels += region.size.width * region.size.height;
+                }
                 fb.flush_region(
                     &mut display,
                     region.top_left.x as u16,
                     region.top_left.y as u16,
                     region.size.width as u16,
                     region.size.height as u16,
-                    None,
+                    overlay,
                 )
                 .await
                 .expect("display region flush failed");
             }
         };
-
-        #[cfg(feature = "damage-debug")]
-        {
-            // Full-screen transfers do not leave a region-specific overlay to clear.
-            let current_debug = if dirty.is_full() {
-                Dirty::new()
-            } else {
-                dirty.clone()
-            };
-            previous_debug = current_debug.clone();
-            *debug_repaint = current_debug;
-        }
 
         timings.spi_time = start.elapsed() - timings.vsync_wait;
 
@@ -426,10 +401,12 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
 
         #[cfg(feature = "timing-log")]
         defmt::info!(
-            "timing spi: vsync={}us flush={}us swap={}us",
+            "timing spi: vsync={}us flush={}us swap={}us regions={} pixels={}",
             timings.vsync_wait.as_micros(),
             timings.spi_time.as_micros(),
             timings.swap_spi.as_micros(),
+            regions,
+            pixels,
         );
 
         let before_swap = start.elapsed();
@@ -939,21 +916,42 @@ where
     Ok(())
 }
 
+/// Marks the one-pixel border of `region`.
+#[cfg(feature = "damage-debug")]
+fn add_outline(damage: &mut Dirty, region: embedded_graphics::primitives::Rectangle) {
+    let Some(corner) = region.bottom_right() else {
+        return;
+    };
+    let (left, top) = (region.top_left.x, region.top_left.y);
+    for (from, to) in [
+        ((left, top), (corner.x, top)),
+        ((left, corner.y), (corner.x, corner.y)),
+        ((left, top), (left, corner.y)),
+        ((corner.x, top), (corner.x, corner.y)),
+    ] {
+        damage.add(embedded_graphics::primitives::Rectangle::with_corners(
+            Point::new(from.0, from.1),
+            Point::new(to.0, to.1),
+        ));
+    }
+}
+
 struct SwapState<A: Allocator = alloc::alloc::Global> {
     fb: Box<chrome::FB, A>,
+    /// What the display core flushes from `fb`.
     dirty: Dirty,
-    needs_full_redraw: Dirty,
+    /// `fb` holds a whole frame. Until it does, it is drawn in full.
+    drawn: bool,
+    /// The step's own damage, which the display core outlines.
     #[cfg(feature = "damage-debug")]
-    debug_repaint: Dirty,
-    #[cfg(feature = "damage-debug")]
-    debug_damage: Dirty,
+    debug_changed: Dirty,
     timings: Timings,
 }
 
 #[embassy_executor::task]
 async fn async_main(spawner: Spawner) {
     // esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 72 * 1024);
-    esp_alloc::heap_allocator!(size: 260 * 1024);
+    esp_alloc::heap_allocator!(size: 252 * 1024);
 
     // PERF: How low do we want to drop the clock speed?
     let mut peripherals =
@@ -1405,6 +1403,11 @@ async fn async_main(spawner: Spawner) {
         PSRAM_HEAP.used(),
     );
     let mut prev_swap_draw = Duration::MIN;
+    // The other buffer last saw the frame before this one, so it needs this step's damage and
+    // the one before.
+    let mut previous_changed = Dirty::new_full();
+    #[cfg(feature = "damage-debug")]
+    let mut outlined = Dirty::new();
     let mut last_touch_poll = Instant::now();
     const TOUCH_REPOLL: Duration = Duration::from_micros(16_667);
     loop {
@@ -1415,11 +1418,9 @@ async fn async_main(spawner: Spawner) {
                 fb,
                 dirty,
                 timings,
-                needs_full_redraw,
+                drawn,
                 #[cfg(feature = "damage-debug")]
-                debug_repaint,
-                #[cfg(feature = "damage-debug")]
-                debug_damage,
+                debug_changed,
             } = state;
             let fb = &mut **fb;
             // Keep reading while either tracker holds a contact, or neither sees it lift.
@@ -1491,32 +1492,32 @@ async fn async_main(spawner: Spawner) {
                 );
             }
             let changed = update.changed;
-            dirty.clear();
-
-            let mut repaint = needs_full_redraw.clone();
+            let repaint = dirty;
+            *repaint = previous_changed;
             repaint.extend(&changed);
             #[cfg(feature = "damage-debug")]
             {
-                repaint.extend(debug_repaint);
-                debug_repaint.clear();
+                // Erase the outlines the last flush drew, and outline this step's damage.
+                repaint.extend(&outlined);
+                outlined.clear();
+                for region in repaint.rectangles(chrome::FLUSH_OVERHEAD) {
+                    if changed.intersects(&region) {
+                        add_outline(&mut outlined, region);
+                    }
+                }
+                *debug_changed = changed.clone();
+            }
+            if !*drawn {
+                repaint.make_full();
+                *drawn = true;
             }
 
-            // esp_println::dbg!(&needs_full_redraw);
             if repaint.is_full() {
                 stage.draw(fb);
-                dirty.make_full();
-            } else {
-                for area in repaint.iter() {
-                    let mut clipped = chrome::Window::new(fb, Point::zero(), area);
-                    dirty.extend(&stage.draw(&mut clipped));
-                }
+            } else if !repaint.is_empty() {
+                stage.draw(&mut chrome::Clip::new(fb, repaint));
             }
-            dirty.extend(&repaint);
-            #[cfg(feature = "damage-debug")]
-            {
-                *debug_damage = changed.clone();
-            }
-            *needs_full_redraw = changed;
+            previous_changed = changed;
 
             timings.frametime = start.elapsed();
             timings.swap_draw = prev_swap_draw;

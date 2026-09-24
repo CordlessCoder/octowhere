@@ -1,196 +1,427 @@
+//! Damage as spans of columns per pair of rows.
+//!
+//! The panel takes partial writes in 2 × 2 blocks, so damage is kept at that grain: each band of
+//! two rows holds up to `K` sorted, disjoint spans of whole column pairs. Past `K`, the two spans
+//! with the smallest gap between them merge. Drawing clips to the spans exactly; the flush covers
+//! them with rectangles, trading pixels sent for regions started.
+
 use embedded_graphics::{
     prelude::{Point, Size},
     primitives::Rectangle,
 };
 
-// TODO: Coalesce full grid entries during iteration
+/// Rows per band, and the column grain.
+const GRAIN: i32 = 2;
+
+/// Columns `start * GRAIN..end * GRAIN`.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct Span {
+    start: u8,
+    end: u8,
+}
+
+impl Span {
+    fn len(self) -> u32 {
+        u32::from(self.end - self.start) * GRAIN as u32
+    }
+}
 
 #[derive(Clone, Debug)]
-pub struct DirtyAreas<
-    const WIDTH: usize,
-    const HEIGHT: usize,
-    const CELLS_X: usize,
-    const CELLS_Y: usize,
-    const N: usize,
-> {
-    grid: [Rectangle; N],
+pub struct RowSpans<const WIDTH: usize, const BANDS: usize, const K: usize> {
+    spans: [[Span; K]; BANDS],
+    counts: [u8; BANDS],
     full: bool,
 }
 
-#[inline]
-fn bounding_box(a: &Rectangle, b: &Rectangle) -> Rectangle {
-    // dbg!(a, b);
-    let Some(bottom_right_a) = a.bottom_right() else {
-        return *b;
-    };
-    let Some(bottom_right_b) = b.bottom_right() else {
-        return *a;
-    };
-    let top_left = a.top_left.component_min(b.top_left);
-    let bottom_right = bottom_right_b.component_max(bottom_right_a);
-    Rectangle::with_corners(top_left, bottom_right)
-}
-
-impl<
-    const WIDTH: usize,
-    const HEIGHT: usize,
-    const CELLS_X: usize,
-    const CELLS_Y: usize,
-    const N: usize,
-> DirtyAreas<WIDTH, HEIGHT, CELLS_X, CELLS_Y, N>
-{
-    const CELL_WIDTH: u32 = (WIDTH / CELLS_X) as u32;
-    const CELL_HEIGHT: u32 = (HEIGHT / CELLS_Y) as u32;
-    const _CHECK_CELL: () = assert!(Self::CELL_WIDTH != 0 && Self::CELL_HEIGHT != 0);
-
-    /// Static assertion that N is correct.
-    // MSRV: remove N when constant generic expressions are stabilized
-    const _CHECK_N: () = assert!(
-        N == CELLS_X * CELLS_Y,
-        "Invalid N: it must be equal to CELLS_HEIGHT * CELLS_WIDTH"
+impl<const WIDTH: usize, const BANDS: usize, const K: usize> RowSpans<WIDTH, BANDS, K> {
+    pub const HEIGHT: usize = BANDS * GRAIN as usize;
+    const _CHECK: () = assert!(
+        K >= 1 && K <= MAX_K && WIDTH.is_multiple_of(GRAIN as usize) && WIDTH / GRAIN as usize <= u8::MAX as usize,
+        "K must be 1 to 7, and WIDTH even and at most 510"
     );
 
     #[must_use]
     pub const fn new() -> Self {
-        let _: () = Self::_CHECK_CELL;
-        let _: () = Self::_CHECK_N;
+        let _: () = Self::_CHECK;
         Self {
+            spans: [[Span { start: 0, end: 0 }; K]; BANDS],
+            counts: [0; BANDS],
             full: false,
-            grid: [Rectangle::zero(); N],
         }
     }
 
     #[must_use]
     pub const fn new_full() -> Self {
-        let _: () = Self::_CHECK_CELL;
-        let _: () = Self::_CHECK_N;
-        Self {
-            full: true,
-            grid: [Rectangle::zero(); N],
-        }
+        let mut spans = Self::new();
+        spans.full = true;
+        spans
     }
 
     pub fn clear(&mut self) {
-        self.grid
-            .iter_mut()
-            .for_each(|rect| *rect = Rectangle::zero());
+        self.counts = [0; BANDS];
         self.full = false;
     }
 
-    fn cell(x: u32, y: u32) -> Rectangle {
-        let width = if x == const { CELLS_X as u32 - 1 } {
-            Self::CELL_WIDTH + WIDTH as u32 % CELLS_X as u32
-        } else {
-            Self::CELL_WIDTH
-        };
-        let height = if y == const { CELLS_Y as u32 - 1 } {
-            Self::CELL_HEIGHT + HEIGHT as u32 % CELLS_Y as u32
-        } else {
-            Self::CELL_HEIGHT
-        };
-        Rectangle::new(
-            Point::new(
-                (x * Self::CELL_WIDTH) as i32,
-                (y * Self::CELL_HEIGHT) as i32,
-            ),
-            Size { width, height },
-        )
-    }
-
-    #[inline]
-    fn get_mut(&mut self, x: u32, y: u32) -> &mut Rectangle {
-        assert!(x < CELLS_X as u32 && y < CELLS_Y as u32);
-        &mut self.grid[(y * CELLS_X as u32 + x) as usize]
-    }
-
-    pub fn add(&mut self, rect: Rectangle) {
-        if self.is_full() {
-            return;
-        }
-        let Some(bottom_right) = rect.bottom_right() else {
-            return;
-        };
-        if bottom_right.x < 0 || bottom_right.y < 0 {
-            return;
-        }
-        let x_start = (rect.top_left.x.max(0) as u32 / Self::CELL_WIDTH).min(CELLS_X as u32 - 1);
-        let y_start = (rect.top_left.y.max(0) as u32 / Self::CELL_HEIGHT).min(CELLS_Y as u32 - 1);
-        let x_end = bottom_right.x as u32 / Self::CELL_WIDTH;
-        let y_end = bottom_right.y as u32 / Self::CELL_HEIGHT;
-
-        let x_range = x_start..=x_end.min(CELLS_X as u32 - 1);
-        let y_range = y_start..=y_end.min(CELLS_Y as u32 - 1);
-        for x in x_range {
-            for y in y_range.clone() {
-                let current = self.get_mut(x, y);
-                // dbg!(x, y);
-                let cell_box = Self::cell(x, y);
-
-                let within_cell = rect.intersection(&cell_box);
-                *current = bounding_box(&within_cell, current);
-            }
-        }
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = Rectangle> {
-        self.grid
-            .iter()
-            .copied()
-            .filter(|rect| !rect.is_zero_sized())
-    }
-
-    pub fn iter_merged<'a>(
-        &'a self,
-        other: &'a Self,
-    ) -> impl Iterator<Item = (Rectangle, Rectangle)> + 'a {
-        self.iter_merged_with_overlay(self, other)
-    }
-
-    pub fn iter_merged_with_overlay<'a>(
-        &'a self,
-        overlay: &'a Self,
-        other: &'a Self,
-    ) -> impl Iterator<Item = (Rectangle, Rectangle)> + 'a {
-        self.grid
-            .iter()
-            .zip(overlay.grid.iter())
-            .zip(other.grid.iter())
-            .filter_map(|((current, overlay), previous)| {
-                let merged = bounding_box(current, previous);
-                (!merged.is_zero_sized()).then_some((merged, *overlay))
-            })
-    }
-
     #[inline(always)]
+    #[must_use]
     pub fn is_full(&self) -> bool {
         self.full
     }
 
     pub fn make_full(&mut self) {
-        self.full = true
+        self.full = true;
     }
 
-    pub fn extend(&mut self, other: &Self) {
-        self.full = self.full || other.full;
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        !self.full && self.counts.iter().all(|&count| count == 0)
+    }
+
+    /// The spans of band `band`, as column ranges.
+    fn band(&self, band: usize) -> impl Iterator<Item = (i32, i32)> + '_ {
+        let whole = Span {
+            start: 0,
+            end: (WIDTH / GRAIN as usize) as u8,
+        };
+        let count = if self.full { 0 } else { usize::from(self.counts[band]) };
+        self.full
+            .then_some(whole)
+            .into_iter()
+            .chain(self.spans[band][..count].iter().copied())
+            .map(|span| (i32::from(span.start) * GRAIN, i32::from(span.end) * GRAIN))
+    }
+
+    /// The damaged column ranges of pixel row `y`, left to right.
+    pub fn spans(&self, y: i32) -> impl Iterator<Item = (i32, i32)> + '_ {
+        let band = usize::try_from(y / GRAIN)
+            .ok()
+            .filter(|&band| y >= 0 && band < BANDS);
+        band.into_iter().flat_map(|band| self.band(band))
+    }
+
+    /// Marks columns `start..end` of bands `first..=last`, widened to the grain and clipped.
+    fn add_bands(&mut self, first: i32, last: i32, start: i32, end: i32) {
         if self.full {
             return;
         }
-        self.grid
-            .iter_mut()
-            .zip(other.grid)
-            .for_each(|(rect, other)| *rect = bounding_box(rect, &other));
+        let start = start.max(0).div_euclid(GRAIN);
+        let end = (end + GRAIN - 1).div_euclid(GRAIN).min((WIDTH / GRAIN as usize) as i32);
+        if start >= end {
+            return;
+        }
+        let span = Span {
+            start: start as u8,
+            end: end as u8,
+        };
+        for band in first.max(0)..=last.min(BANDS as i32 - 1) {
+            self.insert(band as usize, span);
+        }
+    }
+
+    fn add_row(&mut self, y: i32, start: i32, end: i32) {
+        self.add_bands(y.div_euclid(GRAIN), y.div_euclid(GRAIN), start, end);
+    }
+
+    fn insert(&mut self, band: usize, mut new: Span) {
+        let mut merged = [Span::default(); MAX_K + 1];
+        let mut count = 0;
+        let mut placed = false;
+        for &span in &self.spans[band][..usize::from(self.counts[band])] {
+            if span.end < new.start {
+                merged[count] = span;
+            } else if span.start > new.end {
+                if !placed {
+                    merged[count] = new;
+                    count += 1;
+                    placed = true;
+                }
+                merged[count] = span;
+            } else {
+                new.start = new.start.min(span.start);
+                new.end = new.end.max(span.end);
+                continue;
+            }
+            count += 1;
+        }
+        if !placed {
+            merged[count] = new;
+            count += 1;
+        }
+        if count > K {
+            let closest = (0..count - 1)
+                .min_by_key(|&index| merged[index + 1].start - merged[index].end)
+                .expect("more than one span");
+            merged[closest].end = merged[closest + 1].end;
+            merged.copy_within(closest + 2..count, closest + 1);
+            count -= 1;
+        }
+        self.spans[band][..count].copy_from_slice(&merged[..count]);
+        self.counts[band] = count as u8;
+    }
+
+    pub fn add(&mut self, rect: Rectangle) {
+        let Some(bottom_right) = rect.bottom_right() else {
+            return;
+        };
+        self.add_bands(
+            rect.top_left.y.div_euclid(GRAIN),
+            bottom_right.y.div_euclid(GRAIN),
+            rect.top_left.x,
+            bottom_right.x + 1,
+        );
+    }
+
+    /// Marks every pixel a convex polygon through `corners` touches, and `margin` pixels more
+    /// either side along each row.
+    pub fn add_polygon(&mut self, corners: &[(f32, f32)], margin: i32) {
+        if self.full || corners.is_empty() {
+            return;
+        }
+        let (top, bottom) = corners
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(top, bottom), &(_, y)| (top.min(y), bottom.max(y)));
+        let first = libm::floorf(top) as i32;
+        let last = libm::ceilf(bottom) as i32 - 1;
+        for y in first..=last.max(first) {
+            let (low, high) = (y as f32, y as f32 + 1.0);
+            let (mut left, mut right) = (f32::MAX, f32::MIN);
+            for (index, &(x0, y0)) in corners.iter().enumerate() {
+                let (x1, y1) = corners[(index + 1) % corners.len()];
+                // The edge clipped to this row's height.
+                let (from, to) = if y0 <= y1 { ((x0, y0), (x1, y1)) } else { ((x1, y1), (x0, y0)) };
+                if to.1 < low || from.1 > high {
+                    continue;
+                }
+                let at = |y: f32| {
+                    if to.1 == from.1 {
+                        from.0
+                    } else {
+                        from.0 + (to.0 - from.0) * ((y - from.1) / (to.1 - from.1)).clamp(0.0, 1.0)
+                    }
+                };
+                for x in [at(low.max(from.1)), at(high.min(to.1))] {
+                    left = left.min(x);
+                    right = right.max(x);
+                }
+            }
+            if left <= right {
+                self.add_row(
+                    y,
+                    libm::floorf(left) as i32 - margin,
+                    libm::ceilf(right) as i32 + margin,
+                );
+            }
+        }
+    }
+
+    /// Marks every pixel a disc about `center` touches.
+    pub fn add_disc(&mut self, center: (f32, f32), radius: f32) {
+        if self.full {
+            return;
+        }
+        let first = libm::floorf(center.1 - radius) as i32;
+        let last = libm::ceilf(center.1 + radius) as i32 - 1;
+        for y in first..=last {
+            // The row's widest point is its nearest to the centre.
+            let dy = (center.1 - (y as f32 + 0.5)).abs() - 0.5;
+            let half = libm::sqrtf((radius * radius - dy.max(0.0) * dy.max(0.0)).max(0.0));
+            self.add_row(
+                y,
+                libm::floorf(center.0 - half) as i32,
+                libm::ceilf(center.0 + half) as i32,
+            );
+        }
+    }
+
+    pub fn extend(&mut self, other: &Self) {
+        self.full |= other.full;
+        if self.full {
+            return;
+        }
+        for band in 0..BANDS {
+            for index in 0..usize::from(other.counts[band]) {
+                self.insert(band, other.spans[band][index]);
+            }
+        }
+    }
+
+    /// Whether any damaged pixel lies in `area`.
+    #[must_use]
+    pub fn intersects(&self, area: &Rectangle) -> bool {
+        let Some(bottom_right) = area.bottom_right() else {
+            return false;
+        };
+        let (left, right) = (area.top_left.x, bottom_right.x + 1);
+        let first = area.top_left.y.div_euclid(GRAIN).max(0);
+        let last = bottom_right.y.div_euclid(GRAIN).min(BANDS as i32 - 1);
+        (first..=last).any(|band| {
+            self.band(band as usize)
+                .any(|(start, end)| start < right && left < end)
+        })
+    }
+
+    #[must_use]
+    pub fn contains(&self, point: Point) -> bool {
+        self.spans(point.y)
+            .any(|(start, end)| (start..end).contains(&point.x))
+    }
+
+    #[must_use]
+    pub fn bounding_box(&self) -> Rectangle {
+        let mut bands = (0..BANDS).filter(|&band| self.band(band).next().is_some());
+        let Some(first) = bands.next() else {
+            return Rectangle::zero();
+        };
+        let last = bands.next_back().unwrap_or(first);
+        let (left, right) = (first..=last)
+            .flat_map(|band| self.band(band))
+            .fold((i32::MAX, i32::MIN), |(left, right), (start, end)| {
+                (left.min(start), right.max(end))
+            });
+        Rectangle::with_corners(
+            Point::new(left, first as i32 * GRAIN),
+            Point::new(right - 1, (last as i32 + 1) * GRAIN - 1),
+        )
+    }
+
+    /// How many pixels are damaged.
+    #[must_use]
+    pub fn pixels(&self) -> u32 {
+        (0..BANDS)
+            .flat_map(|band| self.band(band))
+            .map(|(start, end)| (end - start) as u32 * GRAIN as u32)
+            .sum()
+    }
+
+    /// Rectangles covering the damage. A rectangle grows over the next band's span when that
+    /// wastes at most `overhead` pixels, the cost of starting another region; otherwise a new one
+    /// starts. Every corner lands on the grain.
+    #[must_use]
+    pub fn rectangles(&self, overhead: u32) -> Rectangles<'_, WIDTH, BANDS, K> {
+        Rectangles {
+            spans: self,
+            overhead,
+            band: 0,
+            open: [None; K],
+            ready: [None; K],
+        }
     }
 }
 
-impl<
-    const WIDTH: usize,
-    const HEIGHT: usize,
-    const CELLS_X: usize,
-    const CELLS_Y: usize,
-    const N: usize,
-> Default for DirtyAreas<WIDTH, HEIGHT, CELLS_X, CELLS_Y, N>
+const MAX_K: usize = 7;
+
+impl<const WIDTH: usize, const BANDS: usize, const K: usize> Default
+    for RowSpans<WIDTH, BANDS, K>
 {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Open {
+    span: Span,
+    first_band: usize,
+    bands: u32,
+}
+
+impl Open {
+    fn rectangle(self) -> Rectangle {
+        Rectangle::new(
+            Point::new(i32::from(self.span.start) * GRAIN, self.first_band as i32 * GRAIN),
+            Size::new(self.span.len(), self.bands * GRAIN as u32),
+        )
+    }
+}
+
+pub struct Rectangles<'a, const WIDTH: usize, const BANDS: usize, const K: usize> {
+    spans: &'a RowSpans<WIDTH, BANDS, K>,
+    overhead: u32,
+    band: usize,
+    open: [Option<Open>; K],
+    ready: [Option<Rectangle>; K],
+}
+
+impl<const WIDTH: usize, const BANDS: usize, const K: usize> Rectangles<'_, WIDTH, BANDS, K> {
+    fn close(&mut self, open: Open) {
+        let slot = self
+            .ready
+            .iter_mut()
+            .find(|slot| slot.is_none())
+            .expect("at most K rectangles close per band");
+        *slot = Some(open.rectangle());
+    }
+
+    /// Extends or closes the open rectangles over the next band's spans.
+    fn advance(&mut self) {
+        let band = self.band;
+        self.band += 1;
+        let mut next = [None; K];
+        let mut taken = [false; K];
+        let spans = self.spans;
+        for (slot, (start, end)) in spans.band(band).enumerate() {
+            let span = Span {
+                start: (start / GRAIN) as u8,
+                end: (end / GRAIN) as u8,
+            };
+            // The first open rectangle over this span, if any. Spans and rectangles are both
+            // sorted, so this pairs them left to right.
+            let over = (0..K).find(|&index| {
+                !taken[index]
+                    && self.open[index]
+                        .is_some_and(|open| open.span.start < span.end && span.start < open.span.end)
+            });
+            let grown = over.and_then(|index| {
+                taken[index] = true;
+                let open = self.open[index].expect("found above");
+                let wide = Span {
+                    start: open.span.start.min(span.start),
+                    end: open.span.end.max(span.end),
+                };
+                let waste = (wide.len() - span.len()) + (wide.len() - open.span.len()) * open.bands;
+                if waste * GRAIN as u32 <= self.overhead {
+                    Some(Open {
+                        span: wide,
+                        bands: open.bands + 1,
+                        ..open
+                    })
+                } else {
+                    None
+                }
+            });
+            next[slot] = Some(grown.unwrap_or(Open {
+                span,
+                first_band: band,
+                bands: 1,
+            }));
+            if grown.is_some() {
+                self.open[over.expect("grown")] = None;
+            }
+        }
+        for index in 0..K {
+            if let Some(open) = self.open[index].take() {
+                self.close(open);
+            }
+        }
+        self.open = next;
+    }
+}
+
+impl<const WIDTH: usize, const BANDS: usize, const K: usize> Iterator
+    for Rectangles<'_, WIDTH, BANDS, K>
+{
+    type Item = Rectangle;
+
+    fn next(&mut self) -> Option<Rectangle> {
+        loop {
+            if let Some(ready) = self.ready.iter_mut().find_map(Option::take) {
+                return Some(ready);
+            }
+            if self.band < BANDS {
+                self.advance();
+                continue;
+            }
+            return self.open.iter_mut().find_map(Option::take).map(Open::rectangle);
+        }
     }
 }

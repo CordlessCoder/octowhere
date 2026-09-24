@@ -33,7 +33,7 @@ use embedded_graphics::{
 use minifb::{Key, KeyRepeat, MouseButton, MouseMode, Scale, Window, WindowOptions};
 use octowhere_ui::{
     board::{LCD_HEIGHT, LCD_WIDTH},
-    chrome::FB,
+    chrome::{Clip, FB},
     ui::{
         compass::CompassView,
         prototypes::{ClockState, PeripheralState},
@@ -217,13 +217,22 @@ fn main() {
             println!("pose {} logged from {} samples", record.pose + 1, record.samples);
         }
 
-        if redraw || update.changed.is_full() || update.changed.iter().next().is_some() {
+        if redraw || !update.changed.is_empty() {
+            // One buffer, so each step repaints only its own damage, as the firmware's buffers
+            // would with the step before added.
             let drawing = Instant::now();
-            stage.draw(&mut *fb);
+            let pixels_drawn = if redraw || update.changed.is_full() {
+                stage.draw(&mut *fb);
+                LCD_WIDTH as u32 * LCD_HEIGHT as u32
+            } else {
+                stage.draw(&mut Clip::new(&mut *fb, &update.changed));
+                update.changed.pixels()
+            };
             let took = drawing.elapsed();
             window.set_title(&format!(
-                "octowhere: {:?}, drawn in {:.2} ms on the host",
+                "octowhere: {:?}, {} px drawn in {:.2} ms on the host",
                 stage.screen(),
+                pixels_drawn,
                 took.as_secs_f64() * 1e3
             ));
             to_pixels(&fb, &mask, &mut pixels);

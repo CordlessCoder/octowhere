@@ -14,7 +14,7 @@ use embedded_layout::{
 
 use crate::{
     board::{self, LCD_WIDTH},
-    chrome::{self, Color, Dirty},
+    chrome::{self, Color},
 };
 
 /// Rendering boundaries under consideration for the first product screens.
@@ -166,11 +166,10 @@ pub fn render<D>(
     state: State,
     font: &chrome::FontdueRenderer<'static, Color>,
     target: &mut D,
-) -> Result<Dirty, D::Error>
+) -> Result<(), D::Error>
 where
     D: chrome::CoverageTarget<Color = Color>,
 {
-    let mut dirty = Dirty::new();
     let bounds = target.bounding_box();
     clear_visible(target, &bounds)?;
 
@@ -190,8 +189,7 @@ where
         )?;
     }
 
-    dirty.add(bounds);
-    Ok(dirty)
+    Ok(())
 }
 
 /// Clears the part of `area` on the round panel. The corners outside it are never seen, and

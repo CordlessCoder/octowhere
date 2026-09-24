@@ -187,9 +187,102 @@ fn centred<D: CoverageTarget<Color = Color>>(
     baseline: i32,
     target: &mut D,
 ) -> Result<(), D::Error> {
-    let left = x as f32 - style.advance(text) / 2.0;
-    style.draw_on_baseline(text, Point::new(libm::roundf(left) as i32, baseline), target)
+    style.draw_on_baseline(text, Point::new(centred_left(style, text, x), baseline), target)
 }
+
+/// What each part of the screen shows. Two frames that agree on a part draw it identically.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct Parts {
+    ring: Option<Color>,
+    /// The heading the dial turns to, and how far its ticks and letters have faded in.
+    dial: Option<(u16, u8, u8)>,
+    icon: Option<(Icon, Color)>,
+    caption: (&'static str, Color),
+    slab: Color,
+    readout: Readout,
+    status: Option<Status>,
+    tilt: Option<heapless::String<24>>,
+    /// The divider and the hint under the tilt.
+    footer: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum Readout {
+    NoData,
+    Dashes,
+    Digits(heapless::String<4>, &'static str),
+}
+
+impl Parts {
+    fn of(view: &CompassView, accents: Accents) -> Self {
+        let mode = Mode::of(view);
+        let ring_color = if mode == Mode::NoData { chrome::RED } else { chrome::GRAY };
+        let readout = match mode {
+            Mode::NoData => Readout::NoData,
+            Mode::TopEdgeUp => Readout::Dashes,
+            Mode::Heading(value) | Mode::Interference(value) => {
+                Readout::Digits(three_digits(value), "\u{b0}")
+            }
+            Mode::Calibrating(percent) => Readout::Digits(three_digits(percent.into()), "%"),
+        };
+        let shown = mode != Mode::NoData;
+        let tilt = shown.then(|| {
+            let mut tilt = heapless::String::new();
+            _ = write!(tilt, "P {:+03}  R {:+03}", view.pitch_deg, view.roll_deg);
+            tilt
+        });
+        Self {
+            ring: (accents.ring > 0).then(|| faded(ring_color, accents.ring)),
+            dial: mode
+                .heading()
+                .filter(|_| accents.ticks > 0 || accents.letters > 0)
+                .map(|heading| (heading, accents.ticks, accents.letters)),
+            icon: (accents.icon > 0).then(|| (*mode.icon(), faded(mode.icon_color(), accents.icon))),
+            caption: match mode {
+                Mode::NoData => ("COMPASS", chrome::GRAY),
+                Mode::Calibrating(_) => ("CALIBRATION", chrome::ORANGE),
+                _ => ("MAGNETIC", chrome::GRAY),
+            },
+            slab: mode.color(),
+            readout,
+            status: status(mode),
+            tilt,
+            footer: shown,
+        }
+    }
+}
+
+fn three_digits(value: u16) -> heapless::String<4> {
+    let mut digits = heapless::String::new();
+    _ = write!(digits, "{value:03}");
+    digits
+}
+
+fn caption_style(font: &FontdueRenderer<'static, Color>, color: Color) -> FontdueRenderer<'static, Color> {
+    style(font, color, 16, FRAKTION_BOLD)
+}
+
+fn tilt_style(font: &FontdueRenderer<'static, Color>) -> FontdueRenderer<'static, Color> {
+    style(font, chrome::GRAY, 23, FRAKTION)
+}
+
+fn hint_style(font: &FontdueRenderer<'static, Color>) -> FontdueRenderer<'static, Color> {
+    style(font, chrome::GRAY, 14, FRAKTION)
+}
+
+fn letter_style(font: &FontdueRenderer<'static, Color>, color: Color) -> FontdueRenderer<'static, Color> {
+    style(font, color, 40, SHAPIRO)
+}
+
+fn numerals(font: &FontdueRenderer<'static, Color>) -> FontdueRenderer<'static, Color> {
+    style(font, chrome::BLACK, 86, FRAKTION_BOLD)
+}
+
+fn suffix(font: &FontdueRenderer<'static, Color>) -> FontdueRenderer<'static, Color> {
+    style(font, chrome::BLACK, 40, FRAKTION_BOLD)
+}
+
+const HINT: &str = "COVER SCREEN TO RECAL";
 
 pub fn draw<D>(
     view: &CompassView,
@@ -200,12 +293,11 @@ pub fn draw<D>(
 where
     D: CoverageTarget<Color = Color>,
 {
-    let mode = Mode::of(view);
-    let ring_color = if mode == Mode::NoData { chrome::RED } else { chrome::GRAY };
+    let parts = Parts::of(view, accents);
     {
         // The dial lands on the cleared field, and its parts do not overlap.
         let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
-        if accents.ring > 0 {
+        if let Some(color) = parts.ring {
             RING.get_or_init(|| {
                 super::smooth::Ring::new(
                     CENTER,
@@ -213,79 +305,244 @@ where
                     RING_RADIUS + RING_STROKE / 2.0,
                 )
             })
-            .draw(field, faded(ring_color, accents.ring));
+            .draw(field, color);
         }
-        if let Some(heading) = mode.heading() {
-            draw_dial(heading, accents, font, field)?;
+        if let Some((heading, ticks, letters)) = parts.dial {
+            draw_dial(heading, ticks, letters, font, field)?;
         }
     }
-    draw_icon(mode, accents.icon, target)?;
-
-    let caption = match mode {
-        Mode::NoData => "COMPASS",
-        Mode::Calibrating(_) => "CALIBRATION",
-        _ => "MAGNETIC",
-    };
-    let caption_color = match mode {
-        Mode::Calibrating(_) => chrome::ORANGE,
-        _ => chrome::GRAY,
-    };
-    let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
-    centred(
-        &style(font, caption_color, 16, FRAKTION_BOLD),
-        caption,
-        CENTER.x,
-        CAPTION_BASELINE,
-        field,
-    )?;
-
-    target.fill_solid(&SLAB, mode.color())?;
-    draw_readout(mode, font, &mut OnBackground::new(&mut *target, mode.color()))?;
-    if mode == Mode::NoData {
-        return Ok(());
+    if let Some((icon, color)) = parts.icon {
+        draw_icon(&icon, color, target)?;
     }
 
     let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
-    if let Some((status, style, baseline)) = status_line(mode, font) {
-        centred(&style, status, CENTER.x, baseline, field)?;
+    let (caption, caption_color) = parts.caption;
+    centred(&caption_style(font, caption_color), caption, CENTER.x, CAPTION_BASELINE, field)?;
+
+    target.fill_solid(&SLAB, parts.slab)?;
+    draw_readout(&parts.readout, font, &mut OnBackground::new(&mut *target, parts.slab))?;
+
+    let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
+    if let Some(status) = parts.status {
+        let (style, baseline) = status.style(font);
+        centred(&style, status.text, CENTER.x, baseline, field)?;
     }
-    let mut tilt = heapless::String::<24>::new();
-    _ = write!(tilt, "P {:+03}  R {:+03}", view.pitch_deg, view.roll_deg);
-    centred(&style(font, chrome::GRAY, 23, FRAKTION), &tilt, CENTER.x, TILT_BASELINE, field)?;
-    field.fill_solid(&DIVIDER, chrome::GRAY)?;
-    centred(
-        &style(font, chrome::GRAY, 14, FRAKTION),
-        "COVER SCREEN TO RECAL",
-        CENTER.x,
-        HINT_BASELINE,
-        field,
-    )
+    if let Some(tilt) = &parts.tilt {
+        centred(&tilt_style(font), tilt, CENTER.x, TILT_BASELINE, field)?;
+    }
+    if parts.footer {
+        field.fill_solid(&DIVIDER, chrome::GRAY)?;
+        centred(&hint_style(font), HINT, CENTER.x, HINT_BASELINE, field)?;
+    }
+    Ok(())
 }
 
-/// The line of text a state puts above the slab, if it has one, with the baseline that centres its
-/// ink in the status band.
-fn status_line(
-    mode: Mode,
+/// Marks in `damage` every pixel that differs between the screen drawn for `before` and for
+/// `after`: the old and new places of each part that changed.
+pub fn damage(
+    before: (&CompassView, Accents),
+    after: (&CompassView, Accents),
     font: &FontdueRenderer<'static, Color>,
-) -> Option<(&'static str, FontdueRenderer<'static, Color>, i32)> {
+    damage: &mut chrome::Dirty,
+) {
+    let (old, new) = (Parts::of(before.0, before.1), Parts::of(after.0, after.1));
+    if old == new {
+        return;
+    }
+    if old.ring != new.ring {
+        // The ring runs round the whole panel, and changes only while it fades or with NO DATA.
+        damage.make_full();
+        return;
+    }
+    if old.dial != new.dial {
+        for dial in [old.dial, new.dial].into_iter().flatten() {
+            dial_damage(dial, font, damage);
+        }
+    }
+    if old.icon != new.icon {
+        damage.add(Rectangle::new(ICON, Size::new_equal(ICON_SIDE as u32)));
+    }
+    if old.caption != new.caption {
+        for (text, color) in [old.caption, new.caption] {
+            damage.add(centred_bounds(&caption_style(font, color), text, CENTER.x, CAPTION_BASELINE));
+        }
+    }
+    if old.slab != new.slab {
+        damage.add(SLAB);
+    } else if old.readout != new.readout {
+        readout_damage(&old.readout, &new.readout, font, damage);
+    }
+    if old.status != new.status {
+        for status in [old.status, new.status].into_iter().flatten() {
+            let (style, baseline) = status.style(font);
+            damage.add(centred_bounds(&style, status.text, CENTER.x, baseline));
+        }
+    }
+    if old.tilt != new.tilt {
+        for tilt in [&old.tilt, &new.tilt].into_iter().flatten() {
+            damage.add(centred_bounds(&tilt_style(font), tilt, CENTER.x, TILT_BASELINE));
+        }
+    }
+    if old.footer != new.footer {
+        damage.add(DIVIDER);
+        damage.add(centred_bounds(&hint_style(font), HINT, CENTER.x, HINT_BASELINE));
+    }
+}
+
+/// The pixels a dial turned to `heading` covers.
+fn dial_damage(
+    (heading, ticks, letters): (u16, u8, u8),
+    font: &FontdueRenderer<'static, Color>,
+    damage: &mut chrome::Dirty,
+) {
+    let turn = f32::from(heading);
+    if ticks > 0 {
+        let (cx, cy) = (CENTER.x as f32, CENTER.y as f32);
+        for tick in 0..9 {
+            let (mut corners, _, _) = tick_shape(tick, turn);
+            for _ in 0..4 {
+                damage.add_polygon(&corners, 1);
+                // A quarter turn clockwise about the centre, y down.
+                corners = corners.map(|(x, y)| (cx - (y - cy), cy + (x - cx)));
+            }
+        }
+    }
+    if letters > 0 {
+        for (quarter, letter) in LETTERS.into_iter().enumerate() {
+            let (at, _, _) = letter_place(quarter, turn);
+            let reach = letter_style(font, chrome::WHITE).rotated_reach(letter);
+            damage.add_disc((at.x as f32, at.y as f32), reach);
+        }
+    }
+}
+
+/// The pixels that differ between two readouts on the same slab.
+fn readout_damage(
+    old: &Readout,
+    new: &Readout,
+    font: &FontdueRenderer<'static, Color>,
+    damage: &mut chrome::Dirty,
+) {
+    let (Readout::Digits(old_digits, old_unit), Readout::Digits(new_digits, new_unit)) = (old, new)
+    else {
+        damage.add(SLAB);
+        return;
+    };
+    if old_unit != new_unit {
+        let suffix = suffix(font);
+        damage.add(suffix.baseline_bounds(old_unit, SUFFIX));
+        damage.add(suffix.baseline_bounds(new_unit, SUFFIX));
+    }
+    // The numerals are monospaced, so a digit that did not change did not move.
+    let numerals = numerals(font);
+    let old_glyphs = numerals.glyph_bounds(old_digits, READOUT);
+    let new_glyphs = numerals.glyph_bounds(new_digits, READOUT);
+    for ((a, b), (was, now)) in old_digits.chars().zip(new_digits.chars()).zip(old_glyphs.zip(new_glyphs)) {
+        if a != b {
+            damage.add(was);
+            damage.add(now);
+        }
+    }
+    if old_digits.len() != new_digits.len() {
+        damage.add(SLAB);
+    }
+}
+
+fn centred_left(style: &FontdueRenderer<'static, Color>, text: &str, x: i32) -> i32 {
+    libm::roundf(x as f32 - style.advance(text) / 2.0) as i32
+}
+
+/// The ink [`centred`] covers.
+fn centred_bounds(style: &FontdueRenderer<'static, Color>, text: &str, x: i32, baseline: i32) -> Rectangle {
+    style.baseline_bounds(text, Point::new(centred_left(style, text, x), baseline))
+}
+
+/// The line of text a state puts above the slab.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Status {
+    text: &'static str,
+    color: Color,
+    size: u32,
+    index: usize,
+}
+
+fn status(mode: Mode) -> Option<Status> {
     let (text, color, size, index) = match mode {
         Mode::Interference(_) => ("INTERFERENCE", chrome::ORANGE, 24, FRAKTION_BOLD),
         Mode::Calibrating(_) => ("TURN ALL WAYS", chrome::GRAY, 19, FRAKTION),
         Mode::TopEdgeUp => ("TOP EDGE UP", chrome::GRAY, 20, FRAKTION),
         Mode::Heading(_) | Mode::NoData => return None,
     };
-    let style = style(font, color, size, index);
-    let ink = style.baseline_bounds(text, Point::zero());
-    let baseline = STATUS_BAND.top_left.y
-        + (STATUS_BAND.size.height as i32 - ink.size.height as i32) / 2
-        - ink.top_left.y;
-    Some((text, style, baseline))
+    Some(Status {
+        text,
+        color,
+        size,
+        index,
+    })
 }
 
-/// The ticks and the cardinal letters, turned so the top edge reads `heading`.
+impl Status {
+    /// Its style, and the baseline that centres its ink in the status band.
+    fn style(self, font: &FontdueRenderer<'static, Color>) -> (FontdueRenderer<'static, Color>, i32) {
+        let style = style(font, self.color, self.size, self.index);
+        let ink = style.baseline_bounds(self.text, Point::zero());
+        let baseline = STATUS_BAND.top_left.y
+            + (STATUS_BAND.size.height as i32 - ink.size.height as i32) / 2
+            - ink.top_left.y;
+        (style, baseline)
+    }
+}
+
+const LETTERS: [&str; 4] = ["N", "E", "S", "W"];
+
+/// The corners of tick `tick` of the first quarter turned by `turn` degrees, whether it is
+/// major, and its colour. Ticks nine apart are a quarter turn apart and all major or all minor
+/// alike.
+fn tick_shape(tick: usize, turn: f32) -> ([(f32, f32); 4], bool, Color) {
+    let center = (CENTER.x as f32, CENTER.y as f32);
+    let (sin, cos) = libm::sincosf((tick as f32 * 10.0 - turn).to_radians());
+    let major = tick.is_multiple_of(3);
+    let (width, inner, color) = if major {
+        (4.0, 202.0, chrome::WHITE)
+    } else {
+        (2.0, 216.0, chrome::GRAY)
+    };
+    let outer = 226.0;
+    let point = |along: f32, across: f32| {
+        (
+            center.0 + sin * along + cos * across,
+            center.1 - cos * along + sin * across,
+        )
+    };
+    (
+        [
+            point(outer, -width / 2.0),
+            point(outer, width / 2.0),
+            point(inner, width / 2.0),
+            point(inner, -width / 2.0),
+        ],
+        major,
+        color,
+    )
+}
+
+/// Where letter `quarter` centres with the dial turned by `turn` degrees, and the cosine and sine
+/// it is turned by, so its top faces outward all the way round.
+fn letter_place(quarter: usize, turn: f32) -> (Point, f32, f32) {
+    let (sin, cos) = libm::sincosf((quarter as f32 * 90.0 - turn).to_radians());
+    let at = Point::new(
+        libm::roundf(CENTER.x as f32 + sin * LETTER_RADIUS) as i32,
+        libm::roundf(CENTER.y as f32 - cos * LETTER_RADIUS) as i32,
+    );
+    (at, cos, sin)
+}
+
+/// The ticks and the cardinal letters, turned so the top edge reads `heading`, each faded in by
+/// its amount.
 fn draw_dial<D>(
     heading: u16,
-    accents: Accents,
+    ticks: u8,
+    letters: u8,
     font: &FontdueRenderer<'static, Color>,
     field: &mut D,
 ) -> Result<(), D::Error>
@@ -293,72 +550,39 @@ where
     D: CoverageTarget<Color = Color>,
 {
     let turn = f32::from(heading);
-    let center = (CENTER.x as f32, CENTER.y as f32);
-    if accents.ticks > 0 {
-        // One quarter of the ticks is filled, and each is drawn at all four quarter turns:
-        // ticks nine apart are a quarter turn apart and all major or all minor alike.
+    if ticks > 0 {
+        // One quarter of the ticks is filled, and each is drawn at all four quarter turns.
         let mut raster = fontdue::raster::Raster::empty();
         let mut coverage = alloc::vec::Vec::new();
         for tick in 0..9 {
-            let (sin, cos) = libm::sincosf((tick as f32 * 10.0 - turn).to_radians());
-            let major = tick % 3 == 0;
-            let (width, inner, color) = if major {
-                (4.0, 202.0, chrome::WHITE)
-            } else {
-                (2.0, 216.0, chrome::GRAY)
-            };
-            let outer = 226.0;
-            let point = |along: f32, across: f32| {
-                (
-                    center.0 + sin * along + cos * across,
-                    center.1 - cos * along + sin * across,
-                )
-            };
+            let (corners, _, color) = tick_shape(tick, turn);
             super::smooth::polygon_quarters(
                 field,
                 &mut raster,
                 &mut coverage,
-                &[
-                    point(outer, -width / 2.0),
-                    point(outer, width / 2.0),
-                    point(inner, width / 2.0),
-                    point(inner, -width / 2.0),
-                ],
+                &corners,
                 CENTER,
-                faded(color, accents.ticks),
+                faded(color, ticks),
             );
         }
     }
-    if accents.letters > 0 {
-        for (quarter, letter) in ["N", "E", "S", "W"].into_iter().enumerate() {
-            let (sin, cos) = libm::sincosf((quarter as f32 * 90.0 - turn).to_radians());
-            let at = Point::new(
-                libm::roundf(center.0 + sin * LETTER_RADIUS) as i32,
-                libm::roundf(center.1 - cos * LETTER_RADIUS) as i32,
-            );
+    if letters > 0 {
+        for (quarter, letter) in LETTERS.into_iter().enumerate() {
+            let (at, cos, sin) = letter_place(quarter, turn);
             let color = if quarter == 0 { chrome::ORANGE } else { chrome::WHITE };
-            // Turned by the letter's own bearing, so its top faces outward all the way round.
-            style(font, faded(color, accents.letters), 40, SHAPIRO)
-                .draw_rotated(letter, at, cos, sin, field)?;
+            letter_style(font, faded(color, letters)).draw_rotated(letter, at, cos, sin, field)?;
         }
     }
     Ok(())
 }
 
 fn draw_icon<D: DrawTarget<Color = Color>>(
-    mode: Mode,
-    amount: u8,
+    icon: &Icon,
+    color: Color,
     target: &mut D,
 ) -> Result<(), D::Error> {
-    if amount == 0 {
-        return Ok(());
-    }
-    let side = ICON_SIDE;
-    target.fill_solid(
-        &Rectangle::new(ICON, Size::new_equal(side as u32)),
-        faded(mode.icon_color(), amount),
-    )?;
-    for (row, bits) in mode.icon().iter().enumerate() {
+    target.fill_solid(&Rectangle::new(ICON, Size::new_equal(ICON_SIDE as u32)), color)?;
+    for (row, bits) in icon.iter().enumerate() {
         for column in (0..5).filter(|column| bits & (0b10000 >> column) != 0) {
             let corner = ICON
                 + Point::new(
@@ -384,34 +608,21 @@ fn dashes_origin(numerals: &FontdueRenderer<'static, Color>) -> Point {
 }
 
 fn draw_readout<D: CoverageTarget<Color = Color>>(
-    mode: Mode,
+    readout: &Readout,
     font: &FontdueRenderer<'static, Color>,
     slab: &mut D,
 ) -> Result<(), D::Error> {
-    let numerals = style(font, chrome::BLACK, 86, FRAKTION_BOLD);
-    let suffix = style(font, chrome::BLACK, 40, FRAKTION_BOLD);
-    let mut digits = heapless::String::<4>::new();
-    let unit = match mode {
-        Mode::NoData => {
-            return style(font, chrome::BLACK, 28, SHAPIRO)
-                .draw_aligned("NO DATA", &SLAB, horizontal::Center, vertical::Center, slab)
-                .map(drop);
+    let numerals = numerals(font);
+    match readout {
+        Readout::NoData => style(font, chrome::BLACK, 28, SHAPIRO)
+            .draw_aligned("NO DATA", &SLAB, horizontal::Center, vertical::Center, slab)
+            .map(drop),
+        Readout::Dashes => numerals.draw_on_baseline(DASHES, dashes_origin(&numerals), slab),
+        Readout::Digits(digits, unit) => {
+            numerals.draw_on_baseline(digits, READOUT, slab)?;
+            suffix(font).draw_on_baseline(unit, SUFFIX, slab)
         }
-        Mode::Heading(degrees) | Mode::Interference(degrees) => {
-            _ = write!(digits, "{degrees:03}");
-            Some("\u{b0}")
-        }
-        Mode::Calibrating(percent) => {
-            _ = write!(digits, "{percent:03}");
-            Some("%")
-        }
-        Mode::TopEdgeUp => return numerals.draw_on_baseline(DASHES, dashes_origin(&numerals), slab),
-    };
-    numerals.draw_on_baseline(&digits, READOUT, slab)?;
-    if let Some(unit) = unit {
-        suffix.draw_on_baseline(unit, SUFFIX, slab)?;
     }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -462,8 +673,7 @@ mod tests {
     #[test]
     fn every_readout_fits_the_slab() {
         let font = renderer();
-        let numerals = style(&font, chrome::BLACK, 86, FRAKTION_BOLD);
-        let suffix = style(&font, chrome::BLACK, 40, FRAKTION_BOLD);
+        let (numerals, suffix) = (numerals(&font), suffix(&font));
         for (digits, unit) in [("000", "\u{b0}"), ("359", "\u{b0}"), ("000", "%"), ("100", "%")] {
             let ink = numerals.baseline_bounds(digits, READOUT);
             let mark = suffix.baseline_bounds(unit, SUFFIX);
@@ -487,7 +697,7 @@ mod tests {
     #[test]
     fn the_dashes_are_centred_in_the_slab() {
         let font = renderer();
-        let numerals = style(&font, chrome::BLACK, 86, FRAKTION_BOLD);
+        let numerals = numerals(&font);
         let ink = numerals.baseline_bounds(DASHES, dashes_origin(&numerals));
         let offset = ink.center() - SLAB.center();
         assert!(offset.x.abs() <= 1 && offset.y.abs() <= 1, "{ink:?} is off centre by {offset:?}");
@@ -497,9 +707,10 @@ mod tests {
     fn the_status_lines_sit_in_their_band_and_clear_the_letters() {
         let font = renderer();
         for mode in [Mode::Interference(0), Mode::Calibrating(0), Mode::TopEdgeUp] {
-            let (text, style, baseline) = status_line(mode, &font).unwrap();
-            let left = CENTER.x - libm::roundf(style.advance(text) / 2.0) as i32;
-            let ink = style.baseline_bounds(text, Point::new(left, baseline));
+            let status = status(mode).unwrap();
+            let (style, baseline) = status.style(&font);
+            let text = status.text;
+            let ink = centred_bounds(&style, text, CENTER.x, baseline);
             let band = STATUS_BAND;
             assert!(
                 ink.top_left.y >= band.top_left.y

@@ -1,7 +1,7 @@
 use embedded_graphics::prelude::{Point, Size};
 use embedded_graphics::primitives::Rectangle;
 use octowhere_ui::{
-    chrome::{Window, FB},
+    chrome::{Clip, Dirty, Window, FB},
     ui::{
         compass::CompassView,
         gesture::{LIFT_SAMPLES, Micros},
@@ -421,4 +421,122 @@ fn a_heading_back_slowly_from_top_edge_up_reveals_again() {
 fn a_heading_back_from_no_data_reveals_again() {
     let accents = heading_back_after(Motion::default(), 300_000);
     assert!(accents.ticks < 255 && accents.letters == 0, "{accents:?}");
+}
+
+/// Two framebuffers drawn in turn as the frame loop draws them: each repaints the damage of the
+/// step before as well as its own, since it last saw the frame before that.
+struct Buffers {
+    fbs: [Box<FB>; 2],
+    next: usize,
+    previous: Dirty,
+    drawn: [bool; 2],
+    /// Pixels repainted, over every step.
+    pixels: u64,
+}
+
+impl Buffers {
+    fn new() -> Self {
+        Self {
+            fbs: [FB::boxed(), FB::boxed()],
+            next: 0,
+            previous: Dirty::new_full(),
+            drawn: [false; 2],
+            pixels: 0,
+        }
+    }
+
+    /// Draws `stage` after a step that changed `changed`, and returns the buffer drawn into.
+    fn draw(&mut self, stage: &Stage, changed: &Dirty) -> &FB {
+        let mut repaint = self.previous.clone();
+        repaint.extend(changed);
+        self.previous = changed.clone();
+        let index = self.next;
+        self.next ^= 1;
+        let fb = &mut *self.fbs[index];
+        if repaint.is_full() || !self.drawn[index] {
+            self.drawn[index] = true;
+            self.pixels += 466 * 466;
+            stage.draw(fb);
+        } else if !repaint.is_empty() {
+            self.pixels += u64::from(repaint.pixels());
+            stage.draw(&mut Clip::new(fb, &repaint));
+        }
+        &self.fbs[index]
+    }
+}
+
+fn differing(a: &FB, b: &FB) -> usize {
+    (0..466 * 466)
+        .map(|index| Point::new(index % 466, index / 466))
+        .filter(|&point| a.pixel(point) != b.pixel(point))
+        .count()
+}
+
+/// Readings that walk the compass through every state and turn the dial both ways.
+fn compass_walk() -> Vec<(String, Motion)> {
+    let mut walk = Vec::new();
+    for step in 0..40 {
+        // Uneven steps, across north, both ways.
+        let decidegrees = (3400 + step * 37) % 3600;
+        walk.push((format!("heading {decidegrees}"), heading(decidegrees as u16)));
+    }
+    for step in 0..12 {
+        let mut motion = heading(1234 - step * 13);
+        motion.compass.pitch_deg = (step as i8 - 6) * 17;
+        motion.compass.roll_deg = (step as i8 * 23).wrapping_sub(90);
+        motion.compass.disturbed = step % 3 == 0;
+        walk.push((format!("tilted {step}"), motion));
+    }
+    walk.push(("top edge up".into(), top_edge_up()));
+    walk.push(("back from top edge".into(), heading(900)));
+    for percent in [0, 9, 10, 54, 99] {
+        let mut motion = heading(900);
+        motion.compass.heading_decidegrees = None;
+        motion.compass.calibration_percent = percent;
+        walk.push((format!("calibrating {percent}"), motion));
+    }
+    walk.push(("no data".into(), Motion::default()));
+    walk.push(("heading after no data".into(), heading(2700)));
+    walk
+}
+
+/// Redrawing only what each step marked leaves both buffers as a full redraw would, through
+/// fades, turns and every state change.
+#[test]
+fn compass_damage_redraws_what_changed() {
+    let mut driver = Driver::settled_on_compass();
+    let mut buffers = Buffers::new();
+    for _ in 0..2 {
+        buffers.draw(&driver.stage, &Dirty::new_full());
+    }
+    for (name, motion) in compass_walk() {
+        // Each reading, then a few quiet steps for any fade it starts.
+        let mut update = driver.motion(motion);
+        for frame in 0..6 {
+            let partial = buffers.draw(&driver.stage, &update.changed);
+            let whole = render(&driver.stage);
+            let wrong = differing(partial, &whole);
+            assert_eq!(wrong, 0, "{name}, frame {frame}: {wrong} pixels differ");
+            update = driver.step(Input::default());
+        }
+    }
+}
+
+/// How many pixels a turning dial repaints per step, against the full panel.
+#[test]
+fn a_turning_dial_repaints_a_fraction_of_the_panel() {
+    let mut driver = Driver::settled_on_compass();
+    let mut buffers = Buffers::new();
+    for _ in 0..2 {
+        buffers.draw(&driver.stage, &Dirty::new_full());
+    }
+    buffers.pixels = 0;
+    const STEPS: u64 = 90;
+    for step in 0..STEPS {
+        let update = driver.motion(heading((470 + step * 10) as u16));
+        buffers.draw(&driver.stage, &update.changed);
+    }
+    let share = buffers.pixels as f64 / (STEPS * 466 * 466) as f64;
+    println!("a degree a step repaints {:.1}% of the panel", share * 100.0);
+    assert!(share < 0.5, "{:.1}%", share * 100.0);
 }

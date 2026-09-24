@@ -7,7 +7,7 @@ use embedded_graphics::prelude::Point;
 use super::{
     axis_check::{self, AxisCheck},
     compass::CompassView,
-    compass_screen::{Accents, Mode},
+    compass_screen::{self, Accents, Mode},
     gesture::{GestureEvent, GestureTracker, Micros},
     input::TouchState,
     pager::Pager,
@@ -85,7 +85,7 @@ pub struct Input {
 /// What the frame loop owes after a step.
 #[derive(Debug)]
 pub struct Update {
-    /// The regions whose pixels changed.
+    /// The pixels that changed.
     pub changed: Dirty,
     /// A cover over the settled compass page asked for the calibration to restart.
     pub recalibrate: bool,
@@ -115,6 +115,8 @@ pub struct Stage {
     top_edge_since: Option<Micros>,
     accents: Accents,
     fading: bool,
+    /// What the compass page showed after the last step, while it filled the panel.
+    drawn_compass: Option<(CompassView, Accents)>,
 }
 
 impl Stage {
@@ -142,6 +144,7 @@ impl Stage {
             top_edge_since: None,
             accents: Accents::FULL,
             fading: false,
+            drawn_compass: None,
         }
     }
 
@@ -157,6 +160,7 @@ impl Stage {
         self.compass_settled = None;
         self.heading_since = None;
         self.top_edge_since = None;
+        self.drawn_compass = None;
     }
 
     #[must_use]
@@ -202,7 +206,9 @@ impl Stage {
             pose: None,
             samples_fast: false,
         };
-        let changed = &mut update.changed;
+        // Set where a change needs the whole panel redrawn. The settled compass works out its own
+        // damage instead.
+        let mut full = false;
         let previous_touch = (
             self.peripherals.touch_points,
             self.peripherals.touch_position,
@@ -220,7 +226,7 @@ impl Stage {
                 self.screen,
                 Screen::Motion | Screen::Compass | Screen::AxisCheck
             ) {
-                changed.make_full();
+                full = true;
             }
         }
         if let Some(sensors) = sensors {
@@ -232,7 +238,7 @@ impl Stage {
             peripherals.gnss_valid = sensors.gnss_fix;
             peripherals.lora_irq = sensors.lora_irq;
             peripherals.clock = sensors.clock;
-            changed.make_full();
+            full = true;
         }
 
         if let Some(touch) = touch {
@@ -306,7 +312,7 @@ impl Stage {
                 let compass = &mut self.peripherals.compass;
                 compass.calibration_percent = 0;
                 compass.heading_decidegrees = None;
-                changed.make_full();
+                full = true;
             }
             match touch {
                 Touch::Cover => self.covered_at = Some(now),
@@ -321,22 +327,35 @@ impl Stage {
         let accents = self.compass_accents(now);
         if accents != self.accents {
             self.accents = accents;
-            changed.make_full();
+            full = true;
         }
 
         let axis_check = self.axis_check.view();
         if axis_check != self.peripherals.axis_check {
             self.peripherals.axis_check = axis_check;
-            changed.make_full();
+            full = true;
         }
         if view != previous_view || self.selected_node != previous_selected_node {
-            changed.make_full();
+            full = true;
         }
         if self.screen == Screen::Touch
             && (touch_points, touch_positions[0], touch_positions) != previous_touch
         {
-            changed.make_full();
+            full = true;
         }
+        let compass = (self.screen == Screen::Compass && view.offset == 0 && view.neighbour.is_none())
+            .then_some((self.peripherals.compass, self.accents));
+        match (self.drawn_compass, compass) {
+            (Some(before), Some(after)) => compass_screen::damage(
+                (&before.0, before.1),
+                (&after.0, after.1),
+                &self.renderer,
+                &mut update.changed,
+            ),
+            _ if full => update.changed.make_full(),
+            _ => {}
+        }
+        self.drawn_compass = compass;
         update
     }
 
@@ -400,8 +419,8 @@ impl Stage {
         }
     }
 
-    /// Draws the current state into `target` and returns the regions it drew.
-    pub fn draw<D>(&self, target: &mut D) -> Dirty
+    /// Draws the current state into `target`.
+    pub fn draw<D>(&self, target: &mut D)
     where
         D: CoverageTarget<Color = Color>,
         D::Error: core::fmt::Debug,

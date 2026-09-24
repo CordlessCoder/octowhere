@@ -6,7 +6,10 @@
 
 use alloc::vec::Vec;
 
-use embedded_graphics::prelude::Point;
+use embedded_graphics::{
+    prelude::{Point, Size},
+    primitives::Rectangle,
+};
 use fontdue::{PathEvent, Transform, raster::Raster, rasterize_path_clipped};
 
 use crate::chrome::CoverageTarget;
@@ -105,6 +108,19 @@ pub fn polygon_quarters<D: CoverageTarget>(
     if width == 0 || height == 0 {
         return;
     }
+    // Offsets from the centre corner of the fill's first column and row, and of its last.
+    let (dx0, dy0) = (left - center.x, top - center.y);
+    let (dx1, dy1) = (dx0 + width as i32 - 1, dy0 + height as i32 - 1);
+    let (along, across) = (Size::new(width as u32, height as u32), Size::new(height as u32, width as u32));
+    let quarters = [
+        Rectangle::new(Point::new(left, top), along),
+        Rectangle::new(Point::new(center.x + dy0, center.y - 1 - dx1), across),
+        Rectangle::new(Point::new(center.x - 1 - dx1, center.y - 1 - dy1), along),
+        Rectangle::new(Point::new(center.x - 1 - dy1, center.y + dx0), across),
+    ];
+    if !quarters.iter().any(|quarter| target.visible(quarter)) {
+        return;
+    }
     raster.resize(width, height);
     let path = corners.iter().enumerate().map(|(index, &(x, y))| {
         if index == 0 {
@@ -119,9 +135,6 @@ pub fn polygon_quarters<D: CoverageTarget>(
         .get_bitmap_iter()
         .for_each(|covered| coverage.push(covered));
 
-    // Offsets from the centre corner of the fill's first column and row, and of its last.
-    let (dx0, dy0) = (left - center.x, top - center.y);
-    let (dx1, dy1) = (dx0 + width as i32 - 1, dy0 + height as i32 - 1);
     let mut line = Vec::with_capacity(width.max(height));
     // A clockwise quarter turn takes the pixel at offset (dx, dy) to (-1 - dy, dx), so each turn
     // of the fill is still whole rows: its own rows, reversed, or its columns.

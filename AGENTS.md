@@ -252,7 +252,7 @@ errata workaround, are in [`docs/hardware-notes.md`](docs/hardware-notes.md).
 
 ## Memory
 
-- The current internal heap is 260 KiB, allocated by `esp_alloc::heap_allocator!` in `main`.
+- The current internal heap is 252 KiB, allocated by `esp_alloc::heap_allocator!` in `main`.
 - PSRAM is registered in the separate `PSRAM_HEAP` static. Framebuffers must be allocated with
   `FB::alloc(&PSRAM_HEAP)` rather than the global allocator.
 - The current RGB565 configuration uses 466 × 466 × 2 = 434,312 bytes per framebuffer, with two

@@ -11,7 +11,7 @@ use embedded_graphics::{
 use embedded_layout::align::{HorizontalAlignment, VerticalAlignment};
 use fontdue::{FontRepr, layout::Layout};
 
-use crate::{board, ui::dirty::DirtyAreas};
+use crate::{board, ui::dirty::RowSpans};
 
 // Rgb888 is higher quality, Rgb565 cuts the size of the framebuffer by a third.
 // Gray8 is 3x smaller than Rgb888... but I'm not sure we love monochrome.
@@ -31,8 +31,14 @@ pub type FB = crate::framebuffer::Framebuffer<
     { board::LCD_HEIGHT as usize },
     Color,
 >;
+/// Spans kept per band of damage. The turning dial puts marks on both sides of most rows, and a
+/// letter or the slab can sit between them.
+pub const DAMAGE_SPANS: usize = 4;
+/// What starting another flush region costs, in pixels sent. A flush rectangle grows over a
+/// neighbouring span while that wastes no more than this.
+pub const FLUSH_OVERHEAD: u32 = 512;
 pub type Dirty =
-    DirtyAreas<{ board::LCD_WIDTH as usize }, { board::LCD_HEIGHT as usize }, 2, 2, { 2 * 2 }>;
+    RowSpans<{ board::LCD_WIDTH as usize }, { board::LCD_HEIGHT as usize / 2 }, DAMAGE_SPANS>;
 
 /// A draw target that takes antialiased coverage a row at a time and blends it over what it
 /// already holds, so edges come out right over any background.
@@ -41,6 +47,12 @@ pub trait CoverageTarget: DrawTarget {
     /// the pixel, 255 replaces it, and anything between mixes with it. Pixels outside the target
     /// are skipped.
     fn blend_row(&mut self, x: i32, y: i32, coverage: &[u8], color: Self::Color);
+
+    /// Whether anything drawn in `area` can land. A drawing may skip work it knows is outside;
+    /// it must still clip, since this is only a hint.
+    fn visible(&self, area: &Rectangle) -> bool {
+        !area.intersection(&self.bounding_box()).is_zero_sized()
+    }
 
     fn blend_pixel(&mut self, point: Point, coverage: u8, color: Self::Color) {
         self.blend_row(point.x, point.y, &[coverage], color);
@@ -105,6 +117,10 @@ impl<T: CoverageTarget> DrawTarget for OnBackground<'_, T> {
 }
 
 impl<T: CoverageTarget> CoverageTarget for OnBackground<'_, T> {
+    fn visible(&self, area: &Rectangle) -> bool {
+        self.parent.visible(area)
+    }
+
     fn blend_row(&mut self, x: i32, y: i32, coverage: &[u8], color: Self::Color) {
         self.parent.blend_row_over(x, y, coverage, color, self.background);
     }
@@ -283,6 +299,11 @@ impl<T: CoverageTarget> Window<'_, T> {
 }
 
 impl<T: CoverageTarget> CoverageTarget for Window<'_, T> {
+    fn visible(&self, area: &Rectangle) -> bool {
+        let area = area.translate(self.offset).intersection(&self.clip);
+        !area.is_zero_sized() && self.parent.visible(&area)
+    }
+
     fn blend_row_over(
         &mut self,
         x: i32,
@@ -299,6 +320,115 @@ impl<T: CoverageTarget> CoverageTarget for Window<'_, T> {
     fn blend_row(&mut self, x: i32, y: i32, coverage: &[u8], color: Self::Color) {
         if let Some((x, y, coverage)) = self.clip_row(x, y, coverage) {
             self.parent.blend_row(x, y, coverage, color);
+        }
+    }
+}
+
+/// A view of `parent` that draws only where `damage` marks.
+pub struct Clip<'a, T> {
+    parent: &'a mut T,
+    damage: &'a Dirty,
+}
+
+impl<'a, T> Clip<'a, T> {
+    pub fn new(parent: &'a mut T, damage: &'a Dirty) -> Self {
+        Self { parent, damage }
+    }
+}
+
+/// Each damaged part of row `y` that `x..x + len` covers, as its start and its range within the
+/// row.
+fn damaged_parts(
+    damage: &Dirty,
+    x: i32,
+    y: i32,
+    len: usize,
+) -> impl Iterator<Item = (i32, core::ops::Range<usize>)> + '_ {
+    let end = x.saturating_add(len as i32);
+    damage.spans(y).filter_map(move |(start, stop)| {
+        let (from, to) = (x.max(start), end.min(stop));
+        (from < to).then(|| (from, (from - x) as usize..(to - x) as usize))
+    })
+}
+
+impl<T: DrawTarget> Dimensions for Clip<'_, T> {
+    fn bounding_box(&self) -> Rectangle {
+        self.damage.bounding_box().intersection(&self.parent.bounding_box())
+    }
+}
+
+impl<T: DrawTarget> DrawTarget for Clip<'_, T> {
+    type Color = T::Color;
+    type Error = T::Error;
+
+    fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = Pixel<Self::Color>>,
+    {
+        let damage = self.damage;
+        self.parent.draw_iter(
+            pixels
+                .into_iter()
+                .filter(|Pixel(point, _)| damage.contains(*point)),
+        )
+    }
+
+    fn fill_contiguous<I>(&mut self, area: &Rectangle, colors: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = Self::Color>,
+    {
+        let damage = self.damage;
+        self.parent.draw_iter(
+            area.points()
+                .zip(colors)
+                .filter(|(point, _)| damage.contains(*point))
+                .map(|(point, color)| Pixel(point, color)),
+        )
+    }
+
+    fn fill_solid(&mut self, area: &Rectangle, color: Self::Color) -> Result<(), Self::Error> {
+        let Some(bottom_right) = area.bottom_right() else {
+            return Ok(());
+        };
+        let (left, right) = (area.top_left.x, bottom_right.x + 1);
+        let bounds = self.damage.bounding_box();
+        let Some(last) = bounds.bottom_right() else {
+            return Ok(());
+        };
+        for y in area.top_left.y.max(bounds.top_left.y)..=bottom_right.y.min(last.y) {
+            for (start, end) in self.damage.spans(y) {
+                let (from, to) = (left.max(start), right.min(end));
+                if from < to {
+                    let row = Rectangle::new(Point::new(from, y), Size::new((to - from) as u32, 1));
+                    self.parent.fill_solid(&row, color)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<T: CoverageTarget> CoverageTarget for Clip<'_, T> {
+    fn visible(&self, area: &Rectangle) -> bool {
+        self.damage.intersects(area) && self.parent.visible(area)
+    }
+
+    fn blend_row(&mut self, x: i32, y: i32, coverage: &[u8], color: Self::Color) {
+        for (start, range) in damaged_parts(self.damage, x, y, coverage.len()) {
+            self.parent.blend_row(start, y, &coverage[range], color);
+        }
+    }
+
+    fn blend_row_over(
+        &mut self,
+        x: i32,
+        y: i32,
+        coverage: &[u8],
+        color: Self::Color,
+        background: Self::Color,
+    ) {
+        for (start, range) in damaged_parts(self.damage, x, y, coverage.len()) {
+            self.parent.blend_row_over(start, y, &coverage[range], color, background);
         }
     }
 }
@@ -436,6 +566,18 @@ fn blend_glyph<D: CoverageTarget>(
     bitmap.rows(row, |y, x, span| {
         target.blend_row(corner.x + x as i32, corner.y + y as i32, span, color);
     });
+}
+
+/// The farthest a glyph's ink box reaches from `origin`, given its pen at `pen` relative to it, y
+/// down, plus a pixel for the edges' coverage.
+fn glyph_reach(pen: (f32, f32), metrics: &fontdue::Metrics) -> f32 {
+    if metrics.width == 0 || metrics.height == 0 {
+        return 0.0;
+    }
+    let (left, right) = (pen.0 + metrics.xmin as f32, pen.0 + (metrics.xmin + metrics.width as i32) as f32);
+    let (top, bottom) = (pen.1 - (metrics.ymin + metrics.height as i32) as f32, pen.1 - metrics.ymin as f32);
+    let far = |a: f32, b: f32| a.abs().max(b.abs());
+    libm::hypotf(far(left, right), far(top, bottom)) + 1.5
 }
 
 impl Default for FontdueRendererCtx {
@@ -614,6 +756,45 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
         Ok(rendered)
     }
 
+    /// Where [`draw_rotated`](Self::draw_rotated) starts each glyph's pen, relative to `center`
+    /// and before turning, with the glyph's metrics.
+    fn rotated_pens<'s>(
+        &'s self,
+        text: &'s str,
+    ) -> Option<impl Iterator<Item = (u16, (f32, f32), fontdue::Metrics)> + 's> {
+        let font = self.fonts[self.font_index];
+        let px = self.font_size as f32;
+        let mut offsets = fontdue::PenOffsets::new(font, text, px);
+        let (mut bottom, mut top) = (i32::MAX, i32::MIN);
+        for (index, _) in offsets.by_ref() {
+            let metrics = font.metrics_indexed(index, px);
+            if metrics.height > 0 {
+                bottom = bottom.min(metrics.ymin);
+                top = top.max(metrics.ymin + metrics.height as i32);
+            }
+        }
+        if bottom > top {
+            return None;
+        }
+        // Pen-relative and y down: back half the advance, and down to the middle of the ink.
+        let start = (-offsets.advance() / 2.0, (bottom + top) as f32 / 2.0);
+        Some(
+            fontdue::PenOffsets::new(font, text, px).map(move |(index, offset)| {
+                (index, (start.0 + offset, start.1), font.metrics_indexed(index, px))
+            }),
+        )
+    }
+
+    /// How far from `center` the ink of [`draw_rotated`](Self::draw_rotated) can reach at any
+    /// angle, counting pixels its edges touch.
+    #[must_use]
+    pub fn rotated_reach(&self, text: &str) -> f32 {
+        self.rotated_pens(text).map_or(0.0, |pens| {
+            pens.map(|(_, pen, metrics)| glyph_reach(pen, &metrics))
+                .fold(0.0, f32::max)
+        })
+    }
+
     /// Draws `text` centred on `center`, turned clockwise by the angle with this cosine and sine.
     pub fn draw_rotated<D: CoverageTarget<Color = C>>(
         &self,
@@ -626,24 +807,20 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
         let font = self.fonts[self.font_index];
         let px = self.font_size as f32;
         let transform = fontdue::Transform::rotation(cos, sin);
-        let mut offsets = fontdue::PenOffsets::new(font, text, px);
-        let (mut bottom, mut top) = (i32::MAX, i32::MIN);
-        for (index, _) in offsets.by_ref() {
-            let metrics = font.metrics_indexed(index, px);
-            if metrics.height > 0 {
-                bottom = bottom.min(metrics.ymin);
-                top = top.max(metrics.ymin + metrics.height as i32);
-            }
-        }
-        if bottom > top {
+        let Some(pens) = self.rotated_pens(text) else {
             return Ok(());
-        }
-        // Pen-relative and y down: back half the advance, and down to the middle of the ink.
-        let start = (-offsets.advance() / 2.0, (bottom + top) as f32 / 2.0);
+        };
         let ctx = &mut *self.ctx.borrow_mut();
-        for (index, offset) in fontdue::PenOffsets::new(font, text, px) {
-            let (dx, dy) = transform.apply(start.0 + offset, start.1);
+        for (index, start, metrics) in pens {
+            let (dx, dy) = transform.apply(start.0, start.1);
             let pen = (center.x as f32 + dx, center.y as f32 + dy);
+            // The glyph turns about its pen, so it stays within its unturned reach of it.
+            let reach = libm::ceilf(glyph_reach((0.0, 0.0), &metrics)) as i32;
+            let around = Point::new(libm::floorf(pen.0) as i32, libm::floorf(pen.1) as i32);
+            if !target.visible(&Rectangle::with_center(around, Size::new_equal(2 * reach as u32 + 2)))
+            {
+                continue;
+            }
             let (metrics, bitmap) =
                 font.rasterize_indexed_transformed(&mut ctx.canvas, index, px, transform, pen);
             ctx.coverage.resize(metrics.width, 0);
@@ -707,13 +884,18 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
             coverage,
         } = &mut *ctx;
         for glyph in layout.glyphs().iter().filter(|g| g.char_data.rasterize()) {
+            let corner = position + Point::new(glyph.x as i32, glyph.y as i32);
+            let size = Size::new(glyph.width as u32, glyph.height as u32);
+            if !target.visible(&Rectangle::new(corner, size)) {
+                continue;
+            }
             blend_glyph(
                 canvas,
                 coverage,
                 self.fonts[glyph.font_index],
                 glyph.key.glyph_index,
                 glyph.key.px,
-                position + Point::new(glyph.x as i32, glyph.y as i32),
+                corner,
                 self.text_color,
                 target,
             );
@@ -749,6 +931,15 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
         })
     }
 
+    /// Each glyph's ink bounds, one per character, for `text` whose pen starts at `origin` on the
+    /// baseline. A glyph with no ink has zero-sized bounds.
+    pub fn glyph_bounds<'s>(&'s self, text: &'s str, origin: Point) -> impl Iterator<Item = Rectangle> + 's {
+        self.glyphs_on_baseline(text, origin)
+            .map(|(_, corner, metrics)| {
+                Rectangle::new(corner, Size::new(metrics.width as u32, metrics.height as u32))
+            })
+    }
+
     /// The ink bounds [`draw_on_baseline`](Self::draw_on_baseline) would cover.
     #[must_use]
     pub fn baseline_bounds(&self, text: &str, origin: Point) -> Rectangle {
@@ -777,7 +968,8 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
             canvas, coverage, ..
         } = &mut *ctx;
         for (index, corner, metrics) in self.glyphs_on_baseline(text, origin) {
-            if metrics.width == 0 || metrics.height == 0 {
+            let size = Size::new(metrics.width as u32, metrics.height as u32);
+            if size.width == 0 || size.height == 0 || !target.visible(&Rectangle::new(corner, size)) {
                 continue;
             }
             let color = self.text_color;
