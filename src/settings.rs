@@ -2,7 +2,7 @@
 //! partition. Nothing else in the firmware uses that partition, and the map is not ESP-IDF's NVS
 //! format.
 //!
-//! A flash operation stops the cache both cores run from, so the display core must wait in RAM
+//! A flash write stops the cache both cores run from, so the display core must wait in RAM
 //! for its length. Core 0 asks with [`with_display_core_held`], and the display core's loop owes
 //! a call to [`hold_display_core_if_asked`] between frames, outside any critical section.
 
