@@ -9,7 +9,7 @@ until the feature set is complete, because profiling an incomplete firmware pric
   comes first: the radio moves into its own task, and I2C gets a single owning task.
 
 - Take the framebuffer clear off the drawing core. On the compass it is now the largest cost,
-  about 8.3 ms of a 16–17 ms frame, and it is paid per 64-byte PSRAM cache line: clearing only the
+  about 8.3 ms of a 19 ms heading frame, and it is paid per 64-byte PSRAM cache line: clearing only the
   visible circle saved 0.6 ms, not the 21% its area suggests. The candidates are a GDMA
   memory-to-memory clear, or core 1 clearing a buffer after flushing it. Either changes the
   buffer hand-off in `util::Swap`, and partial redraws rely on a buffer keeping its own pixels,

@@ -150,8 +150,7 @@ row at a time.
   - PP Fraktion Mono Bold, printable ASCII and `°`, built from the full font file with fontdue's
     `chars:` option. Any other glyph in the font files can be added the same way.
 - **Upright text:** any size, aligned in a box with `draw_aligned`, or with its pen on a given
-  baseline with `draw_on_baseline`. Each glyph's coverage is cached by font, glyph and size, so
-  repeated text costs little.
+  baseline with `draw_on_baseline`. Every glyph is rasterized on every draw; nothing is cached.
 - **Rotated text:** `draw_rotated` centres a string on a point, turned by any angle. The cardinal
   letters use it. It rasterizes every glyph every frame, so it is the costliest text.
 - **Text bounds:** `aligned_bounds` and `baseline_bounds` give a string's ink bounds before
@@ -185,22 +184,21 @@ Constraints that shape what is practical:
 
   | Frame | Draw |
   | --- | ---: |
-  | Heading | 16.4 ms |
-  | Interference | 17.0 ms |
-  | Calibrating | 13.6 ms |
-  | Top edge up | 12.8 ms |
-  | No data | 11.9 ms |
-  | Entering, 150 ms after settle | 13.2 ms |
-  | Swipe just begun, dial still showing | 17.2 ms |
-  | Swipe halfway, dial faded out | 12.6 ms |
+  | Heading | 18.7 ms |
+  | Interference | 20.1 ms |
+  | Calibrating | 16.5 ms |
+  | Top edge up | 14.8 ms |
+  | No data | 12.8 ms |
+  | Entering, 150 ms after settle | 15.5 ms |
+  | Swipe just begun, dial still showing | 23.2 ms |
+  | Swipe halfway, dial faded out | 18.4 ms |
 
   Clearing the visible circle alone was about 8.3 ms before this design. Rotated text is the
   costly element. A design that adds rotated labels, or large antialiased areas, will lower the
   frame rate. Ask for a measurement before committing to one. The bench is
-  `bench/compass-states`.
+  `bench/no-glyph-cache` (`compass-state-bench`).
 - **Memory:** a 260 KiB internal heap. A path-fill raster costs 4 bytes per pixel of its bounding
-  box, so a raster the size of the dial is out of reach. The ring is analytic for that reason. The
-  glyph cache holds at most 32 KiB.
+  box, so a raster the size of the dial is out of reach. The ring is analytic for that reason.
 
 ## Rules to keep
 
