@@ -119,19 +119,25 @@ pub fn polygon_quarters<D: CoverageTarget>(
         .get_bitmap_iter()
         .for_each(|covered| coverage.push(covered));
 
-    // Unturned, the fill's rows are the target's rows.
-    for (row, line) in coverage.chunks_exact(width).enumerate() {
-        target.blend_row(left, top + row as i32, line, color);
+    // Offsets from the centre corner of the fill's first column and row, and of its last.
+    let (dx0, dy0) = (left - center.x, top - center.y);
+    let (dx1, dy1) = (dx0 + width as i32 - 1, dy0 + height as i32 - 1);
+    let mut line = Vec::with_capacity(width.max(height));
+    // A clockwise quarter turn takes the pixel at offset (dx, dy) to (-1 - dy, dx), so each turn
+    // of the fill is still whole rows: its own rows, reversed, or its columns.
+    for (row, pixels) in coverage.chunks_exact(width).enumerate() {
+        let dy = dy0 + row as i32;
+        target.blend_row(center.x + dx0, center.y + dy, pixels, color);
+        line.clear();
+        line.extend(pixels.iter().rev());
+        target.blend_row(center.x - 1 - dx1, center.y - 1 - dy, &line, color);
     }
-    for (index, &covered) in coverage.iter().enumerate() {
-        if covered == 0 {
-            continue;
-        }
-        let dx = left + (index % width) as i32 - center.x;
-        let dy = top + (index / width) as i32 - center.y;
-        // Each clockwise quarter takes the pixel at offset (dx, dy) to (-1 - dy, dx).
-        for (dx, dy) in [(-1 - dy, dx), (-1 - dx, -1 - dy), (dy, -1 - dx)] {
-            target.blend_pixel(center + Point::new(dx, dy), covered, color);
-        }
+    for column in 0..width {
+        let dx = dx0 + column as i32;
+        line.clear();
+        line.extend(coverage[column..].iter().step_by(width));
+        target.blend_row(center.x + dy0, center.y - 1 - dx, &line, color);
+        line.reverse();
+        target.blend_row(center.x - 1 - dy1, center.y + dx, &line, color);
     }
 }
