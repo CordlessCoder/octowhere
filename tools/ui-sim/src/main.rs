@@ -6,12 +6,13 @@
 //! ```
 //!
 //! After `--`, `--play <scene>` loops a scene from `scenes.rs` in the window instead, and
-//! `--record <scene> <out.gif>` records one without a window. Both step it on the firmware's
-//! frame period, so a recording is the same every run and shows none of the host's speed.
-//! `--scenes` lists them.
+//! `--record <scene> <out>` records one without a window, to GIF or MP4 by `<out>`'s extension.
+//! Both step it on the firmware's frame period, so a recording is the same every run and shows
+//! none of the host's speed. `--scenes` lists them. MP4 is encoded by `ffmpeg`, which must be on
+//! the path.
 //!
 //! The panel shows only its inscribed circle. The window paints the corners outside it grey, and
-//! screenshots and recordings leave them transparent. `--unmasked`, or M in the window, shows the
+//! screenshots and GIFs leave them transparent. An MP4 has no transparency and keeps the grey. `--unmasked`, or M in the window, shows the
 //! whole framebuffer instead, to see what is drawn where nobody will see it.
 //!
 //! Keys:
@@ -26,11 +27,10 @@
 //!   unreadable.
 //! - Hold H: a hand covering the screen, which restarts calibration on the settled compass.
 //! - Tab: next screen without the slide. P: save the window to `ui-sim-<n>.png` in the current
-//!   directory. V: start or stop recording it to `ui-sim-<n>.gif`, which keeps the mask it
-//!   started with. M: mask the corners or show them. Esc: quit.
+//!   directory. V: start or stop recording it to `ui-sim-<n>.gif`, or `.mp4` with `--mp4`,
+//!   which keeps the mask it started with. M: mask the corners or show them. Esc: quit.
 //!
-//! V samples the window every 20 ms of the host's time, so slow drawing shows in it. For a
-//! video of any recording, `ffmpeg -i ui-sim-1.gif -pix_fmt yuv420p ui-sim-1.mp4`.
+//! V samples the window every 20 ms of the host's time, so slow drawing shows in it.
 //!
 //! Readings are synthetic. Drawing times in the title are the host's and say nothing about the
 //! target.
@@ -229,7 +229,9 @@ fn main() {
     }
     if let Some(rest) = after("--record") {
         let [name, out, ..] = rest else { panic!("--record takes a scene and an output path") };
-        record(scenes::find(name), PathBuf::from(out), masked);
+        let out = PathBuf::from(out);
+        assert!(record::Format::of(&out).is_some(), "--record writes a .gif or an .mp4");
+        record(scenes::find(name), out, masked);
         return;
     }
     let scene = after("--play").map(|rest| {
@@ -253,7 +255,7 @@ fn main() {
     .expect("opening the window");
     match scene {
         Some(scene) => play(&mut window, scene, masked),
-        None => interact(window, masked),
+        None => interact(window, masked, if after("--mp4").is_some() { "mp4" } else { "gif" }),
     }
 }
 
@@ -318,7 +320,8 @@ fn play(window: &mut Window, scene: &scenes::Scene, masked: bool) {
 }
 
 /// The mouse and keyboard drive the stage, on the host's clock.
-fn interact(mut window: Window, masked: bool) {
+/// V records to files ending in `extension`.
+fn interact(mut window: Window, masked: bool, extension: &str) {
     window.set_target_fps(60);
 
     let mut stage = Stage::new(PeripheralState::default());
@@ -367,7 +370,7 @@ fn interact(mut window: Window, masked: bool) {
                         Some(finished) => encoders.push(finished.finish()),
                         None => {
                             recordings += 1;
-                            let path = PathBuf::from(format!("ui-sim-{recordings}.gif"));
+                            let path = PathBuf::from(format!("ui-sim-{recordings}.{extension}"));
                             println!("recording {}", path.display());
                             recording = Some(record::Recording::start(
                                 path,

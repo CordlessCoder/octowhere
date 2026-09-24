@@ -120,12 +120,12 @@ It is expected for this target and is not a regression.
 The UI runs on the host through `crates/octowhere-ui`. Its tests drive a `Stage` through
 `ui::script::Driver` with taps, swipes and readings, and check that a redraw clipped to tiles
 matches a full one. `tools/ui-sim` plays scenes written on the same driver, from its
-`scenes.rs`, and records them to GIF the same every run, which is the way to share an
+`scenes.rs`, and records them to GIF or MP4 the same every run, which is the way to share an
 animation. The `render` example writes every screen to PNG, and `tools/ui-sim` is also the
 interactive window. Both render through the firmware's own drawing code, so they show what the
-panel will show, but they say nothing about draw time on the target. Commands are in the headers of `examples/render.rs` and
-`tools/ui-sim/src/main.rs`. Keep the crate free of board dependencies: that is what lets the host
-build it, and its manifest enforces it.
+panel will show, but they say nothing about draw time on the target. Commands are in the headers
+of `examples/render.rs` and `tools/ui-sim/src/main.rs`. Keep the crate free of board
+dependencies: that is what lets the host build it, and its manifest enforces it.
 
 `host-tests` pulls the board-side modules it can test (`util` and the I2C peripherals) in by
 `#[path]` rather than copying them, so those must keep compiling for std on x86. Board-only
