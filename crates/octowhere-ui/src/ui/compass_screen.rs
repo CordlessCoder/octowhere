@@ -5,7 +5,6 @@
 use core::fmt::Write as _;
 
 use embedded_graphics::{
-    draw_target::DrawTarget,
     prelude::{Point, Size},
     primitives::Rectangle,
 };
@@ -45,11 +44,6 @@ const ICON: Tile = Tile {
 const READOUT: Point = Point::new(143, SLAB.top_left.y + 79);
 const SUFFIX: Point = Point::new(298, SLAB.top_left.y + 43);
 const TILT_BASELINE: i32 = 327;
-/// The divider draws out from its centre, at progress k spanning `DIVIDER_MIDDLE ± DIVIDER_HALF * k`.
-const DIVIDER_ROW: i32 = 336;
-const DIVIDER_MIDDLE: f32 = 233.5;
-const DIVIDER_HALF: f32 = 95.5;
-const HINT_BASELINE: i32 = 352;
 const LETTER_RADIUS: f32 = 172.0;
 
 /// What the screen shows, in the order that decides between them.
@@ -120,17 +114,14 @@ pub fn degrees(decidegrees: u16) -> u16 {
 }
 
 /// How far each of the screen's accents has come in: the ring's fade, how many rows of the
-/// icon's modules show (0 to 5), and the caption's reveal, the dial's sweep, the divider's
-/// draw-out and the hint's reveal, each 0 to 255. The stage animates these; the centre content
-/// always shows whole.
+/// icon's modules show (0 to 5), and the caption's reveal and the dial's sweep, each 0 to 255.
+/// The stage animates these; the centre content always shows whole.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Accents {
     pub ring: u8,
     pub icon_rows: u8,
     pub caption: u8,
     pub dial: u8,
-    pub divider: u8,
-    pub hint: u8,
 }
 
 impl Accents {
@@ -139,16 +130,12 @@ impl Accents {
         icon_rows: 5,
         caption: u8::MAX,
         dial: u8::MAX,
-        divider: u8::MAX,
-        hint: u8::MAX,
     };
     pub const HIDDEN: Self = Self {
         ring: 0,
         icon_rows: 0,
         caption: 0,
         dial: 0,
-        divider: 0,
-        hint: 0,
     };
 
     /// Each accent at the lesser of the two.
@@ -159,8 +146,6 @@ impl Accents {
             icon_rows: self.icon_rows.min(other.icon_rows),
             caption: self.caption.min(other.caption),
             dial: self.dial.min(other.dial),
-            divider: self.divider.min(other.divider),
-            hint: self.hint.min(other.hint),
         }
     }
 }
@@ -185,15 +170,6 @@ fn swept(progress: u8) -> u8 {
     (0..MARKS)
         .take_while(|&mark| u32::from(mark) * 10 * 255 < u32::from(progress) * 360)
         .count() as u8
-}
-
-/// The divider's columns at `progress` of its draw-out, as a start and an end past it.
-fn divider_span(progress: u8) -> (i32, i32) {
-    let half = DIVIDER_HALF * f32::from(progress) / 255.0;
-    (
-        libm::roundf(DIVIDER_MIDDLE - half) as i32,
-        libm::roundf(DIVIDER_MIDDLE + half) as i32,
-    )
 }
 
 fn style(
@@ -245,8 +221,6 @@ struct Parts {
     readout: Readout,
     status: Option<Status>,
     tilt: Option<heapless::String<24>>,
-    /// The divider's span and the hint's reveal, under the tilt.
-    footer: Option<((i32, i32), Reveal)>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -268,8 +242,7 @@ impl Parts {
             }
             Mode::Calibrating(percent) => Readout::Digits(three_digits(percent.into()), "%"),
         };
-        let shown = mode != Mode::NoData;
-        let tilt = shown.then(|| {
+        let tilt = (mode != Mode::NoData).then(|| {
             let mut tilt = heapless::String::new();
             _ = write!(tilt, "P {:+03}  R {:+03}", view.pitch_deg, view.roll_deg);
             tilt
@@ -285,7 +258,6 @@ impl Parts {
             readout,
             status: status(mode),
             tilt,
-            footer: shown.then(|| (divider_span(accents.divider), Reveal::of(accents.hint, HINT.len()))),
         }
     }
 }
@@ -314,10 +286,6 @@ fn tilt_style(font: &FontdueRenderer<'static, Color>) -> FontdueRenderer<'static
     style(font, chrome::GRAY, 23, FRAKTION)
 }
 
-fn hint_style(font: &FontdueRenderer<'static, Color>) -> FontdueRenderer<'static, Color> {
-    style(font, chrome::GRAY, 14, FRAKTION)
-}
-
 fn letter_style(font: &FontdueRenderer<'static, Color>, color: Color) -> FontdueRenderer<'static, Color> {
     style(font, color, 40, SHAPIRO)
 }
@@ -329,8 +297,6 @@ fn numerals(font: &FontdueRenderer<'static, Color>) -> FontdueRenderer<'static, 
 fn suffix(font: &FontdueRenderer<'static, Color>) -> FontdueRenderer<'static, Color> {
     style(font, chrome::BLACK, 40, FRAKTION_BOLD)
 }
-
-const HINT: &str = "COVER SCREEN TO RECAL";
 
 pub fn draw<D>(
     view: &CompassView,
@@ -373,26 +339,11 @@ where
     if let Some(tilt) = &parts.tilt {
         centred(&tilt_style(font), tilt, CENTER.x, TILT_BASELINE, field)?;
     }
-    if let Some(((left, right), reveal)) = parts.footer {
-        if right > left {
-            field.fill_solid(&divider(left, right), chrome::GRAY)?;
-        }
-        let style = hint_style(font);
-        draw_revealed(&style, HINT, hint_pen(&style), reveal, field)?;
-    }
     Ok(())
-}
-
-fn divider(left: i32, right: i32) -> Rectangle {
-    Rectangle::new(Point::new(left, DIVIDER_ROW), Size::new((right - left).max(0) as u32, 1))
 }
 
 fn caption_pen(style: &FontdueRenderer<'static, Color>, caption: &str) -> Point {
     Point::new(centred_left(style, caption, CENTER.x), CAPTION_BASELINE)
-}
-
-fn hint_pen(style: &FontdueRenderer<'static, Color>) -> Point {
-    Point::new(centred_left(style, HINT, CENTER.x), HINT_BASELINE)
 }
 
 /// Marks in `damage` every pixel that differs between the screen drawn for `before` and for
@@ -458,11 +409,6 @@ pub fn damage(
                 }
             }
         }
-    }
-    if old.footer != new.footer {
-        damage.add(divider(divider_span(0).0 - 1, divider_span(u8::MAX).1 + 1));
-        let style = hint_style(font);
-        damage.add(revealed_bounds(&style, HINT, hint_pen(&style)));
     }
 }
 

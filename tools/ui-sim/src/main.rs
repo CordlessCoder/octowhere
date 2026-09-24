@@ -12,8 +12,9 @@
 //! the path.
 //!
 //! The panel shows only its inscribed circle. The window paints the corners outside it grey, and
-//! screenshots and GIFs leave them transparent. An MP4 has no transparency and keeps the grey. `--unmasked`, or M in the window, shows the
-//! whole framebuffer instead, to see what is drawn where nobody will see it.
+//! screenshots and GIFs leave them transparent. An MP4 has no transparency and keeps the grey.
+//! `--unmasked`, or M in the window, shows the whole framebuffer instead, to see what is drawn
+//! where nobody will see it.
 //!
 //! Keys:
 //!
@@ -25,7 +26,10 @@
 //! - Z: the clock's zone, through unknown, automatic in Dublin, and chosen by hand in New York
 //!   and Kolkata. R: the clock, through set from GNSS, running unconfirmed, stopped and
 //!   unreadable.
-//! - Hold H: a hand covering the screen, which restarts calibration on the settled compass.
+//! - B: the supply, through USB and charging, battery only, and USB with no battery. G: GNSS fix
+//!   or none.
+//! - Hold H: a hand covering the screen, which goes to the clock face.
+//! - Drag down from a face for the settings panel, as on the device.
 //! - Tab: next screen without the slide. P: save the window to `ui-sim-<n>.png` in the current
 //!   directory. V: start or stop recording it to `ui-sim-<n>.gif`, or `.mp4` with `--mp4`,
 //!   which keeps the mask it started with. M: mask the corners or show them. Esc: quit.
@@ -54,9 +58,9 @@ use octowhere_ui::{
     ui::{
         clock::{ClockState, ZoneMode, ZoneState},
         compass::CompassView,
-        screens::PeripheralState,
+        screens::{Battery, Gnss, PeripheralState},
         script::{self, Driver},
-        stage::{Input, Motion, Sensors, Stage, Touch},
+        stage::{Input, Motion, Sensors, Stage, Store, Touch},
     },
 };
 
@@ -87,7 +91,20 @@ struct Readings {
     zone: usize,
     /// Which of [`CLOCKS`] the clock reads.
     clock: usize,
+    /// A zone chosen in the settings panel, which the sensor task would report from then on.
+    chosen: Option<ZoneState>,
+    /// Which of [`BATTERIES`] the power controller reports.
+    battery: usize,
+    /// Whether GNSS has a fix.
+    fix: bool,
 }
+
+/// The supplies B steps through.
+const BATTERIES: [Option<Battery>; 3] = [
+    Some(Battery { present: true, percent: 87, millivolts: 4020, charging: true, usb: true }),
+    Some(Battery { present: true, percent: 64, millivolts: 3850, charging: false, usb: false }),
+    Some(Battery { present: false, percent: 0, millivolts: 0, charging: false, usb: true }),
+];
 
 /// The clock's states R steps through: whether GNSS has set it, whether it stopped, and whether
 /// it can be read.
@@ -144,7 +161,12 @@ impl Readings {
             Key::L => self.live = !self.live,
             Key::T => self.vertical = !self.vertical,
             Key::Space => self.spinning = !self.spinning,
-            Key::Z => self.zone = (self.zone + 1) % ZONES.len(),
+            Key::Z => {
+                self.zone = (self.zone + 1) % ZONES.len();
+                self.chosen = None;
+            }
+            Key::B => self.battery = (self.battery + 1) % BATTERIES.len(),
+            Key::G => self.fix = !self.fix,
             Key::R => self.clock = (self.clock + 1) % CLOCKS.len(),
             _ => return false,
         }
@@ -152,6 +174,9 @@ impl Readings {
     }
 
     fn zone_state(&self) -> ZoneState {
+        if let Some(chosen) = self.chosen {
+            return chosen;
+        }
         ZONES[self.zone].map_or(ZoneState::default(), |(name, mode)| ZoneState {
             mode,
             zone: octowhere_ui::tz::DATABASE.find(name).map(|zone| zone.id),
@@ -324,7 +349,7 @@ fn play(window: &mut Window, scene: &scenes::Scene, masked: bool) {
 fn interact(mut window: Window, masked: bool, extension: &str) {
     window.set_target_fps(60);
 
-    let mut stage = Stage::new(PeripheralState::default());
+    let mut stage = Stage::new(PeripheralState { firmware: "0.1.0", ..PeripheralState::default() });
     let mut readings = Readings {
         heading: 37.0,
         pitch: 0,
@@ -336,6 +361,9 @@ fn interact(mut window: Window, masked: bool, extension: &str) {
         vertical: false,
         zone: 1,
         clock: 0,
+        chosen: None,
+        battery: 0,
+        fix: true,
     };
     let mut panel = Panel::new(masked);
     let start = Instant::now();
@@ -420,12 +448,25 @@ fn interact(mut window: Window, masked: bool, extension: &str) {
                 Touch::Contacts([contact, None])
             }),
             motion: motion_due.then(|| readings.motion()),
-            sensors: sensors_due.then(|| sensors(readings.zone_state(), CLOCKS[readings.clock])),
+            sensors: sensors_due.then(|| sensors(&readings)),
         });
         samples_fast = update.samples_fast;
         if update.recalibrate {
             readings.calibration = 0;
             readings_changed = true;
+        }
+        if let Some(level) = update.brightness {
+            println!("brightness {level}");
+        }
+        if let Some(store) = update.store {
+            println!("store {store:?}");
+            // As the sensor task takes the choice and reports it from then on.
+            if !matches!(store, Store::Brightness(_)) {
+                let zone = stage.peripherals().clock.zone;
+                readings.chosen =
+                    Some(ZoneState { zone: zone.zone.or(readings.zone_state().zone), ..zone });
+                zone_changed = true;
+            }
         }
 
         if let Some((pixels_drawn, took)) = panel.draw(&stage, redraw) {
@@ -482,8 +523,9 @@ fn to_pixels(fb: &FB, knock_out: Option<&[bool]>, pixels: &mut [u32]) {
     }
 }
 
-/// The host's UTC clock, in the state R selects.
-fn sensors(zone: ZoneState, (gnss, stopped, readable): (bool, bool, bool)) -> Sensors {
+/// The host's UTC clock, in the state R selects, and the rest of the readings.
+fn sensors(readings: &Readings) -> Sensors {
+    let (gnss, stopped, readable) = CLOCKS[readings.clock];
     let seconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_secs());
@@ -493,7 +535,15 @@ fn sensors(zone: ZoneState, (gnss, stopped, readable): (bool, bool, bool)) -> Se
             set_from_gnss: gnss,
             stopped,
         },
-        zone,
+        zone: readings.zone_state(),
+        battery: BATTERIES[readings.battery],
+        gnss: Gnss {
+            fix: readings.fix,
+            in_use: if readings.fix { 9 } else { 0 },
+            in_view: 14,
+            // Dublin.
+            position: readings.fix.then_some((533_498_000, -62_603_000)),
+        },
     }
 }
 

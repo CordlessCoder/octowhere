@@ -13,7 +13,7 @@ compile_error!("lora-link-tx and lora-link-rx are mutually exclusive");
 extern crate alloc;
 
 use alloc::{alloc::Allocator, boxed::Box};
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_executor::Spawner;
 use embassy_futures::select::{Either, Either3, Either4, select, select3, select4};
@@ -60,8 +60,8 @@ use octowhere::{
         compass::{AxisMap, Calibration, CalibrationEvent, CompassView, Vec3},
         fusion::Fusion,
         imu::{accel_micro_ms2, gyro_micro_rad_s},
-        screens::PeripheralState,
-        stage::{Input as StageInput, Motion, Sensors, Stage, Touch},
+        screens::{Battery, DEFAULT_BRIGHTNESS, Gnss, PeripheralState},
+        stage::{Input as StageInput, Motion, Sensors, Stage, Store as Choice, Touch},
     },
     util::{Swap, SwapThread},
 };
@@ -148,6 +148,19 @@ static COMPASS_RECALIBRATE: AtomicBool = AtomicBool::new(false);
 /// Settings for `settings_task` to save. A full queue drops the newest, which the next change of
 /// the same setting supersedes.
 static SETTINGS_WRITES: Channel<CriticalSectionRawMutex, settings::Write, 4> = Channel::new();
+/// A zone choice from the settings panel, for `sensor_task`, which owns the zone.
+static ZONE_CHOICE: Signal<CriticalSectionRawMutex, ZoneChoice> = Signal::new();
+/// A display level for the display core to apply before its next flush, or `NO_BRIGHTNESS`.
+static BRIGHTNESS: AtomicU16 = AtomicU16::new(NO_BRIGHTNESS);
+const NO_BRIGHTNESS: u16 = u16::MAX;
+
+#[derive(Clone, Copy)]
+enum ZoneChoice {
+    Manual(ZoneId),
+    Automatic,
+    /// Settings were cleared: automatic, with no zone chosen by hand.
+    Cleared,
+}
 pub static PSRAM_HEAP: esp_alloc::EspHeap = esp_alloc::EspHeap::empty();
 
 #[cfg(feature = "gnss-full-power")]
@@ -166,6 +179,10 @@ struct SensorSnapshot {
     lora_irq: u8,
     clock: ClockState,
     zone: ZoneState,
+    /// `None` while the power controller does not answer.
+    battery: Option<Battery>,
+    /// The last fix's latitude and longitude, kept while there is none.
+    position: Option<(i32, i32)>,
 }
 
 struct SensorTask {
@@ -195,6 +212,23 @@ struct ZoneTracker {
 }
 
 impl ZoneTracker {
+    fn choose(&mut self, choice: ZoneChoice) {
+        match choice {
+            ZoneChoice::Manual(zone) => {
+                self.mode = ZoneMode::Manual;
+                self.manual = Some(zone);
+            }
+            ZoneChoice::Automatic | ZoneChoice::Cleared => {
+                self.mode = ZoneMode::Automatic;
+                // Look the zone up at the next fix, wherever it is.
+                self.looked_up_at = None;
+                if matches!(choice, ZoneChoice::Cleared) {
+                    self.manual = None;
+                }
+            }
+        }
+    }
+
     fn state(&self) -> ZoneState {
         ZoneState {
             mode: self.mode,
@@ -389,8 +423,12 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
     let mut display = Co5300Display::new(spi, reset, te, dma_tx, dma_tx_swap)
         .await
         .expect("display init failed");
+    let level = match BRIGHTNESS.swap(NO_BRIGHTNESS, Ordering::Relaxed) {
+        NO_BRIGHTNESS => DEFAULT_BRIGHTNESS,
+        level => level as u8,
+    };
     display
-        .set_brightness(120)
+        .set_brightness(level)
         .expect("brightness command failed");
 
     info!("[DISPLAY] OK");
@@ -399,6 +437,10 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
     let mut first_flush = true;
     loop {
         settings::hold_display_core_if_asked();
+        let level = BRIGHTNESS.swap(NO_BRIGHTNESS, Ordering::Relaxed);
+        if level != NO_BRIGHTNESS && display.set_brightness(level as u8).is_err() {
+            warn!("[DISPLAY] brightness command failed");
+        }
         let state = swap.get();
         let SwapState {
             fb,
@@ -681,10 +723,24 @@ async fn sensor_task(task: SensorTask) {
     loop {
         Timer::after(Duration::from_millis(250)).await;
 
-        let battery_present = power.is_battery_present().await.unwrap_or(false);
+        if let Some(choice) = ZONE_CHOICE.try_take() {
+            zones.choose(choice);
+        }
+        let present = power.is_battery_present().await.ok();
+        let battery_present = present.unwrap_or(false);
         let battery_mv = power.get_battery_voltage().await.ok();
         let vbus_mv = power.get_vbus_voltage().await.ok();
         let vsys_mv = power.get_system_voltage().await.ok();
+        let percent = power.get_battery_percent().await.ok();
+        let charging = power.is_charging().await.ok();
+        let usb = power.is_vbus_in().await.ok();
+        state.battery = present.map(|present| Battery {
+            present,
+            percent: percent.unwrap_or(0).min(100),
+            millivolts: battery_mv.unwrap_or(0),
+            charging: charging.unwrap_or(false),
+            usb: usb.unwrap_or(false),
+        });
         state.battery_present = battery_present;
         state.battery_mv = battery_present.then_some(battery_mv).flatten();
         state.vbus_mv = vbus_mv;
@@ -817,6 +873,9 @@ async fn sensor_task(task: SensorTask) {
             stopped: rtc.oscillator_stopped(),
         };
 
+        if let Some(fix) = state.gnss.fix {
+            state.position = Some((fix.latitude.get(), fix.longitude.get()));
+        }
         if let Some(fix) = state.gnss.fix
             && let Some(zone) = zones.follow(fix.latitude.get(), fix.longitude.get()).await
             && SETTINGS_WRITES.try_send(settings::Write::AutomaticZone(zone)).is_err()
@@ -1432,11 +1491,15 @@ async fn async_main(spawner: Spawner) {
     let mut store = unsafe { Store::new(esp_storage::FlashStorage::new(peripherals.FLASH), seed) };
     let saved = store.load();
     info!(
-        "[SETTINGS] zone mode={} manual={} automatic={}",
+        "[SETTINGS] zone mode={} manual={} automatic={} brightness={}",
         saved.zone_mode,
         saved.manual_zone.map(|zone| DATABASE.zone(zone).name),
         saved.automatic_zone.map(|zone| DATABASE.zone(zone).name),
+        saved.brightness,
     );
+    let brightness = saved.brightness.unwrap_or(DEFAULT_BRIGHTNESS);
+    // The display core applies it as it starts the panel.
+    BRIGHTNESS.store(u16::from(brightness), Ordering::Relaxed);
     spawner.spawn(settings_task(store).unwrap());
 
     let initial_sensor_state = SensorSnapshot {
@@ -1481,7 +1544,11 @@ async fn async_main(spawner: Spawner) {
 
     start_display_core!(peripherals, fb_st);
 
-    let mut stage = Stage::new(PeripheralState::default());
+    let mut stage = Stage::new(PeripheralState {
+        brightness,
+        firmware: env!("CARGO_PKG_VERSION"),
+        ..PeripheralState::default()
+    });
     // The last report the controller wrote, which a stale read repeats.
     let mut touch_data = TouchData::default();
     let mut last_report = Instant::now();
@@ -1563,14 +1630,48 @@ async fn async_main(spawner: Spawner) {
                     TouchData::Stale => unreachable!("a stale read keeps the last report"),
                 }),
                 motion: motion_state,
-                sensors: sensor_state.map(|state| Sensors {
-                    clock: state.clock,
-                    zone: state.zone,
+                sensors: sensor_state.map(|state| {
+                    let signal = state.gnss.signal;
+                    Sensors {
+                        clock: state.clock,
+                        zone: state.zone,
+                        battery: state.battery,
+                        gnss: Gnss {
+                            fix: state.gnss.fix.is_some(),
+                            in_use: signal.satellites_used.get(),
+                            in_view: signal.satellites_in_view.get(),
+                            position: state.position,
+                        },
+                    }
                 }),
             });
             if update.recalibrate {
-                info!("[TOUCH] cover accepted, recalibrating");
+                info!("[COMPASS] recalibrating on request");
                 COMPASS_RECALIBRATE.store(true, Ordering::Relaxed);
+            }
+            if let Some(level) = update.brightness {
+                BRIGHTNESS.store(u16::from(level), Ordering::Relaxed);
+            }
+            if let Some(choice) = update.store {
+                info!("[SETTINGS] chosen {}", choice);
+                let write = match choice {
+                    Choice::Brightness(level) => settings::Write::Brightness(level),
+                    Choice::ManualZone(zone) => {
+                        ZONE_CHOICE.signal(ZoneChoice::Manual(zone));
+                        settings::Write::ManualZone(zone)
+                    }
+                    Choice::AutomaticZone => {
+                        ZONE_CHOICE.signal(ZoneChoice::Automatic);
+                        settings::Write::Automatic
+                    }
+                    Choice::Clear => {
+                        ZONE_CHOICE.signal(ZoneChoice::Cleared);
+                        settings::Write::Clear
+                    }
+                };
+                if SETTINGS_WRITES.try_send(write).is_err() {
+                    warn!("[SETTINGS] queue full, {} not saved", write);
+                }
             }
             COMPASS_ACTIVE.store(update.samples_fast, Ordering::Relaxed);
             let changed = stage.changed();

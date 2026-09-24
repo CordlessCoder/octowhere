@@ -3,10 +3,12 @@
 
 use embedded_graphics::prelude::Point;
 use octowhere_ui::ui::{
+    screens::PeripheralState,
+    stage::Stage,
     clock::{ClockState, DateTime, ZoneMode, ZoneState},
     compass::CompassView,
     gesture::Micros,
-    screens::Screen,
+    screens::{Battery, Gnss, Screen},
     script::Driver,
     stage::{Motion, Sensors},
 };
@@ -32,6 +34,11 @@ pub const SCENES: &[Scene] = &[
         name: "compass-calibration",
         about: "the compass calibrating, finding its heading, turning, and meeting interference",
         run: compass_calibration,
+    },
+    Scene {
+        name: "settings",
+        about: "the settings panel: opening, scrolling, brightness, the zone picker, and closing",
+        run: settings,
     },
     Scene {
         name: "tour",
@@ -67,6 +74,8 @@ fn dublin() -> Sensors {
             mode: ZoneMode::Automatic,
             zone: octowhere_ui::tz::DATABASE.find("Europe/Dublin").map(|zone| zone.id),
         },
+        battery: Some(Battery { present: true, percent: 87, millivolts: 4020, charging: true, usb: true }),
+        gnss: Gnss { fix: true, in_use: 9, in_view: 14, position: Some((533_498_000, -62_603_000)) },
     }
 }
 
@@ -177,4 +186,47 @@ fn tour(driver: &mut Driver) {
     compass_walk(driver);
     page_right(driver);
     driver.wait(ms(1_500));
+}
+
+fn tap(driver: &mut Driver, x: i32, y: i32) {
+    driver.stroke(&[Point::new(x, y)]);
+}
+
+fn settings(driver: &mut Driver) {
+    driver.stage = Stage::new(PeripheralState { firmware: "0.1.0", ..PeripheralState::default() });
+    start(driver, Screen::Clock);
+    driver.motion(calibrating(54));
+    driver.wait(ms(1_200));
+    // Down from the face, then along the grid and back.
+    driver.swipe(Point::new(233, 70), Point::new(233, 420), ms(300));
+    driver.settle();
+    driver.wait(ms(900));
+    driver.swipe(Point::new(380, 250), Point::new(200, 250), ms(300));
+    driver.settle();
+    driver.wait(ms(800));
+    driver.swipe(Point::new(200, 250), Point::new(380, 250), ms(300));
+    driver.settle();
+    driver.wait(ms(600));
+    // Brightness to 80 %, kept.
+    tap(driver, 150, 300);
+    driver.wait(ms(700));
+    driver.swipe(Point::new(220, 285), Point::new(333, 285), ms(500));
+    driver.wait(ms(600));
+    tap(driver, 233, 250);
+    driver.wait(ms(700));
+    // The zone picker: one offset later, its zones, and back out.
+    tap(driver, 150, 150);
+    driver.wait(ms(800));
+    driver.swipe(Point::new(233, 300), Point::new(233, 255), ms(300));
+    driver.wait(ms(600));
+    tap(driver, 233, 250);
+    driver.wait(ms(900));
+    tap(driver, 120, 120);
+    driver.wait(ms(500));
+    tap(driver, 120, 120);
+    driver.wait(ms(600));
+    // Up to close, back to the clock.
+    driver.swipe(Point::new(233, 420), Point::new(233, 80), ms(300));
+    driver.settle();
+    driver.wait(ms(1_000));
 }

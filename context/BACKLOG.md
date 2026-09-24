@@ -5,13 +5,24 @@ until the feature set is complete, because profiling an incomplete firmware pric
 
 ## Next
 
-- A settings pane. Its first job is the time zone: choosing automatic or a zone by hand, which
-  `settings::Write` and `ZoneTracker` in `src/main.rs` need a variant and a method for, and the
-  zone picker, which the clock face design round is to propose. The ODbL attribution for the
-  zone boundaries (`crates/tz/data/NOTICE.md`) belongs on the device too, in an about page there.
-- Measure a settings write that erases a flash sector. `bench/zone-lookup` saw only writes into
-  a sector with room, which held core 1 for about 1.3 ms; an erase holds it for the erase.
+- Shorten settings saves. Settings are in ekv now, and each write transaction starts a new file
+  that erases a whole 4 KiB page first, so every save erases. The first saved brightness took
+  331 ms, all of it with core 1 held, so the display stopped updating for that long. The
+  sequential-storage map it replaced took about 1.3 ms for a write into a sector with room
+  (`bench/zone-lookup`). Options: hold core 1 only around each flash operation rather than the
+  whole transaction, erase a spare page ahead of time, or batch saves.
 
+- Lay out the 512 KiB of SRAM deliberately. esp-hal's linker script gives `.data`, `.bss` and
+  core 0's stack 341,760 bytes (`0x3FC88000` to `0x3FCDB700`); the stack is whatever the other
+  two leave. The internal heap is a static in `.bss`: 252 KiB from the first commit, cut to
+  240 KiB when moving settings to ekv grew `.bss` and left a 13.9 KiB stack that overflowed
+  silently in the partition table read. At boot the heap held 4,548 bytes; its peak while the
+  screens run has not been measured. Unused so far: `dram2` (`0x3FCDB700` to `0x3FCED710`, about 72 KiB, which the ROM
+  needs only during boot and `esp_alloc` can take with `#[esp_hal::ram(reclaimed)]`, as the
+  commented line by `heap_allocator!` in `src/main.rs` shows), and the data cache's reclaimed
+  segment above `0x3FCF0000`. Also look at what IRAM holds (15 KiB of `.rwtext`), the two 8 KiB
+  display DMA buffers, the 8 KiB core-1 stack, and a guard or a measured watermark for core 0's
+  stack so an overflow faults instead of hanging.
 - Build the protocol in [`LORA-PROTOCOL.md`](LORA-PROTOCOL.md). Its "Firmware structure" section
   comes first: the radio moves into its own task, and I2C gets a single owning task.
 
@@ -32,9 +43,9 @@ until the feature set is complete, because profiling an incomplete firmware pric
   thin across many short spans. The candidates are a GDMA memory-to-memory clear, or core 1
   clearing a buffer after flushing it. Either changes the buffer hand-off in `util::Swap`, and
   partial redraws rely on a buffer keeping its own pixels, so only damaged spans may be cleared.
-- Build Shapiro and PP Fraktion Mono Regular from their full font files with fontdue's `chars:`
-  option, as PP Fraktion Mono Bold already is, instead of the hand-made ASCII subsets under
-  `assets/`. Subsetting Bold to the glyphs in use would also recover some of the 54 KB it
+- Build Shapiro from its full font file with fontdue's `chars:` option, as both PP Fraktion
+  Mono weights already are, instead of the hand-made ASCII subset under `assets/`. Regular moved
+  for the device page's `©`. Subsetting Bold to the glyphs in use would also recover some of the 54 KB it
   added.
 
 ## Deferred, with detail elsewhere

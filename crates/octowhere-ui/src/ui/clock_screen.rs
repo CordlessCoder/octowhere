@@ -195,24 +195,14 @@ pub struct Keys {
 impl Keys {
     #[must_use]
     pub fn of(view: &ClockView) -> Self {
-        let ClockView { clock, zone, known } = view;
+        let ClockView { clock, zone, .. } = view;
         let mode = Mode::of(clock, zone);
-        let local = clock.local(*zone);
         let tag = match zone.mode {
             ZoneMode::Automatic => "AUTO",
             ZoneMode::Manual => "MANUAL",
         };
         let mut values = heapless::Vec::new();
-        // A stopped or unreadable clock has no time to find the offset from, so the plate keeps
-        // the one the zone last had.
-        let offset = match (mode, local) {
-            (Mode::Local { .. }, Some(local)) => Some(local.offset),
-            (Mode::Stopped | Mode::NoData, _) => known
-                .filter(|known| Some(known.zone) == zone.zone)
-                .map(|known| known.offset),
-            _ => None,
-        };
-        match (mode, offset) {
+        match (mode, offset(view)) {
             (Mode::NoZone, _) => _ = values.push(String::try_from("NO FIX YET").unwrap()),
             (_, Some(known)) => {
                 let mut offset = String::new();
@@ -236,6 +226,25 @@ impl Keys {
                 .filter(|_| mode != Mode::NoZone),
         }
     }
+}
+
+/// The zone's offset now, or while the clock is stopped or unreadable, the one it last had.
+#[must_use]
+pub fn offset(view: &ClockView) -> Option<octowhere_tz::Offset<'static>> {
+    let ClockView { clock, zone, known } = view;
+    match (Mode::of(clock, zone), clock.local(*zone)) {
+        (Mode::Local { .. }, Some(local)) => Some(local.offset),
+        (Mode::Stopped | Mode::NoData, _) => known
+            .filter(|known| Some(known.zone) == zone.zone)
+            .map(|known| known.offset),
+        _ => None,
+    }
+}
+
+/// The zone's abbreviation, from [`offset`].
+#[must_use]
+pub fn abbreviation(view: &ClockView) -> Option<&'static str> {
+    offset(view).map(|offset| offset.abbreviation)
 }
 
 /// What each part of the face shows. Two frames that agree on a part draw it identically.

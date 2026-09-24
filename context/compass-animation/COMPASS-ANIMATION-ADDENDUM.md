@@ -9,6 +9,11 @@ adds two of its own for the compass, a rule draw-out and a dial sweep. All four 
 below, so this document stands alone. It works with the compass's icon at any size. The
 renders use the proposed 66 px outlined icon.
 
+Later change, by the owner's decision of 2026-09-24: the hint `COVER SCREEN TO RECAL` and the
+divider above it are gone, with their entry and exit steps. A cover on the compass now goes to
+the clock face, and calibration restarts from the settings panel's COMPASS cell. The tables
+below still list the two, as a record of the approved motion.
+
 Files, all at 466 × 466 with a frame every 20 ms:
 
 | File | Shows |

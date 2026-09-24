@@ -68,8 +68,8 @@ was removed as preliminary.
   second contact but no gesture uses one.
 - The clock face takes no touch at all besides the page drag. The owner moved zone choice off the
   face because a tap there was too easy to trigger by accident.
-- The compass takes one gesture besides the page drag: a hand covering the settled page restarts
-  calibration, once per hand.
+- A hand covering the screen goes to the clock face from any screen, once per hand. It no longer
+  restarts the compass's calibration; the settings panel's COMPASS cell does.
 - There is no long press, double tap or edge swipe yet. Each is small firmware work on the
   existing gesture tracker, but it is a proposal the design must name.
 
@@ -82,8 +82,8 @@ the panel is reached and what else it holds are open. That is this round's quest
 
 The zone picker is designed (spec, "Zone picker"). It assumes a settings panel:
 
-- `CANCEL` on its first step, and covering the screen on either step, return to the panel with
-  nothing stored.
+- `CANCEL` on its first step returns to the panel with nothing stored. Covering the screen on
+  either step discards the choice and goes to the clock face.
 - Storing a manual zone or automatic returns to the panel.
 - "A horizontal drag does whatever it does on the settings panel. If it leaves, the picker is
   discarded without storing anything."
@@ -104,7 +104,7 @@ which a design need not plan around.
 | Time zone mode: automatic or manual | Stored and used. Nothing on screen can change it yet |
 | Manual zone | Stored and used. Chosen through the zone picker |
 | Display brightness | The controller accepts 0 to 255 at run time. Fixed at 120 today; storing and applying a chosen level is small work |
-| Restart the compass calibration | Exists, as the cover gesture on the compass. A control elsewhere would call the same thing |
+| Restart the compass calibration | The settings panel's COMPASS cell. The compass's cover gesture that used to do it now goes to the clock face |
 | Clear stored settings | The settings live in one flash partition that can be erased. Small work; the design decides whether it deserves a control |
 
 The owner has decided that the panel has a screen brightness slider. Its range, steps, and how

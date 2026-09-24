@@ -5,14 +5,20 @@
 use embedded_graphics::prelude::Point;
 
 use super::{
-    clock::{ClockState, ClockView, ZoneState},
+    clock::{ClockState, ClockView, ZoneMode, ZoneState},
     clock_screen,
     compass::CompassView,
     compass_screen::{self, Accents, DialFootprint, Mode},
-    gesture::{GestureEvent, GestureTracker, Micros},
+    gesture::{Drag, GestureEvent, GestureTracker, Micros},
     pager::Pager,
-    screens::{self, PeripheralState, Screen},
+    panel::{self, Cell},
+    picker::Picker,
+    screens::{self, Battery, Gnss, PeripheralState, Screen, DEFAULT_BRIGHTNESS},
+    second::{self, Effects, Next, Page},
+    sheet::Sheet,
 };
+
+pub use super::second::Store;
 use crate::{
     board,
     chrome::{self, Color, CoverageTarget, Dirty, FontdueRenderer, FontdueRendererCtx},
@@ -29,6 +35,8 @@ pub struct Motion {
 pub struct Sensors {
     pub clock: ClockState,
     pub zone: ZoneState,
+    pub battery: Option<Battery>,
+    pub gnss: Gnss,
 }
 
 /// One read of the touch controller.
@@ -47,15 +55,11 @@ const COMPASS_ENTRY: CompassTimes<Micros> = CompassTimes {
     icon: 95_000,
     caption: 120_000,
     dial: 190_000,
-    divider: 240_000,
-    hint: 280_000,
 };
 const RING_FADE: Micros = 110_000;
 const ICON_ROW: Micros = 30_000;
 const CAPTION_REVEAL: Micros = 120_000;
 const DIAL_SWEEP: Micros = 170_000;
-const DIVIDER_DRAW: Micros = 100_000;
-const HINT_REVEAL: Micros = 160_000;
 /// A heading back from TOP EDGE UP within this shows the dial at once, so tilting through
 /// vertical does not replay anything.
 const TOP_EDGE_GRACE: Micros = 750_000;
@@ -67,8 +71,6 @@ struct CompassTimes<T = Option<Micros>> {
     icon: T,
     caption: T,
     dial: T,
-    divider: T,
-    hint: T,
 }
 
 /// Dragging the compass or the clock this fraction of the panel's width takes its accents out
@@ -118,6 +120,25 @@ struct ClockTimes<T = Option<Micros>> {
     mark: T,
 }
 
+/// When each of the panel's accents starts after it settles open. Cells follow each other by
+/// `PANEL_STAGGER`.
+const PANEL_RULES: Micros = 40_000;
+const PANEL_RULES_DRAW: Micros = 160_000;
+const PANEL_TITLE_REVEAL: Micros = 120_000;
+const PANEL_ICON: Micros = 80_000;
+const PANEL_INDEX: Micros = 100_000;
+const PANEL_INDEX_REVEAL: Micros = 60_000;
+const PANEL_NAME: Micros = 120_000;
+const PANEL_NAME_REVEAL: Micros = 90_000;
+const PANEL_STAGGER: Micros = 30_000;
+const PANEL_MARKERS: Micros = 200_000;
+const PANEL_HINT: Micros = 260_000;
+const PANEL_HINT_REVEAL: Micros = 160_000;
+/// The grid's snap to a rest position after a scroll.
+const SNAP: Micros = 160_000;
+/// A release faster than this, in pixels per second, scrolls the grid on in its direction.
+const SNAP_FLICK: f32 = 600.0;
+
 /// How long without a cover report before another cover is a new hand. The controller does not
 /// always report the hand lifting, and a held hand repeats its report up to about 180 ms apart.
 /// Covering again after lifting took about 350 ms.
@@ -135,12 +156,59 @@ pub struct Input {
 }
 
 /// What the frame loop owes after a step. [`Stage::changed`] holds the pixels it changed.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Update {
-    /// A cover over the settled compass page asked for the calibration to restart.
+    /// The compass's calibration should restart.
     pub recalibrate: bool,
     /// A screen that needs fast motion samples shows, or is sliding in.
     pub samples_fast: bool,
+    /// Set the display to this level now, without storing it.
+    pub brightness: Option<u8>,
+    /// Store this setting. The stage already shows it.
+    pub store: Option<Store>,
+}
+
+/// Where the drag in progress goes, decided when it leaves the tap slop.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Route {
+    Pager,
+    Sheet,
+    Grid,
+    Nowhere,
+}
+
+/// The grid's sideways scroll, in pixels, and its motion.
+#[derive(Clone, Copy, Debug, Default)]
+struct Grid {
+    scroll: i32,
+    /// The scroll when the current drag started.
+    grabbed: Option<i32>,
+    /// Easing from one scroll to another, since a time.
+    snap: Option<(i32, i32, Micros)>,
+}
+
+impl Grid {
+    fn finish(&mut self) {
+        if let Some((_, to, _)) = self.snap.take() {
+            self.scroll = to;
+        }
+    }
+
+    fn snap_to(&mut self, to: i32, now: Micros) {
+        self.snap = (to != self.scroll).then_some((self.scroll, to, now));
+    }
+
+    fn step(&mut self, now: Micros) {
+        let Some((from, to, start)) = self.snap else {
+            return;
+        };
+        let t = (now.saturating_sub(start) as f32 / SNAP as f32).min(1.0);
+        let eased = 1.0 - (1.0 - t) * (1.0 - t) * (1.0 - t);
+        self.scroll = libm::roundf(from as f32 + (to - from) as f32 * eased) as i32;
+        if t >= 1.0 {
+            self.snap = None;
+        }
+    }
 }
 
 pub struct Stage {
@@ -168,6 +236,19 @@ pub struct Stage {
     clock_accents: clock_screen::Accents,
     /// What the clock page showed after the last step, while it filled the panel.
     drawn_clock: Option<(ClockView, clock_screen::Accents)>,
+    /// How far the settings panel has come down over the faces.
+    sheet: Sheet,
+    route: Option<Route>,
+    grid: Grid,
+    /// When the panel last settled open, while it stays open.
+    panel_settled: Option<Micros>,
+    panel_accents: panel::Accents,
+    /// What the open panel showed after the last step, while nothing covered it.
+    drawn_panel: Option<(PeripheralState, i32, panel::Accents)>,
+    /// A screen the panel opened, and when.
+    page: Option<(Page, Micros)>,
+    page_accents: second::Accents,
+    drawn_page: Option<(Page, second::Accents, PeripheralState)>,
 }
 
 impl Stage {
@@ -196,11 +277,28 @@ impl Stage {
             clock_settled: None,
             clock_accents: clock_screen::Accents::FULL,
             drawn_clock: None,
+            sheet: Sheet::new(board::LCD_HEIGHT as i32),
+            route: None,
+            grid: Grid::default(),
+            panel_settled: None,
+            panel_accents: panel::Accents::HIDDEN,
+            drawn_panel: None,
+            page: None,
+            page_accents: second::Accents::FULL,
+            drawn_page: None,
         }
     }
 
-    /// Jumps to `screen` as though the pager had come to rest on it.
+    /// Jumps to `screen` as though the pager had come to rest on it, with the panel closed.
     pub fn show(&mut self, screen: Screen) {
+        self.sheet.set(false);
+        self.page = None;
+        self.panel_settled = None;
+        self.face(screen);
+    }
+
+    /// Puts `screen` under the panel, to show when the panel next moves off it.
+    fn face(&mut self, screen: Screen) {
         let page = Screen::ALL
             .iter()
             .position(|&each| each == screen)
@@ -212,6 +310,38 @@ impl Stage {
         self.drawn_compass = None;
         self.clock_settled = None;
         self.drawn_clock = None;
+    }
+
+    /// How far the panel has come down over the faces: 0 closed, the panel's height open.
+    #[must_use]
+    pub fn panel_offset(&self) -> i32 {
+        self.sheet.offset()
+    }
+
+    /// The grid's sideways scroll: 0 with the first two columns in view.
+    #[must_use]
+    pub fn panel_scroll(&self) -> i32 {
+        self.grid.scroll
+    }
+
+    /// How far the panel's accents have come in.
+    #[must_use]
+    pub fn panel_accents(&self) -> panel::Accents {
+        self.panel_accents
+    }
+
+    /// The screen the panel opened, if one shows.
+    #[must_use]
+    pub fn page(&self) -> Option<&Page> {
+        self.page.as_ref().map(|(page, _)| page)
+    }
+
+    /// How far a face has moved off the panel, sideways or down.
+    fn face_offset(&self) -> i32 {
+        if self.page.is_some() {
+            return self.sheet.height();
+        }
+        self.pager.view().offset.abs().max(self.sheet.offset())
     }
 
     /// The pixels the last [`step`](Self::step) changed.
@@ -253,7 +383,7 @@ impl Stage {
     /// input.
     #[must_use]
     pub fn is_animating(&self) -> bool {
-        self.pager.is_moving() || self.fading
+        self.pager.is_moving() || self.sheet.is_moving() || self.grid.snap.is_some() || self.fading
     }
 
     pub fn step(&mut self, input: Input) -> Update {
@@ -264,12 +394,10 @@ impl Stage {
             sensors,
         } = input;
         self.changed.clear();
-        let mut update = Update {
-            recalibrate: false,
-            samples_fast: false,
-        };
-        // Set where a change needs the whole panel redrawn. The settled compass works out its own
-        // damage instead.
+        self.fading = false;
+        let mut update = Update::default();
+        // Set where a change needs the whole panel redrawn. The settled screens work out their
+        // own damage instead.
         let mut full = false;
 
         if let Some(motion) = motion {
@@ -283,6 +411,8 @@ impl Stage {
                 ..self.peripherals.clock
             }
             .remembering();
+            self.peripherals.battery = sensors.battery;
+            self.peripherals.gnss = sensors.gnss;
             full |= self.screen == Screen::Clock;
         }
 
@@ -293,36 +423,22 @@ impl Stage {
             };
         }
 
-        let previous_view = self.pager.view();
+        let previous = (self.pager.view(), self.sheet.offset(), self.grid.scroll, self.page.is_some());
         let event = if touch.is_some() {
             self.gesture.update(self.raw_touch[0], now)
         } else {
             GestureEvent::None
         };
-        self.pager.handle(&event, now);
-        // Taps do nothing on either screen: only a cover restarts the compass's calibration.
-        self.pager.step(now);
-        let view = self.pager.view();
-        let screen = Screen::ALL[view.page];
-        self.screen = screen;
-        let samples_fast = |screen: Screen| screen == Screen::Compass;
-        update.samples_fast = samples_fast(screen)
-            || view
-                .neighbour
-                .is_some_and(|(page, _)| samples_fast(Screen::ALL[page]));
+        let mut effects = Effects::default();
+        self.route_event(&event, now, &mut effects, &mut update);
 
         if let Some(touch) = touch {
             let cover = touch == Touch::Cover;
             let fresh = self
                 .covered_at
                 .is_none_or(|at| now.saturating_sub(at) >= COVER_REARM);
-            if cover && fresh && self.accepts_cover() {
-                update.recalibrate = true;
-                // The motion task resets the calibration on its next sample; the dial goes now.
-                let compass = &mut self.peripherals.compass;
-                compass.calibration_percent = 0;
-                compass.heading_decidegrees = None;
-                full = true;
+            if cover && fresh {
+                self.go_home(now, &mut effects);
             }
             match touch {
                 Touch::Cover => self.covered_at = Some(now),
@@ -334,6 +450,35 @@ impl Stage {
                 Touch::Contacts(_) => {}
             }
         }
+        self.apply(effects, &mut update);
+
+        self.pager.step(now);
+        let was_open = self.sheet.is_open();
+        self.sheet.step(now);
+        self.grid.step(now);
+        if let Some((page, _)) = &mut self.page {
+            self.fading |= page.step(now);
+        }
+        if self.sheet.is_open() && !was_open || self.sheet.is_open() && self.panel_settled.is_none() {
+            self.panel_settled = Some(now);
+            // The face under the panel starts its entry again when the panel leaves it.
+            self.compass_settled = None;
+            self.clock_settled = None;
+        }
+        if self.sheet.is_closed() {
+            self.panel_settled = None;
+        }
+
+        let view = self.pager.view();
+        self.screen = Screen::ALL[view.page];
+        let face_shows = self.page.is_none() && !self.sheet.is_open();
+        let samples_fast = |screen: Screen| screen == Screen::Compass;
+        update.samples_fast = face_shows
+            && (samples_fast(self.screen)
+                || view
+                    .neighbour
+                    .is_some_and(|(page, _)| samples_fast(Screen::ALL[page])));
+
         let accents = self.compass_accents(now);
         if accents != self.accents {
             self.accents = accents;
@@ -344,14 +489,32 @@ impl Stage {
             self.clock_accents = clock_accents;
             full = true;
         }
+        self.panel_accents = self.advance_panel_accents(now);
+        self.page_accents = self
+            .page
+            .as_ref()
+            .map_or(second::Accents::FULL, |(_, opened)| second::Accents::at(*opened, now));
+        self.fading |= self.page_accents != second::Accents::FULL;
 
-        full |= view != previous_view;
-        // A settled screen works out its own damage; a moving one redraws in full.
-        let settled = view.offset == 0 && view.neighbour.is_none();
-        let compass = (self.screen == Screen::Compass && settled)
-            .then_some((self.peripherals.compass, self.accents));
-        let clock =
-            (self.screen == Screen::Clock && settled).then_some((self.peripherals.clock, self.clock_accents));
+        let current = (view, self.sheet.offset(), self.grid.scroll, self.page.is_some());
+        let grid_only = current.2 != previous.2 && (current.0, current.1, current.3) == (previous.0, previous.1, previous.3);
+        full |= current != previous && !grid_only;
+        self.track_damage(full);
+        update
+    }
+
+    /// Works out what the step changed, from what each settled screen showed before.
+    fn track_damage(&mut self, full: bool) {
+        let view = self.pager.view();
+        let faces_settled = self.page.is_none() && self.sheet.is_closed() && view.offset == 0 && view.neighbour.is_none();
+        let compass = (faces_settled && self.screen == Screen::Compass).then_some((self.peripherals.compass, self.accents));
+        let clock = (faces_settled && self.screen == Screen::Clock).then_some((self.peripherals.clock, self.clock_accents));
+        let panel = (self.page.is_none() && self.sheet.is_open())
+            .then_some((self.peripherals, self.grid.scroll, self.panel_accents));
+        let page = self
+            .page
+            .as_ref()
+            .map(|(page, _)| (page.clone(), self.page_accents, self.peripherals));
         if let (Some(before), Some(after)) = (self.drawn_compass, compass) {
             compass_screen::damage(
                 (&before.0, before.1),
@@ -361,49 +524,268 @@ impl Stage {
                 &mut self.changed,
             );
         } else if let (Some(before), Some(after)) = (self.drawn_clock, clock) {
-            clock_screen::damage(
-                (&before.0, before.1),
-                (&after.0, after.1),
-                &self.renderer,
-                &mut self.changed,
-            );
-        } else if full {
+            clock_screen::damage((&before.0, before.1), (&after.0, after.1), &self.renderer, &mut self.changed);
+        } else if let (Some(before), Some(after)) = (self.drawn_panel, panel) {
+            self.panel_damage(&before, &after);
+        } else if let (Some(before), Some(after)) = (&self.drawn_page, &page) {
+            if before != after {
+                self.changed.make_full();
+            }
+        } else if full || compass.is_some() || clock.is_some() || panel.is_some() || page.is_some() {
             self.changed.make_full();
         }
         self.drawn_compass = compass;
         self.drawn_clock = clock;
-        update
+        self.drawn_panel = panel;
+        self.drawn_page = page;
     }
 
-    /// A cover counts only on the compass page at rest, while its sensors report.
-    fn accepts_cover(&self) -> bool {
-        self.screen == Screen::Compass
-            && !self.pager.is_moving()
-            && self.peripherals.compass.live
+    /// The open panel's damage: the grid while it scrolls, a cell whose reading changed, or
+    /// everything while its accents move.
+    fn panel_damage(
+        &mut self,
+        before: &(PeripheralState, i32, panel::Accents),
+        after: &(PeripheralState, i32, panel::Accents),
+    ) {
+        if before.2 != after.2 {
+            self.changed.make_full();
+            return;
+        }
+        if before.1 != after.1 {
+            self.changed.add(panel::GRID_ROWS);
+            self.changed.add(panel::MARKERS);
+            return;
+        }
+        for cell in Cell::ALL {
+            if panel::cell_changed(cell, &before.0, &after.0) {
+                self.changed.add(panel::cell_damage(cell, after.1));
+            }
+        }
+    }
+
+    /// Sends a gesture to what it acts on: the pager or the panel's travel on the faces, the
+    /// grid on the open panel, or the screen the panel opened.
+    fn route_event(&mut self, event: &GestureEvent, now: Micros, effects: &mut Effects, update: &mut Update) {
+        if let Some((page, _)) = &mut self.page {
+            let next = page.handle(event, &self.peripherals, effects);
+            match next {
+                Next::Stay => {}
+                Next::Panel => self.page = None,
+                Next::Open(page) => self.page = Some((page, now)),
+            }
+            return;
+        }
+        match *event {
+            GestureEvent::Down(_) => {
+                self.route = None;
+                if self.sheet.is_closed() {
+                    self.pager.handle(event, now);
+                }
+                self.sheet.finish();
+                self.grid.finish();
+            }
+            GestureEvent::DragStart(drag) => {
+                let route = self.route_for(&drag);
+                self.route = Some(route);
+                match route {
+                    Route::Pager => self.pager.handle(event, now),
+                    Route::Sheet => self.sheet.grab(&drag),
+                    Route::Grid => {
+                        self.grid.grabbed = Some(self.grid.scroll);
+                        self.grid.scroll = (self.grid.scroll - drag.offset().x).clamp(0, panel::MAX_SCROLL);
+                    }
+                    Route::Nowhere => {}
+                }
+            }
+            GestureEvent::DragMove(drag) => match self.route {
+                Some(Route::Pager) => self.pager.handle(event, now),
+                Some(Route::Sheet) => self.sheet.drag(&drag),
+                Some(Route::Grid) => {
+                    if let Some(from) = self.grid.grabbed {
+                        self.grid.scroll = (from - drag.offset().x).clamp(0, panel::MAX_SCROLL);
+                    }
+                }
+                _ => {}
+            },
+            GestureEvent::DragEnd(drag) => {
+                match self.route.take() {
+                    Some(Route::Pager) => self.pager.handle(event, now),
+                    Some(Route::Sheet) => self.sheet.release(&drag, now),
+                    Some(Route::Grid) => self.release_grid(&drag, now),
+                    _ => {}
+                }
+            }
+            GestureEvent::Tap(point) => {
+                if self.sheet.is_open() {
+                    self.tap_panel(point, now, update);
+                }
+            }
+            GestureEvent::None => {}
+        }
+    }
+
+    fn route_for(&self, drag: &Drag) -> Route {
+        let offset = drag.offset();
+        if self.sheet.is_closed() {
+            // Mostly downward opens the panel; anything else is the pager's.
+            if offset.y > 0 && offset.y >= 2 * offset.x.abs() {
+                Route::Sheet
+            } else {
+                Route::Pager
+            }
+        } else if self.sheet.is_open() {
+            if offset.x.abs() >= offset.y.abs() {
+                Route::Grid
+            } else if offset.y < 0 {
+                Route::Sheet
+            } else {
+                Route::Nowhere
+            }
+        } else {
+            Route::Sheet
+        }
+    }
+
+    fn release_grid(&mut self, drag: &Drag, now: Micros) {
+        self.grid.grabbed = None;
+        let scroll = self.grid.scroll;
+        let velocity = drag.velocity.0;
+        let target = if velocity <= -SNAP_FLICK {
+            panel::MAX_SCROLL
+        } else if velocity >= SNAP_FLICK {
+            0
+        } else if scroll * 2 >= panel::MAX_SCROLL {
+            panel::MAX_SCROLL
+        } else {
+            0
+        };
+        self.grid.snap_to(target, now);
+    }
+
+    fn tap_panel(&mut self, point: Point, now: Micros, update: &mut Update) {
+        let scroll = self.grid.scroll;
+        let Some(cell) = panel::cell_at(point, scroll) else {
+            return;
+        };
+        if !panel::in_view(cell.column(), scroll) {
+            self.grid.snap_to(panel::scroll_to(cell.column()), now);
+            return;
+        }
+        let page = match cell {
+            Cell::Zone => Page::Picker(Picker::new(&self.peripherals)),
+            Cell::Brightness => Page::Brightness(second::Brightness::new(self.peripherals.brightness)),
+            Cell::Gnss | Cell::Battery | Cell::Device => Page::Device(second::Device::default()),
+            Cell::Compass => {
+                update.recalibrate = true;
+                // The motion task resets the calibration on its next sample; the panel and the
+                // compass show it from now.
+                let compass = &mut self.peripherals.compass;
+                compass.calibration_percent = 0;
+                compass.heading_decidegrees = None;
+                self.face(Screen::Compass);
+                self.sheet.go(false, now);
+                return;
+            }
+        };
+        self.page = Some((page, now));
+    }
+
+    /// Takes what a screen asked for into the update, and shows a stored setting at once.
+    fn apply(&mut self, effects: Effects, update: &mut Update) {
+        if let Some(level) = effects.brightness {
+            update.brightness = Some(level);
+        }
+        let Some(store) = effects.store else {
+            return;
+        };
+        update.store = Some(store);
+        let zone = &mut self.peripherals.clock.zone;
+        match store {
+            Store::Brightness(level) => {
+                self.peripherals.brightness = level;
+                update.brightness = Some(level);
+            }
+            Store::ManualZone(id) => *zone = ZoneState { mode: ZoneMode::Manual, zone: Some(id) },
+            Store::AutomaticZone => zone.mode = ZoneMode::Automatic,
+            Store::Clear => {
+                zone.mode = ZoneMode::Automatic;
+                self.peripherals.brightness = DEFAULT_BRIGHTNESS;
+                update.brightness = Some(DEFAULT_BRIGHTNESS);
+            }
+        }
+        self.peripherals.clock = self.peripherals.clock.remembering();
+    }
+
+    /// Returns to the clock face from anywhere, discarding any edit in progress.
+    fn go_home(&mut self, now: Micros, effects: &mut Effects) {
+        if let Some((page, _)) = self.page.take() {
+            page.discard(effects);
+            self.sheet.set(true);
+        }
+        self.route = None;
+        if !self.sheet.is_closed() {
+            self.face(Screen::Clock);
+            self.sheet.go(false, now);
+        } else if Screen::ALL[self.pager.page()] != Screen::Clock {
+            self.pager.advance(false, now);
+        }
+    }
+
+    /// Advances the panel's builds and reveals to `now`, and returns how far each has come.
+    fn advance_panel_accents(&mut self, now: Micros) -> panel::Accents {
+        let entry = match self.panel_settled {
+            Some(settled) => {
+                let at = |delay: Micros| Some(settled + delay);
+                let cell = |start: Micros, i: usize| Some(settled + start + PANEL_STAGGER * i as Micros);
+                panel::Accents {
+                    ring: progress(now, at(0), RING_FADE),
+                    title: progress(now, at(0), PANEL_TITLE_REVEAL),
+                    rules: progress(now, at(PANEL_RULES), PANEL_RULES_DRAW),
+                    rows: core::array::from_fn(|i| rows_built(now, cell(PANEL_ICON, i))),
+                    index: core::array::from_fn(|i| progress(now, cell(PANEL_INDEX, i), PANEL_INDEX_REVEAL)),
+                    name: core::array::from_fn(|i| progress(now, cell(PANEL_NAME, i), PANEL_NAME_REVEAL)),
+                    markers: now >= settled + PANEL_MARKERS,
+                    hint: progress(now, at(PANEL_HINT), PANEL_HINT_REVEAL),
+                }
+            }
+            None => panel::Accents::HIDDEN,
+        };
+        self.fading |= self.panel_settled.is_some() && entry != panel::Accents::FULL;
+        // Going up, the accents follow the panel's offset, so reversing a drag restores them.
+        let p = swipe_progress(self.sheet.height() - self.sheet.offset());
+        let exit = panel::Accents {
+            ring: leaving(p, 0.6, 0.4),
+            title: leaving(p, 0.5, 0.3),
+            rules: leaving(p, 0.4, 0.4),
+            rows: [rows_leaving(p, 0.3, 0.4); 6],
+            index: [leaving(p, 0.15, 0.25); 6],
+            name: [leaving(p, 0.1, 0.3); 6],
+            markers: p <= 0.1,
+            hint: leaving(p, 0.0, 0.2),
+        };
+        entry.min(exit)
     }
 
     /// Advances the compass page's builds and reveals to `now`, and returns how far each has
     /// come.
     fn compass_accents(&mut self, now: Micros) -> Accents {
-        self.fading = false;
+
         if self.screen != Screen::Compass {
             self.compass_settled = None;
             self.top_edge_since = None;
             return Accents::FULL;
         }
-        let view = self.pager.view();
+        let offset = self.face_offset();
         let mode = Mode::of(&self.peripherals.compass);
         let (times, shown) = match &mut self.compass_settled {
             Some(settled) => settled,
-            None if view.offset == 0 => {
+            None if offset == 0 => {
                 let start = |delay: Micros| Some(now + delay);
                 let mut times = CompassTimes {
                     ring: start(COMPASS_ENTRY.ring),
                     icon: start(COMPASS_ENTRY.icon),
                     caption: start(COMPASS_ENTRY.caption),
                     dial: start(COMPASS_ENTRY.dial),
-                    divider: start(COMPASS_ENTRY.divider),
-                    hint: start(COMPASS_ENTRY.hint),
                 };
                 if mode == Mode::NoData {
                     // A fault shows at once.
@@ -444,19 +826,15 @@ impl Stage {
             icon_rows: rows_built(now, times.icon),
             caption: progress(now, times.caption, CAPTION_REVEAL),
             dial: progress(now, times.dial, DIAL_SWEEP),
-            divider: progress(now, times.divider, DIVIDER_DRAW),
-            hint: progress(now, times.hint, HINT_REVEAL),
         };
-        self.fading = entry != Accents::FULL;
+        self.fading |= entry != Accents::FULL;
         // Going out, the accents follow the page's offset, so reversing a drag restores them.
-        let p = swipe_progress(view.offset);
+        let p = swipe_progress(offset);
         let exit = Accents {
             ring: leaving(p, 0.6, 0.4),
             icon_rows: rows_leaving(p, 0.3, 0.5),
             caption: leaving(p, 0.2, 0.3),
             dial: leaving(p, 0.2, 0.4),
-            divider: leaving(p, 0.1, 0.2),
-            hint: leaving(p, 0.0, 0.2),
         };
         entry.min(exit)
     }
@@ -468,12 +846,12 @@ impl Stage {
             self.clock_settled = None;
             return Accents::FULL;
         }
-        let view = self.pager.view();
+        let offset = self.face_offset();
         let keys = clock_screen::Keys::of(&self.peripherals.clock);
         let time = clock_screen::shown_time(&self.peripherals.clock);
         let settled = match &mut self.clock_settled {
             Some(settled) => settled,
-            None if view.offset == 0 => {
+            None if offset == 0 => {
                 let start = |delay: Micros| Some(now + delay);
                 let mut times = ClockTimes {
                     ring: start(CLOCK_ENTRY.ring),
@@ -551,7 +929,7 @@ impl Stage {
             date: progress(now, retyped.map(|start| start + CLOCK_DATE_DELAY), CLOCK_DATE_REVEAL),
         };
         self.fading |= entry != Accents::FULL;
-        let p = swipe_progress(view.offset);
+        let p = swipe_progress(offset);
         let exit = Accents {
             ring: leaving(p, 0.6, 0.4),
             icon_rows: rows_leaving(p, 0.3, 0.5),
@@ -571,6 +949,12 @@ impl Stage {
         D: CoverageTarget<Color = Color>,
         D::Error: core::fmt::Debug,
     {
+        if let Some((page, _)) = &self.page {
+            screens::clear(target).expect("clearing the panel failed");
+            page.draw(&self.peripherals, self.page_accents, &self.renderer, target)
+                .expect("drawing a screen failed");
+            return;
+        }
         let view = self.pager.view();
         screens::render(
             screens::State {
@@ -582,6 +966,9 @@ impl Stage {
                     .map(|(page, offset)| (Screen::ALL[page], offset)),
                 compass_accents: self.accents,
                 clock_accents: self.clock_accents,
+                sheet: self.sheet.offset(),
+                panel_scroll: self.grid.scroll,
+                panel_accents: self.panel_accents,
             },
             &self.renderer,
             target,

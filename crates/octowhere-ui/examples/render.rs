@@ -21,7 +21,8 @@ use octowhere_ui::{
     ui::{
         clock::{ClockState, DateTime, ZoneMode, ZoneState},
         compass::CompassView,
-        screens::{PeripheralState, Screen},
+        screens::{Battery, Gnss, PeripheralState, Screen},
+        script::Driver,
         stage::{Input, Motion, Sensors, Stage, Touch},
     },
 };
@@ -111,7 +112,7 @@ fn main() {
         for now in [1_000_001, 2_000_000] {
             stage.step(Input {
                 now,
-                sensors: Some(Sensors { clock, zone }),
+                sensors: Some(Sensors { clock, zone, ..Sensors::default() }),
                 ..Input::default()
             });
         }
@@ -160,6 +161,8 @@ fn main() {
     }
     frames.push(("compass-swiping".into(), swiping));
 
+    frames.extend(settings_frames());
+
     for (name, stage) in frames {
         let mut fb = FB::boxed();
         stage.draw(&mut *fb);
@@ -167,6 +170,80 @@ fn main() {
         write_png(&fb, &path);
         println!("{}", path.display());
     }
+}
+
+/// The settings panel and the screens it opens, reached by the gestures that reach them.
+fn settings_frames() -> Vec<(String, Stage)> {
+    let calibrating = CompassView {
+        live: true,
+        calibration_percent: 54,
+        heading_decidegrees: None,
+        pitch_deg: 5,
+        roll_deg: -12,
+        disturbed: false,
+    };
+    let start = || {
+        let mut driver = Driver::on(Screen::Clock);
+        driver.stage = Stage::new(PeripheralState { firmware: "0.1.0", ..PeripheralState::default() });
+        driver.stage.show(Screen::Clock);
+        driver.sensors(sensors());
+        driver.motion(Motion { compass: calibrating });
+        driver.wait(600_000);
+        driver
+    };
+    let open = || {
+        let mut driver = start();
+        driver.swipe(Point::new(233, 80), Point::new(233, 420), 250_000);
+        driver.settle();
+        driver.wait(600_000);
+        driver
+    };
+    let tap = |driver: &mut Driver, x, y| {
+        driver.stroke(&[Point::new(x, y)]);
+        driver.wait(400_000);
+    };
+    let mut frames = Vec::new();
+
+    let mut pulling = start();
+    for y in [80, 120, 180, 240, 280] {
+        pulling.touch(Some(Point::new(233, y)));
+    }
+    frames.push(("panel-pulling".into(), pulling.stage));
+    frames.push(("panel-rest".into(), open().stage));
+    let mut end = open();
+    end.swipe(Point::new(380, 250), Point::new(200, 250), 200_000);
+    end.settle();
+    end.wait(400_000);
+    frames.push(("panel-end".into(), end.stage));
+    let mut scrolling = open();
+    for x in [380, 360, 330, 320] {
+        scrolling.touch(Some(Point::new(x, 250)));
+    }
+    frames.push(("panel-scrolling".into(), scrolling.stage));
+
+    let mut brightness = open();
+    tap(&mut brightness, 150, 300);
+    frames.push(("settings-brightness".into(), brightness.stage));
+    let mut device = open();
+    tap(&mut device, 300, 300);
+    frames.push(("panel-device".into(), device.stage));
+    let mut device_end = open();
+    tap(&mut device_end, 300, 300);
+    device_end.swipe(Point::new(233, 400), Point::new(233, 250), 300_000);
+    frames.push(("panel-device-end".into(), device_end.stage));
+    let mut clear = open();
+    tap(&mut clear, 300, 300);
+    clear.swipe(Point::new(233, 400), Point::new(233, 250), 300_000);
+    tap(&mut clear, 233, 398);
+    frames.push(("settings-clear".into(), clear.stage));
+    let mut picker = open();
+    tap(&mut picker, 150, 150);
+    frames.push(("picker-offset".into(), picker.stage));
+    let mut zone = open();
+    tap(&mut zone, 150, 150);
+    tap(&mut zone, 233, 250);
+    frames.push(("picker-zone".into(), zone.stage));
+    frames
 }
 
 fn stage(screen: Screen, compass: CompassView) -> Stage {
@@ -193,12 +270,14 @@ fn sensors() -> Sensors {
             mode: ZoneMode::Automatic,
             zone: octowhere_ui::tz::DATABASE.find("Europe/Dublin").map(|zone| zone.id),
         },
+        battery: Some(Battery { present: true, percent: 87, millivolts: 4020, charging: true, usb: true }),
+        gnss: Gnss { fix: true, in_use: 9, in_view: 14, position: Some((533_498_000, -62_603_000)) },
     }
 }
 
 /// A stage on `screen` that settled at 1 µs and has stepped to `now`.
 fn stage_with(screen: Screen, compass: CompassView, sensors: Sensors, now: u64) -> Stage {
-    let mut stage = Stage::new(PeripheralState::default());
+    let mut stage = Stage::new(PeripheralState { firmware: "0.1.0", ..PeripheralState::default() });
     stage.show(screen);
     stage.step(Input {
         now: 1,

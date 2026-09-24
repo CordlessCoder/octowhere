@@ -12,6 +12,7 @@ use super::{
     clock_screen,
     compass::CompassView,
     compass_screen,
+    panel,
 };
 use crate::{
     board,
@@ -35,11 +36,59 @@ impl Screen {
     }
 }
 
-/// The readings the screens show.
+/// The display's level at boot while none is stored, out of 255.
+pub const DEFAULT_BRIGHTNESS: u8 = 120;
+
+/// What the power controller reports about the battery and the supply.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct Battery {
+    pub present: bool,
+    /// Charge, 0 to 100, while a battery is present.
+    pub percent: u8,
+    pub millivolts: u16,
+    pub charging: bool,
+    /// USB power is present.
+    pub usb: bool,
+}
+
+/// What the GNSS receiver reports.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct Gnss {
+    pub fix: bool,
+    /// Satellites used in the fix.
+    pub in_use: u8,
+    pub in_view: u8,
+    /// The last fix's latitude and longitude, in 1e-7 degrees.
+    pub position: Option<(i32, i32)>,
+}
+
+/// The readings the screens show.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PeripheralState {
     pub clock: ClockView,
     pub compass: CompassView,
+    /// `None` until the power controller has been read.
+    pub battery: Option<Battery>,
+    pub gnss: Gnss,
+    /// The display's level, out of 255.
+    pub brightness: u8,
+    /// The firmware's version.
+    pub firmware: &'static str,
+}
+
+impl Default for PeripheralState {
+    fn default() -> Self {
+        Self {
+            clock: ClockView::default(),
+            compass: CompassView::default(),
+            battery: None,
+            gnss: Gnss::default(),
+            brightness: DEFAULT_BRIGHTNESS,
+            firmware: "",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -54,6 +103,10 @@ pub struct State {
     pub compass_accents: compass_screen::Accents,
     /// How far the clock face's accents have come in, when `screen` is the clock.
     pub clock_accents: clock_screen::Accents,
+    /// How far the settings panel has come down over the faces, which move down with it.
+    pub sheet: i32,
+    pub panel_scroll: i32,
+    pub panel_accents: panel::Accents,
 }
 
 pub fn render<D>(
@@ -65,11 +118,23 @@ where
     D: chrome::CoverageTarget<Color = Color>,
 {
     let bounds = target.bounding_box();
+    let height = board::LCD_HEIGHT as i32;
     // The settled compass paints its slab over whatever is there, so the clear leaves it.
-    let painted = (state.screen == Screen::Compass && state.offset == 0 && state.neighbour.is_none())
+    let painted = (state.screen == Screen::Compass
+        && state.offset == 0
+        && state.neighbour.is_none()
+        && state.sheet == 0)
         .then_some(compass_screen::SLAB);
     clear_visible(target, &bounds, painted)?;
 
+    if state.sheet > 0 {
+        let visible = Rectangle::new(Point::zero(), Size::new(board::LCD_WIDTH.into(), state.sheet as u32));
+        let panel = &mut chrome::Window::new(target, Point::new(0, state.sheet - height), visible);
+        panel::draw(&state.peripherals, state.panel_scroll, state.panel_accents, font, panel)?;
+    }
+    if state.sheet >= height {
+        return Ok(());
+    }
     render_page(state, state.offset, font, target)?;
     if let Some((screen, offset)) = state.neighbour {
         render_page(
@@ -86,6 +151,12 @@ where
         )?;
     }
     Ok(())
+}
+
+/// Clears the round panel.
+pub fn clear<D: DrawTarget<Color = Color>>(target: &mut D) -> Result<(), D::Error> {
+    let bounds = target.bounding_box();
+    clear_visible(target, &bounds, None)
 }
 
 /// Clears the part of `area` on the round panel, leaving `painted`, which the caller covers
@@ -137,12 +208,12 @@ fn render_page<D>(
 where
     D: chrome::CoverageTarget<Color = Color>,
 {
-    let page = Rectangle::new(Point::new(offset, 0), chrome::DISPLAY_SIZE);
+    let page = Rectangle::new(Point::new(offset, state.sheet), chrome::DISPLAY_SIZE);
     let visible = page.intersection(&target.bounding_box());
     if visible.is_zero_sized() {
         return Ok(());
     }
-    let target = &mut chrome::Window::new(target, Point::new(offset, 0), visible);
+    let target = &mut chrome::Window::new(target, Point::new(offset, state.sheet), visible);
     let peripherals = &state.peripherals;
     match state.screen {
         Screen::Clock => clock_screen::draw(&peripherals.clock, state.clock_accents, font, target),

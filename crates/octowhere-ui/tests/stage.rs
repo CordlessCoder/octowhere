@@ -49,28 +49,21 @@ fn a_swipe_left_moves_to_the_next_screen_and_right_moves_back() {
 }
 
 #[test]
-fn a_cover_on_the_settled_compass_asks_for_recalibration_once_per_hand() {
+fn a_cover_on_the_compass_goes_to_the_clock_and_leaves_the_calibration() {
     let mut driver = settled_on_compass();
-    assert!(driver.cover().recalibrate);
-    // The dial goes at once, before the motion task confirms the reset.
-    assert_eq!(driver.stage.peripherals().compass.heading_decidegrees, None);
-    // A held hand keeps reporting, with unreadable reports among them that arrive as no contacts.
-    for _ in 0..20 {
-        assert!(!driver.cover().recalibrate, "a held cover fired twice");
-        assert!(!driver.touch(None).recalibrate);
-        driver.wait(150_000);
-    }
-    // Lifted: no cover report for longer than a held hand leaves between them.
-    driver.wait(300_000);
-    assert!(driver.cover().recalibrate, "a second hand was ignored");
+    assert!(!driver.cover().recalibrate);
+    driver.settle();
+    assert_eq!(driver.stage.screen(), Screen::Clock);
+    assert_eq!(driver.stage.peripherals().compass.heading_decidegrees, Some(470));
 }
 
 #[test]
-fn a_finger_rearms_the_cover_at_once() {
-    let mut driver = settled_on_compass();
-    assert!(driver.cover().recalibrate);
-    driver.touch(Some(COMPASS_CENTER));
-    assert!(driver.cover().recalibrate, "a cover after a touch was ignored");
+fn a_cover_on_the_clock_changes_nothing() {
+    let mut driver = Driver::on(Screen::Clock);
+    driver.wait(500_000);
+    driver.cover();
+    assert!(!driver.stage.is_animating());
+    assert_eq!(driver.stage.screen(), Screen::Clock);
 }
 
 #[test]
@@ -81,22 +74,6 @@ fn a_tap_on_the_compass_does_nothing() {
     driver.stroke(&[Point::new(233, 73)]);
     assert!(!driver.stage.is_animating());
     assert_eq!(driver.stage.screen(), Screen::Compass);
-}
-
-#[test]
-fn a_cover_is_ignored_without_data_or_off_a_settled_compass() {
-    let mut driver = Driver::on(Screen::Compass);
-    driver.motion(Motion::default());
-    driver.wait(500_000);
-    assert!(!driver.cover().recalibrate, "NO DATA accepted a cover");
-
-    let mut driver = settled_on_compass();
-    driver.touch(Some(Point::new(400, 233)));
-    driver.touch(Some(Point::new(340, 233)));
-    assert!(!driver.cover().recalibrate, "a cover mid-drag was accepted");
-
-    let mut driver = Driver::on(Screen::Clock);
-    assert!(!driver.cover().recalibrate);
 }
 
 fn accents(driver: &Driver) -> Accents {
@@ -128,7 +105,7 @@ fn a_swipe_off_the_compass_takes_its_accents_reversibly() {
     driver.touch(Some(Point::new(360, 233)));
     driver.touch(Some(Point::new(340, 233)));
     let part = accents(&driver);
-    assert!(part.hint < 255 && part.ring == 255, "{part:?}");
+    assert!(part.caption < 255 && part.ring == 255, "{part:?}");
     driver.touch(Some(Point::new(200, 233)));
     assert_eq!(accents(&driver), Accents::HIDDEN);
     driver.touch(Some(Point::new(399, 233)));
@@ -175,7 +152,6 @@ fn a_heading_after_calibration_sweeps_the_dial_and_rebuilds_the_icon() {
     let early = accents(&driver);
     assert!(early.dial > 0 && early.dial < 255, "{early:?}");
     assert!(early.icon_rows < 5 && early.caption < 255, "{early:?}");
-    assert_eq!((early.divider, early.hint), (255, 255));
     driver.wait(200_000);
     assert_eq!(accents(&driver), Accents::FULL);
 }
@@ -271,22 +247,24 @@ fn stages() -> Vec<(String, Stage)> {
 /// shows seams.
 #[test]
 fn drawing_in_tiles_matches_drawing_whole() {
-    const TILE: u32 = 70;
     for (name, stage) in stages() {
-        let whole = render(&stage);
-        let mut tiled = FB::boxed();
-        for y in (0..466).step_by(TILE as usize) {
-            for x in (0..466).step_by(TILE as usize) {
-                let area = Rectangle::new(Point::new(x, y), Size::new_equal(TILE));
-                stage.draw(&mut Window::new(&mut *tiled, Point::zero(), area));
-            }
-        }
-        let differing = (0..466 * 466)
-            .map(|index| Point::new(index % 466, index / 466))
-            .filter(|&point| whole.pixel(point) != tiled.pixel(point))
-            .count();
+        let differing = tiled_differs(&stage);
         assert_eq!(differing, 0, "{name}: {differing} pixels differ");
     }
+}
+
+/// How many pixels differ between drawing `stage` whole and drawing it in tiles.
+fn tiled_differs(stage: &Stage) -> usize {
+    const TILE: u32 = 70;
+    let whole = render(stage);
+    let mut tiled = FB::boxed();
+    for y in (0..466).step_by(TILE as usize) {
+        for x in (0..466).step_by(TILE as usize) {
+            let area = Rectangle::new(Point::new(x, y), Size::new_equal(TILE));
+            stage.draw(&mut Window::new(&mut *tiled, Point::zero(), area));
+        }
+    }
+    differing(&whole, &tiled)
 }
 
 #[test]
@@ -410,9 +388,15 @@ impl Buffers {
     }
 }
 
+/// How many pixels on the round panel differ. The square's corners are never seen or cleared,
+/// and a page moving across them leaves what it drew there.
 fn differing(a: &FB, b: &FB) -> usize {
     (0..466 * 466)
         .map(|index| Point::new(index % 466, index / 466))
+        .filter(|&point| {
+            let (x, y) = (point.x as f32 + 0.5 - 233.0, point.y as f32 + 0.5 - 233.0);
+            x * x + y * y <= 233.0 * 233.0
+        })
         .filter(|&point| a.pixel(point) != b.pixel(point))
         .count()
 }
@@ -526,7 +510,7 @@ fn zone(name: &str, mode: ZoneMode) -> ZoneState {
 
 fn sensors(clock: ClockState, zone: ZoneState) -> Input {
     Input {
-        sensors: Some(Sensors { clock, zone }),
+        sensors: Some(Sensors { clock, zone, ..Sensors::default() }),
         ..Input::default()
     }
 }
@@ -736,3 +720,313 @@ fn the_time_types_in_again_when_a_fix_or_zone_replaces_it_and_not_on_a_tick() {
     assert!(!retypes(&mut driver, sensors(stopped, berlin)), "dashes");
     assert!(retypes(&mut driver, sensors(clock_at(12, 12, 1), berlin)), "leaving STOPPED");
 }
+
+// The settings panel.
+
+use octowhere_ui::ui::{
+    panel::{self, Accents as PanelAccents},
+    screens::{Battery, Gnss, PeripheralState},
+    second::Page,
+    stage::{Store, Update},
+};
+
+const HEIGHT: i32 = 466;
+
+/// Settled on `screen`, with readings in every cell.
+fn driver_on(screen: Screen) -> Driver<'static> {
+    let mut driver = Driver::on(screen);
+    driver.stage = Stage::new(PeripheralState { firmware: "0.1.0", ..PeripheralState::default() });
+    driver.stage.show(screen);
+    driver.step(Input {
+        sensors: Some(Sensors {
+            clock: clock_at(12, 7, 42),
+            zone: zone("Europe/Dublin", ZoneMode::Automatic),
+            battery: Some(Battery { present: true, percent: 87, millivolts: 4020, charging: true, usb: true }),
+            gnss: Gnss { fix: true, in_use: 9, in_view: 14, position: None },
+        }),
+        motion: Some(heading(470)),
+        ..Input::default()
+    });
+    driver.wait(600_000);
+    driver
+}
+
+fn pull_down(driver: &mut Driver) {
+    driver.swipe(Point::new(233, 80), Point::new(233, 420), 250_000);
+    driver.settle();
+}
+
+fn open_panel(screen: Screen) -> Driver<'static> {
+    let mut driver = driver_on(screen);
+    pull_down(&mut driver);
+    driver.wait(500_000);
+    driver
+}
+
+fn tap(driver: &mut Driver, x: i32, y: i32) -> Vec<Update> {
+    let updates = driver.stroke(&[Point::new(x, y)]);
+    driver.wait(300_000);
+    updates
+}
+
+fn stored(updates: &[Update]) -> Option<Store> {
+    updates.iter().find_map(|update| update.store)
+}
+
+#[test]
+fn a_downward_drag_on_either_face_opens_the_panel() {
+    for screen in Screen::ALL {
+        let driver = open_panel(screen);
+        assert_eq!(driver.stage.panel_offset(), HEIGHT, "from {screen:?}");
+        assert_eq!(driver.stage.panel_accents(), PanelAccents::FULL);
+    }
+}
+
+#[test]
+fn a_short_or_mostly_sideways_drag_leaves_the_panel_shut() {
+    let mut driver = driver_on(Screen::Clock);
+    driver.swipe(Point::new(233, 80), Point::new(233, 150), 300_000);
+    driver.settle();
+    assert_eq!(driver.stage.panel_offset(), 0);
+    // Down, but more sideways than down, is the pager's.
+    driver.swipe(Point::new(400, 150), Point::new(160, 260), 200_000);
+    driver.settle();
+    assert_eq!(driver.stage.panel_offset(), 0);
+    assert_eq!(driver.stage.screen(), Screen::Compass);
+}
+
+#[test]
+fn the_panel_arrives_with_its_accents_hidden_and_builds_them_once_open() {
+    let mut driver = driver_on(Screen::Clock);
+    for y in [80, 150, 250] {
+        driver.touch(Some(Point::new(233, y)));
+    }
+    assert_eq!(driver.stage.panel_accents(), PanelAccents::HIDDEN);
+    for _ in 0..3 {
+        driver.touch(None);
+    }
+    while driver.stage.panel_offset() < HEIGHT {
+        driver.wait(0);
+    }
+    driver.wait(100_000);
+    let early = driver.stage.panel_accents();
+    assert!(early.ring > 0 && early.hint == 0 && early.rows[5] == 0, "{early:?}");
+    driver.wait(400_000);
+    assert_eq!(driver.stage.panel_accents(), PanelAccents::FULL);
+}
+
+#[test]
+fn an_upward_drag_closes_the_panel_to_the_face_it_came_from() {
+    let mut driver = open_panel(Screen::Compass);
+    driver.swipe(Point::new(233, 420), Point::new(233, 100), 250_000);
+    driver.settle();
+    assert_eq!(driver.stage.panel_offset(), 0);
+    assert_eq!(driver.stage.screen(), Screen::Compass);
+    assert_eq!(accents(&driver), Accents::FULL, "the compass entry did not run again");
+}
+
+#[test]
+fn a_cover_on_the_panel_closes_it_to_the_clock() {
+    let mut driver = open_panel(Screen::Compass);
+    driver.cover();
+    driver.settle();
+    assert_eq!(driver.stage.panel_offset(), 0);
+    assert_eq!(driver.stage.screen(), Screen::Clock);
+}
+
+#[test]
+fn a_sideways_drag_scrolls_the_grid_and_it_snaps_to_either_end() {
+    let mut driver = open_panel(Screen::Clock);
+    driver.swipe(Point::new(380, 250), Point::new(260, 250), 400_000);
+    driver.settle();
+    assert_eq!(driver.stage.panel_scroll(), panel::MAX_SCROLL);
+    assert_eq!(driver.stage.panel_offset(), HEIGHT);
+    driver.swipe(Point::new(200, 250), Point::new(260, 250), 400_000);
+    driver.settle();
+    assert_eq!(driver.stage.panel_scroll(), panel::MAX_SCROLL, "a short drag moved it");
+    driver.swipe(Point::new(200, 250), Point::new(260, 250), 50_000);
+    driver.settle();
+    assert_eq!(driver.stage.panel_scroll(), 0, "a flick did not carry it back");
+}
+
+#[test]
+fn a_tap_on_the_cropped_column_scrolls_it_into_view_without_opening_it() {
+    let mut driver = open_panel(Screen::Clock);
+    tap(&mut driver, 420, 150);
+    assert_eq!(driver.stage.panel_scroll(), panel::MAX_SCROLL);
+    assert!(driver.stage.page().is_none());
+    tap(&mut driver, 330, 300);
+    assert!(matches!(driver.stage.page(), Some(Page::Device(_))));
+}
+
+#[test]
+fn the_compass_cell_restarts_calibration_and_closes_to_the_compass() {
+    let mut driver = open_panel(Screen::Clock);
+    let updates = tap(&mut driver, 300, 150);
+    assert!(updates.iter().any(|update| update.recalibrate));
+    driver.settle();
+    assert_eq!(driver.stage.panel_offset(), 0);
+    assert_eq!(driver.stage.screen(), Screen::Compass);
+    assert_eq!(driver.stage.peripherals().compass.heading_decidegrees, None);
+}
+
+#[test]
+fn the_brightness_editor_shows_each_step_live_and_stores_on_a_tap() {
+    let mut driver = open_panel(Screen::Clock);
+    tap(&mut driver, 150, 300);
+    assert!(matches!(driver.stage.page(), Some(Page::Brightness(_))));
+    let updates = driver.swipe(Point::new(150, 280), Point::new(420, 280), 300_000);
+    let levels: Vec<_> = updates.iter().filter_map(|update| update.brightness).collect();
+    assert!(levels.len() > 3 && levels.last() == Some(&255), "{levels:?}");
+    assert_eq!(driver.stage.peripherals().brightness, 120, "the level was stored before a tap");
+    let updates = tap(&mut driver, 233, 250);
+    assert_eq!(stored(&updates), Some(Store::Brightness(255)));
+    assert!(driver.stage.page().is_none());
+    assert_eq!(driver.stage.peripherals().brightness, 255);
+}
+
+#[test]
+fn cancel_or_a_cover_puts_the_brightness_back() {
+    let mut driver = open_panel(Screen::Clock);
+    tap(&mut driver, 150, 300);
+    driver.swipe(Point::new(150, 280), Point::new(80, 280), 200_000);
+    let updates = tap(&mut driver, 120, 120);
+    assert_eq!(updates.iter().rev().find_map(|update| update.brightness), Some(120));
+    assert!(driver.stage.page().is_none());
+    assert_eq!(driver.stage.panel_offset(), HEIGHT);
+
+    tap(&mut driver, 150, 300);
+    driver.swipe(Point::new(150, 280), Point::new(80, 280), 200_000);
+    let update = driver.cover();
+    assert_eq!(update.brightness, Some(120));
+    assert_eq!(update.store, None);
+    driver.settle();
+    assert_eq!(driver.stage.screen(), Screen::Clock);
+    assert_eq!(driver.stage.panel_offset(), 0);
+}
+
+#[test]
+fn clearing_takes_a_drag_all_the_way_to_the_target() {
+    let mut driver = open_panel(Screen::Clock);
+    tap(&mut driver, 150, 300);
+    driver.swipe(Point::new(150, 280), Point::new(420, 280), 300_000);
+    tap(&mut driver, 233, 250);
+    tap(&mut driver, 300, 300);
+    driver.swipe(Point::new(233, 400), Point::new(233, 250), 300_000);
+    tap(&mut driver, 233, 398);
+    assert!(matches!(driver.stage.page(), Some(Page::Clear(_))));
+    // Short of the target, or not starting on the handle, erases nothing.
+    let updates = driver.swipe(Point::new(90, 258), Point::new(250, 258), 300_000);
+    assert_eq!(stored(&updates), None);
+    let updates = driver.swipe(Point::new(200, 258), Point::new(420, 258), 300_000);
+    assert_eq!(stored(&updates), None);
+    let updates = driver.swipe(Point::new(90, 258), Point::new(420, 258), 300_000);
+    assert_eq!(stored(&updates), Some(Store::Clear));
+    assert!(driver.stage.page().is_none());
+    assert_eq!(driver.stage.peripherals().brightness, 120);
+}
+
+#[test]
+fn the_picker_stores_a_zone_by_hand_and_automatic_from_its_first_step() {
+    let mut driver = open_panel(Screen::Clock);
+    tap(&mut driver, 150, 150);
+    assert!(matches!(driver.stage.page(), Some(Page::Picker(_))));
+    // One row up is the next offset, +02:00, and its zones start at the top of the list.
+    driver.swipe(Point::new(233, 300), Point::new(233, 255), 300_000);
+    tap(&mut driver, 233, 250);
+    let updates = tap(&mut driver, 233, 250);
+    let Some(Store::ManualZone(zone)) = stored(&updates) else {
+        panic!("no zone was stored: {:?}", stored(&updates));
+    };
+    assert_eq!(DATABASE.zone(zone).at(clock_at(12, 7, 42).utc.unwrap()).utc_offset, 7200);
+    assert_eq!(driver.stage.peripherals().clock.zone, octowhere_ui::ui::clock::ZoneState {
+        mode: ZoneMode::Manual,
+        zone: Some(zone),
+    });
+
+    tap(&mut driver, 150, 150);
+    let updates = tap(&mut driver, 233, 390);
+    assert_eq!(stored(&updates), Some(Store::AutomaticZone));
+    assert_eq!(driver.stage.peripherals().clock.zone.mode, ZoneMode::Automatic);
+}
+
+#[test]
+fn a_fling_in_the_picker_keeps_stepping_and_stops() {
+    let mut driver = open_panel(Screen::Clock);
+    tap(&mut driver, 150, 150);
+    let Some(Page::Picker(before)) = driver.stage.page().cloned() else { panic!() };
+    driver.swipe(Point::new(233, 300), Point::new(233, 200), 60_000);
+    driver.settle();
+    let Some(Page::Picker(after)) = driver.stage.page().cloned() else { panic!() };
+    assert_ne!(before, after);
+    assert!(!driver.stage.is_animating());
+}
+
+/// The panel and every screen it opens, drawn clipped to tiles, must match drawing whole.
+#[test]
+fn the_panel_and_its_screens_draw_the_same_in_tiles() {
+    let mut stages = vec![("panel", open_panel(Screen::Clock).stage)];
+    let mut driver = open_panel(Screen::Clock);
+    for x in [380, 340, 320] {
+        driver.touch(Some(Point::new(x, 250)));
+    }
+    stages.push(("scrolling", driver.stage));
+    let mut driver = driver_on(Screen::Compass);
+    for y in [80, 150, 250] {
+        driver.touch(Some(Point::new(233, y)));
+    }
+    stages.push(("pulling", driver.stage));
+    for (name, (x, y)) in [("brightness", (150, 300)), ("device", (300, 300)), ("picker", (150, 150))] {
+        let mut driver = open_panel(Screen::Clock);
+        tap(&mut driver, x, y);
+        stages.push((name, driver.stage));
+    }
+    let mut driver = open_panel(Screen::Clock);
+    tap(&mut driver, 150, 150);
+    tap(&mut driver, 233, 250);
+    stages.push(("zones", driver.stage));
+    for (name, stage) in stages {
+        let differing = tiled_differs(&stage);
+        assert_eq!(differing, 0, "{name}: {differing} pixels differ");
+    }
+}
+
+/// Steps through opening, scrolling and value changes, checking each partial redraw against a
+/// full one.
+#[test]
+fn panel_damage_redraws_what_changed() {
+    let mut driver = driver_on(Screen::Clock);
+    let mut buffers = Buffers::new();
+    let mut check = |driver: &Driver, what: &str| {
+        let partial = buffers.draw(&driver.stage, driver.stage.changed());
+        let whole = render(&driver.stage);
+        let wrong = differing(partial, &whole);
+        assert_eq!(wrong, 0, "{what}: {wrong} pixels differ");
+        let wrong = differing(&buffers.panel, &whole);
+        assert_eq!(wrong, 0, "{what}: {wrong} pixels differ on the panel");
+    };
+    for (index, y) in [80, 160, 260, 360, 420].into_iter().enumerate() {
+        driver.touch(Some(Point::new(233, y)));
+        check(&driver, &format!("pull {index}"));
+    }
+    for step in 0..40 {
+        driver.touch(None);
+        check(&driver, &format!("settle {step}"));
+    }
+    for (index, x) in [380, 350, 300, 260].into_iter().enumerate() {
+        driver.touch(Some(Point::new(x, 250)));
+        check(&driver, &format!("scroll {index}"));
+    }
+    for step in 0..20 {
+        driver.touch(None);
+        check(&driver, &format!("snap {step}"));
+    }
+    let mut calibrating = heading(470);
+    calibrating.compass.heading_decidegrees = None;
+    for percent in [10, 60, 100] {
+        calibrating.compass.calibration_percent = percent;
+        driver.motion(calibrating);
+        check(&driver, &format!("calibration {percent}"));
+    }
+}
+

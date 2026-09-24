@@ -328,6 +328,107 @@ impl<T: CoverageTarget> CoverageTarget for Window<'_, T> {
     }
 }
 
+/// A view of `parent` that draws only on pixels whose centres lie within `radius` of the pixel
+/// corner `center`. The edge is hard; a ring drawn over it afterwards gives the antialiasing.
+pub struct Round<'a, T> {
+    parent: &'a mut T,
+    center: Point,
+    radius: f32,
+}
+
+impl<'a, T: DrawTarget> Round<'a, T> {
+    pub fn new(parent: &'a mut T, center: Point, radius: f32) -> Self {
+        Self { parent, center, radius }
+    }
+
+    /// The columns of row `y` inside the circle, as a start and an end past it.
+    fn chord(&self, y: i32) -> Option<(i32, i32)> {
+        let dy = y as f32 + 0.5 - self.center.y as f32;
+        let squared = self.radius * self.radius - dy * dy;
+        if squared < 0.0 {
+            return None;
+        }
+        let half = libm::sqrtf(squared);
+        let start = libm::ceilf(self.center.x as f32 - half - 0.5) as i32;
+        let end = libm::floorf(self.center.x as f32 + half - 0.5) as i32 + 1;
+        (start < end).then_some((start, end))
+    }
+}
+
+impl<T: DrawTarget> Dimensions for Round<'_, T> {
+    fn bounding_box(&self) -> Rectangle {
+        self.parent.bounding_box()
+    }
+}
+
+impl<T: DrawTarget> DrawTarget for Round<'_, T> {
+    type Color = T::Color;
+    type Error = T::Error;
+
+    fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = Pixel<Self::Color>>,
+    {
+        let (center, radius) = (self.center, self.radius);
+        self.parent.draw_iter(pixels.into_iter().filter(|Pixel(point, _)| {
+            let dx = point.x as f32 + 0.5 - center.x as f32;
+            let dy = point.y as f32 + 0.5 - center.y as f32;
+            dx * dx + dy * dy <= radius * radius
+        }))
+    }
+
+    fn fill_solid(&mut self, area: &Rectangle, color: Self::Color) -> Result<(), Self::Error> {
+        let Some(bottom_right) = area.bottom_right() else {
+            return Ok(());
+        };
+        for y in area.top_left.y..=bottom_right.y {
+            let Some((start, end)) = self.chord(y) else {
+                continue;
+            };
+            let (from, to) = (start.max(area.top_left.x), end.min(bottom_right.x + 1));
+            if from < to {
+                let row = Rectangle::new(Point::new(from, y), Size::new((to - from) as u32, 1));
+                self.parent.fill_solid(&row, color)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<T: CoverageTarget> Round<'_, T> {
+    fn clip_row<'c>(&self, x: i32, y: i32, coverage: &'c [u8]) -> Option<(i32, &'c [u8])> {
+        let (start, end) = self.chord(y)?;
+        let from = x.max(start);
+        let to = x.saturating_add(coverage.len() as i32).min(end);
+        (from < to).then(|| (from, &coverage[(from - x) as usize..(to - x) as usize]))
+    }
+}
+
+impl<T: CoverageTarget> CoverageTarget for Round<'_, T> {
+    fn visible(&self, area: &Rectangle) -> bool {
+        self.parent.visible(area)
+    }
+
+    fn blend_row(&mut self, x: i32, y: i32, coverage: &[u8], color: Self::Color) {
+        if let Some((x, coverage)) = self.clip_row(x, y, coverage) {
+            self.parent.blend_row(x, y, coverage, color);
+        }
+    }
+
+    fn blend_row_over(
+        &mut self,
+        x: i32,
+        y: i32,
+        coverage: &[u8],
+        color: Self::Color,
+        background: Self::Color,
+    ) {
+        if let Some((x, coverage)) = self.clip_row(x, y, coverage) {
+            self.parent.blend_row_over(x, y, coverage, color, background);
+        }
+    }
+}
+
 /// A view of `parent` that draws only where `damage` marks.
 pub struct Clip<'a, T> {
     parent: &'a mut T,
@@ -444,8 +545,9 @@ fontdue_macros::fontdue_font_from_file!(
 
 fontdue_macros::fontdue_font_from_file!(
     FraktionMonoRegularFont,
-    "../../../assets/PPFraktion-Free for personal use v1.1/Mono/PPFraktionMono-Regular-subset.ttf",
-    scale: 24.0
+    "../../../assets/PPFraktion-Free for personal use v1.1/Mono/PPFraktionMono-Regular.otf",
+    scale: 24.0,
+    chars: " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\u{a9}\u{b0}"
 );
 
 fontdue_macros::fontdue_font_from_file!(

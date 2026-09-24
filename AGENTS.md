@@ -19,10 +19,12 @@ initialization or peripheral mappings.
 - `crates/octowhere-ui/` is everything between the sensors and the pixels, with no board
   dependency, so it also builds for the host. `src/ui/` there owns dirty tracking, geometry,
   gestures and paging, IMU unit conversion, the compass maths, the clock and compass screens with
-  the icon and cell reveal they share, `stage`, which holds the screen state and turns touch
-  and readings into redraws, and `script`, which steps a stage on a simulated clock for tests
-  and scenes. `src/chrome.rs` is the
-  font and draw-target layer, and `src/framebuffer.rs` holds the pixels. The firmware re-exports
+  the icon and cell reveal they share, the settings panel (`panel`, the grid; `sheet`, its
+  travel over the faces; `second`, the screens it opens; `picker`, the zone picker; `text`,
+  placing text by its ink), `stage`, which holds the screen state and turns touch and readings
+  into redraws and settings to store, and `script`, which steps a stage on a simulated clock for
+  tests and scenes. `src/chrome.rs` is the font and draw-target layer, and `src/framebuffer.rs`
+  holds the pixels. The firmware re-exports
   its `chrome`, `framebuffer` and `ui` modules, so `octowhere::ui::…` paths still resolve.
 - `src/main.rs` holds both cores, the sensor and motion tasks, and the frame loop, which feeds
   the stage and flushes what it draws.
@@ -34,8 +36,11 @@ initialization or peripheral mappings.
   crate's test vectors from timezone-boundary-builder's boundaries and the IANA rules; its header
   has the command. The boundaries are ODbL, and `crates/tz/data/NOTICE.md` carries the
   attribution the licence asks for.
-- `src/settings.rs` keeps settings in flash across restarts. Today that is the time zone mode,
-  the manually chosen zone, and the zone GNSS last placed the device in.
+- `src/settings.rs` keeps settings in flash across restarts, in an ekv database: the time zone
+  mode, the manually chosen zone, the zone GNSS last placed the device in, and the display's
+  brightness. `partitions.csv` is the flash layout, and the cargo runner flashes it.
+- `tools/tz-references.py` writes each zone's reference point into `crates/tz/src/references.rs`,
+  which the picker ranks zones by.
 - `crates/` also holds the local `lc76g`, `sx127x-lora` and `sx127x-common` crates.
 - `host-tests/` is the std test harness for the board-side modules.
 - `tools/ui-sim/` runs the stage in a desktop window. `tools/` also holds the bench scripts.
@@ -48,8 +53,9 @@ initialization or peripheral mappings.
 - [`context/BACKLOG.md`](context/BACKLOG.md) lists open work that is not in progress, and says
   where each entry's detail lives. Read it when choosing what to do next.
 - [`context/SCREEN-DESIGN-BRIEF.md`](context/SCREEN-DESIGN-BRIEF.md) briefs a design agent on
-  a new screen, currently the settings panel: the hardware, what the renderer draws and what it
-  costs, what data the screens receive, and the two approved screens. Captures of their states
+  a new screen: the hardware, what the renderer draws and what it costs, what data the screens
+  receive, and the approved screens. It was written for the settings panel's round and does
+  not yet describe the panel as built; refresh it before the next round. Captures of their states
   are in `context/screen-captures/`, drawn by the `render` example. Keep it current when the renderer,
   the costs or the screens' data change. The compass's earlier specification and the design
   round's questions and answers were removed once the firmware implemented them; git history
@@ -60,8 +66,10 @@ initialization or peripheral mappings.
   [`context/compass-animation/COMPASS-ANIMATION-ADDENDUM.md`](context/compass-animation/COMPASS-ANIMATION-ADDENDUM.md)
   replaces the compass's motion, and
   [`context/clock-wordmark/CLOCK-WORDMARK-ADDENDUM.md`](context/clock-wordmark/CLOCK-WORDMARK-ADDENDUM.md)
-  adds the wordmark to the clock face. The firmware implements all three, except the picker,
-  which waits for the settings panel.
+  adds the wordmark to the clock face. The firmware implements all three.
+- [`context/settings-panel/SETTINGS-PANEL-SPEC.md`](context/settings-panel/SETTINGS-PANEL-SPEC.md)
+  is the approved design of the settings panel and the screens it opens, with the owner's
+  decisions since. The firmware implements it.
 - [`context/HARDWARE-VERIFICATION.md`](context/HARDWARE-VERIFICATION.md) lists open hardware
   questions from static review. They are questions, not confirmed defects.
 - [`context/IMPLEMENTATION.md`](context/IMPLEMENTATION.md) is a finished multi-agent brief kept as
@@ -106,8 +114,8 @@ The firmware's clippy run does not reach `crates/octowhere-ui`, because a path d
 a workspace member. Its own clippy line above is what lints it. The stable clippy there is newer
 than the `esp` one and flags more.
 
-`cargo run --release` uses the configured `espflash` runner to flash the board and decode its
-log. The firmware logs only through defmt, so the image holds an index per message rather than
+`cargo run --release`, from the repository root, uses the configured `espflash` runner to flash
+the board with `partitions.csv` and decode its log. The firmware logs only through defmt, so the image holds an index per message rather than
 its text, and the serial stream needs the ELF to read. `espflash monitor --no-reset
 --log-format defmt --elf <elf>` reads it without restarting the board. `DEFMT_LOG` in
 [`.cargo/config.toml`](.cargo/config.toml) sets the level at compile time. It is `info`, which
@@ -142,7 +150,10 @@ Weigh that cost before adding one.
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 930,112 bytes, 22.53% of the 4,128,768-byte app partition. The time zone
+The image is currently 1,026,624 bytes, 6.55% of the 15,663,104-byte app partition that
+`partitions.csv` gives it. Measure with `espflash save-image --chip esp32s3 --flash-size 16mb
+--partition-table partitions.csv <elf> <out>`; without those two options it assumes 4 MB of flash
+and the default table. The time zone
 data is about 390 KB of that, and its boundary tolerance in `tools/tz-data.py` is the lever: the
 bench branch `bench/tz-boundary-size` tabulates size against accuracy. PP Fraktion Mono Bold with
 all of printable ASCII is about 54 KB; subsetting it to the glyphs the compass uses is the other
@@ -300,15 +311,18 @@ errata workaround, are in [`docs/hardware-notes.md`](docs/hardware-notes.md).
 
 ## Memory
 
-- The current internal heap is 252 KiB, allocated by `esp_alloc::heap_allocator!` in `main`.
+- The current internal heap is 240 KiB, allocated by `esp_alloc::heap_allocator!` in `main`.
+  It is a static in `.bss`, and core 0's stack is whatever DRAM `.data` and `.bss` leave,
+  about 26 KiB; an overflow there hangs without a message. `context/BACKLOG.md` has the plan for
+  laying SRAM out deliberately.
 - PSRAM is registered in the separate `PSRAM_HEAP` static. Framebuffers must be allocated with
   `FB::alloc(&PSRAM_HEAP)` rather than the global allocator.
 - The current RGB565 configuration uses 466 × 466 × 2 = 434,312 bytes per framebuffer, with two
   framebuffers.
 - Core 1 uses the 8 KiB `CORE1_STACK` static.
-- Settings are a sequential-storage map in the partition table's `nvs` partition, 24 KiB at
-  `0x9000`. It is not ESP-IDF's NVS format, and nothing else uses the partition.
-  `espflash erase-region 0x9000 0x6000` clears them.
+- Settings are an ekv database in the `storage` partition, 1 MiB at `0xF00000`, 256 pages of
+  4 KiB. The firmware formats it when it finds no database. `espflash erase-region 0xF00000
+  0x100000` clears it. The 24 KiB `nvs` partition at `0x9000` held settings before and is unused.
 
 Check the allocator and framebuffer definitions in [`src/main.rs`](src/main.rs) and
 [`crates/octowhere-ui/src/chrome.rs`](crates/octowhere-ui/src/chrome.rs) when changing memory
@@ -336,11 +350,11 @@ renderer.
 
 ## Design language
 
-The firmware has two screens, the clock and the compass, and both follow approved designs: the
-clock face specification with its wordmark addendum, and the compass animation addendum, all
-listed above. Change how either looks or moves only against those documents or a new design
-round. A new screen, the settings panel included, starts from a design round rather than from a
-sketch in code.
+The firmware has two faces, the clock and the compass, and the settings panel over them, and all
+follow approved designs: the clock face specification with its wordmark addendum, the compass
+animation addendum, and the settings panel specification, all listed above. Change how any of
+them looks or moves only against those documents or a new design round. A new screen starts
+from a design round rather than from a sketch in code.
 
 [`context/marathon-ui-cross-project-handoff.md`](context/marathon-ui-cross-project-handoff.md) is
 the doctrine the screens were designed from. It is project-agnostic and was carried in from an

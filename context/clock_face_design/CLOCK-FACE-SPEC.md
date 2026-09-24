@@ -259,9 +259,11 @@ white would need an interpolation toward the band colour, which the firmware doe
 ## Gestures on the face
 
 - Horizontal drags change page, as everywhere.
-- Nothing else does anything on the face: taps, vertical drags, two-finger contacts and
-  covering the screen. The zone is chosen from a settings panel, so an accidental touch never
-  starts changing it.
+- Nothing else changes the face: taps, vertical drags other than the settings panel's opening
+  drag, and two-finger contacts. The zone is chosen from a settings panel, so an accidental touch
+  never starts changing it.
+- Covering the screen goes to the clock face from any screen, and does nothing on the face
+  itself (owner's decision, 2026-09-24).
 
 ## Zone picker
 
@@ -355,9 +357,9 @@ smaller than about 10 mm.
   0.5 px/ms, stepping continues and slows to a stop. Both numbers are starting values to tune on
   the panel.
 - Steps are hard replacements. Rows do not slide.
-- Covering the screen, on either step, is `CANCEL`: back to the settings panel, nothing stored. It counts
-  once per hand, with the compass's rule for a repeated cover report (a second cover counts
-  after 260 ms without a report, or after a finger touches). This gives an exit that does not
+- Covering the screen, on either step, discards the choice and goes to the clock face, as on
+  every screen (owner's decision, 2026-09-24). It counts once per hand: a second cover counts
+  after 260 ms without a report, or after a finger touches. This gives an exit that does not
   depend on finding the top cap.
 - A horizontal drag does whatever it does on the settings panel. If it leaves, the picker is
   discarded without storing anything.
