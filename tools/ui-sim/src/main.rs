@@ -13,7 +13,8 @@
 //!   withholds the heading.
 //! - D: magnetic disturbance on or off. L: sensors live or silent.
 //! - Z: the clock's zone, through unknown, automatic in Dublin, and chosen by hand in New York
-//!   and Kolkata.
+//!   and Kolkata. R: the clock, through set from GNSS, running unconfirmed, stopped and
+//!   unreadable.
 //! - Hold H: a hand covering the screen, which restarts calibration on the settled compass.
 //! - Tab: next screen without the slide. P: save the window to `ui-sim-<n>.png` in the current
 //!   directory. Esc: quit.
@@ -65,7 +66,14 @@ struct Readings {
     vertical: bool,
     /// Which of [`ZONES`] the clock shows.
     zone: usize,
+    /// Which of [`CLOCKS`] the clock reads.
+    clock: usize,
 }
+
+/// The clock's states R steps through: whether GNSS has set it, whether it stopped, and whether
+/// it can be read.
+const CLOCKS: [(bool, bool, bool); 4] =
+    [(true, false, true), (false, false, true), (false, true, true), (false, false, false)];
 
 /// The zones Z steps through, and whether each was chosen by hand. `None` is automatic mode
 /// before any fix.
@@ -118,6 +126,7 @@ impl Readings {
             Key::T => self.vertical = !self.vertical,
             Key::Space => self.spinning = !self.spinning,
             Key::Z => self.zone = (self.zone + 1) % ZONES.len(),
+            Key::R => self.clock = (self.clock + 1) % CLOCKS.len(),
             _ => return false,
         }
         true
@@ -174,6 +183,7 @@ fn main() {
         spinning: false,
         vertical: false,
         zone: 1,
+        clock: 0,
     };
     let mut fb = FB::boxed();
     let mut pixels = vec![0u32; WIDTH * HEIGHT];
@@ -202,9 +212,9 @@ fn main() {
                     println!("saved {path}");
                 }
                 key => {
-                    let zone = readings.zone;
+                    let clock = (readings.zone, readings.clock);
                     readings_changed |= readings.press(key, shift);
-                    zone_changed |= readings.zone != zone;
+                    zone_changed |= (readings.zone, readings.clock) != clock;
                 }
             }
         }
@@ -235,7 +245,7 @@ fn main() {
                 Touch::Contacts([contact, None])
             }),
             motion: motion_due.then(|| readings.motion()),
-            sensors: sensors_due.then(|| sensors(readings.zone_state())),
+            sensors: sensors_due.then(|| sensors(readings.zone_state(), CLOCKS[readings.clock])),
         });
         samples_fast = update.samples_fast;
         if update.recalibrate {
@@ -299,7 +309,7 @@ fn to_pixels(fb: &FB, mask: &[bool], pixels: &mut [u32]) {
 }
 
 /// Synthetic power and GNSS readings, with the host's UTC clock.
-fn sensors(zone: ZoneState) -> Sensors {
+fn sensors(zone: ZoneState, (gnss, stopped, readable): (bool, bool, bool)) -> Sensors {
     let seconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_secs());
@@ -311,9 +321,9 @@ fn sensors(zone: ZoneState) -> Sensors {
         gnss_fix: true,
         lora_irq: 0,
         clock: ClockState {
-            utc: Some(seconds as i64),
-            set_from_gnss: true,
-            stopped: false,
+            utc: readable.then_some(seconds as i64),
+            set_from_gnss: gnss,
+            stopped,
         },
         zone,
     }
