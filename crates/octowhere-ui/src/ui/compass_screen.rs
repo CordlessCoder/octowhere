@@ -358,6 +358,14 @@ fn draw_icon<D: DrawTarget<Color = Color>>(
 }
 
 /// The slab's black knockout content, over a target that knows the slab's colour.
+/// The readout's stand-in while there is no heading.
+const DASHES: &str = "---";
+
+/// Where the dashes' pen starts so that their ink, taken as one group, is centred in the slab.
+fn dashes_origin(numerals: &FontdueRenderer<'static, Color>) -> Point {
+    SLAB.center() - numerals.baseline_bounds(DASHES, Point::zero()).center()
+}
+
 fn draw_readout<D: CoverageTarget<Color = Color>>(
     mode: Mode,
     font: &FontdueRenderer<'static, Color>,
@@ -380,10 +388,7 @@ fn draw_readout<D: CoverageTarget<Color = Color>>(
             _ = write!(digits, "{percent:03}");
             Some("%")
         }
-        Mode::TopEdgeUp => {
-            _ = digits.push_str("---");
-            None
-        }
+        Mode::TopEdgeUp => return numerals.draw_on_baseline(DASHES, dashes_origin(&numerals), slab),
     };
     numerals.draw_on_baseline(&digits, READOUT, slab)?;
     if let Some(unit) = unit {
@@ -465,6 +470,15 @@ mod tests {
             vertical::Center,
         );
         assert!(inside(no_data, SLAB), "NO DATA spills out of the slab: {no_data:?}");
+    }
+
+    #[test]
+    fn the_dashes_are_centred_in_the_slab() {
+        let font = renderer();
+        let numerals = style(&font, chrome::BLACK, 86, FRAKTION_BOLD);
+        let ink = numerals.baseline_bounds(DASHES, dashes_origin(&numerals));
+        let offset = ink.center() - SLAB.center();
+        assert!(offset.x.abs() <= 1 && offset.y.abs() <= 1, "{ink:?} is off centre by {offset:?}");
     }
 
     #[test]
