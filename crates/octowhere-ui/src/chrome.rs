@@ -303,6 +303,9 @@ fontdue_macros::fontdue_font_from_file!(
     scale: 2.2
 );
 
+/// The fonts a `FontdueRenderer` indexes with `font_index`.
+pub const FONTS: &[&dyn FontRepr] = &[&MarathonShapiroFont, &FraktionMonoRegularFont];
+
 const fn color_from_rgb(r: u8, g: u8, b: u8) -> Color {
     Color::new(
         (r as f64 / 255. * Color::MAX_R as f64) as u8,

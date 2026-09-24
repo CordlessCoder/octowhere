@@ -9,3 +9,4 @@ pub mod input;
 pub mod pager;
 pub mod prototypes;
 pub mod smooth;
+pub mod stage;
