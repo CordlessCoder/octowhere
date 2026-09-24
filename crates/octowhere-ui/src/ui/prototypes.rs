@@ -148,6 +148,8 @@ pub struct State {
     pub offset: i32,
     /// The screen a shift uncovers, and its own offset.
     pub neighbour: Option<(Screen, i32)>,
+    /// How far the compass's dial accents have faded in, when `screen` is the compass.
+    pub compass_accents: super::compass_screen::Accents,
 }
 
 pub const HEADER: Rectangle = Rectangle::new(Point::new(92, 48), Size::new(282, 50));
@@ -174,7 +176,18 @@ where
 
     render_page(architecture, state, state.offset, font, target)?;
     if let Some((screen, offset)) = state.neighbour {
-        render_page(architecture, State { screen, ..state }, offset, font, target)?;
+        render_page(
+            architecture,
+            // A page crossing into view has not settled, so its accents have not begun.
+            State {
+                screen,
+                compass_accents: super::compass_screen::Accents::HIDDEN,
+                ..state
+            },
+            offset,
+            font,
+            target,
+        )?;
     }
 
     dirty.add(bounds);
@@ -941,17 +954,7 @@ where
     )
 }
 
-pub const COMPASS_CENTER: Point = Point::new(233, 233);
-/// The dial's edge, just inside the panel's.
-const COMPASS_INSET: i32 = 1;
-const COMPASS_RADIUS: i32 = LCD_WIDTH as i32 / 2 - COMPASS_INSET;
-/// The dial's ring, whose coverage is computed on first use.
-static COMPASS_RING: embassy_sync::once_lock::OnceLock<super::smooth::Ring> =
-    embassy_sync::once_lock::OnceLock::new();
-const CARDINALS: [&str; 16] = [
-    "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW",
-    "NNW",
-];
+pub const COMPASS_CENTER: Point = super::compass_screen::CENTER;
 
 fn draw_compass<D>(
     state: State,
@@ -961,193 +964,7 @@ fn draw_compass<D>(
 where
     D: chrome::CoverageTarget<Color = Color>,
 {
-    let view = state.peripherals.compass;
-    let center = (COMPASS_CENTER.x as f32, COMPASS_CENTER.y as f32);
-    let radius = COMPASS_RADIUS as f32;
-    // Without a trusted heading the dial holds still and carries no bearings, so it cannot be
-    // read as pointing anywhere.
-    let heading = view.heading_decidegrees;
-    let turn = heading.map_or(0.0, |decidegrees| decidegrees as f32 / 10.0);
-
-    // The ring, ticks and labels land on the cleared field and do not overlap.
-    let dial = &mut chrome::OnBackground::new(&mut *target, chrome::BLACK);
-    COMPASS_RING
-        .get_or_init(|| super::smooth::Ring::new(COMPASS_CENTER, radius - 2.0, radius))
-        .draw(dial, chrome::GRAY);
-    // One quarter of the ticks is filled, and each is drawn at all four quarter turns: ticks nine
-    // apart are a quarter turn apart and all major or all minor alike.
-    let mut raster = fontdue::raster::Raster::empty();
-    let mut coverage = alloc::vec::Vec::new();
-    for tick in 0..9 {
-        let (sin, cos) = libm::sincosf((tick as f32 * 10.0 - turn).to_radians());
-        let (width, inner) = if tick % 3 == 0 { (4.0, 30.0) } else { (2.0, 16.0) };
-        let point = |along: f32, across: f32| {
-            (
-                center.0 + sin * along + cos * across,
-                center.1 - cos * along + sin * across,
-            )
-        };
-        let (outer, inner) = (radius - 6.0, radius - inner);
-        super::smooth::polygon_quarters(
-            dial,
-            &mut raster,
-            &mut coverage,
-            &[
-                point(outer, -width / 2.0),
-                point(outer, width / 2.0),
-                point(inner, width / 2.0),
-                point(inner, -width / 2.0),
-            ],
-            COMPASS_CENTER,
-            if tick % 3 == 0 { chrome::WHITE } else { chrome::GRAY },
-        );
-    }
-    for tick in (0..36).step_by(3).filter(|_| heading.is_some()) {
-        let (sin, cos) = libm::sincosf((tick as f32 * 10.0 - turn).to_radians());
-        let at = |radius: i32| {
-            COMPASS_CENTER
-                + Point::new(
-                    libm::roundf(sin * radius as f32) as i32,
-                    libm::roundf(-cos * radius as f32) as i32,
-                )
-        };
-        let (label, color, size, font_index, radius) = match tick {
-            0 => ("N", chrome::ORANGE, 40, 0, COMPASS_RADIUS - 58),
-            9 => ("E", chrome::WHITE, 40, 0, COMPASS_RADIUS - 58),
-            18 => ("S", chrome::WHITE, 40, 0, COMPASS_RADIUS - 58),
-            27 => ("W", chrome::WHITE, 40, 0, COMPASS_RADIUS - 58),
-            _ => (
-                ["30", "60", "", "120", "150", "", "210", "240", "", "300", "330"][tick / 3 - 1],
-                chrome::GRAY,
-                22,
-                1,
-                COMPASS_RADIUS - 50,
-            ),
-        };
-        font_style(font, color, chrome::BLACK, size, font_index)
-            .draw_rotated(label, at(radius), cos, sin, dial)?;
-    }
-    // The lubber mark: the top edge's direction, which the dial turns under. Drawn after the
-    // dial so the bearings pass beneath it.
-    target.fill_solid(
-        &Rectangle::new(
-            COMPASS_CENTER - Point::new(2, COMPASS_RADIUS),
-            Size::new(4, 20),
-        ),
-        chrome::BLUE,
-    )?;
-
-    if !view.live {
-        return aligned_text(
-            "NO DATA",
-            &Rectangle::with_center(COMPASS_CENTER, Size::new(260, 40)),
-            font,
-            chrome::RED,
-            chrome::BLACK,
-            32,
-            0,
-            horizontal::Center,
-            vertical::Center,
-            &mut chrome::OnBackground::new(&mut *target, chrome::BLACK),
-        );
-    }
-    let mut primary = heapless::String::<16>::new();
-    let mut secondary = heapless::String::<16>::new();
-    let primary_color;
-    let secondary_color;
-    if let Some(decidegrees) = heading {
-        let degrees = (decidegrees + 5) / 10 % 360;
-        _ = write!(primary, "{degrees:03}");
-        if view.disturbed {
-            _ = secondary.push_str("MAG INTERFERENCE");
-            primary_color = chrome::ORANGE;
-            secondary_color = chrome::ORANGE;
-        } else {
-            _ = secondary.push_str(CARDINALS[usize::from((decidegrees + 112) / 225 % 16)]);
-            primary_color = chrome::WHITE;
-            secondary_color = chrome::LIME;
-        }
-    } else if view.calibration_percent < 100 {
-        _ = write!(primary, "CAL {:02}%", view.calibration_percent);
-        _ = secondary.push_str("TURN ALL WAYS");
-        primary_color = chrome::ORANGE;
-        secondary_color = chrome::GRAY;
-    } else {
-        _ = primary.push_str("---");
-        _ = secondary.push_str("TOP EDGE UP");
-        primary_color = chrome::WHITE;
-        secondary_color = chrome::GRAY;
-    }
-    let primary_region =
-        Rectangle::with_center(COMPASS_CENTER - Point::new(0, 60), Size::new(260, 80));
-    if heading.is_some() {
-        // The heading is knocked out of a slab of its colour.
-        let number = font_style(font, chrome::BLACK, primary_color, 72, 1);
-        let ink =
-            number.aligned_bounds(&primary, &primary_region, horizontal::Center, vertical::Center);
-        target.fill_solid(
-            &Rectangle::with_center(ink.center(), ink.size + Size::new(28, 20)),
-            primary_color,
-        )?;
-        number.draw_aligned(
-            &primary,
-            &primary_region,
-            horizontal::Center,
-            vertical::Center,
-            &mut chrome::OnBackground::new(&mut *target, chrome::BLACK),
-        )?;
-    } else {
-        aligned_text(
-            &primary,
-            &primary_region,
-            font,
-            primary_color,
-            chrome::BLACK,
-            32,
-            0,
-            horizontal::Center,
-            vertical::Center,
-            &mut chrome::OnBackground::new(&mut *target, chrome::BLACK),
-        )?;
-    }
-    aligned_text(
-        &secondary,
-        &Rectangle::with_center(COMPASS_CENTER + Point::new(0, 6), Size::new(300, 40)),
-        font,
-        secondary_color,
-        chrome::BLACK,
-        32,
-        1,
-        horizontal::Center,
-        vertical::Center,
-        &mut chrome::OnBackground::new(&mut *target, chrome::BLACK),
-    )?;
-    let mut tilt = heapless::String::<24>::new();
-    _ = write!(tilt, "P {:+03}  R {:+03}", view.pitch_deg, view.roll_deg);
-    aligned_text(
-        &tilt,
-        &Rectangle::with_center(COMPASS_CENTER + Point::new(0, 50), Size::new(260, 34)),
-        font,
-        chrome::GRAY,
-        chrome::BLACK,
-        26,
-        1,
-        horizontal::Center,
-        vertical::Center,
-        &mut chrome::OnBackground::new(&mut *target, chrome::BLACK),
-    )?;
-    aligned_text(
-        "TAP CENTRE TO RECAL",
-        &Rectangle::with_center(COMPASS_CENTER + Point::new(0, 90), Size::new(260, 26)),
-        font,
-        chrome::GRAY,
-        chrome::BLACK,
-        18,
-        1,
-        horizontal::Center,
-        vertical::Center,
-        &mut chrome::OnBackground::new(&mut *target, chrome::BLACK),
-    )
+    super::compass_screen::draw(&state.peripherals.compass, state.compass_accents, font, target)
 }
 
 fn draw_axis_check<D>(

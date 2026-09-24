@@ -1,5 +1,6 @@
 pub mod axis_check;
 pub mod compass;
+pub mod compass_screen;
 pub mod dirty;
 pub mod fusion;
 pub mod geometry;

@@ -6,7 +6,8 @@ use octowhere_ui::{
         compass::CompassView,
         gesture::{LIFT_SAMPLES, Micros},
         prototypes::{COMPASS_CENTER, HEADER, PeripheralState, Screen},
-        stage::{Input, Motion, Stage, Update},
+        compass_screen::Accents,
+        stage::{Input, Motion, Stage, Touch, Update},
     },
 };
 
@@ -41,10 +42,36 @@ impl Driver {
     }
 
     fn touch(&mut self, contact: Option<Point>) -> Update {
+        self.read(Touch::Contacts([contact, None]))
+    }
+
+    fn read(&mut self, touch: Touch) -> Update {
         self.step(Input {
-            touch: Some([contact, None]),
+            touch: Some(touch),
             ..Input::default()
         })
+    }
+
+    fn cover(&mut self) -> Update {
+        self.read(Touch::Cover)
+    }
+
+    /// Steps without input for at least `duration`.
+    fn wait(&mut self, duration: Micros) -> Update {
+        let end = self.now + duration;
+        let mut update = self.step(Input::default());
+        while self.now < end {
+            update = self.step(Input::default());
+        }
+        update
+    }
+
+    /// Steps until the compass page's entry has faded in.
+    fn settled_on_compass() -> Self {
+        let mut driver = Self::on(Screen::Compass);
+        driver.motion(heading(470));
+        driver.wait(500_000);
+        driver
     }
 
     fn motion(&mut self, motion: Motion) -> Update {
@@ -110,14 +137,119 @@ fn a_swipe_left_moves_to_the_next_screen_and_right_moves_back() {
 }
 
 #[test]
-fn a_tap_inside_the_compass_dial_asks_for_recalibration() {
-    let mut driver = Driver::on(Screen::Compass);
-    let updates = driver.stroke(&[COMPASS_CENTER + Point::new(30, -40)]);
-    assert!(updates.iter().any(|update| update.recalibrate));
+fn a_cover_on_the_settled_compass_asks_for_recalibration_once_per_hand() {
+    let mut driver = Driver::settled_on_compass();
+    assert!(driver.cover().recalibrate);
+    // The dial goes at once, before the motion task confirms the reset.
+    assert_eq!(driver.stage.peripherals().compass.heading_decidegrees, None);
+    assert!(!driver.cover().recalibrate, "a held cover fired twice");
+    driver.touch(None);
+    assert!(driver.cover().recalibrate, "a fresh cover after release was ignored");
+}
 
-    let updates = driver.stroke(&[COMPASS_CENTER + Point::new(150, 0)]);
+#[test]
+fn a_tap_on_the_compass_does_nothing() {
+    let mut driver = Driver::settled_on_compass();
+    let updates = driver.stroke(&[COMPASS_CENTER + Point::new(30, -40)]);
     assert!(updates.iter().all(|update| !update.recalibrate));
+    driver.stroke(&[HEADER.center()]);
+    assert!(!driver.stage.is_animating());
     assert_eq!(driver.stage.screen(), Screen::Compass);
+}
+
+#[test]
+fn a_cover_is_ignored_without_data_or_off_a_settled_compass() {
+    let mut driver = Driver::on(Screen::Compass);
+    driver.motion(Motion::default());
+    driver.wait(500_000);
+    assert!(!driver.cover().recalibrate, "NO DATA accepted a cover");
+
+    let mut driver = Driver::settled_on_compass();
+    driver.touch(Some(Point::new(400, 233)));
+    driver.touch(Some(Point::new(340, 233)));
+    assert!(!driver.cover().recalibrate, "a cover mid-drag was accepted");
+
+    let mut driver = Driver::on(Screen::Clock);
+    assert!(!driver.cover().recalibrate);
+}
+
+fn accents(driver: &Driver) -> Accents {
+    let mut fb = FB::boxed();
+    driver.stage.draw(&mut *fb);
+    driver.stage.accents()
+}
+
+#[test]
+fn the_compass_accents_fade_in_after_the_page_settles() {
+    let mut driver = Driver::on(Screen::Compass);
+    driver.motion(heading(470));
+    assert_eq!(accents(&driver).ring, 0);
+    assert!(driver.stage.is_animating());
+    driver.wait(150_000);
+    let early = accents(&driver);
+    assert_eq!(early.ring, 255);
+    assert!(early.icon > 0 && early.icon < 255, "{early:?}");
+    assert_eq!(early.ticks, 0);
+    driver.wait(300_000);
+    assert_eq!(accents(&driver), Accents::FULL);
+    assert!(!driver.stage.is_animating());
+}
+
+#[test]
+fn a_swipe_off_the_compass_fades_its_accents_reversibly() {
+    let mut driver = Driver::settled_on_compass();
+    driver.touch(Some(Point::new(400, 233)));
+    driver.touch(Some(Point::new(360, 233)));
+    driver.touch(Some(Point::new(340, 233)));
+    let part = accents(&driver);
+    assert!(part.ring > 0 && part.ring < 255, "{part:?}");
+    driver.touch(Some(Point::new(200, 233)));
+    assert_eq!(accents(&driver), Accents::HIDDEN);
+    driver.touch(Some(Point::new(399, 233)));
+    driver.touch(None);
+    driver.touch(None);
+    driver.touch(None);
+    driver.settle();
+    assert_eq!(driver.stage.screen(), Screen::Compass);
+    assert_eq!(accents(&driver), Accents::FULL, "the entry replayed");
+}
+
+#[test]
+fn the_compass_accents_stay_hidden_while_it_slides_in() {
+    let mut driver = Driver::on(Screen::Navigation);
+    driver.wait(500_000);
+    driver.touch(Some(Point::new(400, 233)));
+    driver.touch(Some(Point::new(200, 233)));
+    driver.touch(Some(Point::new(10, 233)));
+    for _ in 0..LIFT_SAMPLES {
+        driver.touch(None);
+    }
+    for _ in 0..120 {
+        if driver.stage.screen() == Screen::Compass {
+            break;
+        }
+        assert_eq!(driver.stage.accents().ring, 255, "an unsettled compass changed its accents");
+        driver.step(Input::default());
+    }
+    assert_eq!(driver.stage.screen(), Screen::Compass);
+    assert_eq!(accents(&driver).ring, 0, "the entry began before the page settled");
+}
+
+#[test]
+fn a_heading_after_calibration_reveals_the_ticks_then_the_letters() {
+    let mut driver = Driver::on(Screen::Compass);
+    let mut calibrating = heading(470);
+    calibrating.compass.heading_decidegrees = None;
+    calibrating.compass.calibration_percent = 99;
+    driver.motion(calibrating);
+    driver.wait(500_000);
+    driver.motion(heading(470));
+    driver.wait(60_000);
+    let early = accents(&driver);
+    assert!(early.ticks > 0 && early.ticks < 255, "{early:?}");
+    assert_eq!(early.letters, 0);
+    driver.wait(200_000);
+    assert_eq!(accents(&driver), Accents::FULL);
 }
 
 #[test]
@@ -165,6 +297,7 @@ fn stages() -> Vec<(String, Stage)> {
     for screen in Screen::ALL {
         let mut driver = Driver::on(screen);
         driver.motion(heading(3599));
+        driver.wait(500_000);
         stages.push((format!("{screen:?}"), driver.stage));
     }
     for (name, compass) in [
@@ -194,6 +327,7 @@ fn stages() -> Vec<(String, Stage)> {
             compass,
             ..Motion::default()
         });
+        driver.wait(500_000);
         stages.push((format!("compass {name}"), driver.stage));
     }
     stages

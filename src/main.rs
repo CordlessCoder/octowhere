@@ -57,7 +57,7 @@ use octowhere::{
         dirty::DirtyAreas,
         imu::{accel_micro_ms2, gyro_micro_rad_s},
         prototypes::{self, Screen},
-        stage::{Input as StageInput, Motion, Sensors, Stage},
+        stage::{Input as StageInput, Motion, Sensors, Stage, Touch},
     },
     util::{Swap, SwapThread},
 };
@@ -1457,9 +1457,9 @@ async fn async_main(spawner: Spawner) {
                         for (slot, point) in points.iter().take(2).enumerate() {
                             positions[slot] = Some(Point::new(point.x as i32, point.y as i32));
                         }
-                        positions
+                        Touch::Contacts(positions)
                     }
-                    TouchData::CoverGesture => [None; 2],
+                    TouchData::CoverGesture => Touch::Cover,
                 }),
                 motion: motion_state,
                 sensors: sensor_state.map(|state| Sensors {
@@ -1473,6 +1473,7 @@ async fn async_main(spawner: Spawner) {
                 }),
             });
             if update.recalibrate {
+                println!("[TOUCH] cover accepted, recalibrating");
                 COMPASS_RECALIBRATE.store(true, Ordering::Relaxed);
             }
             COMPASS_ACTIVE.store(update.samples_fast, Ordering::Relaxed);

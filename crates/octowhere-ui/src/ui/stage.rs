@@ -7,6 +7,7 @@ use embedded_graphics::prelude::Point;
 use super::{
     axis_check::{self, AxisCheck},
     compass::CompassView,
+    compass_screen::{Accents, Mode},
     gesture::{GestureEvent, GestureTracker, Micros},
     input::TouchState,
     pager::Pager,
@@ -39,13 +40,37 @@ pub struct Sensors {
     pub clock: ClockState,
 }
 
+/// One read of the touch controller.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Touch {
+    /// Up to two contacts in panel coordinates; none when nothing touches.
+    Contacts([Option<Point>; 2]),
+    /// The controller recognised a hand covering the screen.
+    Cover,
+}
+
+/// When each group of the compass's accents starts fading in after the page settles, and how
+/// long each fade takes.
+const ENTRY_DELAYS: Accents<Micros> = Accents {
+    ring: 0,
+    icon: 95_000,
+    ticks: 190_000,
+    letters: 285_000,
+};
+const ENTRY_FADE: Micros = 110_000;
+/// A heading that appears on a settled page reveals the ticks, then the letters this much later.
+const REVEAL_FADE: Micros = 170_000;
+const REVEAL_LETTERS: Micros = 70_000;
+/// Dragging the compass this fraction of the panel's width fades its accents out entirely.
+const SWIPE_FADE: f32 = 0.35;
+
 /// Everything that arrived since the last step.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Input {
     pub now: Micros,
-    /// A fresh touch reading, up to two contacts in panel coordinates. `None` when the touch
-    /// controller was not read this step; the last reading then stands.
-    pub touch: Option<[Option<Point>; 2]>,
+    /// A fresh touch reading. `None` when the touch controller was not read this step; the
+    /// last reading then stands.
+    pub touch: Option<Touch>,
     pub motion: Option<Motion>,
     pub sensors: Option<Sensors>,
 }
@@ -55,7 +80,7 @@ pub struct Input {
 pub struct Update {
     /// The regions whose pixels changed.
     pub changed: Dirty,
-    /// A tap on the compass dial asked for the calibration to restart.
+    /// A cover over the settled compass page asked for the calibration to restart.
     pub recalibrate: bool,
     /// The axis check finished capturing a pose.
     pub pose: Option<axis_check::Record>,
@@ -73,6 +98,14 @@ pub struct Stage {
     touch_state: TouchState,
     peripherals: PeripheralState,
     renderer: FontdueRenderer<'static, Color>,
+    /// The last read was a cover, so another cover is the same hand still there.
+    covered: bool,
+    /// When the compass page last settled into view, from another page.
+    compass_settled: Option<Micros>,
+    /// When the heading the dial turns to last appeared.
+    heading_since: Option<Micros>,
+    accents: Accents,
+    fading: bool,
 }
 
 impl Stage {
@@ -94,6 +127,11 @@ impl Stage {
                 chrome::BLACK,
                 chrome::FONTS,
             ),
+            covered: false,
+            compass_settled: None,
+            heading_since: None,
+            accents: Accents::FULL,
+            fading: false,
         }
     }
 
@@ -106,11 +144,19 @@ impl Stage {
         self.pager = Pager::new(page, Screen::ALL.len(), board::LCD_WIDTH as i32);
         self.screen = screen;
         self.selected_node = None;
+        self.compass_settled = None;
+        self.heading_since = None;
     }
 
     #[must_use]
     pub fn screen(&self) -> Screen {
         self.screen
+    }
+
+    /// How far the compass page's dial accents have faded in.
+    #[must_use]
+    pub fn accents(&self) -> Accents {
+        self.accents
     }
 
     #[must_use]
@@ -125,10 +171,11 @@ impl Stage {
         self.peripherals.touch_position.is_some() || self.gesture.in_contact()
     }
 
-    /// A page slide is under way, so the next step should come without waiting for input.
+    /// A page slide or a fade is under way, so the next step should come without waiting for
+    /// input.
     #[must_use]
     pub fn is_animating(&self) -> bool {
-        self.pager.is_moving()
+        self.pager.is_moving() || self.fading
     }
 
     pub fn step(&mut self, input: Input) -> Update {
@@ -177,8 +224,11 @@ impl Stage {
             changed.make_full();
         }
 
-        if let Some(raw) = touch {
-            self.raw_touch = raw;
+        if let Some(touch) = touch {
+            self.raw_touch = match touch {
+                Touch::Contacts(contacts) => contacts,
+                Touch::Cover => [None; 2],
+            };
         }
         let (touch_points, touch_positions) = self.touch_state.update_positions(self.raw_touch);
         self.peripherals.touch_points = touch_points;
@@ -212,10 +262,7 @@ impl Stage {
             if self.screen == Screen::AxisCheck {
                 self.axis_check.start(now);
             } else if self.screen == Screen::Compass {
-                let offset = point - prototypes::COMPASS_CENTER;
-                if offset.x * offset.x + offset.y * offset.y <= 100 * 100 {
-                    update.recalibrate = true;
-                }
+                // Only a cover restarts calibration here.
             } else if prototypes::HEADER.contains(point) {
                 self.pager.advance(true, now);
             } else if self.screen == Screen::Map
@@ -237,6 +284,24 @@ impl Stage {
                 .neighbour
                 .is_some_and(|(page, _)| samples_fast(Screen::ALL[page]));
 
+        if let Some(touch) = touch {
+            let cover = touch == Touch::Cover;
+            if cover && !self.covered && self.accepts_cover() {
+                update.recalibrate = true;
+                // The motion task resets the calibration on its next sample; the dial goes now.
+                let compass = &mut self.peripherals.compass;
+                compass.calibration_percent = 0;
+                compass.heading_decidegrees = None;
+                changed.make_full();
+            }
+            self.covered = cover;
+        }
+        let accents = self.compass_accents(now);
+        if accents != self.accents {
+            self.accents = accents;
+            changed.make_full();
+        }
+
         let axis_check = self.axis_check.view();
         if axis_check != self.peripherals.axis_check {
             self.peripherals.axis_check = axis_check;
@@ -251,6 +316,53 @@ impl Stage {
             changed.make_full();
         }
         update
+    }
+
+    /// A cover counts only on the compass page at rest, while its sensors report.
+    fn accepts_cover(&self) -> bool {
+        self.screen == Screen::Compass
+            && !self.pager.is_moving()
+            && self.peripherals.compass.live
+    }
+
+    /// Advances the compass page's fades to `now`, and returns how far each group has come.
+    fn compass_accents(&mut self, now: Micros) -> Accents {
+        self.fading = false;
+        if self.screen != Screen::Compass {
+            self.compass_settled = None;
+            self.heading_since = None;
+            return Accents::FULL;
+        }
+        let view = self.pager.view();
+        if self.compass_settled.is_none() && view.offset == 0 {
+            self.compass_settled = Some(now);
+        }
+        let heading = Mode::of(&self.peripherals.compass).heading().is_some();
+        self.heading_since = match self.heading_since {
+            Some(since) if heading => Some(since),
+            None if heading => Some(now),
+            _ => None,
+        };
+        let Some(settled) = self.compass_settled else {
+            return Accents::HIDDEN;
+        };
+        let since_settle = now.saturating_sub(settled);
+        let since_heading = self.heading_since.map_or(0, |since| now.saturating_sub(since));
+        let entry = |delay: Micros| fade(since_settle.saturating_sub(delay), ENTRY_FADE);
+        let reveal = |delay: Micros| fade(since_heading.saturating_sub(delay), REVEAL_FADE);
+        let swipe =
+            (1.0 - view.offset.unsigned_abs() as f32 / board::LCD_WIDTH as f32 / SWIPE_FADE)
+                .clamp(0.0, 1.0);
+        let scale = |amount: u8| libm::roundf(f32::from(amount) * swipe) as u8;
+        let entry_done = since_settle >= ENTRY_DELAYS.letters + ENTRY_FADE;
+        let reveal_done = !heading || since_heading >= REVEAL_LETTERS + REVEAL_FADE;
+        self.fading = !(entry_done && reveal_done);
+        Accents {
+            ring: scale(entry(ENTRY_DELAYS.ring)),
+            icon: scale(entry(ENTRY_DELAYS.icon)),
+            ticks: scale(entry(ENTRY_DELAYS.ticks).min(reveal(0))),
+            letters: scale(entry(ENTRY_DELAYS.letters).min(reveal(REVEAL_LETTERS))),
+        }
     }
 
     /// Draws the current state into `target` and returns the regions it drew.
@@ -270,6 +382,7 @@ impl Stage {
                 neighbour: view
                     .neighbour
                     .map(|(page, offset)| (Screen::ALL[page], offset)),
+                compass_accents: self.accents,
             },
             &self.renderer,
             target,
@@ -289,4 +402,9 @@ fn selected_node(point: Point) -> Option<u8> {
     } else {
         None
     }
+}
+
+/// How far a fade of `duration` has come after `elapsed`, 0 to 255.
+fn fade(elapsed: Micros, duration: Micros) -> u8 {
+    (elapsed.min(duration) * 255 / duration) as u8
 }

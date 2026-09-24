@@ -9,13 +9,15 @@
 //!
 //! - Left / Right: heading down / up 5°, 1° with Shift. Space spins it.
 //! - Up / Down: pitch; Q / E: roll, 5° a press.
-//! - C: calibration through none, part-way and complete.
+//! - C: calibration through none, part-way and complete. T: top edge vertical or not, which
+//!   withholds the heading.
 //! - D: magnetic disturbance on or off. L: sensors live or silent.
+//! - Hold H: a hand covering the screen, which restarts calibration on the settled compass.
 //! - Tab: next screen without the slide. P: save the window to `ui-sim-<n>.png` in the current
 //!   directory. Esc: quit.
 //!
-//! Readings are synthetic. A tap on the compass dial restarts calibration here, as it does on
-//! the board. Drawing times in the title are the host's and say nothing about the target.
+//! Readings are synthetic. Drawing times in the title are the host's and say nothing about the
+//! target.
 
 use std::{
     fs::File,
@@ -35,7 +37,7 @@ use octowhere_ui::{
     ui::{
         compass::CompassView,
         prototypes::{ClockState, PeripheralState},
-        stage::{Input, Motion, Sensors, Stage},
+        stage::{Input, Motion, Sensors, Stage, Touch},
     },
 };
 
@@ -57,6 +59,7 @@ struct Readings {
     disturbed: bool,
     live: bool,
     spinning: bool,
+    vertical: bool,
 }
 
 impl Readings {
@@ -70,7 +73,7 @@ impl Readings {
         CompassView {
             live: true,
             calibration_percent: self.calibration,
-            heading_decidegrees: (self.calibration >= 100)
+            heading_decidegrees: (self.calibration >= 100 && !self.vertical)
                 .then(|| (self.heading.rem_euclid(360.0) * 10.0).round() as u16 % 3600),
             pitch_deg: self.pitch.clamp(-90, 90) as i8,
             roll_deg: self.roll.clamp(-128, 127) as i8,
@@ -97,6 +100,7 @@ impl Readings {
             }
             Key::D => self.disturbed = !self.disturbed,
             Key::L => self.live = !self.live,
+            Key::T => self.vertical = !self.vertical,
             Key::Space => self.spinning = !self.spinning,
             _ => return false,
         }
@@ -145,6 +149,7 @@ fn main() {
         disturbed: false,
         live: true,
         spinning: false,
+        vertical: false,
     };
     let mut fb = FB::boxed();
     let mut pixels = vec![0u32; WIDTH * HEIGHT];
@@ -194,7 +199,11 @@ fn main() {
             .map(|(x, y)| Point::new(x as i32, y as i32));
         let update = stage.step(Input {
             now,
-            touch: Some([contact, None]),
+            touch: Some(if window.is_key_down(Key::H) {
+                Touch::Cover
+            } else {
+                Touch::Contacts([contact, None])
+            }),
             motion: motion_due.then(|| readings.motion()),
             sensors: sensors_due.then(sensors),
         });

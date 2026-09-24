@@ -21,7 +21,7 @@ use octowhere_ui::{
     ui::{
         compass::CompassView,
         prototypes::{ClockState, PeripheralState, Screen},
-        stage::{Input, Motion, Sensors, Stage},
+        stage::{Input, Motion, Sensors, Stage, Touch},
     },
 };
 
@@ -35,9 +35,9 @@ fn main() {
     let calibrated = CompassView {
         live: true,
         calibration_percent: 100,
-        heading_decidegrees: Some(372),
-        pitch_deg: 4,
-        roll_deg: -7,
+        heading_decidegrees: Some(470),
+        pitch_deg: 5,
+        roll_deg: -12,
         disturbed: false,
     };
     let mut frames: Vec<(String, Stage)> = Screen::ALL
@@ -49,21 +49,53 @@ fn main() {
         (
             "calibrating",
             CompassView {
-                live: true,
-                calibration_percent: 40,
-                ..CompassView::default()
+                heading_decidegrees: None,
+                calibration_percent: 54,
+                ..calibrated
             },
         ),
         (
-            "disturbed",
+            "top-edge-up",
+            CompassView {
+                heading_decidegrees: None,
+                ..calibrated
+            },
+        ),
+        (
+            "interference",
             CompassView {
                 disturbed: true,
+                ..calibrated
+            },
+        ),
+        (
+            "heading-359",
+            CompassView {
+                heading_decidegrees: Some(3599),
                 ..calibrated
             },
         ),
     ] {
         frames.push((format!("compass-{name}"), stage(Screen::Compass, compass)));
     }
+
+    // Partway through the entry fades: the ring is in, the icon arriving, the dial not yet.
+    let mut entering = stage_at(Screen::Compass, calibrated, 150_000);
+    entering.step(Input {
+        now: 150_001,
+        ..Input::default()
+    });
+    frames.push(("compass-entering".into(), entering));
+    // Dragged a third of the way to the next page, where the accents have nearly faded.
+    let mut swiping = stage(Screen::Compass, calibrated);
+    for (step, x) in [400, 340, 280, 245].into_iter().enumerate() {
+        swiping.step(Input {
+            now: 1_000_000 + step as u64 * 16_667,
+            touch: Some(Touch::Contacts([Some(Point::new(x, 233)), None])),
+            ..Input::default()
+        });
+    }
+    frames.push(("compass-swiping".into(), swiping));
 
     for (name, stage) in frames {
         let mut fb = FB::boxed();
@@ -75,6 +107,11 @@ fn main() {
 }
 
 fn stage(screen: Screen, compass: CompassView) -> Stage {
+    stage_at(screen, compass, 1_000_000)
+}
+
+/// A stage on `screen` that settled at 1 µs and has stepped to `now`.
+fn stage_at(screen: Screen, compass: CompassView, now: u64) -> Stage {
     let mut stage = Stage::new(PeripheralState {
         pmic_valid: true,
         tca_valid: true,
@@ -108,6 +145,10 @@ fn stage(screen: Screen, compass: CompassView) -> Stage {
                 valid: true,
             },
         }),
+        ..Input::default()
+    });
+    stage.step(Input {
+        now,
         ..Input::default()
     });
     stage
