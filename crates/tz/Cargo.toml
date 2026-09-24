@@ -1,0 +1,9 @@
+[package]
+name = "octowhere-tz"
+version = "0.1.0"
+edition = "2024"
+description = "Time zones for octowhere: the zone under a position, and local time from UTC"
+
+[workspace]
+
+[dependencies]
