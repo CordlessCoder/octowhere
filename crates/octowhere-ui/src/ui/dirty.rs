@@ -24,6 +24,10 @@ impl Span {
     fn len(self) -> u32 {
         u32::from(self.end - self.start) * GRAIN as u32
     }
+
+    fn columns(&self) -> (i32, i32) {
+        (i32::from(self.start) * GRAIN, i32::from(self.end) * GRAIN)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -34,6 +38,8 @@ pub struct RowSpans<const WIDTH: usize, const BANDS: usize, const K: usize> {
     first: u16,
     last: u16,
     full: bool,
+    /// The span of a band while the damage is full.
+    whole: Span,
 }
 
 impl<const WIDTH: usize, const BANDS: usize, const K: usize> RowSpans<WIDTH, BANDS, K> {
@@ -52,6 +58,10 @@ impl<const WIDTH: usize, const BANDS: usize, const K: usize> RowSpans<WIDTH, BAN
             first: u16::MAX,
             last: 0,
             full: false,
+            whole: Span {
+                start: 0,
+                end: (WIDTH / GRAIN as usize) as u8,
+            },
         }
     }
 
@@ -96,24 +106,25 @@ impl<const WIDTH: usize, const BANDS: usize, const K: usize> RowSpans<WIDTH, BAN
 
     /// The spans of band `band`, as column ranges.
     fn band(&self, band: usize) -> impl Iterator<Item = (i32, i32)> + '_ {
-        let whole = Span {
-            start: 0,
-            end: (WIDTH / GRAIN as usize) as u8,
-        };
-        let count = if self.full { 0 } else { usize::from(self.counts[band]) };
-        self.full
-            .then_some(whole)
-            .into_iter()
-            .chain(self.spans[band][..count].iter().copied())
-            .map(|span| (i32::from(span.start) * GRAIN, i32::from(span.end) * GRAIN))
+        self.band_spans(band).iter().map(Span::columns)
+    }
+
+    fn band_spans(&self, band: usize) -> &[Span] {
+        if self.full {
+            core::slice::from_ref(&self.whole)
+        } else {
+            &self.spans[band][..usize::from(self.counts[band])]
+        }
     }
 
     /// The damaged column ranges of pixel row `y`, left to right.
     pub fn spans(&self, y: i32) -> impl Iterator<Item = (i32, i32)> + '_ {
-        let band = usize::try_from(y / GRAIN)
-            .ok()
-            .filter(|&band| y >= 0 && band < BANDS);
-        band.into_iter().flat_map(|band| self.band(band))
+        let spans = if (0..Self::HEIGHT as i32).contains(&y) {
+            self.band_spans((y / GRAIN) as usize)
+        } else {
+            &[]
+        };
+        spans.iter().map(Span::columns)
     }
 
     /// Marks columns `start..end` of bands `first..=last`, widened to the grain and clipped.
@@ -136,6 +147,13 @@ impl<const WIDTH: usize, const BANDS: usize, const K: usize> RowSpans<WIDTH, BAN
     }
 
     fn insert(&mut self, band: usize, mut new: Span) {
+        self.first = self.first.min(band as u16);
+        self.last = self.last.max(band as u16);
+        if self.counts[band] == 0 {
+            self.spans[band][0] = new;
+            self.counts[band] = 1;
+            return;
+        }
         let mut merged = [Span::default(); MAX_K + 1];
         let mut count = 0;
         let mut placed = false;
@@ -170,8 +188,6 @@ impl<const WIDTH: usize, const BANDS: usize, const K: usize> RowSpans<WIDTH, BAN
         }
         self.spans[band][..count].copy_from_slice(&merged[..count]);
         self.counts[band] = count as u8;
-        self.first = self.first.min(band as u16);
-        self.last = self.last.max(band as u16);
     }
 
     pub fn add(&mut self, rect: Rectangle) {
@@ -326,13 +342,20 @@ impl<const WIDTH: usize, const BANDS: usize, const K: usize> RowSpans<WIDTH, BAN
     #[must_use]
     pub fn rectangles(&self, overhead: u32) -> Rectangles<'_, WIDTH, BANDS, K> {
         let used = self.used();
+        let none = Open {
+            span: Span::default(),
+            first_band: 0,
+            last_band: 0,
+        };
         Rectangles {
             spans: self,
             overhead,
             band: used.start,
             end: used.end,
-            open: [None; OPEN],
-            ready: [None; OPEN],
+            open: [none; OPEN],
+            opened: 0,
+            ready: [Rectangle::zero(); OPEN + MAX_K],
+            readied: 0,
         }
     }
 }
@@ -389,20 +412,18 @@ pub struct Rectangles<'a, const WIDTH: usize, const BANDS: usize, const K: usize
     overhead: u32,
     band: usize,
     end: usize,
-    open: [Option<Open>; OPEN],
-    ready: [Option<Rectangle>; OPEN],
+    open: [Open; OPEN],
+    opened: usize,
+    ready: [Rectangle; OPEN + MAX_K],
+    readied: usize,
 }
 
 impl<const WIDTH: usize, const BANDS: usize, const K: usize> Rectangles<'_, WIDTH, BANDS, K> {
     fn close(&mut self, index: usize) {
-        if let Some(open) = self.open[index].take() {
-            let slot = self
-                .ready
-                .iter_mut()
-                .find(|slot| slot.is_none())
-                .expect("no more rectangles close than are open");
-            *slot = Some(open.rectangle());
-        }
+        self.ready[self.readied] = self.open[index].rectangle();
+        self.readied += 1;
+        self.opened -= 1;
+        self.open[index] = self.open[self.opened];
     }
 
     /// Adds the next band's spans to the open rectangles.
@@ -410,50 +431,41 @@ impl<const WIDTH: usize, const BANDS: usize, const K: usize> Rectangles<'_, WIDT
         let band = self.band;
         self.band += 1;
         // A rectangle whose gap alone would cost more than a region can never take a span.
-        for index in 0..OPEN {
-            if let Some(open) = self.open[index] {
-                let gap = (band - open.last_band - 1) as u32 * GRAIN as u32 * open.span.len();
-                if gap > self.overhead {
-                    self.close(index);
-                }
+        let mut index = 0;
+        while index < self.opened {
+            let open = self.open[index];
+            let gap = (band - open.last_band - 1) as u32 * GRAIN as u32 * open.span.len();
+            if gap > self.overhead {
+                self.close(index);
+            } else {
+                index += 1;
             }
         }
-        let spans = self.spans;
-        for (start, end) in spans.band(band) {
-            let span = Span {
-                start: (start / GRAIN) as u8,
-                end: (end / GRAIN) as u8,
-            };
+        for &span in self.spans.band_spans(band) {
             let own = span.len() * GRAIN as u32;
-            let best = (0..OPEN)
-                .filter_map(|index| {
-                    let open = self.open[index]?;
-                    let added = open.with(span, band).pixels() - open.pixels();
-                    Some((index, added.saturating_sub(own)))
-                })
-                .min_by_key(|&(_, waste)| waste);
-            match best {
-                Some((index, waste)) if waste <= self.overhead => {
-                    self.open[index] = self.open[index].map(|open| open.with(span, band));
-                }
-                _ => {
-                    let index = match self.open.iter().position(Option::is_none) {
-                        Some(index) => index,
-                        None => {
-                            let oldest = (0..OPEN)
-                                .min_by_key(|&index| self.open[index].map_or(0, |open| open.last_band))
-                                .expect("OPEN is not zero");
-                            self.close(oldest);
-                            oldest
-                        }
-                    };
-                    self.open[index] = Some(Open {
-                        span,
-                        first_band: band,
-                        last_band: band,
-                    });
+            let mut best = (usize::MAX, u32::MAX);
+            for (index, open) in self.open[..self.opened].iter().enumerate() {
+                let waste = (open.with(span, band).pixels() - open.pixels()).saturating_sub(own);
+                if waste < best.1 {
+                    best = (index, waste);
                 }
             }
+            if best.1 <= self.overhead {
+                self.open[best.0] = self.open[best.0].with(span, band);
+                continue;
+            }
+            if self.opened == OPEN {
+                let oldest = (0..OPEN)
+                    .min_by_key(|&index| self.open[index].last_band)
+                    .expect("OPEN is not zero");
+                self.close(oldest);
+            }
+            self.open[self.opened] = Open {
+                span,
+                first_band: band,
+                last_band: band,
+            };
+            self.opened += 1;
         }
     }
 }
@@ -465,14 +477,19 @@ impl<const WIDTH: usize, const BANDS: usize, const K: usize> Iterator
 
     fn next(&mut self) -> Option<Rectangle> {
         loop {
-            if let Some(ready) = self.ready.iter_mut().find_map(Option::take) {
-                return Some(ready);
+            if self.readied > 0 {
+                self.readied -= 1;
+                return Some(self.ready[self.readied]);
             }
             if self.band < self.end {
                 self.advance();
                 continue;
             }
-            return self.open.iter_mut().find_map(Option::take).map(Open::rectangle);
+            if self.opened == 0 {
+                return None;
+            }
+            self.opened -= 1;
+            return Some(self.open[self.opened].rectangle());
         }
     }
 }

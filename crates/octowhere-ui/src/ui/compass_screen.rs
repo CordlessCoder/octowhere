@@ -179,7 +179,8 @@ fn style(
     style
 }
 
-/// Draws `text` centred on `x` along the baseline at `baseline`.
+/// Draws `text` centred on `x` along the baseline at `baseline`. It skips the text outright when
+/// no part of its line can land.
 fn centred<D: CoverageTarget<Color = Color>>(
     style: &FontdueRenderer<'static, Color>,
     text: &str,
@@ -187,7 +188,18 @@ fn centred<D: CoverageTarget<Color = Color>>(
     baseline: i32,
     target: &mut D,
 ) -> Result<(), D::Error> {
-    style.draw_on_baseline(text, Point::new(centred_left(style, text, x), baseline), target)
+    let advance = style.advance(text);
+    let left = libm::roundf(x as f32 - advance / 2.0) as i32;
+    // Wide enough for any overhang, and from above a capital to below a descender.
+    let size = style.font_size as i32;
+    let line = Rectangle::new(
+        Point::new(left - size / 2, baseline - size - 2),
+        Size::new(advance as u32 + size as u32 + 2, (size * 2) as u32),
+    );
+    if !target.visible(&line) {
+        return Ok(());
+    }
+    style.draw_on_baseline(text, Point::new(left, baseline), target)
 }
 
 /// What each part of the screen shows. Two frames that agree on a part draw it identically.
