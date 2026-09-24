@@ -35,7 +35,9 @@ ph-qmi8658 = { version = "0.1.1", features = ["defmt", "fixed"] }
 tca9554 = "0.2.0"
 heapless = { version = "0.9.3", features = ["nightly"] }
 esp-storage = { version = "0.10.0", features = ["esp32s3"] }
-sequential-storage = "8.0.1"
+# Unreleased main: 1.0.0 needs embassy-sync 0.6, and main also fixes a chunk buffer overflow.
+ekv = { git = "https://github.com/embassy-rs/ekv", rev = "a0e2c7e", features = ["crc", "max-chunk-size-512"] }
+embedded-storage = "0.3.2"
 
 [features]
 default = []

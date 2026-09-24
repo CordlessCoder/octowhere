@@ -1040,7 +1040,7 @@ struct SwapState<A: Allocator = alloc::alloc::Global> {
 #[embassy_executor::task]
 async fn async_main(spawner: Spawner) {
     // esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 72 * 1024);
-    esp_alloc::heap_allocator!(size: 252 * 1024);
+    esp_alloc::heap_allocator!(size: 240 * 1024);
 
     // PERF: How low do we want to drop the clock speed?
     let mut peripherals =
@@ -1427,7 +1427,9 @@ async fn async_main(spawner: Spawner) {
     );
 
     // SAFETY: the display core has not started, and `settings_task` holds it for every write.
-    let mut store = unsafe { Store::new(esp_storage::FlashStorage::new(peripherals.FLASH)) };
+    // The seed only spreads wear across pages, so the RNG need not be at full entropy.
+    let seed = esp_hal::rng::Rng::new().random();
+    let mut store = unsafe { Store::new(esp_storage::FlashStorage::new(peripherals.FLASH), seed) };
     let saved = store.load();
     info!(
         "[SETTINGS] zone mode={} manual={} automatic={}",

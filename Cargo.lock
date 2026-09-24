@@ -383,6 +383,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ekv"
+version = "1.0.0"
+source = "git+https://github.com/embassy-rs/ekv?rev=a0e2c7e#a0e2c7e16cf790e2fa7e34fac9f9dac1557824aa"
+dependencies = [
+ "embassy-sync 0.8.0",
+ "heapless 0.9.3",
+]
+
+[[package]]
 name = "embassy-embedded-hal"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1549,6 +1558,7 @@ name = "octowhere"
 version = "0.1.0"
 dependencies = [
  "defmt 1.1.1",
+ "ekv",
  "embassy-embedded-hal",
  "embassy-executor",
  "embassy-futures",
@@ -1560,6 +1570,7 @@ dependencies = [
  "embedded-hal-async",
  "embedded-hal-bus",
  "embedded-io-async 0.7.0",
+ "embedded-storage",
  "esp-alloc",
  "esp-backtrace",
  "esp-bootloader-esp-idf",
@@ -1572,7 +1583,6 @@ dependencies = [
  "lc76g",
  "octowhere-ui",
  "ph-qmi8658",
- "sequential-storage",
  "static_cell",
  "sx127xlora",
  "tca9554",
@@ -1811,15 +1821,6 @@ name = "semihosting"
 version = "0.1.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8e4abf97879f4e80db69a9fba7bd64998e9bdad25f58ef045a778e191172fd4"
-
-[[package]]
-name = "sequential-storage"
-version = "8.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e750f14f4f6e5a81277c66311713a56106c8df0196df62a634d1fc806556832b"
-dependencies = [
- "embedded-storage-async",
-]
 
 [[package]]
 name = "serde"
