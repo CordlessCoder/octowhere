@@ -397,6 +397,13 @@ where
     }
 }
 
+#[cfg(feature = "tearing-bench")]
+pub static FLUSH_COPY_US: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+#[cfg(feature = "tearing-bench")]
+pub static FLUSH_WAIT_US: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+#[cfg(feature = "tearing-bench")]
+pub static FLUSH_CHUNKS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
 pub struct PixelStream<'r, 'd, C: Co5300ColorMode>
 where
     <C as embedded_graphics::pixelcolor::raw::ToBytes>::Bytes: core::convert::AsRef<[u8]>,
@@ -473,10 +480,21 @@ where
                 return Err(DisplayError::from(error));
             }
         };
+        #[cfg(feature = "tearing-bench")]
+        let copy_start = embassy_time::Instant::now();
         let new = fill_swap_with(swap.as_mut_slice());
+        #[cfg(feature = "tearing-bench")]
+        let wait_start = embassy_time::Instant::now();
         let mut transfer = transfer;
         transfer.wait_for_done().await;
         let (spi, active) = transfer.wait();
+        #[cfg(feature = "tearing-bench")]
+        {
+            use core::sync::atomic::Ordering::Relaxed;
+            FLUSH_COPY_US.fetch_add((wait_start - copy_start).as_micros() as u32, Relaxed);
+            FLUSH_WAIT_US.fetch_add(wait_start.elapsed().as_micros() as u32, Relaxed);
+            FLUSH_CHUNKS.fetch_add(1, Relaxed);
+        }
         self.disp.bus.spi = Some(spi);
         self.active = Some(swap);
         self.swap = Some(active);

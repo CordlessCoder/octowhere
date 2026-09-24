@@ -444,6 +444,8 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
     #[cfg(feature = "tearing-bench")]
     measure_te(&display.te_pin);
     #[cfg(feature = "tearing-bench")]
+    measure_copies(swap.get().fb.buffer_mut());
+    #[cfg(feature = "tearing-bench")]
     let mut bench = TearStats::default();
     loop {
         settings::hold_display_core_if_asked();
@@ -594,6 +596,53 @@ fn measure_te(te: &Input<'_>) {
     );
 }
 
+/// Times copying one DMA chunk's worth of bytes out of the framebuffer and within SRAM.
+#[cfg(feature = "tearing-bench")]
+fn measure_copies(fb: &mut [u8]) {
+    const CHUNK: usize = 4095 * 2;
+    const ROUNDS: usize = 53;
+    static mut SRAM_A: [u32; 2048] = [0; 2048];
+    static mut SRAM_B: [u32; 2048] = [0; 2048];
+    // SAFETY: only this function, on one core, touches the scratch buffers.
+    let (a, b) = unsafe {
+        (
+            &mut *core::ptr::addr_of_mut!(SRAM_A),
+            &mut *core::ptr::addr_of_mut!(SRAM_B),
+        )
+    };
+    let a_bytes: &mut [u8] = bytemuck_bytes(a);
+    let start = Instant::now();
+    for round in 0..ROUNDS {
+        a_bytes[..CHUNK].copy_from_slice(&fb[round * CHUNK..][..CHUNK]);
+    }
+    let psram_slice = start.elapsed().as_micros();
+    let start = Instant::now();
+    for round in 0..ROUNDS {
+        let src = &fb[round * CHUNK..][..CHUNK];
+        for (dst, src) in a.iter_mut().zip(src.chunks_exact(4)) {
+            *dst = u32::from_ne_bytes([src[0], src[1], src[2], src[3]]);
+        }
+    }
+    let psram_words = start.elapsed().as_micros();
+    let start = Instant::now();
+    for _ in 0..ROUNDS {
+        let b_bytes: &[u8] = bytemuck_bytes(b);
+        let a_bytes: &mut [u8] = bytemuck_bytes(a);
+        a_bytes[..CHUNK].copy_from_slice(&b_bytes[..CHUNK]);
+    }
+    let sram_slice = start.elapsed().as_micros();
+    info!(
+        "[TEAR] copy of {} x {} bytes: psram slice={}us psram words={}us sram slice={}us",
+        ROUNDS, CHUNK, psram_slice, psram_words, sram_slice
+    );
+}
+
+#[cfg(feature = "tearing-bench")]
+fn bytemuck_bytes(words: &mut [u32]) -> &mut [u8] {
+    // SAFETY: u8 has no alignment or validity requirements, and the length covers the words.
+    unsafe { core::slice::from_raw_parts_mut(words.as_mut_ptr().cast(), words.len() * 4) }
+}
+
 #[cfg(feature = "tearing-bench")]
 #[derive(Default)]
 struct TearStats {
@@ -628,6 +677,17 @@ impl TearStats {
                 self.frames, self.full, self.high_at_wait, self.timeouts, self.wait_max,
                 self.flush_min, self.flush_max, self.flush_sum / u64::from(self.frames), self.over_16ms,
             );
+            {
+                use core::sync::atomic::Ordering::Relaxed;
+                use octowhere::drivers::co5300::{FLUSH_CHUNKS, FLUSH_COPY_US, FLUSH_WAIT_US};
+                let chunks = FLUSH_CHUNKS.swap(0, Relaxed).max(1);
+                let (copy, wait) = (FLUSH_COPY_US.swap(0, Relaxed), FLUSH_WAIT_US.swap(0, Relaxed));
+                info!(
+                    "[TEAR] per frame copy_us={} dma_wait_us={} chunks={}; per chunk copy_us={} wait_us={}",
+                    copy / self.frames, wait / self.frames, chunks / self.frames,
+                    copy / chunks, wait / chunks,
+                );
+            }
             *self = Self::default();
         }
     }
