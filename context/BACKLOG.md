@@ -8,6 +8,16 @@ until the feature set is complete, because profiling an incomplete firmware pric
 - Build the protocol in [`LORA-PROTOCOL.md`](LORA-PROTOCOL.md). Its "Firmware structure" section
   comes first: the radio moves into its own task, and I2C gets a single owning task.
 
+- Take the framebuffer clear off the drawing core. On the compass it is now the largest cost,
+  about 8.3 ms of an 18 ms frame, and it is paid per 64-byte PSRAM cache line: clearing only the
+  visible circle saved 0.6 ms, not the 21% its area suggests. The candidates are a GDMA
+  memory-to-memory clear, or core 1 clearing a buffer after flushing it. Either changes the
+  buffer hand-off in `util::Swap`, and partial redraws rely on a buffer keeping its own pixels,
+  so only regions due for a full redraw may be cleared. Measure with `bench/compass-draw-rows`.
+- Build the fonts from the full font files with fontdue's `chars:` option instead of the
+  hand-made ASCII subsets under `assets/`. Both full files contain `°`, which the compass could
+  then use.
+
 ## Deferred, with detail elsewhere
 
 - The partial-flush hardware check, in [`HARDWARE-VERIFICATION.md`](HARDWARE-VERIFICATION.md).
@@ -32,6 +42,10 @@ until the feature set is complete, because profiling an incomplete firmware pric
   `fontdue-line-store` feature on `bench/fontdue`, which does not build against the current pin:
   its `line_store_bench.rs` needs the API port in fontdue's
   `dev-tools/board/octowhere-line-store-d3.patch`.
+- opt-level 3 for the compass draw, measured on 2026-09-24 and not taken: the heading frame went
+  from 22.6 ms to 21.6 ms with the whole build at 3, 22.0 ms with only octowhere at 3, and 21.5 ms
+  with octowhere and fontdue at 3, for 150 to 175 KB more image. Branch `bench/compass-draw-rows`,
+  built with `--config 'profile.release.opt-level=3'` and the package variants.
 - opt-level 3, measured on 2026-09-23 at fontdue `381f935c` and not taken. The whole profile at 3
   grows the image by 108,496 bytes for under 1.5% on full redraw, flush and rasterize. fontdue
   alone at 3 costs 160 bytes for 0.3–1.6% on rasterize and no change in redraw. Revisit only if a

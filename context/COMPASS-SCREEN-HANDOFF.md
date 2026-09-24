@@ -178,24 +178,26 @@ green, pale green, and a neutral ramp.
 ## What the renderer can draw
 
 The firmware is `no_std` Rust. The screen is one function, `draw_compass` in
-`src/ui/prototypes.rs`, drawing into an embedded-graphics `DrawTarget` over an RGB565
-framebuffer.
+`src/ui/prototypes.rs`. It draws into a `chrome::CoverageTarget`: an embedded-graphics
+`DrawTarget` over an RGB565 framebuffer that also takes antialiased coverage a row at a time.
 
 - **Fonts:** two, both limited to printable ASCII (space to `~`). There is no `°` or other symbol
-  glyph. A degree mark would have to be drawn as a shape.
+  glyph. A degree mark would have to be drawn as a shape. The full font files do contain `°`, and
+  fontdue's `chars:` option can subset them, so adding glyphs is a small change if a design needs
+  them.
   - Font 0, Marathon Shapiro Wide 65, the display face.
   - Font 1, PP Fraktion Mono, a monospace face.
-- **Upright text:** any size, aligned in a box with `aligned_text`, antialiased against a
-  background colour you pass.
+- **Upright text:** any size, aligned in a box with `aligned_text`. Each glyph's coverage is
+  cached by font, glyph and size, so repeated text costs little.
 - **Rotated text:** `draw_rotated` centres a string on a point, turned by any angle. The bearing
-  labels use it.
-- **Text bounds:** `Text::bounding_box()` gives a string's ink bounds before drawing. The heading
-  slab is sized this way.
+  labels use it. It rasterizes every glyph every frame, so it is the costliest text.
+- **Text bounds:** `FontdueRenderer::aligned_bounds` gives a string's ink bounds before drawing.
+  The heading slab is sized this way.
 - **Filled rectangles:** axis-aligned, solid, no antialiasing needed.
 - **embedded-graphics primitives:** circles, arcs, lines, triangles, polygons and rounded
   rectangles. These are not antialiased and look stepped at this density.
-- **`smooth::ring`** (`src/ui/smooth.rs`): an antialiased ring between two radii. Each pixel's
-  coverage comes from its distance to the circle.
+- **`smooth::Ring`** (`src/ui/smooth.rs`): an antialiased ring between two radii about a pixel
+  corner. Its coverage is computed once and redrawn each frame.
 - **`smooth::polygon_quarters`:** fills any polygon with fontdue's antialiased path fill, then
   draws it at all four quarter turns about a pixel corner. Built for the ticks, where each fill
   serves four ticks.
@@ -204,20 +206,29 @@ framebuffer.
 
 Constraints that shape what is practical:
 
-- **Antialiasing blends against a known colour.** A draw target cannot be read back, so an
-  antialiased edge is blended toward a background colour the code names. Every antialiased shape
-  today sits on `BLACK`. An antialiased shape over a coloured slab must name that colour, and one
-  that overlaps two backgrounds shows a fringe on one of them.
-- **Later draws overwrite earlier ones.** There is no alpha compositing. Draw order is the layering.
-- **Symbols are built from primitives, not bitmaps.** This is doctrine (`AGENTS.md`), and the fonts
-  carry no symbol glyphs anyway.
-- **The whole screen redraws when anything on it changes.** The heading changes almost every frame,
-  so the compass redraws in full at up to 50 frames a second. Its frame time has not been measured.
-  A full redraw of another screen measured about 19 ms. Rotated text and large antialiased areas
-  cost the most. A design that doubles the rotated labels, or fills large antialiased areas, may
-  lower the frame rate. Ask for a measurement before committing to one.
+- **Antialiased edges blend with what is underneath.** The framebuffer reads a partly covered
+  pixel back and mixes with it. Where the background is known, `chrome::OnBackground` names it
+  and the read is skipped, which is faster. The compass draws everything that way: the dial and
+  the status lines on `BLACK`, the heading number on its slab colour. Drawing through
+  `OnBackground` over any other colour gives edges mixed with the wrong one.
+- **Later draws overwrite earlier ones.** There is no alpha compositing beyond edge coverage. Draw
+  order is the layering.
+- **Symbols are built from primitives, not bitmaps.** This is doctrine (`AGENTS.md`).
+- **The whole screen redraws when anything on it changes.** The heading changes almost every
+  frame, so the compass redraws in full. A frame showing a heading measured about 18 ms, against a
+  20 ms sensor period:
+  - clearing the visible circle, about 8.3 ms;
+  - the bearing labels, about 4.2 ms;
+  - the centre text, about 2.2 ms;
+  - the ring, about 1.6 ms;
+  - the ticks, about 1.4 ms.
+
+  So there is little headroom. Rotated text is the costly element. A design that adds rotated
+  labels, or large antialiased areas, will lower the frame rate. Ask for a measurement before
+  committing to one. The bench is `bench/compass-draw-rows`.
 - **Memory:** a 260 KiB internal heap. A path-fill raster costs 4 bytes per pixel of its bounding
-  box, so a raster the size of the dial is out of reach. The ring is analytic for that reason.
+  box, so a raster the size of the dial is out of reach. The ring is analytic for that reason. The
+  glyph cache holds at most 32 KiB.
 
 ## Rules to keep
 

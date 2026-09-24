@@ -89,7 +89,7 @@ Weigh that cost before adding one.
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 440,544 bytes, 10.67% of the 4,128,768-byte app partition.
+The image is currently 464,192 bytes, 11.24% of the 4,128,768-byte app partition.
 
 `panic = "immediate-abort"` is the size lever, and it is not taken. It needs
 `cargo-features = ["panic-immediate-abort"]` restored to unlock it, which costs the drift check
@@ -115,8 +115,12 @@ and `bench/fontdue`, which adds IRAM placement (`fontdue-iram`), a serial glyph 
 decode bench (`fontdue-line-store`) to the font benchmark; `bench/opt-level`, which times the
 draw alone under `timing-log` and builds the firmware at each candidate opt-level;
 `bench/fontdue-pin`, which dumps every glyph's metrics and stops each run on a done marker with
-`tools/flash-until.sh`; and `bench/gyro-cod`, which measures the gyro offset around the IMU's
-on-demand calibration (`gyro-cod-bench`).
+`tools/flash-until.sh`; `bench/gyro-cod`, which measures the gyro offset around the IMU's
+on-demand calibration (`gyro-cod-bench`); `bench/compass-draw`, the compass screen's draw timed
+per part before the coverage-row rewrite, with the antialiased ring variants and fontdue's share
+of the text (`compass-draw-bench`); and `bench/compass-draw-rows`, the same bench on the
+rewritten draw path, with pixel checks of the precomputed ring and the turned ticks, the clear
+variants and the text split (`compass-draw-bench`).
 
 ## Concurrency
 
@@ -148,6 +152,13 @@ poisons the thread and a later `get()` panics.
 - `needs_full_redraw` identifies the regions that must be redrawn in the alternate framebuffer.
   A buffer is not assumed to retain the pixels drawn into the other buffer.
 - Partial flushing is active. A full redraw is selected only when the accumulated damage is full.
+- Every draw target the screens use is a `chrome::CoverageTarget`, which takes antialiased
+  coverage a row at a time and blends it with what is underneath. `chrome::Window` shifts and
+  clips once per row, and stands in for embedded-graphics' `translated` and `clipped`, which go
+  per pixel. `chrome::OnBackground` names a known background so edges skip the read-back. Nothing
+  checks that promise.
+- `prototypes::render` clears only the round panel's visible circle. The square's corners are
+  never cleared or seen.
 
 The display path is split across:
 
