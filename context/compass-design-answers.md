@@ -23,3 +23,12 @@
 11. Six to eight frames in a 110 ms fade are acceptable if the transition looks clean on the physical panel. Do not lengthen it solely to add frames; adjust if the actual fade looks stepped or sluggish.
 
 12. A second cover must work after the hand is lifted, without another screen touch. One continuous cover may trigger only once. Use release/idle reporting if available; otherwise test a new-event re-arm policy that distinguishes a fresh cover from a held-cover repeat. Do not change the hint to instruct an extra tap.
+
+## Owner's overrides
+
+- 5 and 7: the interference line reads `INTERFERENCE`, in Bold at the direction abbreviation's
+  36 px and on its baseline. `MAG INTERFERENCE` at that size runs into the turning `E` and `W`.
+  This replaces the smaller, separately centred `MAG INTERFERENCE` of answer 7.
+- 4: the dashes are centred on both axes.
+- 9: a heading back after NO DATA always runs the reveal; the 750 ms grace applies only to TOP
+  EDGE UP.

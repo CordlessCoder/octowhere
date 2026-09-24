@@ -105,17 +105,21 @@ Where the implementation differs from the handoff, or fills a gap in it:
   within about 10° either side of north or south, so the owner shortened it. A unit test keeps
   the status lines inside the letters' reach.
 - Unstated sizes were chosen to match the concept: `NO DATA` in Shapiro 28 px, the cardinal
-  letters in Shapiro 40 px, `---` in the readout's own style, captions `GRAY` except
+  letters in Shapiro 40 px, `---` in the readout's own style with its ink centred in the slab
+  on both axes, captions `GRAY` except
   `CALIBRATION`. `TURN ALL WAYS`, `TOP EDGE UP`, the tilt and the hint are PP Fraktion Mono
   Regular; the readout, captions and the cardinal and interference lines are Bold.
-- A cover is taken only on the compass page at rest with `live` set, once per hand: another
-  cover needs a touch report without one in between. The firmware reads the controller on its
-  interrupt, so if the controller does not interrupt when the hand lifts, the next cover waits
-  for any touch. An ordinary tap on this page does nothing.
+- A cover is taken only on the compass page at rest with `live` set, once per hand. A held hand
+  keeps reporting the cover, and the controller does not always report it lifting, so another
+  cover counts once 260 ms pass without a cover report, or after a finger touches. An ordinary
+  tap on this page does nothing. `docs/logs/touch/` has the recording the rule came from.
+- A heading back from TOP EDGE UP within 750 ms shows the dial at once. After a longer gap, or
+  after NO DATA or calibration, the reveal runs.
 - On an accepted cover the stage clears the heading and shows `000%` at once, before the motion
   task confirms the reset on its next sample.
-- Open questions for the designer are in
-  [`compass-design-questions.md`](compass-design-questions.md).
+- The designer's answers are in [`compass-design-answers.md`](compass-design-answers.md), to the
+  questions in [`compass-design-questions.md`](compass-design-questions.md). The owner's
+  shortening to `INTERFERENCE` overrides answers 5 and 7 where they name `MAG INTERFERENCE`.
 
 ## Colour tokens
 

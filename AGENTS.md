@@ -45,7 +45,9 @@ initialization or peripheral mappings.
   the design agent's specification of the compass screen, which the firmware implements, and
   [`context/compass-concept-states.png`](context/compass-concept-states.png) is the approved
   concept. [`context/compass-design-questions.md`](context/compass-design-questions.md) holds
-  what the implementation asked back.
+  what the implementation asked back, and
+  [`context/compass-design-answers.md`](context/compass-design-answers.md) the designer's answers
+  with the owner's overrides.
 - [`context/GRAPHICS-PROTOTYPES.md`](context/GRAPHICS-PROTOTYPES.md) explains the three renderer
   architectures in `crates/octowhere-ui/src/ui/prototypes.rs` and the `ACTIVE_ARCHITECTURE`
   constant that selects one.
@@ -157,7 +159,8 @@ compass design's full draw in each state, entering, and early and halfway throug
 cache, and `tools/font-scale-sweep.sh`, which reruns it at each fontdue `scale`;
 `bench/glyph-cache`, which counted the removed glyph cache's contents on the host
 (`examples/glyph_cache.rs`) and the heap on the board (`glyph-cache-bench`); and
-`bench/no-glyph-cache`, both benches on the uncached draw path.
+`bench/no-glyph-cache`, both benches on the uncached draw path; and `bench/touch-cover`, which
+logs every touch report and polls during a cover (`touch-report-log`).
 
 ## Concurrency
 
