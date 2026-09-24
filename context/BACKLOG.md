@@ -47,9 +47,9 @@ until the feature set is complete, because profiling an incomplete firmware pric
   three times the per-pixel rate of a region flushed alone. The display core copies each short
   row out of PSRAM itself while core 0 draws into the other buffer, and the two slow each other:
   the draw runs 2.4 ms faster with flushing held off. DMA straight from the PSRAM framebuffer is
-  ruled out: the owner says it does not work on this path. Opening each stream with `RAMWR`
-  instead of a separate command, now in place, took the address window from 2.1 to 1.8 ms a
-  frame. What remains is the row copies. The bench that measured this,
+  ruled out: the DMA cannot read PSRAM as fast as the SPI sends (see the flush entry). Opening
+  each stream with `RAMWR` instead of a separate command, now in place, took the address window
+  from 2.1 to 1.8 ms a frame. What remains is the row copies. The bench that measured this,
   `bench/row-span-damage`, was deleted; its last commit was `e92ff49`.
 - Shorten a full-panel flush, or take it off PSRAM contention. Measured during drags on
   2026-09-24 (`bench/tearing`): a flush took 13.3–15.9 ms, mean 14.5, once each chunk's
@@ -60,13 +60,48 @@ until the feature set is complete, because profiling an incomplete firmware pric
   chunk's copy is not overlapped. Frame rate during drags is set by core 0, not the flush: a
   step and full draw took 23 ms mean, 28 ms at most, for 38 frames a second. The flush matters
   there only through the PSRAM contention it adds to the draw. Levers:
-  - DMA straight from the PSRAM framebuffer, removing the copy and its contention. The owner
-    ruled it out before on this path. The missing piece is a cache writeback before each
-    transfer, and esp-hal 1.2.2 has it: `esp_hal::soc::cache_writeback_addr` wraps the ROM's
-    `Cache_WriteBack_Addr`, and its DMA buffers call it on PSRAM ranges. Still to check is
-    whether the PSRAM can feed 40 MB/s while core 0 draws.
+  - DMA straight from the PSRAM framebuffer does not work, and the reason is now known
+    (`bench/psram-dma`, 2026-09-24). esp-hal's `DmaTxBuf` writes the cache back itself, and the
+    framebuffer is 64-byte aligned. But the DMA cannot read PSRAM as fast as the SPI clock
+    sends: at 80 and 40 MHz the panel showed long strips of one repeated pattern, and at
+    10 MHz it was clean. None of the DMA's settings changed that at 80 MHz: 32- or 64-byte
+    PSRAM blocks (esp-hal writes 64 as a value the S3's register description calls reserved),
+    the channel's transmit FIFO (`OUT_SRAM_SIZE_CH`, whose field resets to 14, about 128 bytes
+    by the documented formula; 80 bytes was worse, 256 no better), or core 0 not drawing at
+    all, which helped only a little. The CPU copy reads PSRAM faster (41 MB/s while core 0 draws, 75 MB/s
+    idle), so copying through internal buffers is the right design here, as in ESP-IDF's
+    bounce buffers. The direct flush did take the copy's contention off core 0's draw, 23 ms
+    down to about 20.
+  - PSRAM at 120 MHz: not pursued (owner, 2026-09-25). On `bench/psram-120` the bench starts
+    PSRAM at 80 MHz, then moves the memory core clock from 160 to 240 MHz, divides flash by 3
+    on SPI0 and SPI1 so it stays at 80 MHz, and writes the PSRAM timing ESP-IDF v6.1's tuning
+    chose on this board (`SMEM_TIMING_CALI` 7, `SMEM_DIN_MODE` 0x01249249). A 4 MB pattern check
+    passed, and during the synthetic drag core 0's step and draw fell from 23.1 to 19.2 ms and
+    the flush from 14.7 to 13.3 ms, 38 to 42 fps. But the board froze within minutes under the
+    drag, and the cause was not found. esp-hal's `SpiRamFreq::Freq120m` hangs at boot, esp-hal
+    has no MSPI timing tuning, and ESP-IDF calls octal PSRAM at 120 MHz experimental.
+    `tools/idf-psram-reference` on that branch reproduces ESP-IDF's register dump. esp-hal also
+    leaves PSRAM untuned at 80 MHz (extra dummy 0, sampling mode 0, where ESP-IDF sets 2 and 4),
+    which is unexamined.
   - Flush only bands covering the visible circle, about 80% of the square, at the cost of an
     address window and an unoverlapped first chunk per band.
+- Shorten the clock face's draws further. Measured on 2026-09-25 with `bench/clock-draw`, after
+  the face stopped laying out parts outside the damage and the clear stopped painting under the
+  band: a tick draws in about 1.5 ms (2.7 before), a full draw in 17.5–22.6 ms (20.5–27 before),
+  and an entry's draws total about 160 ms (236 before). What is left:
+  - Each change draws twice, since the other buffer catches up on the next step, even with
+    nothing new. Skipping the draw and the swap on a step that changed nothing would fold the
+    catch-up into the next change, which on a tick covers the same pixels. But core 1 answers
+    the settings hold only between frames, so the hold would need another way in first.
+  - A sparse change pays per 64-byte cache line of PSRAM, not per pixel. A ring-fade step
+    repaints 8,040 px in 8.2–9.5 ms: the clear takes 3.7 ms, the ring 2.3 and the band 1.2,
+    each passing over the same rows in turn after the last pass has been evicted. Drawing a
+    region row by row, every layer at once, would pay each line once.
+  - A full draw: the clear 6.5 ms, the band 2.9, the hours and minutes 2.5 ms each pair at
+    136 px, rasterized every time now that the glyph cache is gone, the date 1.5 and the ring
+    about 2 once faded in.
+  - A tick still spends about 0.55 ms rasterizing the seconds and 0.27 ms on the band's rows.
+  - Frames during a swipe were not measured after the change.
 - Take the framebuffer clear off the drawing core. It is paid per 64-byte PSRAM cache line:
   clearing only the visible circle saved 0.6 ms, not the 21% its area suggests. Partial redraws
   now clear only the damage, about 2.3 ms of a one-degree turn on the compass, much of it spread

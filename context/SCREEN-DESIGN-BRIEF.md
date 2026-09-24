@@ -225,20 +225,25 @@ that changed redraw. Measured on the device, per frame:
 | Frame | Draw |
 | --- | ---: |
 | Either face at rest | nothing drawn |
-| Clock, a second ticks | about 2.3 ms |
-| Clock, a minute changes (one 136 px digit) | 5.3–5.9 ms |
-| Clock, a step of its entry, after the ring fade | 1.4–4.8 ms |
+| Clock, a second ticks | about 1.5 ms |
+| Clock, a minute changes (one 136 px digit) | 3.5–3.7 ms |
+| Clock, a step of its entry while the ring fades | 8.2–9.5 ms |
+| Clock, a step of its entry, after the ring fade | 0.9–4.4 ms |
 | Compass, tilt changes by a degree | 1.7 ms |
 | Compass, a step of the dial sweep | 7–12 ms |
 | Compass, heading changes by a degree | about 13 ms |
-| Clock drawn in full | 20–26 ms |
+| Clock drawn in full | 17.5–22.6 ms |
 | Compass drawn in full | 13–23 ms |
 
-These are not measured: the wordmark's share of the clock, and every screen of the settings
-round.
+The wordmark is about 0.3 ms of a full clock draw. The screens of the settings round are not
+measured.
 
-- A full redraw happens during a page swipe or sheet travel, a fade of the perimeter ring, and a
-  change that recolours a large area such as the clock's band.
+- A full redraw happens during a page swipe or sheet travel. A fade of the perimeter ring
+  redraws the ring, and recolouring the clock's band redraws the band's rows.
+- A sparse change costs more per pixel than a compact one. The framebuffers are in external
+  memory, reached through a cache in 64-byte lines, so each row a change touches costs at least
+  a line. The ring fade touches every row twice, which is why it costs more than its 8,000
+  pixels suggest.
 - The settled panel redraws only a cell whose reading changed. While scrolling it redraws the
   grid rows and markers. Opening, closing and entry steps redraw in full. Every second-level
   screen redraws in full on any change.

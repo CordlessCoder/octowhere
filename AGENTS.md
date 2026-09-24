@@ -212,7 +212,13 @@ synthetic finger between the faces and logs TE's period and pulse and each flush
 length (`tearing-bench`), with TE moved to a scan line by `tearing-scanline` (`TE_LINE` at build
 time), and splits each flush into copying and transfer time, times one transfer alone and logs
 core 0's step and draw; `flush-spin` spins on each chunk and `flush-chunk` takes larger chunk
-buffers from the heap (`FLUSH_DESCRIPTORS` at build time).
+buffers from the heap (`FLUSH_DESCRIPTORS` at build time); and `bench/psram-dma`, built on it,
+which sends full flushes by DMA straight from the PSRAM framebuffer (`flush-psram-dma`, chunk
+size `DIRECT_CHUNK`) at a build-time SPI clock (`SPI_MHZ`), PSRAM block size (`EXT_BURST`) and
+transmit FIFO depth (`OUT_FIFO`), optionally with core 0 no longer drawing (`idle-core0`); and
+`bench/clock-draw`, which alternates the clock face (20 s, the RTC's time in a fixed zone) and
+the compass (3 s), and logs every draw's time and area with the clock face's time per part,
+from an optional timer in `octowhere_ui::part_timing` (`clock-draw-bench`).
 
 ## Concurrency
 
@@ -257,8 +263,9 @@ poisons the thread and a later `get()` panics.
 ## Rendering
 
 - Damage is `chrome::Dirty`, spans of columns per pair of rows at the panel's 2 × 2 write grain
-  (`ui/dirty.rs`). `Stage::changed` holds what a step changed: on the settled compass, the old
-  and new places of each part that changed; elsewhere, the whole panel.
+  (`ui/dirty.rs`). `Stage::changed` holds what a step changed: on a settled face, the old and
+  new places of each part that changed; on the settled panel, the cells that changed or the
+  scrolling grid; elsewhere, the whole panel.
 - Each framebuffer repaints the previous step's damage and its own, since it last held the frame
   before that, drawing through `chrome::Clip`. The flush sends only the step's own damage, since
   the panel already shows the step before. A buffer not yet drawn is drawn in full. The spans are
@@ -267,13 +274,20 @@ poisons the thread and a later `get()` panics.
 - `Clip` makes every draw land only on damaged pixels. `CoverageTarget::visible` lets a drawing
   skip work outside them, which is what makes a partial redraw cheap: glyphs, ticks and whole
   text lines outside the damage are never rasterized. It is a hint, so a drawing must still clip.
+  Laying text out is not free either, since the font and zone tables sit in flash behind the
+  data cache the framebuffers keep evicting. So the clock face checks each part against a fixed
+  region (the `*_INK` constants in `clock_screen.rs`) before laying it out, and
+  `each_line_stays_in_its_region` checks every character each line can show against its region.
+  `ClockView` works out the local time once per reading for the same reason.
 - Every draw target the screens use is a `chrome::CoverageTarget`, which takes antialiased
   coverage a row at a time and blends it with what is underneath. `chrome::Window` shifts and
   clips once per row, and stands in for embedded-graphics' `translated` and `clipped`, which go
   per pixel. `chrome::OnBackground` names a known background so edges skip the read-back. Nothing
   checks that promise.
 - `screens::render` clears only the round panel's visible circle. The square's corners are
-  never cleared or seen.
+  never cleared or seen. The clear also leaves the settled compass's slab and the clock's band
+  interior, wherever its page is, because those screens paint them solid.
+  `a_frame_replaces_everything_under_it` draws over an old frame to catch a hole left unpainted.
 
 The display path is split across:
 
