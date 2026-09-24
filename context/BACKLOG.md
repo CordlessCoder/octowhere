@@ -5,13 +5,6 @@ until the feature set is complete, because profiling an incomplete firmware pric
 
 ## Next
 
-- Find the tearing while dragging between screens. The owner saw it on 2026-09-24 during page
-  and panel drags, which redraw and flush the whole panel every frame. The display core waits
-  for the TE pulse, or 17 ms and a `te_timeout` warning, then flushes; a full flush took about
-  14.8 ms when last measured, against a frame of about 16.7 ms. Check whether the flush starts
-  at the TE edge the panel means (its TE mode and scan line), whether it overtakes the panel's
-  scan, and whether a timeout flush is involved. The code is `second_core` in `src/main.rs` and
-  `src/drivers/co5300.rs`.
 - Shorten settings saves, ahead of other work that touches settings (design response,
   2026-09-24). Settings are in ekv now, and each write transaction starts a new file that
   erases a whole 4 KiB page first, so every save erases. The first saved brightness took
@@ -38,6 +31,12 @@ until the feature set is complete, because profiling an incomplete firmware pric
   segment above `0x3FCF0000`. Also look at what IRAM holds (15 KiB of `.rwtext`), the two 8 KiB
   display DMA buffers, the 8 KiB core-1 stack, and a guard or a measured watermark for core 0's
   stack so an overflow faults instead of hanging.
+- Move the CO5300 driver into its own crate under `crates/`, with the QSPI command layer it
+  needs, and implement more of the controller reusably (owner, 2026-09-24). Today
+  `src/drivers/co5300.rs` covers init, address windows, brightness, TE and pixel streaming.
+  The datasheet (`docs/datasheets/CO5300_Datasheet_V0.00.pdf`) also has TE modes and the scan
+  line as proper settings, reading the current scan line (45h), partial and scroll areas, idle
+  mode, deep standby, and high-brightness and contrast controls.
 - Build the protocol in [`LORA-PROTOCOL.md`](LORA-PROTOCOL.md). Its "Firmware structure" section
   comes first: the radio moves into its own task, and I2C gets a single owning task.
 
@@ -52,6 +51,22 @@ until the feature set is complete, because profiling an incomplete firmware pric
   instead of a separate command, now in place, took the address window from 2.1 to 1.8 ms a
   frame. What remains is the row copies. The bench that measured this,
   `bench/row-span-damage`, was deleted; its last commit was `e92ff49`.
+- Shorten a full-panel flush, or take it off PSRAM contention. Measured during drags on
+  2026-09-24 (`bench/tearing`): a flush took 13.3–15.9 ms, mean 14.5, once each chunk's
+  transfer was spun on rather than awaited (it was 15.3). Per 8 KiB chunk, the CPU copy out of
+  PSRAM takes about 205 µs while core 0 draws (115 µs with core 0 idle), and the transfer 204 µs
+  alone but about 232 µs beside the copy. Transfers alone would take 11 ms a frame. Larger
+  chunks from the heap gained 0.3 ms at 16 KiB and nothing more at 32 KiB, because the first
+  chunk's copy is not overlapped. Frame rate during drags is set by core 0, not the flush: a
+  step and full draw took 23 ms mean, 28 ms at most, for 38 frames a second. The flush matters
+  there only through the PSRAM contention it adds to the draw. Levers:
+  - DMA straight from the PSRAM framebuffer, removing the copy and its contention. The owner
+    ruled it out before on this path. The missing piece is a cache writeback before each
+    transfer, and esp-hal 1.2.2 has it: `esp_hal::soc::cache_writeback_addr` wraps the ROM's
+    `Cache_WriteBack_Addr`, and its DMA buffers call it on PSRAM ranges. Still to check is
+    whether the PSRAM can feed 40 MB/s while core 0 draws.
+  - Flush only bands covering the visible circle, about 80% of the square, at the cost of an
+    address window and an unoverlapped first chunk per band.
 - Take the framebuffer clear off the drawing core. It is paid per 64-byte PSRAM cache line:
   clearing only the visible circle saved 0.6 ms, not the 21% its area suggests. Partial redraws
   now clear only the damage, about 2.3 ms of a one-degree turn on the compass, much of it spread

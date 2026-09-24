@@ -89,8 +89,7 @@ initialization or peripheral mappings.
 
 `IMPLEMENTATION.md` tells the reader to keep full-frame flushing until a hardware check passes. It
 is a record of what that round was told, not current instruction, and the firmware now flushes
-partially. The question is still open and lives in `HARDWARE-VERIFICATION.md`, which records that
-no run of the check has been recorded.
+partially. `HARDWARE-VERIFICATION.md` has what has been checked of that since.
 
 ## Build and test
 
@@ -208,7 +207,12 @@ steps and time, each settings write, and how long it held core 1 (`zone-lookup-b
 polygons at several tolerances, sizes their encoding and checks every GeoNames city of over
 15,000 people against the full set (`tools/tz-boundary-size.py`, usage in its header); and `bench/face-draw`, which starts on the clock
 face with a fixed zone, reruns the clock's and the compass's entries in turn with a synthetic
-heading, and logs every draw's time and area (`face-draw-bench`).
+heading, and logs every draw's time and area (`face-draw-bench`); and `bench/tearing`, which drags a
+synthetic finger between the faces and logs TE's period and pulse and each flush's wait and
+length (`tearing-bench`), with TE moved to a scan line by `tearing-scanline` (`TE_LINE` at build
+time), and splits each flush into copying and transfer time, times one transfer alone and logs
+core 0's step and draw; `flush-spin` spins on each chunk and `flush-chunk` takes larger chunk
+buffers from the heap (`FLUSH_DESCRIPTORS` at build time).
 
 ## Concurrency
 
@@ -228,7 +232,10 @@ core 1 owns the display SPI/DMA path.
   `COMPASS_ACTIVE`, and publishes a `MotionSnapshot` through `MOTION_STATE`. The frame loop
   never touches these devices.
 - `second_core` on core 1 waits for display TE with a timeout, flushes the handed-off regions
-  through `Co5300Display`, and returns the other framebuffer.
+  through `Co5300Display`, and returns the other framebuffer. TE pulses when the panel's scan
+  reaches `TE_LINE` in `src/drivers/co5300.rs`, so a flush runs behind the scan. A full flush
+  takes about as long as the scan, so moving the line, or waiting for TE's level instead of its
+  edge, brings back tearing.
 
 A flash write stops the cache both cores run from, so core 1 must not touch flash while one
 runs. Reads through `esp-storage` may not need it, but the settings store holds core 1 for them
