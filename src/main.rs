@@ -1173,6 +1173,7 @@ struct Parts {
     imu_int2: peripherals::GPIO21<'static>,
 }
 
+
 #[embassy_executor::task]
 async fn async_main(spawner: Spawner) {
     // A third of the heap lives in the RAM the bootloader frees, which is not static memory, so
@@ -1611,7 +1612,22 @@ async fn frame_loop(
     // freezes while it runs: core 1 has flushed a frame once the swap after the one that
     // handed it over completes.
     let mut pending_write: Option<(settings::Write, u8)> = None;
+    #[cfg(feature = "clock-draw-bench")]
+    let (bench_start, mut bench_phase, mut bench_shown) = {
+        octowhere_ui::part_timing::install(|| Instant::now().as_micros() as u32);
+        (Instant::now(), u64::MAX, Instant::now())
+    };
+    #[cfg(feature = "clock-draw-bench")]
+    let (mut heap_peak, mut mem_logged) = (0usize, Instant::now());
     loop {
+        #[cfg(feature = "clock-draw-bench")]
+        {
+            heap_peak = heap_peak.max(esp_alloc::HEAP.used());
+            if mem_logged.elapsed().as_secs() >= 5 {
+                mem_logged = Instant::now();
+                info!("[MEM] heap_used={} heap_peak={}", esp_alloc::HEAP.used(), heap_peak);
+            }
+        }
         if touch.is_none() {
             touch = touch_slot.take();
         }
@@ -1687,6 +1703,28 @@ async fn frame_loop(
             if touch_ready {
                 last_touch_poll = Instant::now();
             }
+            #[cfg(feature = "clock-draw-bench")]
+            let bench_screen = {
+                use octowhere::ui::screens::Screen;
+                let secs = bench_start.elapsed().as_secs();
+                let phase = secs / 23 * 2 + u64::from(secs % 23 >= 20);
+                let screen = if phase % 2 == 0 { Screen::Clock } else { Screen::Compass };
+                if phase != bench_phase {
+                    bench_phase = phase;
+                    stage.show(screen);
+                    bench_shown = Instant::now();
+                    info!("[BENCH] show {}", phase % 2);
+                }
+                phase % 2
+            };
+            #[cfg(feature = "clock-draw-bench")]
+            let motion_state = motion_state.map(|mut motion: octowhere::ui::stage::Motion| {
+                motion.compass.live = true;
+                motion.compass.calibration_percent = 100;
+                motion.compass.heading_decidegrees = Some(470);
+                motion.compass.disturbed = false;
+                motion
+            });
             let update = stage.step(StageInput {
                 now: Instant::now().as_micros(),
                 touch: touch_ready.then(|| match &touch_data {
@@ -1704,8 +1742,21 @@ async fn frame_loop(
                 sensors: sensor_state.map(|state| {
                     let signal = state.gnss.signal;
                     Sensors {
+                        #[cfg(not(feature = "clock-draw-bench"))]
                         clock: state.clock,
+                        #[cfg(not(feature = "clock-draw-bench"))]
                         zone: state.zone,
+                        #[cfg(feature = "clock-draw-bench")]
+                        clock: octowhere::ui::clock::ClockState {
+                            stopped: false,
+                            set_from_gnss: true,
+                            ..state.clock
+                        },
+                        #[cfg(feature = "clock-draw-bench")]
+                        zone: octowhere::ui::clock::ZoneState {
+                            mode: octowhere::ui::clock::ZoneMode::Manual,
+                            zone: octowhere::tz::DATABASE.find("Europe/Dublin").map(|zone| zone.id),
+                        },
                         battery: state.battery,
                         gnss: Gnss {
                             fix: state.gnss.fix.is_some(),
@@ -1757,10 +1808,28 @@ async fn frame_loop(
                 repaint.make_full();
                 *drawn = true;
             }
+            #[cfg(feature = "clock-draw-bench")]
+            let (draw_start, repaint_px) =
+                (Instant::now(), if repaint.is_full() { 466 * 466 } else { repaint.pixels() });
             if repaint.is_full() {
                 stage.draw(fb);
             } else if !repaint.is_empty() {
                 stage.draw(&mut chrome::Clip::new(fb, &repaint));
+            }
+            #[cfg(feature = "clock-draw-bench")]
+            if repaint_px > 0 {
+                let draw_us = draw_start.elapsed().as_micros();
+                let p = octowhere_ui::part_timing::take();
+                info!(
+                    "[BENCH] s={} t={} full={} repaint={} changed={} draw={} clear={} parts={} scatter={} hours={} tile={} band={} bandtext={} column={} mark={} lines={} railring={} other={}",
+                    bench_screen,
+                    bench_shown.elapsed().as_millis(),
+                    repaint.is_full(),
+                    repaint_px,
+                    if changed.is_full() { 466 * 466 } else { changed.pixels() },
+                    draw_us,
+                    p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8], p[9], p[10], p[11],
+                );
             }
             // The panel already shows the step before, so only this step's pixels change on it.
             dirty.clone_from(changed);

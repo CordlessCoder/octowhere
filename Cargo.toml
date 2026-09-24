@@ -49,6 +49,9 @@ fontdue-target-bench = []
 fontdue-target-bench-gcc = ["fontdue-target-bench"]
 lora-link-tx = []
 lora-link-rx = []
+# Alternates the clock face (20 s, with the time from the RTC in a fixed zone) and the compass
+# (3 s), and logs every draw's time, area and the clock face's time per part.
+clock-draw-bench = []
 
 [patch.crates-io]
 tca9554 = { git = "https://github.com/CordlessCoder/tca9554-rs", rev = "dd76e69" }

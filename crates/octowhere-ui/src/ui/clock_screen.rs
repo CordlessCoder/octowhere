@@ -815,20 +815,27 @@ pub fn draw<D>(
 where
     D: CoverageTarget<Color = Color>,
 {
+    use crate::part_timing::mark;
+    mark(11);
     let parts = parts(&(*view, supply, accents), font);
+    mark(1);
     if let Some(bloom) = parts.scatter {
         scatter().draw_clear_of(&looks(bloom), &parts.clear(font), target)?;
     }
+    mark(2);
     if let Some(hours) = parts.hours.as_ref().filter(|_| target.visible(&HOURS_INK)) {
         let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
         draw_revealed(&digits(font, chrome::WHITE), hours, HOURS, parts.time.part(0, 2), field)?;
     }
+    mark(3);
     let (glyph, color, rows) = parts.icon;
     if target.visible(&TILE.bounds()) {
         TILE.draw(glyph, color, rows, target)?;
     }
 
+    mark(4);
     band().draw(target, parts.band)?;
+    mark(5);
     {
         let band = &mut OnBackground::new(&mut *target, parts.band);
         let (label, reveal) = parts.label;
@@ -855,23 +862,28 @@ where
             }
         }
     }
+    mark(6);
     if target.visible(&WINDOW) {
         draw_column(parts.column, target)?;
     }
+    mark(7);
     if target.visible(&MARK_INK) {
         draw_mark(font, parts.mark, parts.band, target)?;
     }
+    mark(8);
     for (tokens, reveal, bounds) in &parts.lines {
         if target.visible(bounds) {
             tokens.draw(font, *reveal, &mut OnBackground::new(&mut *target, chrome::BLACK))?;
         }
     }
+    mark(9);
     if let Some(hour) = parts.rail.filter(|_| target.visible(&RAIL)) {
         draw_rail(hour, target)?;
     }
     if let Some(color) = parts.ring {
         super::smooth::perimeter().draw(&mut OnBackground::new(&mut *target, chrome::BLACK), color);
     }
+    mark(10);
     Ok(())
 }
 

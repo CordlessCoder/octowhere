@@ -13,3 +13,4 @@ pub mod board;
 pub mod chrome;
 pub mod framebuffer;
 pub mod ui;
+pub mod part_timing;
