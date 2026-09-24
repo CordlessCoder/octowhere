@@ -205,14 +205,15 @@ impl<'d> QspiBus<'d> {
         self.cs.set_high();
     }
 
-    pub(crate) async fn begin_quad_write_async(&mut self) -> Result<(), esp_hal::spi::Error> {
+    /// Starts a quad write with `command`, leaving CS asserted for the data that follows.
+    pub(crate) async fn begin_quad_write_async(&mut self, command: u8) -> Result<(), esp_hal::spi::Error> {
         self.cs_low();
         let spi = self.spi.take().unwrap();
         let transfer = spi
             .half_duplex_write_buffer(
                 DataMode::Quad,
                 Command::_8Bit(0x12, DataMode::Single),
-                Address::_24Bit(0x003C00, DataMode::Quad),
+                Address::_24Bit(u32::from(command) << 8, DataMode::Quad),
                 0,
                 0,
                 EmptyBuf,
@@ -229,14 +230,15 @@ impl<'d> QspiBus<'d> {
         Ok(())
     }
 
-    pub(crate) fn begin_quad_write(&mut self) -> Result<(), esp_hal::spi::Error> {
+    /// As [`begin_quad_write_async`](Self::begin_quad_write_async), blocking.
+    pub(crate) fn begin_quad_write(&mut self, command: u8) -> Result<(), esp_hal::spi::Error> {
         self.cs_low();
         let spi = self.spi.take().unwrap();
         let transfer = spi
             .half_duplex_write_buffer(
                 DataMode::Quad,
                 Command::_8Bit(0x12, DataMode::Single),
-                Address::_24Bit(0x003C00, DataMode::Quad),
+                Address::_24Bit(u32::from(command) << 8, DataMode::Quad),
                 0,
                 0,
                 EmptyBuf,

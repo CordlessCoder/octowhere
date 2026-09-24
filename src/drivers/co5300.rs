@@ -241,7 +241,7 @@ where
         delay_ms(RST_DELAY_MS);
     }
 
-    /// Set the address window for pixel writes.
+    /// Set the address window for pixel writes. The next stream writes from its top-left corner.
     pub fn set_addr_window(&mut self, x: u16, y: u16, w: u16, h: u16) -> Result<(), DisplayError> {
         let (x, y, w, h) = self.even_window(x, y, w, h);
         let x_start = x + self.col_offset;
@@ -252,7 +252,6 @@ where
         self.bus.batch(&[
             QSPIOperation::CommandD16D16(CMD_CASET, x_start, x_end),
             QSPIOperation::CommandD16D16(CMD_PASET, y_start, y_end),
-            QSPIOperation::Command(CMD_RAMWR),
         ])?;
         Ok(())
     }
@@ -356,10 +355,13 @@ where
         Ok(())
     }
 
+    /// Starts streaming pixels from the top-left of the window last set. The stream opens with
+    /// `RAMWR`, which resets the write position, so each stream must follow its own
+    /// [`set_addr_window`](Self::set_addr_window) rather than continue an earlier one.
     pub async fn begin_stream_async<'r>(
         &'r mut self,
     ) -> Result<PixelStream<'r, 'd, C>, DisplayError> {
-        self.bus.begin_quad_write_async().await?;
+        self.bus.begin_quad_write_async(CMD_RAMWR).await?;
         let active = self.stream.take();
         let swap = self.swap.take();
         Ok(PixelStream {
@@ -370,8 +372,9 @@ where
         })
     }
 
+    /// As [`begin_stream_async`](Self::begin_stream_async), blocking.
     pub fn begin_stream<'r>(&'r mut self) -> Result<PixelStream<'r, 'd, C>, DisplayError> {
-        self.bus.begin_quad_write()?;
+        self.bus.begin_quad_write(CMD_RAMWR)?;
         let active = self.stream.take();
         let swap = self.swap.take();
         Ok(PixelStream {
