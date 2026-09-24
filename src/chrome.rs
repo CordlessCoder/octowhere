@@ -404,7 +404,7 @@ impl RgbColorExt for Gray8 {
 pub struct FontdueRendererCtx {
     layout: fontdue::layout::Layout,
     canvas: fontdue::raster::Raster<'static>,
-    /// One glyph's coverage, row by row, for the row-blending draws.
+    /// One row of a rotated glyph's coverage.
     coverage: alloc::vec::Vec<u8>,
     glyphs: GlyphCache,
 }
@@ -649,15 +649,11 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
             let pen = (center.x as f32 + dx, center.y as f32 + dy);
             let (metrics, bitmap) =
                 font.rasterize_indexed_transformed(&mut ctx.canvas, index, px, transform, pen);
-            ctx.coverage.clear();
-            bitmap.for_each(|covered| ctx.coverage.push(covered));
-            blend_bitmap(
-                target,
-                Point::new(metrics.x, metrics.y),
-                metrics.width,
-                &ctx.coverage,
-                self.text_color,
-            );
+            ctx.coverage.resize(metrics.width, 0);
+            let color = self.text_color;
+            bitmap.rows(&mut ctx.coverage, |y, x, row| {
+                target.blend_row(metrics.x + x as i32, metrics.y + y as i32, row, color);
+            });
         }
         Ok(())
     }
