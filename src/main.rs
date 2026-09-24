@@ -19,6 +19,7 @@ use embassy_executor::Spawner;
 use embassy_futures::select::{Either, Either3, Either4, select, select3, select4};
 use embassy_sync::{
     blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex},
+    channel::Channel,
     mutex::Mutex,
     signal::Signal,
 };
@@ -51,7 +52,10 @@ use octowhere::{
         rtc::{DateTime as RtcDateTime, Pcf85063aRtc},
         touch::{Cst9217, Cst9217Config, TouchData},
     },
+    settings::{self, Store},
+    tz::{self, DATABASE},
     ui::{
+        clock::{ClockState, ZoneId, ZoneMode, ZoneState},
         compass::{AxisMap, Calibration, CalibrationEvent, CompassView, Vec3},
         fusion::Fusion,
         imu::{accel_micro_ms2, gyro_micro_rad_s},
@@ -140,6 +144,9 @@ static MOTION_STATE: Signal<CriticalSectionRawMutex, Motion> = Signal::new();
 /// Set by the frame loop while the compass screen shows; `motion_task` then samples fast.
 static COMPASS_ACTIVE: AtomicBool = AtomicBool::new(false);
 static COMPASS_RECALIBRATE: AtomicBool = AtomicBool::new(false);
+/// Settings for `settings_task` to save. A full queue drops the newest, which the next change of
+/// the same setting supersedes.
+static SETTINGS_WRITES: Channel<CriticalSectionRawMutex, settings::Write, 4> = Channel::new();
 pub static PSRAM_HEAP: esp_alloc::EspHeap = esp_alloc::EspHeap::empty();
 
 #[cfg(feature = "gnss-full-power")]
@@ -156,7 +163,8 @@ struct SensorSnapshot {
     gnss_bytes: u16,
     gnss: GnssState,
     lora_irq: u8,
-    clock: prototypes::ClockState,
+    clock: ClockState,
+    zone: ZoneState,
 }
 
 struct SensorTask {
@@ -170,6 +178,71 @@ struct SensorTask {
     rtc: Pcf85063aRtc<SharedI2cDevice>,
     state: SensorSnapshot,
     rtc_sync_pending: bool,
+    zones: ZoneTracker,
+}
+
+/// Moving this far from where the zone was last looked up, in 1e-7 degrees on either axis, looks
+/// it up again. The boundaries are simplified to about this.
+const ZONE_LOOKUP_DISTANCE_E7: i32 = 100_000;
+
+/// The zone the clocks show, and where GNSS last placed the device for the automatic one.
+struct ZoneTracker {
+    mode: ZoneMode,
+    manual: Option<ZoneId>,
+    automatic: Option<ZoneId>,
+    looked_up_at: Option<(i32, i32)>,
+}
+
+impl ZoneTracker {
+    fn state(&self) -> ZoneState {
+        ZoneState {
+            mode: self.mode,
+            zone: match self.mode {
+                ZoneMode::Automatic => self.automatic,
+                ZoneMode::Manual => self.manual,
+            },
+        }
+    }
+
+    /// Looks up the zone at a fix, if automatic mode wants it, a step at a time so the other
+    /// tasks on this core keep running. Returns a zone it newly found.
+    async fn follow(&mut self, latitude: i32, longitude: i32) -> Option<ZoneId> {
+        let moved = self.looked_up_at.is_none_or(|(last_latitude, last_longitude)| {
+            latitude.abs_diff(last_latitude) >= ZONE_LOOKUP_DISTANCE_E7 as u32
+                || longitude.abs_diff(last_longitude) >= ZONE_LOOKUP_DISTANCE_E7 as u32
+        });
+        if self.mode != ZoneMode::Automatic || !moved {
+            return None;
+        }
+        let started = Instant::now();
+        let mut search = DATABASE.locate(latitude, longitude);
+        let (mut steps, mut longest) = (0, Duration::MIN);
+        let found = loop {
+            let step = Instant::now();
+            let progress = search.step();
+            longest = longest.max(step.elapsed());
+            steps += 1;
+            match progress {
+                tz::Progress::Searching => embassy_futures::yield_now().await,
+                tz::Progress::Found(zone) => break Some(zone),
+                tz::Progress::Nowhere => break None,
+            }
+        };
+        self.looked_up_at = Some((latitude, longitude));
+        println!(
+            "[ZONE] {} after {} steps in {}us, longest {}us",
+            found.map_or("none", |zone| zone.name),
+            steps,
+            started.elapsed().as_micros(),
+            longest.as_micros(),
+        );
+        // A fix in a sliver between the simplified boundaries keeps the zone it had.
+        let found = found?.id;
+        (self.automatic != Some(found)).then(|| {
+            self.automatic = Some(found);
+            found
+        })
+    }
 }
 
 struct MotionTask {
@@ -324,6 +397,7 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
     let mut prev_swap_spi = Duration::MIN;
     let mut first_flush = true;
     loop {
+        settings::hold_display_core_if_asked();
         let state = swap.get();
         let SwapState {
             fb,
@@ -573,6 +647,22 @@ async fn motion_task(task: MotionTask) {
     }
 }
 
+/// Saves settings as they change. Each write holds the display core for its length.
+#[embassy_executor::task]
+async fn settings_task(mut store: Store) {
+    loop {
+        let write = SETTINGS_WRITES.receive().await;
+        let started = Instant::now();
+        let saved = settings::with_display_core_held(|| store.save(write)).await;
+        println!(
+            "[SETTINGS] {:?} {} in {}us",
+            write,
+            if saved { "saved" } else { "not saved" },
+            started.elapsed().as_micros()
+        );
+    }
+}
+
 #[embassy_executor::task]
 async fn sensor_task(task: SensorTask) {
     let SensorTask {
@@ -586,7 +676,10 @@ async fn sensor_task(task: SensorTask) {
         mut rtc,
         mut state,
         mut rtc_sync_pending,
+        mut zones,
     } = task;
+    // Whether GNSS has set the clock since the firmware started.
+    let mut clock_set = false;
     #[cfg(feature = "gnss-raw-log")]
     let mut raw_nmea_line = [0; 256];
     #[cfg(feature = "gnss-raw-log")]
@@ -707,6 +800,7 @@ async fn sensor_task(task: SensorTask) {
                 match rtc.set_time(&rtc_time).await {
                     Ok(()) => {
                         rtc_sync_pending = false;
+                        clock_set = true;
                         println!(
                             "[RTC] synchronized from GNSS {:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03}",
                             utc.year,
@@ -722,19 +816,30 @@ async fn sensor_task(task: SensorTask) {
                 }
             }
         }
-        if let Ok(time) = rtc.get_time().await {
-            state.clock = prototypes::ClockState {
-                hours: time.hours,
-                minutes: time.minutes,
-                seconds: time.seconds,
-                day: time.day,
+        let utc = rtc.get_time().await.ok().map(|time| {
+            tz::DateTime {
+                year: 2000 + i32::from(time.year),
                 month: time.month,
-                year: time.year,
-                valid: true,
-            };
-        } else {
-            state.clock.valid = false;
+                day: time.day,
+                hour: time.hours,
+                minute: time.minutes,
+                second: time.seconds,
+            }
+            .to_unix()
+        });
+        state.clock = ClockState {
+            utc,
+            set_from_gnss: clock_set,
+            stopped: rtc.oscillator_stopped(),
+        };
+
+        if let Some(fix) = state.gnss.fix
+            && let Some(zone) = zones.follow(fix.latitude.get(), fix.longitude.get()).await
+            && SETTINGS_WRITES.try_send(settings::Write::AutomaticZone(zone)).is_err()
+        {
+            println!("[SETTINGS] queue full, automatic zone not saved");
         }
+        state.zone = zones.state();
 
         #[cfg(feature = "lora-link-tx")]
         {
@@ -1350,6 +1455,17 @@ async fn async_main(spawner: Spawner) {
     let res = touch.resolution();
     println!("[TOUCH] OK, Resolution: {res}");
 
+    // SAFETY: the display core has not started, and `settings_task` holds it for every write.
+    let mut store = unsafe { Store::new(esp_storage::FlashStorage::new(peripherals.FLASH)) };
+    let saved = store.load();
+    println!(
+        "[SETTINGS] zone mode={:?} manual={:?} automatic={:?}",
+        saved.zone_mode,
+        saved.manual_zone.map(|zone| DATABASE.zone(zone).name),
+        saved.automatic_zone.map(|zone| DATABASE.zone(zone).name),
+    );
+    spawner.spawn(settings_task(store).unwrap());
+
     let initial_sensor_state = SensorSnapshot {
         battery_present,
         battery_mv: battery_present.then(|| pmic_readings.0.ok()).flatten(),
@@ -1370,6 +1486,12 @@ async fn async_main(spawner: Spawner) {
             rtc,
             state: initial_sensor_state,
             rtc_sync_pending: true,
+            zones: ZoneTracker {
+                mode: saved.zone_mode,
+                manual: saved.manual_zone,
+                automatic: saved.automatic_zone,
+                looked_up_at: None,
+            },
         })
         .unwrap(),
     );
@@ -1472,6 +1594,7 @@ async fn async_main(spawner: Spawner) {
                     gnss_fix: state.gnss.fix.is_some(),
                     lora_irq: state.lora_irq,
                     clock: state.clock,
+                    zone: state.zone,
                 }),
             });
             if update.recalibrate {

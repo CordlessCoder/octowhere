@@ -8,6 +8,7 @@ extern crate alloc;
 pub mod board;
 pub mod drivers;
 pub mod peripherals;
+pub mod settings;
 pub mod util;
 
-pub use octowhere_ui::{chrome, fontdue, framebuffer, ui};
+pub use octowhere_ui::{chrome, fontdue, framebuffer, tz, ui};

@@ -744,6 +744,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba0e487f6843419bb085d871f6e860da1bb8c267ce1c5db1051b83882e943054"
 dependencies = [
  "document-features",
+ "embedded-storage",
  "esp-config",
  "esp-hal-procmacros",
  "esp-metadata-generated",
@@ -1520,16 +1521,22 @@ dependencies = [
  "esp-hal",
  "esp-println",
  "esp-rtos",
+ "esp-storage",
  "futures",
  "heapless 0.9.3",
  "lc76g",
  "log",
  "octowhere-ui",
  "ph-qmi8658",
+ "sequential-storage",
  "static_cell",
  "sx127xlora",
  "tca9554",
 ]
+
+[[package]]
+name = "octowhere-tz"
+version = "0.1.0"
 
 [[package]]
 name = "octowhere-ui"
@@ -1543,6 +1550,7 @@ dependencies = [
  "fontdue-macros",
  "heapless 0.9.3",
  "libm",
+ "octowhere-tz",
 ]
 
 [[package]]
@@ -1757,6 +1765,15 @@ name = "semihosting"
 version = "0.1.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8e4abf97879f4e80db69a9fba7bd64998e9bdad25f58ef045a778e191172fd4"
+
+[[package]]
+name = "sequential-storage"
+version = "8.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e750f14f4f6e5a81277c66311713a56106c8df0196df62a634d1fc806556832b"
+dependencies = [
+ "embedded-storage-async",
+]
 
 [[package]]
 name = "serde"

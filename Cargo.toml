@@ -9,7 +9,7 @@ esp-rtos = { version = "0.4.0", features = ["esp32s3", "embassy", "esp-alloc"] }
 esp-alloc = { version = "0.11.0", features = ["nightly"] }
 esp-println = { version = "0.18.0", features = ["esp32s3", "defmt-espflash"] }
 esp-backtrace = { version = "0.20.0", features = ["esp32s3", "panic-handler", "defmt"] }
-esp-bootloader-esp-idf = { version = "0.6.0", features = ["esp32s3"] }
+esp-bootloader-esp-idf = { version = "0.6.0", features = ["embedded-storage", "esp32s3"] }
 log = "0.4"
 defmt = "1.0.1"
 
@@ -35,6 +35,8 @@ embassy-embedded-hal = "0.6.0"
 ph-qmi8658 = { version = "0.1.1", features = ["fixed"] }
 tca9554 = "0.2.0"
 heapless = { version = "0.9.3", features = ["nightly"] }
+esp-storage = { version = "0.10.0", features = ["esp32s3"] }
+sequential-storage = "8.0.1"
 
 [features]
 default = []
