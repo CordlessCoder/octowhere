@@ -142,9 +142,23 @@ fn a_cover_on_the_settled_compass_asks_for_recalibration_once_per_hand() {
     assert!(driver.cover().recalibrate);
     // The dial goes at once, before the motion task confirms the reset.
     assert_eq!(driver.stage.peripherals().compass.heading_decidegrees, None);
-    assert!(!driver.cover().recalibrate, "a held cover fired twice");
-    driver.touch(None);
-    assert!(driver.cover().recalibrate, "a fresh cover after release was ignored");
+    // A held hand keeps reporting, with unreadable reports among them that arrive as no contacts.
+    for _ in 0..20 {
+        assert!(!driver.cover().recalibrate, "a held cover fired twice");
+        assert!(!driver.touch(None).recalibrate);
+        driver.wait(150_000);
+    }
+    // Lifted: no cover report for longer than a held hand leaves between them.
+    driver.wait(300_000);
+    assert!(driver.cover().recalibrate, "a second hand was ignored");
+}
+
+#[test]
+fn a_finger_rearms_the_cover_at_once() {
+    let mut driver = Driver::settled_on_compass();
+    assert!(driver.cover().recalibrate);
+    driver.touch(Some(COMPASS_CENTER));
+    assert!(driver.cover().recalibrate, "a cover after a touch was ignored");
 }
 
 #[test]

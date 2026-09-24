@@ -63,6 +63,10 @@ const REVEAL_FADE: Micros = 170_000;
 const REVEAL_LETTERS: Micros = 70_000;
 /// Dragging the compass this fraction of the panel's width fades its accents out entirely.
 const SWIPE_FADE: f32 = 0.35;
+/// How long without a cover report before another cover is a new hand. The controller does not
+/// always report the hand lifting, and a held hand repeats its report up to about 180 ms apart.
+/// Covering again after lifting took about 350 ms.
+const COVER_REARM: Micros = 260_000;
 
 /// Everything that arrived since the last step.
 #[derive(Clone, Copy, Debug, Default)]
@@ -98,8 +102,8 @@ pub struct Stage {
     touch_state: TouchState,
     peripherals: PeripheralState,
     renderer: FontdueRenderer<'static, Color>,
-    /// The last read was a cover, so another cover is the same hand still there.
-    covered: bool,
+    /// When the last cover report arrived, while the hand that sent it may still be there.
+    covered_at: Option<Micros>,
     /// When the compass page last settled into view, from another page.
     compass_settled: Option<Micros>,
     /// When the heading the dial turns to last appeared.
@@ -127,7 +131,7 @@ impl Stage {
                 chrome::BLACK,
                 chrome::FONTS,
             ),
-            covered: false,
+            covered_at: None,
             compass_settled: None,
             heading_since: None,
             accents: Accents::FULL,
@@ -286,7 +290,10 @@ impl Stage {
 
         if let Some(touch) = touch {
             let cover = touch == Touch::Cover;
-            if cover && !self.covered && self.accepts_cover() {
+            let fresh = self
+                .covered_at
+                .is_none_or(|at| now.saturating_sub(at) >= COVER_REARM);
+            if cover && fresh && self.accepts_cover() {
                 update.recalibrate = true;
                 // The motion task resets the calibration on its next sample; the dial goes now.
                 let compass = &mut self.peripherals.compass;
@@ -294,7 +301,15 @@ impl Stage {
                 compass.heading_decidegrees = None;
                 changed.make_full();
             }
-            self.covered = cover;
+            match touch {
+                Touch::Cover => self.covered_at = Some(now),
+                // A finger means the hand has gone. A report without one does not: the controller
+                // sends unreadable reports while a hand is held, and those arrive as no contacts.
+                Touch::Contacts(contacts) if contacts.iter().any(Option::is_some) => {
+                    self.covered_at = None;
+                }
+                Touch::Contacts(_) => {}
+            }
         }
         let accents = self.compass_accents(now);
         if accents != self.accents {
