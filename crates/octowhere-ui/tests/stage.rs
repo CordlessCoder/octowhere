@@ -390,3 +390,35 @@ fn the_compass_withholds_its_heading_until_calibrated() {
         "the two states drew the same frame"
     );
 }
+
+fn top_edge_up() -> Motion {
+    let mut motion = heading(470);
+    motion.compass.heading_decidegrees = None;
+    motion
+}
+
+/// A settled compass that loses its heading to `absence` for `gap`, then gets it back.
+fn heading_back_after(absence: Motion, gap: Micros) -> Accents {
+    let mut driver = Driver::settled_on_compass();
+    driver.motion(absence);
+    driver.wait(gap);
+    driver.motion(heading(470));
+    accents(&driver)
+}
+
+#[test]
+fn a_heading_back_quickly_from_top_edge_up_skips_the_reveal() {
+    assert_eq!(heading_back_after(top_edge_up(), 300_000), Accents::FULL);
+}
+
+#[test]
+fn a_heading_back_slowly_from_top_edge_up_reveals_again() {
+    let accents = heading_back_after(top_edge_up(), 1_000_000);
+    assert!(accents.ticks < 255 && accents.letters == 0, "{accents:?}");
+}
+
+#[test]
+fn a_heading_back_from_no_data_reveals_again() {
+    let accents = heading_back_after(Motion::default(), 300_000);
+    assert!(accents.ticks < 255 && accents.letters == 0, "{accents:?}");
+}

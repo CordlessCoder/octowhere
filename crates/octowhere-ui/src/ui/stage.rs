@@ -61,6 +61,9 @@ const ENTRY_FADE: Micros = 110_000;
 /// A heading that appears on a settled page reveals the ticks, then the letters this much later.
 const REVEAL_FADE: Micros = 170_000;
 const REVEAL_LETTERS: Micros = 70_000;
+/// A heading back from TOP EDGE UP within this skips the reveal, so tilting through vertical does
+/// not pulse the dial.
+const TOP_EDGE_GRACE: Micros = 750_000;
 /// Dragging the compass this fraction of the panel's width fades its accents out entirely.
 const SWIPE_FADE: f32 = 0.35;
 /// How long without a cover report before another cover is a new hand. The controller does not
@@ -108,6 +111,8 @@ pub struct Stage {
     compass_settled: Option<Micros>,
     /// When the heading the dial turns to last appeared.
     heading_since: Option<Micros>,
+    /// When the heading gave way to TOP EDGE UP, while nothing else has shown since.
+    top_edge_since: Option<Micros>,
     accents: Accents,
     fading: bool,
 }
@@ -134,6 +139,7 @@ impl Stage {
             covered_at: None,
             compass_settled: None,
             heading_since: None,
+            top_edge_since: None,
             accents: Accents::FULL,
             fading: false,
         }
@@ -150,6 +156,7 @@ impl Stage {
         self.selected_node = None;
         self.compass_settled = None;
         self.heading_since = None;
+        self.top_edge_since = None;
     }
 
     #[must_use]
@@ -346,18 +353,31 @@ impl Stage {
         if self.screen != Screen::Compass {
             self.compass_settled = None;
             self.heading_since = None;
+            self.top_edge_since = None;
             return Accents::FULL;
         }
         let view = self.pager.view();
         if self.compass_settled.is_none() && view.offset == 0 {
             self.compass_settled = Some(now);
         }
-        let heading = Mode::of(&self.peripherals.compass).heading().is_some();
-        self.heading_since = match self.heading_since {
-            Some(since) if heading => Some(since),
-            None if heading => Some(now),
-            _ => None,
-        };
+        let mode = Mode::of(&self.peripherals.compass);
+        let heading = mode.heading().is_some();
+        if heading {
+            if self.heading_since.is_none() {
+                let quick = self
+                    .top_edge_since
+                    .is_some_and(|since| now.saturating_sub(since) < TOP_EDGE_GRACE);
+                // A quick return from TOP EDGE UP shows the dial as though it had never gone.
+                let revealed = REVEAL_LETTERS + REVEAL_FADE;
+                self.heading_since = Some(if quick { now.saturating_sub(revealed) } else { now });
+            }
+            self.top_edge_since = None;
+        } else if mode != Mode::TopEdgeUp {
+            self.heading_since = None;
+            self.top_edge_since = None;
+        } else if self.heading_since.take().is_some() {
+            self.top_edge_since = Some(now);
+        }
         let Some(settled) = self.compass_settled else {
             return Accents::HIDDEN;
         };
