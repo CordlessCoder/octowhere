@@ -51,40 +51,6 @@ until the feature set is complete, because profiling an incomplete firmware pric
   each stream with `RAMWR` instead of a separate command, now in place, took the address window
   from 2.1 to 1.8 ms a frame. What remains is the row copies. The bench that measured this,
   `bench/row-span-damage`, was deleted; its last commit was `e92ff49`.
-- Shorten a full-panel flush, or take it off PSRAM contention. Measured during drags on
-  2026-09-24 (`bench/tearing`): a flush took 13.3–15.9 ms, mean 14.5, once each chunk's
-  transfer was spun on rather than awaited (it was 15.3). Per 8 KiB chunk, the CPU copy out of
-  PSRAM takes about 205 µs while core 0 draws (115 µs with core 0 idle), and the transfer 204 µs
-  alone but about 232 µs beside the copy. Transfers alone would take 11 ms a frame. Larger
-  chunks from the heap gained 0.3 ms at 16 KiB and nothing more at 32 KiB, because the first
-  chunk's copy is not overlapped. Frame rate during drags is set by core 0, not the flush: a
-  step and full draw took 23 ms mean, 28 ms at most, for 38 frames a second. The flush matters
-  there only through the PSRAM contention it adds to the draw. Levers:
-  - DMA straight from the PSRAM framebuffer does not work, and the reason is now known
-    (`bench/psram-dma`, 2026-09-24). esp-hal's `DmaTxBuf` writes the cache back itself, and the
-    framebuffer is 64-byte aligned. But the DMA cannot read PSRAM as fast as the SPI clock
-    sends: at 80 and 40 MHz the panel showed long strips of one repeated pattern, and at
-    10 MHz it was clean. None of the DMA's settings changed that at 80 MHz: 32- or 64-byte
-    PSRAM blocks (esp-hal writes 64 as a value the S3's register description calls reserved),
-    the channel's transmit FIFO (`OUT_SRAM_SIZE_CH`, whose field resets to 14, about 128 bytes
-    by the documented formula; 80 bytes was worse, 256 no better), or core 0 not drawing at
-    all, which helped only a little. The CPU copy reads PSRAM faster (41 MB/s while core 0 draws, 75 MB/s
-    idle), so copying through internal buffers is the right design here, as in ESP-IDF's
-    bounce buffers. The direct flush did take the copy's contention off core 0's draw, 23 ms
-    down to about 20.
-  - PSRAM at 120 MHz: not pursued (owner, 2026-09-25). On `bench/psram-120` the bench starts
-    PSRAM at 80 MHz, then moves the memory core clock from 160 to 240 MHz, divides flash by 3
-    on SPI0 and SPI1 so it stays at 80 MHz, and writes the PSRAM timing ESP-IDF v6.1's tuning
-    chose on this board (`SMEM_TIMING_CALI` 7, `SMEM_DIN_MODE` 0x01249249). A 4 MB pattern check
-    passed, and during the synthetic drag core 0's step and draw fell from 23.1 to 19.2 ms and
-    the flush from 14.7 to 13.3 ms, 38 to 42 fps. But the board froze within minutes under the
-    drag, and the cause was not found. esp-hal's `SpiRamFreq::Freq120m` hangs at boot, esp-hal
-    has no MSPI timing tuning, and ESP-IDF calls octal PSRAM at 120 MHz experimental.
-    `tools/idf-psram-reference` on that branch reproduces ESP-IDF's register dump. esp-hal also
-    leaves PSRAM untuned at 80 MHz (extra dummy 0, sampling mode 0, where ESP-IDF sets 2 and 4),
-    which is unexamined.
-  - Flush only bands covering the visible circle, about 80% of the square, at the cost of an
-    address window and an unoverlapped first chunk per band.
 - Shorten the clock face's draws further. Measured on 2026-09-25 with `bench/clock-draw`, after
   the face stopped laying out parts outside the damage and the clear stopped painting under the
   band: a tick draws in about 1.5 ms (2.7 before), a full draw in 17.5–22.6 ms (20.5–27 before),
@@ -115,6 +81,41 @@ until the feature set is complete, because profiling an incomplete firmware pric
 
 ## Deferred, with detail elsewhere
 
+- Shortening a full-panel flush is closed (owner, 2026-09-25): it was explored as far as it
+  usefully goes. The findings stay here so nobody retries them. Measured during drags on
+  2026-09-24 (`bench/tearing`): a flush took 13.3–15.9 ms, mean 14.5, once each chunk's
+  transfer was spun on rather than awaited (it was 15.3). Per 8 KiB chunk, the CPU copy out of
+  PSRAM takes about 205 µs while core 0 draws (115 µs with core 0 idle), and the transfer 204 µs
+  alone but about 232 µs beside the copy. Transfers alone would take 11 ms a frame. Larger
+  chunks from the heap gained 0.3 ms at 16 KiB and nothing more at 32 KiB, because the first
+  chunk's copy is not overlapped. Frame rate during drags is set by core 0, not the flush: a
+  step and full draw took 23 ms mean, 28 ms at most, for 38 frames a second. The flush matters
+  there only through the PSRAM contention it adds to the draw. What was tried or left:
+  - DMA straight from the PSRAM framebuffer does not work, and the reason is now known
+    (`bench/psram-dma`, 2026-09-24). esp-hal's `DmaTxBuf` writes the cache back itself, and the
+    framebuffer is 64-byte aligned. But the DMA cannot read PSRAM as fast as the SPI clock
+    sends: at 80 and 40 MHz the panel showed long strips of one repeated pattern, and at
+    10 MHz it was clean. None of the DMA's settings changed that at 80 MHz: 32- or 64-byte
+    PSRAM blocks (esp-hal writes 64 as a value the S3's register description calls reserved),
+    the channel's transmit FIFO (`OUT_SRAM_SIZE_CH`, whose field resets to 14, about 128 bytes
+    by the documented formula; 80 bytes was worse, 256 no better), or core 0 not drawing at
+    all, which helped only a little. The CPU copy reads PSRAM faster (41 MB/s while core 0 draws, 75 MB/s
+    idle), so copying through internal buffers is the right design here, as in ESP-IDF's
+    bounce buffers. The direct flush did take the copy's contention off core 0's draw, 23 ms
+    down to about 20.
+  - PSRAM at 120 MHz: not pursued (owner, 2026-09-25). On `bench/psram-120` the bench starts
+    PSRAM at 80 MHz, then moves the memory core clock from 160 to 240 MHz, divides flash by 3
+    on SPI0 and SPI1 so it stays at 80 MHz, and writes the PSRAM timing ESP-IDF v6.1's tuning
+    chose on this board (`SMEM_TIMING_CALI` 7, `SMEM_DIN_MODE` 0x01249249). A 4 MB pattern check
+    passed, and during the synthetic drag core 0's step and draw fell from 23.1 to 19.2 ms and
+    the flush from 14.7 to 13.3 ms, 38 to 42 fps. But the board froze within minutes under the
+    drag, and the cause was not found. esp-hal's `SpiRamFreq::Freq120m` hangs at boot, esp-hal
+    has no MSPI timing tuning, and ESP-IDF calls octal PSRAM at 120 MHz experimental.
+    `tools/idf-psram-reference` on that branch reproduces ESP-IDF's register dump. esp-hal also
+    leaves PSRAM untuned at 80 MHz (extra dummy 0, sampling mode 0, where ESP-IDF sets 2 and 4),
+    which is unexamined.
+  - Flush only bands covering the visible circle, about 80% of the square, at the cost of an
+    address window and an unoverlapped first chunk per band.
 - The partial-flush hardware check, in [`HARDWARE-VERIFICATION.md`](HARDWARE-VERIFICATION.md).
   Partial flushing is the default. The owner has checked the compass by eye; the rest of the
   check has not been run.
