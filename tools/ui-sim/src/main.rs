@@ -8,7 +8,7 @@
 //! Keys:
 //!
 //! - Left / Right: heading down / up 5°, 1° with Shift. Space spins it.
-//! - Up / Down: pitch; Q / E: roll, 5° a press.
+//! - Up / Down: pitch; Q / E: roll, 5° a press, 1° with Shift.
 //! - C: calibration through none, part-way and complete. T: top edge vertical or not, which
 //!   withholds the heading.
 //! - D: magnetic disturbance on or off. L: sensors live or silent.
@@ -84,16 +84,17 @@ impl Readings {
     /// Applies a key, and says whether it changed a reading.
     fn press(&mut self, key: Key, shift: bool) -> bool {
         let step = if shift { 1.0 } else { 5.0 };
+        let tilt = if shift { 1 } else { 5 };
         match key {
             Key::Left => self.heading -= step,
             Key::Right => self.heading += step,
-            Key::Up => self.pitch += 5,
-            Key::Down => self.pitch -= 5,
-            Key::Q => self.roll -= 5,
-            Key::E => self.roll += 5,
+            Key::Up => self.pitch += tilt,
+            Key::Down => self.pitch -= tilt,
+            Key::Q => self.roll -= tilt,
+            Key::E => self.roll += tilt,
             Key::C => {
                 self.calibration = match self.calibration {
-                    0 => 40,
+                    0 => 54,
                     100 => 0,
                     _ => 100,
                 }
