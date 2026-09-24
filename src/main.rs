@@ -1569,6 +1569,10 @@ async fn async_main(spawner: Spawner) {
     let mut outlined = Dirty::new();
     let mut last_touch_poll = Instant::now();
     const TOUCH_REPOLL: Duration = Duration::from_micros(16_667);
+    // A write waits for the frame showing its result to reach the panel, since the display
+    // freezes while it runs: core 1 has flushed a frame once the swap after the one that
+    // handed it over completes.
+    let mut pending_write: Option<(settings::Write, u8)> = None;
     loop {
         let start = Instant::now();
         {
@@ -1669,8 +1673,8 @@ async fn async_main(spawner: Spawner) {
                         settings::Write::Clear
                     }
                 };
-                if SETTINGS_WRITES.try_send(write).is_err() {
-                    warn!("[SETTINGS] queue full, {} not saved", write);
+                if let Some((earlier, _)) = pending_write.replace((write, 2)) {
+                    queue_write(earlier);
                 }
             }
             COMPASS_ACTIVE.store(update.samples_fast, Ordering::Relaxed);
@@ -1716,5 +1720,18 @@ async fn async_main(spawner: Spawner) {
         let start = Instant::now();
         fb_st.swap().await;
         prev_swap_draw = start.elapsed();
+        if let Some((write, swaps)) = pending_write.take() {
+            if swaps > 1 {
+                pending_write = Some((write, swaps - 1));
+            } else {
+                queue_write(write);
+            }
+        }
+    }
+}
+
+fn queue_write(write: settings::Write) {
+    if SETTINGS_WRITES.try_send(write).is_err() {
+        warn!("[SETTINGS] queue full, {} not saved", write);
     }
 }
