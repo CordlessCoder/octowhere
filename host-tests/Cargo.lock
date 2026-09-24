@@ -430,6 +430,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "octowhere-tz"
+version = "0.1.0"
+
+[[package]]
 name = "octowhere-ui"
 version = "0.1.0"
 dependencies = [
@@ -441,6 +445,7 @@ dependencies = [
  "fontdue-macros",
  "heapless",
  "libm",
+ "octowhere-tz",
 ]
 
 [[package]]
