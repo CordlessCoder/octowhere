@@ -66,7 +66,7 @@ pub struct Picker {
 impl Eq for Picker {}
 
 fn time_of(peripherals: &PeripheralState) -> Option<i64> {
-    peripherals.clock.clock.utc.filter(|_| !peripherals.clock.clock.stopped)
+    peripherals.clock.clock().utc.filter(|_| !peripherals.clock.clock().stopped)
 }
 
 /// A zone's offset at `unix`, or without a time, each offset it keeps during a year.
@@ -228,7 +228,7 @@ impl Picker {
                 let offset = offsets[self.index];
                 let position = peripherals.gnss.position;
                 let zones = zones_at(offset, unix, position);
-                let current = peripherals.clock.zone.zone;
+                let current = peripherals.clock.zone().zone;
                 self.index = zones.iter().position(|&zone| Some(zone) == current).unwrap_or(0);
                 self.step = Step::Zone { offset, zones, nearest: position.is_some() };
                 self.fling = None;
@@ -345,7 +345,7 @@ impl Picker {
                 Self::draw_neighbour(&line, row, font, target)?;
             }
         }
-        let automatic = peripherals.clock.zone.mode == ZoneMode::Automatic;
+        let automatic = peripherals.clock.zone().mode == ZoneMode::Automatic;
         second::draw_button("AUTO", AUTO, automatic, font, target)
     }
 

@@ -178,7 +178,7 @@ fn tour(driver: &mut Driver) {
 
     // The fix confirms the time where the clock has run to, and places the device in Dublin.
     let mut fix = dublin();
-    fix.clock.utc = driver.stage.peripherals().clock.clock.utc;
+    fix.clock.utc = driver.stage.peripherals().clock.clock().utc;
     driver.sensors(fix);
     driver.wait(ms(1_800));
 

@@ -83,7 +83,13 @@ impl Ring {
         };
         let (top, bottom) = (bounds.top_left.y, corner.y);
         let reaches = |x: i32, length: usize| x <= corner.x && x + length as i32 > bounds.top_left.x;
-        for &(j, last, start, length) in &self.runs {
+        // Run `j` lands on rows `cy - 1 - j` and `cy + j`, so only these runs can reach the target.
+        let clamp = |j: i32| j.clamp(0, self.runs.len() as i32) as usize;
+        let upper = clamp(cy - 1 - bottom)..clamp(cy - top);
+        let lower = clamp(top - cy)..clamp(bottom - cy + 1);
+        let (first, second) = if upper.start <= lower.start { (upper, lower) } else { (lower, upper) };
+        let second = second.start.max(first.end)..second.end.max(first.end);
+        for &(j, last, start, length) in self.runs[first].iter().chain(&self.runs[second]) {
             let (left, right) = (cx - 1 - last, cx + last + 1 - length as i32);
             let forward = &self.forward[start..start + length];
             let reversed = &self.reversed[start..start + length];
@@ -102,10 +108,82 @@ impl Ring {
     }
 }
 
+impl Ring {
+    /// Marks every pixel the ring covers.
+    pub fn damage(&self, damage: &mut crate::chrome::Dirty) {
+        let Point { x: cx, y: cy } = self.center;
+        for &(j, last, _, length) in &self.runs {
+            let (left, right) = (cx - 1 - last, cx + last + 1 - length as i32);
+            for y in [cy - 1 - j, cy + j] {
+                for x in [left, right] {
+                    damage.add(Rectangle::new(Point::new(x, y), Size::new(length as u32, 1)));
+                }
+            }
+        }
+    }
+}
+
 /// The perimeter ring every round screen draws, 2 px wide about radius 231, computed on first use.
 pub fn perimeter() -> &'static Ring {
     static RING: embassy_sync::once_lock::OnceLock<Ring> = embassy_sync::once_lock::OnceLock::new();
     RING.get_or_init(|| Ring::new(Point::new(233, 233), 230.0, 232.0))
+}
+
+/// One row of a disc: its outermost solid offset left of the centre corner, negative when the
+/// row has no solid pixel, and its edge coverage from the outside in.
+type DiscRow = (i32, heapless::Vec<u8, 8>);
+
+/// Row `y` of the disc of `radius` about the pixel corner `center`, or `None` if it misses it.
+fn disc_row(y: i32, center: Point, radius: f32) -> Option<DiscRow> {
+    let dy = y as f32 + 0.5 - center.y as f32;
+    if dy.abs() >= radius + 0.5 {
+        return None;
+    }
+    // Columns are offsets left of the centre corner; pixel `i` has its centre at `i + 0.5`.
+    let covered = |i: i32| coverage(radius - libm::hypotf(i as f32 + 0.5, dy));
+    let reach = libm::sqrtf((radius * radius - dy * dy).max(0.0));
+    let mut i = libm::ceilf(reach + 1.0) as i32;
+    let mut edge = heapless::Vec::new();
+    while i >= 0 && covered(i) < u8::MAX {
+        if covered(i) > 0 {
+            // Past the band's few edge pixels the row is solid.
+            if edge.push(covered(i)).is_err() {
+                break;
+            }
+        }
+        i -= 1;
+    }
+    Some((i, edge))
+}
+
+fn draw_disc_row<D: CoverageTarget>(
+    target: &mut D,
+    y: i32,
+    center: Point,
+    (i, edge): &DiscRow,
+    color: D::Color,
+) -> Result<(), D::Error> {
+    let (left, right) = (center.x - 1 - i, center.x + i);
+    if *i >= 0 {
+        target.fill_solid(&Rectangle::with_corners(Point::new(left, y), Point::new(right, y)), color)?;
+    }
+    let mut edge = edge.clone();
+    target.blend_row(left - edge.len() as i32, y, &edge, color);
+    edge.reverse();
+    target.blend_row(right + 1, y, &edge, color);
+    Ok(())
+}
+
+/// The rows of `rows` within the target's bounds.
+fn bounded_rows<D: CoverageTarget>(target: &D, rows: core::ops::Range<i32>) -> core::ops::Range<i32> {
+    let bounds = target.bounding_box();
+    rows.start.max(bounds.top_left.y)..rows.end.min(bounds.top_left.y + bounds.size.height as i32)
+}
+
+/// Whether the target can show anything on row `y`.
+fn row_visible<D: CoverageTarget>(target: &D, y: i32) -> bool {
+    let bounds = target.bounding_box();
+    target.visible(&Rectangle::new(Point::new(bounds.top_left.x, y), Size::new(bounds.size.width, 1)))
 }
 
 /// Fills rows `rows` of the disc of `radius` about the pixel corner `center`, one span per row
@@ -117,45 +195,64 @@ pub fn disc_rows<D: CoverageTarget>(
     radius: f32,
     color: D::Color,
 ) -> Result<(), D::Error> {
-    let bounds = target.bounding_box();
-    let mut edge: heapless::Vec<u8, 8> = heapless::Vec::new();
-    for y in rows {
-        if !target.visible(&Rectangle::new(Point::new(bounds.top_left.x, y), Size::new(bounds.size.width, 1))) {
+    for y in bounded_rows(target, rows) {
+        if !row_visible(target, y) {
             continue;
         }
-        let dy = y as f32 + 0.5 - center.y as f32;
-        if dy.abs() >= radius + 0.5 {
-            continue;
+        if let Some(row) = disc_row(y, center, radius) {
+            draw_disc_row(target, y, center, &row, color)?;
         }
-        // Columns are offsets left of the centre corner; pixel `i` has its centre at `i + 0.5`.
-        let covered = |i: i32| coverage(radius - libm::hypotf(i as f32 + 0.5, dy));
-        let reach = libm::sqrtf((radius * radius - dy * dy).max(0.0));
-        let mut i = libm::ceilf(reach + 1.0) as i32;
-        edge.clear();
-        while i >= 0 && covered(i) < u8::MAX {
-            if covered(i) > 0 {
-                // Past the band's few edge pixels the row is solid.
-                if edge.push(covered(i)).is_err() {
-                    break;
-                }
-            }
-            i -= 1;
-        }
-        // `i` is now the outermost solid offset, and `edge` runs from the outside in.
-        let left = center.x - 1 - i;
-        let right = center.x + i;
-        if i >= 0 {
-            target.fill_solid(
-                &Rectangle::with_corners(Point::new(left, y), Point::new(right, y)),
-                color,
-            )?;
-        }
-        let length = edge.len() as i32;
-        target.blend_row(left - length, y, &edge, color);
-        edge.reverse();
-        target.blend_row(right + 1, y, &edge, color);
     }
     Ok(())
+}
+
+/// [`disc_rows`] with each row worked out once, for a band drawn every frame.
+pub struct DiscRows {
+    center: Point,
+    top: i32,
+    rows: Vec<Option<DiscRow>>,
+}
+
+impl DiscRows {
+    #[must_use]
+    pub fn new(rows: core::ops::Range<i32>, center: Point, radius: f32) -> Self {
+        Self {
+            center,
+            top: rows.start,
+            rows: rows.map(|y| disc_row(y, center, radius)).collect(),
+        }
+    }
+
+    pub fn draw<D: CoverageTarget>(&self, target: &mut D, color: D::Color) -> Result<(), D::Error> {
+        let rows = self.top..self.top + self.rows.len() as i32;
+        for y in bounded_rows(target, rows) {
+            if !row_visible(target, y) {
+                continue;
+            }
+            if let Some(row) = &self.rows[(y - self.top) as usize] {
+                draw_disc_row(target, y, self.center, row, color)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The largest rectangle every row fills solidly, which nothing under the band shows through.
+    #[must_use]
+    pub fn solid(&self) -> Rectangle {
+        let inner = self
+            .rows
+            .iter()
+            .map(|row| row.as_ref().map_or(-1, |(i, _)| *i))
+            .min()
+            .unwrap_or(-1);
+        if inner < 0 {
+            return Rectangle::zero();
+        }
+        Rectangle::with_corners(
+            Point::new(self.center.x - 1 - inner, self.top),
+            Point::new(self.center.x + inner, self.top + self.rows.len() as i32 - 1),
+        )
+    }
 }
 
 /// Fills the polygon through `corners`, then draws it turned by each number of quarters

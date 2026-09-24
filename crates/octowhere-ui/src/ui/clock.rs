@@ -45,29 +45,55 @@ pub struct KnownOffset {
 /// Everything the clock face shows.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ClockView {
-    pub clock: ClockState,
-    pub zone: ZoneState,
-    pub known: Option<KnownOffset>,
+    clock: ClockState,
+    zone: ZoneState,
+    known: Option<KnownOffset>,
+    /// `clock`'s time in `zone`. Working it out is slow on the target, so a view does it once,
+    /// which is why it is built only through [`read`](Self::read).
+    local: Option<LocalTime>,
 }
 
 impl ClockView {
-    /// `known` brought up to date: the zone's current offset, while the clock is trusted.
+    /// The view after reading `clock` in `zone`, with `known` brought up to date: the zone's
+    /// current offset, while the clock is trusted.
     #[must_use]
-    pub fn remembering(self) -> Self {
-        let trusted = !self.clock.stopped;
-        let current = self
-            .clock
-            .local(self.zone)
-            .filter(|_| trusted)
-            .zip(self.zone.zone)
+    pub fn read(self, clock: ClockState, zone: ZoneState) -> Self {
+        let local = clock.local(zone);
+        let current = local
+            .filter(|_| !clock.stopped)
+            .zip(zone.zone)
             .map(|(local, zone)| KnownOffset {
                 zone,
                 offset: local.offset,
             });
         Self {
+            clock,
+            zone,
             known: current.or(self.known),
-            ..self
+            local,
         }
+    }
+
+    #[must_use]
+    pub fn clock(&self) -> ClockState {
+        self.clock
+    }
+
+    #[must_use]
+    pub fn zone(&self) -> ZoneState {
+        self.zone
+    }
+
+    /// The zone's offset the last time the clock was trusted in it.
+    #[must_use]
+    pub fn known(&self) -> Option<KnownOffset> {
+        self.known
+    }
+
+    /// The clock's time in the zone, or `None` if either is not known.
+    #[must_use]
+    pub fn local(&self) -> Option<LocalTime> {
+        self.local
     }
 }
 

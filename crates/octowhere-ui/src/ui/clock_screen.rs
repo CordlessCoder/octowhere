@@ -38,6 +38,18 @@ const TILE: Tile = Tile {
 const BAND_ROWS: core::ops::Range<i32> = 198..318;
 const BAND_RADIUS: f32 = 232.0;
 const BAND: Rectangle = Rectangle::new(Point::new(0, 198), Size::new(466, 120));
+/// Where each line's ink and reveal blocks can land, whatever it shows, with a pixel spare.
+/// A part whose region the damage misses is skipped without laying its text out.
+/// `each_line_stays_in_its_region` checks every character each line can hold.
+const HOURS_INK: Rectangle = Rectangle::new(Point::new(62, 88), Size::new(166, 99));
+const MINUTES_INK: Rectangle = Rectangle::new(Point::new(62, 209), Size::new(166, 99));
+const SECONDS_INK: Rectangle = Rectangle::new(Point::new(260, 276), Size::new(50, 31));
+const LABEL_INK: Rectangle = Rectangle::new(Point::new(260, 211), Size::new(70, 19));
+const NO_DATA_INK: Rectangle = Rectangle::new(Point::new(70, 245), Size::new(163, 24));
+const DATE_INK: Rectangle = Rectangle::new(Point::new(0, 331), Size::new(466, 25));
+const PLATE_INK: Rectangle = Rectangle::new(Point::new(0, 360), Size::new(466, 20));
+const ZONE_INK: Rectangle = Rectangle::new(Point::new(0, 386), Size::new(466, 16));
+const MARK_INK: Rectangle = Rectangle::new(Point::new(363, 0), Size::new(25, 466));
 /// `NO DATA`'s ink starts on the digits' ink column, centred on this row.
 const NO_DATA_LEFT: i32 = 71;
 const NO_DATA_MIDDLE_TWICE: i32 = 515;
@@ -61,6 +73,18 @@ const GNSS: Glyph = [0b00100, 0b01010, 0b10101, 0b01010, 0b00100];
 const RTC: Glyph = [0b11111, 0b10001, 0b10101, 0b10001, 0b11111];
 const STOPPED: Glyph = [0b01010, 0b01010, 0b01010, 0b01010, 0b01010];
 const NO_ZONE: Glyph = [0b01110, 0b10001, 0b00110, 0b00000, 0b00100];
+
+fn band() -> &'static super::smooth::DiscRows {
+    static BAND_DISC: embassy_sync::once_lock::OnceLock<super::smooth::DiscRows> =
+        embassy_sync::once_lock::OnceLock::new();
+    BAND_DISC.get_or_init(|| super::smooth::DiscRows::new(BAND_ROWS, CENTER, BAND_RADIUS))
+}
+
+/// The part of the settled face that the band always paints solid, so a clear can leave it.
+#[must_use]
+pub fn solid_band() -> Rectangle {
+    band().solid()
+}
 
 /// How far each of the face's accents has come in: the ring's fade, 0 to 255; how many rows of
 /// the icon's modules show, 0 to 5; and the band label's, the plate's, the zone name's and the
@@ -195,7 +219,7 @@ pub struct Keys {
 impl Keys {
     #[must_use]
     pub fn of(view: &ClockView) -> Self {
-        let ClockView { clock, zone, .. } = view;
+        let (clock, zone) = (&view.clock(), &view.zone());
         let mode = Mode::of(clock, zone);
         let tag = match zone.mode {
             ZoneMode::Automatic => "AUTO",
@@ -231,10 +255,11 @@ impl Keys {
 /// The zone's offset now, or while the clock is stopped or unreadable, the one it last had.
 #[must_use]
 pub fn offset(view: &ClockView) -> Option<octowhere_tz::Offset<'static>> {
-    let ClockView { clock, zone, known } = view;
-    match (Mode::of(clock, zone), clock.local(*zone)) {
+    let (clock, zone) = (view.clock(), view.zone());
+    match (Mode::of(&clock, &zone), view.local()) {
         (Mode::Local { .. }, Some(local)) => Some(local.offset),
-        (Mode::Stopped | Mode::NoData, _) => known
+        (Mode::Stopped | Mode::NoData, _) => view
+            .known()
             .filter(|known| Some(known.zone) == zone.zone)
             .map(|known| known.offset),
         _ => None,
@@ -315,11 +340,11 @@ fn date(time: &DateTime) -> String<16> {
 /// The local time the face shows, in seconds, or `None` when it shows none.
 #[must_use]
 pub fn shown_time(view: &ClockView) -> Option<i64> {
-    if !matches!(Mode::of(&view.clock, &view.zone), Mode::Local { .. }) {
+    if !matches!(Mode::of(&view.clock(), &view.zone()), Mode::Local { .. }) {
         return None;
     }
-    let local = view.clock.local(view.zone)?;
-    Some(view.clock.utc? + i64::from(local.offset.utc_offset))
+    let local = view.local()?;
+    Some(view.clock().utc? + i64::from(local.offset.utc_offset))
 }
 
 /// The time's characters: two each for the hours, minutes and seconds.
@@ -327,10 +352,10 @@ const TIME_CELLS: usize = 6;
 
 impl Parts {
     fn of(view: &ClockView, accents: Accents) -> Self {
+        let clock = &view.clock();
         let keys = Keys::of(view);
-        let ClockView { clock, zone, .. } = view;
         let mode = keys.mode;
-        let local = clock.local(*zone).filter(|_| matches!(mode, Mode::Local { .. }));
+        let local = view.local().filter(|_| matches!(mode, Mode::Local { .. }));
         let (hours, minutes, seconds) = match (mode, local) {
             (Mode::NoData, _) => (None, None, None),
             (_, Some(local)) => (
@@ -605,43 +630,50 @@ where
     if let Some(color) = parts.ring {
         super::smooth::perimeter().draw(&mut OnBackground::new(&mut *target, chrome::BLACK), color);
     }
-    {
+    if let Some(hours) = parts.hours.as_ref().filter(|_| target.visible(&HOURS_INK)) {
         let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
-        if let Some(hours) = &parts.hours {
-            draw_revealed(&digits(font, chrome::WHITE), hours, HOURS, parts.time.part(0, 2), field)?;
-        }
+        draw_revealed(&digits(font, chrome::WHITE), hours, HOURS, parts.time.part(0, 2), field)?;
     }
     let (glyph, color, rows) = parts.icon;
     if target.visible(&TILE.bounds()) {
         TILE.draw(glyph, color, rows, target)?;
     }
 
-    if target.visible(&BAND) {
-        super::smooth::disc_rows(target, BAND_ROWS, CENTER, BAND_RADIUS, parts.band)?;
-    }
+    band().draw(target, parts.band)?;
     {
         let band = &mut OnBackground::new(&mut *target, parts.band);
         let (label, reveal) = parts.label;
-        draw_revealed(&label_style(font), label, LABEL, reveal, band)?;
-        if let Some(minutes) = &parts.minutes {
-            draw_revealed(&digits(font, chrome::BLACK), minutes, MINUTES, parts.time.part(2, 2), band)?;
-        } else {
-            no_data_style(font).draw_on_baseline("NO DATA", no_data_origin(font), band)?;
+        if band.visible(&LABEL_INK) {
+            draw_revealed(&label_style(font), label, LABEL, reveal, band)?;
         }
-        if let Some(seconds) = &parts.seconds {
+        match &parts.minutes {
+            Some(minutes) if band.visible(&MINUTES_INK) => {
+                draw_revealed(&digits(font, chrome::BLACK), minutes, MINUTES, parts.time.part(2, 2), band)?;
+            }
+            Some(_) => {}
+            None if band.visible(&NO_DATA_INK) => {
+                no_data_style(font).draw_on_baseline("NO DATA", no_data_origin(font), band)?;
+            }
+            None => {}
+        }
+        if let Some(seconds) = parts.seconds.as_ref().filter(|_| band.visible(&SECONDS_INK)) {
             draw_revealed(&seconds_style(font), seconds, SECONDS, parts.time.part(4, 2), band)?;
         }
     }
-    draw_mark(font, parts.mark, parts.band, target)?;
+    if target.visible(&MARK_INK) {
+        draw_mark(font, parts.mark, parts.band, target)?;
+    }
 
-    let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
-    if let Some((text, line, reveal)) = &parts.date {
+    if let Some((text, line, reveal)) = parts.date.as_ref().filter(|_| target.visible(&DATE_INK)) {
+        let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
         let (style, origin) = date_origin(font, text, *line);
         draw_revealed(&style, text, origin, *reveal, field)?;
     }
-    let (plate, shown) = &parts.plate;
-    draw_plate(font, plate, *shown, target)?;
-    if let Some((name, reveal)) = &parts.zone {
+    if target.visible(&PLATE_INK) {
+        let (plate, shown) = &parts.plate;
+        draw_plate(font, plate, *shown, target)?;
+    }
+    if let Some((name, reveal)) = parts.zone.as_ref().filter(|_| target.visible(&ZONE_INK)) {
         let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
         draw_revealed(&zone_style(font), name, zone_pen(font, name), *reveal, field)?;
     }
@@ -678,14 +710,20 @@ pub fn damage(
     font: &FontdueRenderer<'static, Color>,
     damage: &mut chrome::Dirty,
 ) {
+    if before == after {
+        return;
+    }
     let old = Parts::of(before.0, before.1);
     let new = Parts::of(after.0, after.1);
     if old == new {
         return;
     }
-    if old.ring != new.ring || old.band != new.band {
-        damage.make_full();
-        return;
+    if old.ring != new.ring {
+        super::smooth::perimeter().damage(damage);
+    }
+    if old.band != new.band {
+        // The band's colour also shows through the mark and the text on it.
+        damage.add(BAND);
     }
     let white = digits(font, chrome::WHITE);
     digit_damage(&white, HOURS, (&old.hours, old.time.part(0, 2)), (&new.hours, new.time.part(0, 2)), damage);
@@ -703,9 +741,8 @@ pub fn damage(
         }
     }
     if old.minutes.is_none() != new.minutes.is_none() {
-        // `NO DATA` comes and goes only with the band's colour.
-        damage.make_full();
-        return;
+        damage.add(MINUTES_INK);
+        damage.add(NO_DATA_INK);
     }
     let black = digits(font, chrome::BLACK);
     digit_damage(&black, MINUTES, (&old.minutes, old.time.part(2, 2)), (&new.minutes, new.time.part(2, 2)), damage);
@@ -738,21 +775,23 @@ mod tests {
     use super::*;
     use crate::ui::clock::{ClockState, ZoneState};
 
+    /// The view after reading a clock in `zone`, from `before`.
+    fn read(before: ClockView, stopped: bool, readable: bool, zone: &str) -> ClockView {
+        let clock = ClockState {
+            utc: readable
+                .then_some(DateTime { year: 2026, month: 9, day: 24, hour: 12, ..DateTime::default() }.to_unix()),
+            set_from_gnss: false,
+            stopped,
+        };
+        let zone = ZoneState {
+            mode: ZoneMode::Manual,
+            zone: octowhere_tz::DATABASE.find(zone).map(|zone| zone.id),
+        };
+        before.read(clock, zone)
+    }
+
     fn view(stopped: bool, readable: bool, zone: &str) -> ClockView {
-        ClockView {
-            clock: ClockState {
-                utc: readable.then_some(
-                    DateTime { year: 2026, month: 9, day: 24, hour: 12, ..DateTime::default() }.to_unix(),
-                ),
-                set_from_gnss: false,
-                stopped,
-            },
-            zone: ZoneState {
-                mode: ZoneMode::Manual,
-                zone: octowhere_tz::DATABASE.find(zone).map(|zone| zone.id),
-            },
-            known: None,
-        }
+        read(ClockView::default(), stopped, readable, zone)
     }
 
     fn values(view: &ClockView) -> heapless::Vec<String<10>, 2> {
@@ -761,10 +800,10 @@ mod tests {
 
     #[test]
     fn a_stopped_or_unread_clock_keeps_the_offset_the_zone_last_had() {
-        let trusted = view(false, true, "Europe/Dublin").remembering();
+        let trusted = view(false, true, "Europe/Dublin");
         assert_eq!(values(&trusted), ["IST", "+01:00"]);
         for (stopped, readable) in [(true, true), (false, false)] {
-            let later = ClockView { known: trusted.known, ..view(stopped, readable, "Europe/Dublin") }.remembering();
+            let later = read(trusted, stopped, readable, "Europe/Dublin");
             assert_eq!(values(&later), ["IST", "+01:00"], "stopped {stopped}, readable {readable}");
         }
     }
@@ -788,11 +827,59 @@ mod tests {
         assert!(last < BAND_ROWS.end as f32, "the ink ends on row {last}");
     }
 
+    fn inside(outer: Rectangle, inner: Rectangle) -> bool {
+        inner.is_zero_sized() || outer.intersection(&inner) == inner
+    }
+
+    #[test]
+    fn each_line_stays_in_its_region() {
+        let font = FontdueRenderer::new(chrome::FontdueRendererCtx::new_rc(), 20, chrome::WHITE, chrome::FONTS);
+        const DIGITS: &str = "0123456789-";
+        const TEXT: &str = "0123456789-+:ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        const NAMES: &str = "0123456789-+:ABCDEFGHIJKLMNOPQRSTUVWXYZ_/";
+        // Each character repeated to the line's longest, since every font here is monospaced.
+        let check = |name: &str, region: Rectangle, chars: &str, len: usize, place: &dyn Fn(&str) -> (FontdueRenderer<'static, Color>, Point)| {
+            for c in chars.chars() {
+                let text: String<32> = core::iter::repeat_n(c, len).collect();
+                let (style, pen) = place(&text);
+                let bounds = revealed_bounds(&style, &text, pen);
+                assert!(inside(region, bounds), "{name} {text:?} at {bounds:?} leaves {region:?}");
+            }
+        };
+        check("hours", HOURS_INK, DIGITS, 2, &|_| (digits(&font, chrome::WHITE), HOURS));
+        check("minutes", MINUTES_INK, DIGITS, 2, &|_| (digits(&font, chrome::BLACK), MINUTES));
+        check("seconds", SECONDS_INK, DIGITS, 2, &|_| (seconds_style(&font), SECONDS));
+        let longest = [Mode::NoData, Mode::Stopped, Mode::NoZone, Mode::Local { gnss: true }]
+            .map(|mode| mode.label().len())
+            .into_iter()
+            .max()
+            .unwrap();
+        check("label", LABEL_INK, TEXT, longest, &|_| (label_style(&font), LABEL));
+        for line in [Line::Date, Line::Waiting, Line::Utc] {
+            check("date", DATE_INK, TEXT, 16, &|text| date_origin(&font, text, line));
+        }
+        check("zone", ZONE_INK, NAMES, 32, &|text| (zone_style(&font), zone_pen(&font, text)));
+        let no_data = no_data_style(&font).baseline_bounds("NO DATA", no_data_origin(&font));
+        assert!(inside(NO_DATA_INK, no_data), "NO DATA at {no_data:?}");
+        let mark = MarkLayout::of(&font).span(0, MARK.len());
+        assert!(inside(MARK_INK, mark), "the mark at {mark:?}");
+        for c in TEXT.chars() {
+            let value: String<10> = core::iter::repeat_n(c, 10).collect();
+            let plate = Plate { tag: "MANUAL", values: [value.clone(), value].into_iter().collect() };
+            for (tag, text, cell) in plate_cells(&font, &plate) {
+                let size = if tag { FRAKTION_BOLD } else { FRAKTION };
+                let pen = Point::new(cell.top_left.x + PLATE_PADDING, PLATE_BASELINE);
+                let ink = style(&font, chrome::WHITE, 14, size).baseline_bounds(text, pen);
+                assert!(inside(PLATE_INK, cell) && inside(PLATE_INK, ink), "plate {text:?}");
+            }
+        }
+    }
+
     #[test]
     fn without_a_trusted_reading_for_the_zone_the_plate_holds_only_the_mode() {
-        assert!(values(&view(true, true, "Europe/Dublin").remembering()).is_empty());
-        let trusted = view(false, true, "Europe/Dublin").remembering();
-        let moved = ClockView { known: trusted.known, ..view(true, true, "Asia/Kolkata") }.remembering();
+        assert!(values(&view(true, true, "Europe/Dublin")).is_empty());
+        let trusted = view(false, true, "Europe/Dublin");
+        let moved = read(trusted, true, true, "Asia/Kolkata");
         assert!(values(&moved).is_empty());
     }
 }

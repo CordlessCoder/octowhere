@@ -409,12 +409,7 @@ impl Stage {
             full |= self.screen == Screen::Compass;
         }
         if let Some(sensors) = sensors {
-            self.peripherals.clock = ClockView {
-                clock: sensors.clock,
-                zone: sensors.zone,
-                ..self.peripherals.clock
-            }
-            .remembering();
+            self.peripherals.clock = self.peripherals.clock.read(sensors.clock, sensors.zone);
             self.peripherals.battery = sensors.battery;
             self.peripherals.gnss = sensors.gnss;
             full |= self.screen == Screen::Clock;
@@ -703,13 +698,13 @@ impl Stage {
             return;
         };
         update.store = Some(store);
-        let zone = &mut self.peripherals.clock.zone;
+        let mut zone = self.peripherals.clock.zone();
         match store {
             Store::Brightness(level) => {
                 self.peripherals.brightness = level;
                 update.brightness = Some(level);
             }
-            Store::ManualZone(id) => *zone = ZoneState { mode: ZoneMode::Manual, zone: Some(id) },
+            Store::ManualZone(id) => zone = ZoneState { mode: ZoneMode::Manual, zone: Some(id) },
             Store::AutomaticZone => zone.mode = ZoneMode::Automatic,
             Store::Clear => {
                 zone.mode = ZoneMode::Automatic;
@@ -717,7 +712,8 @@ impl Stage {
                 update.brightness = Some(DEFAULT_BRIGHTNESS);
             }
         }
-        self.peripherals.clock = self.peripherals.clock.remembering();
+        let clock = self.peripherals.clock;
+        self.peripherals.clock = clock.read(clock.clock(), zone);
     }
 
     /// Returns to the clock face from anywhere, discarding any edit in progress.

@@ -530,7 +530,7 @@ fn interact(mut window: Window, masked: bool, extension: &str) {
             println!("store {store:?}");
             // As the sensor task takes the choice and reports it from then on.
             if !matches!(store, Store::Brightness(_)) {
-                let zone = stage.peripherals().clock.zone;
+                let zone = stage.peripherals().clock.zone();
                 readings.chosen =
                     Some(ZoneState { zone: zone.zone.or(readings.zone_state().zone), ..zone });
                 zone_changed = true;

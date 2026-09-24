@@ -360,9 +360,7 @@ pub fn damage(
         return;
     }
     if old.ring != new.ring {
-        // The ring runs round the whole panel, and changes only while it fades or with NO DATA.
-        damage.make_full();
-        return;
+        super::smooth::perimeter().damage(damage);
     }
     if old.dial != new.dial {
         // The old place first: the last step worked it out as its new one.

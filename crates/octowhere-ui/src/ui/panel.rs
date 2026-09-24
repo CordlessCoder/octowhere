@@ -197,13 +197,13 @@ fn content(cell: Cell, peripherals: &PeripheralState) -> Content {
     let glyph = match cell {
         Cell::Zone => {
             let view = &peripherals.clock;
-            tag = Some(match view.zone.mode {
+            tag = Some(match view.zone().mode {
                 super::clock::ZoneMode::Automatic => "AUTO",
                 super::clock::ZoneMode::Manual => "MANUAL",
             });
             match clock_screen::abbreviation(view) {
                 Some(abbreviation) => _ = value.push_str(abbreviation),
-                None if view.zone.zone.is_none() => {
+                None if view.zone().zone.is_none() => {
                     _ = value.push_str("NO ZONE");
                     value_color = chrome::GRAY;
                 }

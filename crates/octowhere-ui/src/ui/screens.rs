@@ -119,12 +119,24 @@ where
 {
     let bounds = target.bounding_box();
     let height = board::LCD_HEIGHT as i32;
-    // The settled compass paints its slab over whatever is there, so the clear leaves it.
-    let painted = (state.screen == Screen::Compass
-        && state.offset == 0
-        && state.neighbour.is_none()
-        && state.sheet == 0)
-        .then_some(compass_screen::SLAB);
+    // The settled compass paints its slab over whatever is there, and the clock face its band
+    // wherever the page is, so the clear leaves them.
+    let settled = state.offset == 0 && state.neighbour.is_none() && state.sheet == 0;
+    let clock_offset = match (state.screen, state.neighbour) {
+        (Screen::Clock, _) => Some(state.offset),
+        (_, Some((Screen::Clock, offset))) => Some(offset),
+        _ => None,
+    };
+    let painted = if state.screen == Screen::Compass && settled {
+        Some(compass_screen::SLAB)
+    } else {
+        clock_offset
+            .filter(|_| state.sheet < height)
+            .map(|offset| {
+                let band = clock_screen::solid_band();
+                Rectangle::new(band.top_left + Point::new(offset, state.sheet), band.size)
+            })
+    };
     clear_visible(target, &bounds, painted)?;
 
     if state.sheet > 0 {

@@ -669,11 +669,11 @@ fn a_running_clock_ticks_each_second_unless_stopped() {
     driver.wait(500_000);
     assert!(driver.stage.changed().is_empty());
     driver.wait(600_000);
-    assert_eq!(driver.stage.peripherals().clock.clock.utc, clock_at(12, 7, 42).utc);
+    assert_eq!(driver.stage.peripherals().clock.clock().utc, clock_at(12, 7, 42).utc);
 
     driver.step(sensors(ClockState { stopped: true, ..clock_at(12, 7, 50) }, dublin));
     driver.wait(1_500_000);
-    assert_eq!(driver.stage.peripherals().clock.clock.utc, clock_at(12, 7, 50).utc);
+    assert_eq!(driver.stage.peripherals().clock.clock().utc, clock_at(12, 7, 50).utc);
 }
 
 #[test]
@@ -939,7 +939,7 @@ fn the_picker_stores_a_zone_by_hand_and_automatic_from_its_first_step() {
         panic!("no zone was stored: {:?}", stored(&updates));
     };
     assert_eq!(DATABASE.zone(zone).at(clock_at(12, 7, 42).utc.unwrap()).utc_offset, 7200);
-    assert_eq!(driver.stage.peripherals().clock.zone, octowhere_ui::ui::clock::ZoneState {
+    assert_eq!(driver.stage.peripherals().clock.zone(), octowhere_ui::ui::clock::ZoneState {
         mode: ZoneMode::Manual,
         zone: Some(zone),
     });
@@ -947,7 +947,7 @@ fn the_picker_stores_a_zone_by_hand_and_automatic_from_its_first_step() {
     tap(&mut driver, 150, 150);
     let updates = tap(&mut driver, 233, 390);
     assert_eq!(stored(&updates), Some(Store::AutomaticZone));
-    assert_eq!(driver.stage.peripherals().clock.zone.mode, ZoneMode::Automatic);
+    assert_eq!(driver.stage.peripherals().clock.zone().mode, ZoneMode::Automatic);
 }
 
 #[test]
@@ -1030,3 +1030,34 @@ fn panel_damage_redraws_what_changed() {
     }
 }
 
+
+/// The clear leaves the parts a screen paints solid, so drawing over an old frame must still
+/// replace every pixel, settled, mid-swipe and under the moving panel.
+#[test]
+fn a_frame_replaces_everything_under_it() {
+    use embedded_graphics::draw_target::DrawTarget as _;
+    let mut cases = stages();
+    for (name, path) in [
+        ("swiping left", [Point::new(400, 233), Point::new(380, 233), Point::new(250, 236)]),
+        ("swiping right", [Point::new(60, 233), Point::new(80, 233), Point::new(300, 230)]),
+        ("pulling the panel", [Point::new(233, 40), Point::new(233, 60), Point::new(236, 200)]),
+    ] {
+        for screen in Screen::ALL {
+            let mut driver = Driver::on(screen);
+            driver.step(sensors(clock_at(12, 7, 42), zone("Europe/Dublin", ZoneMode::Automatic)));
+            driver.wait(500_000);
+            for point in path {
+                driver.touch(Some(point));
+            }
+            cases.push((format!("{screen:?} {name}"), driver.stage));
+        }
+    }
+    for (name, stage) in cases {
+        let mut over = FB::boxed();
+        over.fill_solid(&Rectangle::new(Point::zero(), Size::new(466, 466)), octowhere_ui::chrome::PURPLE)
+            .unwrap();
+        stage.draw(&mut *over);
+        let wrong = differing(&over, &render(&stage));
+        assert_eq!(wrong, 0, "{name}: {wrong} pixels kept the old frame");
+    }
+}
