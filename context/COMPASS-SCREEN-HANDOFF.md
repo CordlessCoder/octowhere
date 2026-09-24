@@ -181,9 +181,26 @@ Constraints that shape what is practical:
 - **Later draws overwrite earlier ones.** There is no alpha compositing beyond edge coverage. Draw
   order is the layering.
 - **Symbols are built from primitives, not bitmaps.** This is doctrine (`AGENTS.md`).
-- **The whole screen redraws when anything on it changes.** The heading changes almost every
-  frame, so the compass redraws in full, against a 20 ms sensor period. Measured full draws,
-  clear included, median of 16:
+- **Only what changes redraws.** Each step compares what every part of the screen shows with
+  the step before, and redraws the old and new place of each part that changed: the dial's
+  ticks and letters, each changed glyph of the readout and the tilt line, the icon, the caption,
+  the state line. A still compass draws nothing. Medians on the target, per step:
+
+  | Change | Draw | Flush |
+  | --- | ---: | ---: |
+  | Nothing | 0 | 0 |
+  | Tilt by a degree | 1.7 ms | 0.7 ms |
+  | Heading by a degree | 13.0 ms | 10.9 ms |
+  | Heading, drawn in full for comparison | 23.1 ms | 14.8 ms |
+
+  A turning dial is the expensive change, because every tick and letter moves. What a change
+  costs grows with how many separate places it touches as well as with its area: each flushed
+  region has a fixed cost of about the time 1,000 pixels take. A design that makes a frequently
+  changing element large, or scatters many small moving marks, costs in proportion.
+
+  The ring changes only while it fades in and on entering or leaving NO DATA, and a change to it
+  redraws the whole panel. So do the entry fade, a swipe, and moving between screens. Measured
+  full draws, clear included, median of 16:
 
   | Frame | Draw |
   | --- | ---: |
@@ -198,9 +215,10 @@ Constraints that shape what is practical:
 
   Clearing the visible circle alone was about 8.3 ms before this design. Rotated text is the
   costly element. A design that adds rotated labels, or large antialiased areas, will lower the
-  frame rate. Ask for a measurement before committing to one. The bench is
-  `bench/no-glyph-cache` (`compass-state-bench`).
-- **Memory:** a 260 KiB internal heap. A path-fill raster costs 4 bytes per pixel of its bounding
+  frame rate. Ask for a measurement before committing to one. The full-draw bench is
+  `bench/no-glyph-cache` (`compass-state-bench`); the per-change one is `bench/row-span-damage`
+  (`compass-sweep-bench`).
+- **Memory:** a 252 KiB internal heap. A path-fill raster costs 4 bytes per pixel of its bounding
   box, so a raster the size of the dial is out of reach. The ring is analytic for that reason.
 
 ## Rules to keep

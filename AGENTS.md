@@ -124,7 +124,7 @@ Weigh that cost before adding one.
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 524,976 bytes, 12.72% of the 4,128,768-byte app partition. PP Fraktion
+The image is currently 536,992 bytes, 13.01% of the 4,128,768-byte app partition. PP Fraktion
 Mono Bold with all of printable ASCII is about 54 KB of that; subsetting it to the glyphs the
 compass uses is the lever if that matters.
 
@@ -164,7 +164,13 @@ cache, and `tools/font-scale-sweep.sh`, which reruns it at each fontdue `scale`;
 `bench/glyph-cache`, which counted the removed glyph cache's contents on the host
 (`examples/glyph_cache.rs`) and the heap on the board (`glyph-cache-bench`); and
 `bench/no-glyph-cache`, both benches on the uncached draw path; and `bench/touch-cover`, which
-logs every touch report and polls during a cover (`touch-report-log`).
+logs every touch report and polls during a cover (`touch-report-log`); and
+`bench/row-span-damage`, which drives the settled compass through synthetic turns, tilts and
+holds in the real frame loop and logs the step, draw, flush, pixels and regions per phase, the
+flush's parts and both cores' stack high-water marks (`compass-sweep-bench`, with
+`compass-micro-bench` for startup timings of the span operations and the draw by part; the
+micro-benches hold large values on the main stack, so box any added), and a host profiling
+example (`examples/damage_profile.rs`).
 
 ## Concurrency
 
@@ -193,9 +199,17 @@ poisons the thread and a later `get()` panics.
 
 ## Rendering
 
-- `needs_full_redraw` identifies the regions that must be redrawn in the alternate framebuffer.
-  A buffer is not assumed to retain the pixels drawn into the other buffer.
-- Partial flushing is active. A full redraw is selected only when the accumulated damage is full.
+- Damage is `chrome::Dirty`, spans of columns per pair of rows at the panel's 2 × 2 write grain
+  (`ui/dirty.rs`). `Stage::changed` holds what a step changed: on the settled compass, the old
+  and new places of each part that changed; elsewhere, the whole panel.
+- Each framebuffer repaints the previous step's damage and its own, since it last held the frame
+  before that, drawing through `chrome::Clip`. The flush sends only the step's own damage, since
+  the panel already shows the step before. A buffer not yet drawn is drawn in full. The spans are
+  a couple of kilobytes each, so they live on the heap rather than pass through the frame loop's
+  stack.
+- `Clip` makes every draw land only on damaged pixels. `CoverageTarget::visible` lets a drawing
+  skip work outside them, which is what makes a partial redraw cheap: glyphs, ticks and whole
+  text lines outside the damage are never rasterized. It is a hint, so a drawing must still clip.
 - Every draw target the screens use is a `chrome::CoverageTarget`, which takes antialiased
   coverage a row at a time and blends it with what is underneath. `chrome::Window` shifts and
   clips once per row, and stands in for embedded-graphics' `translated` and `clipped`, which go

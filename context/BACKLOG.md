@@ -8,12 +8,22 @@ until the feature set is complete, because profiling an incomplete firmware pric
 - Build the protocol in [`LORA-PROTOCOL.md`](LORA-PROTOCOL.md). Its "Firmware structure" section
   comes first: the radio moves into its own task, and I2C gets a single owning task.
 
-- Take the framebuffer clear off the drawing core. On the compass it is now the largest cost,
-  about 8.3 ms of a 19 ms heading frame, and it is paid per 64-byte PSRAM cache line: clearing only the
-  visible circle saved 0.6 ms, not the 21% its area suggests. The candidates are a GDMA
-  memory-to-memory clear, or core 1 clearing a buffer after flushing it. Either changes the
-  buffer hand-off in `util::Swap`, and partial redraws rely on a buffer keeping its own pixels,
-  so only regions due for a full redraw may be cleared. Measure with `bench/compass-states`.
+- Make the partial flush cheaper. With the compass redrawing only what changed, a one-degree turn
+  flushes about 28,000 pixels in about 42 regions and takes about 10 ms, against 14.8 ms for the
+  whole panel. In the frame loop, per frame: the address window takes 2.1 ms (three separate
+  command transactions a region), starting the stream 0.7 ms, and moving the rows 6 ms, about
+  three times the per-pixel rate of a region flushed alone. The display core copies each short
+  row out of PSRAM itself while core 0 draws into the other buffer, and the two slow each other:
+  the draw runs 2.4 ms faster with flushing held off. The candidates are DMA straight from the
+  framebuffer with a descriptor per row, which needs a cache write-back of the region first, and
+  sending the first quad write as `RAMWR` rather than a separate `RAMWR` then `0x3C`. Both change
+  the display path, so they need a look at the panel. Measure with `bench/row-span-damage`.
+- Take the framebuffer clear off the drawing core. It is paid per 64-byte PSRAM cache line:
+  clearing only the visible circle saved 0.6 ms, not the 21% its area suggests. Partial redraws
+  now clear only the damage, about 2.3 ms of a one-degree turn on the compass, much of it spread
+  thin across many short spans. The candidates are a GDMA memory-to-memory clear, or core 1
+  clearing a buffer after flushing it. Either changes the buffer hand-off in `util::Swap`, and
+  partial redraws rely on a buffer keeping its own pixels, so only damaged spans may be cleared.
 - Build Shapiro and PP Fraktion Mono Regular from their full font files with fontdue's `chars:`
   option, as PP Fraktion Mono Bold already is, instead of the hand-made ASCII subsets under
   `assets/`. Subsetting Bold to the glyphs in use would also recover some of the 54 KB it
@@ -22,7 +32,8 @@ until the feature set is complete, because profiling an incomplete firmware pric
 ## Deferred, with detail elsewhere
 
 - The partial-flush hardware check, in [`HARDWARE-VERIFICATION.md`](HARDWARE-VERIFICATION.md).
-  Partial flushing is the default and the check has never been run.
+  Partial flushing is the default and the check has never been run. The compass now flushes
+  dozens of small regions a frame while turning, so it exercises the path far more than before.
 - CAD, flash encryption, delta coordinates and temperature-compensated RTC calibration, in the
   "Deferred" section of [`LORA-PROTOCOL.md`](LORA-PROTOCOL.md).
 - `panic = "immediate-abort"`, in the "Binary size" section of [`AGENTS.md`](../AGENTS.md).
