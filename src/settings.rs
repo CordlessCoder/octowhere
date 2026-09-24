@@ -44,6 +44,17 @@ pub enum Write {
     AutomaticZone(ZoneId),
 }
 
+/// Names the zone, since a `ZoneId` changes when the zone data is rebuilt.
+impl defmt::Format for Write {
+    fn format(&self, f: defmt::Formatter) {
+        match self {
+            Self::AutomaticZone(zone) => {
+                defmt::write!(f, "AutomaticZone({=str})", DATABASE.zone(*zone).name);
+            }
+        }
+    }
+}
+
 pub struct Store {
     flash: FlashStorage<'static>,
 }

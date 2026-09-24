@@ -35,7 +35,8 @@ use esp_hal::{
     time::Rate,
     timer::timg::TimerGroup,
 };
-use esp_println::println;
+use defmt::{debug, error, info, warn};
+use esp_println as _;
 use lc76g::{
     GnssError, GnssOperation, GnssState, Lc76g, LowPowerMode, NmeaOutputRate, NmeaParser,
     NmeaSentence, NmeaUpdate, PairCommandBuilder,
@@ -229,8 +230,8 @@ impl ZoneTracker {
             }
         };
         self.looked_up_at = Some((latitude, longitude));
-        println!(
-            "[ZONE] {} after {} steps in {}us, longest {}us",
+        info!(
+            "[ZONE] {=str} after {} steps in {}us, longest {}us",
             found.map_or("none", |zone| zone.name),
             steps,
             started.elapsed().as_micros(),
@@ -256,7 +257,7 @@ struct MotionTask {
 fn log_raw_nmea(data: &[u8], line: &mut [u8; 256], line_len: &mut usize) {
     for &byte in data {
         if *line_len == line.len() {
-            println!("[GNSS] RAW_TRUNCATED");
+            warn!("[GNSS] RAW_TRUNCATED");
             *line_len = 0;
         }
         line[*line_len] = byte;
@@ -268,8 +269,8 @@ fn log_raw_nmea(data: &[u8], line: &mut [u8; 256], line_len: &mut usize) {
                 end -= 1;
             }
             match core::str::from_utf8(&line[..end]) {
-                Ok(sentence) => println!("[GNSS] RAW {sentence}"),
-                Err(_) => println!("[GNSS] RAW_NON_UTF8 len={end}"),
+                Ok(sentence) => info!("[GNSS] RAW {=str}", sentence),
+                Err(_) => warn!("[GNSS] RAW_NON_UTF8 len={}", end),
             }
             *line_len = 0;
         }
@@ -342,7 +343,7 @@ fn main() -> ! {
 // move some Futures into their own tasks.
 #[embassy_executor::task]
 async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHeap>) {
-    println!("[DISPLAY] core_started");
+    info!("[DISPLAY] core_started");
     let SecondCore {
         gpio4,
         gpio5,
@@ -392,7 +393,7 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
         .set_brightness(120)
         .expect("brightness command failed");
 
-    println!("[DISPLAY] OK");
+    info!("[DISPLAY] OK");
 
     let mut prev_swap_spi = Duration::MIN;
     let mut first_flush = true;
@@ -415,7 +416,7 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
             timings.vsync_wait = Duration::MIN;
         } else {
             if is_first_flush {
-                println!("[DISPLAY] first_flush_without_te");
+                debug!("[DISPLAY] first_flush_without_te");
                 first_flush = false;
             } else {
                 match select(
@@ -425,7 +426,7 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
                 .await
                 {
                     Either::First(()) => {}
-                    Either::Second(()) => println!("[DISPLAY] te_timeout"),
+                    Either::Second(()) => warn!("[DISPLAY] te_timeout"),
                 }
             }
             timings.vsync_wait = start.elapsed();
@@ -474,7 +475,7 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
         timings.swap_spi = prev_swap_spi;
 
         #[cfg(feature = "timing-log")]
-        defmt::info!(
+        info!(
             "timing spi: vsync={}us flush={}us swap={}us regions={} pixels={}",
             timings.vsync_wait.as_micros(),
             timings.spi_time.as_micros(),
@@ -535,7 +536,7 @@ async fn motion_task(task: MotionTask) {
             calibration = Calibration::new();
             calibrated = false;
             field = None;
-            println!("[COMPASS] recalibrating");
+            info!("[COMPASS] recalibrating");
         }
         let mut raw_field = None;
         let mut new_field = None;
@@ -546,8 +547,8 @@ async fn motion_task(task: MotionTask) {
             && let Some(compensated) = magnetometer.compensate(&data)
         {
             if log {
-                println!(
-                    "[BMM350] sample raw=({}, {}, {}) comp=({:.3}, {:.3}, {:.3})uT temp={:.3}C",
+                debug!(
+                    "[BMM350] sample raw=({}, {}, {}) comp=({}, {}, {})uT temp={}C",
                     data.raw.x,
                     data.raw.y,
                     data.raw.z,
@@ -566,8 +567,8 @@ async fn motion_task(task: MotionTask) {
             let event = calibration.update(sample);
             let offset = calibration.offset();
             if event != CalibrationEvent::None {
-                println!(
-                    "[COMPASS] calibration {:?} offset={:?}uT radius={}uT",
+                info!(
+                    "[COMPASS] calibration {} offset={}uT radius={}uT",
                     event,
                     offset,
                     calibration.radius()
@@ -589,8 +590,8 @@ async fn motion_task(task: MotionTask) {
             accel = accel_micro.map(|micro| IMU_AXES.apply(micro.map(|value| value as f32 / 1e6)));
             gyro = gyro_micro.map(|micro| IMU_AXES.apply(micro.map(|value| value as f32 / 1e6)));
             if log {
-                println!(
-                    "[IMU] sample accel={:?} gyro={:?} si_accel={:?} si_gyro={:?}",
+                debug!(
+                    "[IMU] sample accel={} gyro={} si_accel={} si_gyro={}",
                     sample.accel, sample.gyro, accel_micro, gyro_micro
                 );
             }
@@ -615,8 +616,8 @@ async fn motion_task(task: MotionTask) {
         }
         let compass = CompassView::new(fusion.attitude(), field, &calibration);
         if log && compass_active {
-            println!(
-                "[COMPASS] screen accel={:?} field={:?}uT offset={:?}uT gyro_offset={:?} candidate={:?} view={:?}",
+            debug!(
+                "[COMPASS] screen accel={} field={}uT offset={}uT gyro_offset={} candidate={} view={}",
                 accel,
                 field,
                 calibration.offset(),
@@ -638,12 +639,12 @@ async fn settings_task(mut store: Store) {
         let write = SETTINGS_WRITES.receive().await;
         let started = Instant::now();
         let saved = settings::with_display_core_held(|| store.save(write)).await;
-        println!(
-            "[SETTINGS] {:?} {} in {}us",
-            write,
-            if saved { "saved" } else { "not saved" },
-            started.elapsed().as_micros()
-        );
+        let took = started.elapsed().as_micros();
+        if saved {
+            info!("[SETTINGS] {} saved in {}us", write, took);
+        } else {
+            warn!("[SETTINGS] {} not saved, after {}us", write, took);
+        }
     }
 }
 
@@ -688,13 +689,14 @@ async fn sensor_task(task: SensorTask) {
         state.battery_mv = battery_present.then_some(battery_mv).flatten();
         state.vbus_mv = vbus_mv;
         state.vsys_mv = vsys_mv;
-        println!(
-            "[PMIC] sample battery_present={battery_present} VBAT={battery_mv:?}mV VBUS={vbus_mv:?}mV VSYS={vsys_mv:?}mV"
+        debug!(
+            "[PMIC] sample battery_present={} VBAT={}mV VBUS={}mV VSYS={}mV",
+            battery_present, battery_mv, vbus_mv, vsys_mv
         );
 
         if let Ok(irq) = lora.read(IRQ_FLAGS).await {
             state.lora_irq = irq;
-            println!("[LORA] sample IRQ=0x{irq:02X}");
+            debug!("[LORA] sample IRQ={=u8:#04x}", irq);
         }
         match gnss.read_nmea_chunk(&mut nmea).await {
             Ok(data) => {
@@ -706,32 +708,32 @@ async fn sensor_task(task: SensorTask) {
                     match nmea_parser.push(byte) {
                         Ok(Some(NmeaUpdate::PairAck(ack))) => {
                             updates += 1;
-                            println!(
-                                "[GNSS] PAIR_ACK command={} status={:?}",
+                            debug!(
+                                "[GNSS] PAIR_ACK command={} status={}",
                                 ack.command, ack.status
                             );
                         }
                         Ok(Some(NmeaUpdate::NmeaOutputRate { sentence, rate })) => {
                             updates += 1;
-                            println!("[GNSS] NMEA_OUTPUT_RATE sentence={sentence:?} rate={rate:?}");
+                            debug!("[GNSS] NMEA_OUTPUT_RATE sentence={} rate={}", sentence, rate);
                         }
                         Ok(Some(NmeaUpdate::Pair(message))) => {
                             updates += 1;
-                            println!(
-                                "[GNSS] PAIR_RESPONSE command={} fields={:?}",
+                            debug!(
+                                "[GNSS] PAIR_RESPONSE command={} fields={=[u8]:a}",
                                 message.command(),
                                 message.fields()
                             );
                         }
                         Ok(Some(_)) => updates += 1,
                         Ok(None) => {}
-                        Err(error) => println!("[GNSS] NMEA_PARSE_ERROR {error}"),
+                        Err(error) => warn!("[GNSS] NMEA_PARSE_ERROR {=str}", error),
                     }
                 }
                 state.gnss = nmea_parser.state();
                 let signal = state.gnss.signal;
-                println!(
-                    "[GNSS] acquisition in_view={} with_signal={} used={} strongest_snr_db={:?} fix_type={:?} hdop_milli={:?}",
+                debug!(
+                    "[GNSS] acquisition in_view={} with_signal={} used={} strongest_snr_db={} fix_type={} hdop_milli={}",
                     signal.satellites_in_view.get(),
                     signal.satellites_with_signal.get(),
                     signal.satellites_used.get(),
@@ -740,8 +742,8 @@ async fn sensor_task(task: SensorTask) {
                     signal.hdop.map(|value| value.get()),
                 );
                 if let Some(fix) = state.gnss.fix {
-                    println!(
-                        "[GNSS] sample bytes={} updates={} lat={} lon={} alt_mm={:?} sats={:?} hdop_milli={:?}",
+                    debug!(
+                        "[GNSS] sample bytes={} updates={} lat={} lon={} alt_mm={} sats={} hdop_milli={}",
                         data.len(),
                         updates,
                         fix.latitude.get(),
@@ -751,7 +753,7 @@ async fn sensor_task(task: SensorTask) {
                         fix.hdop.map(|value| value.get()),
                     );
                 } else {
-                    println!(
+                    debug!(
                         "[GNSS] sample bytes={} updates={} no_fix",
                         data.len(),
                         updates
@@ -759,18 +761,16 @@ async fn sensor_task(task: SensorTask) {
                 }
             }
             Err(GnssError::I2c { operation, error }) => {
-                println!("[GNSS] I2C_FAILED operation={operation:?} error={error:?}");
+                warn!("[GNSS] I2C_FAILED operation={} error={}", operation, error);
             }
-            Err(GnssError::BufferTooSmall { .. }) => {
-                println!("[GNSS] NMEA_BUFFER_TOO_SMALL")
-            }
-            Err(GnssError::PairCommand(_)) => println!("[GNSS] PAIR_COMMAND_BUILD_FAILED"),
+            Err(GnssError::BufferTooSmall { .. }) => warn!("[GNSS] NMEA_BUFFER_TOO_SMALL"),
+            Err(GnssError::PairCommand(_)) => warn!("[GNSS] PAIR_COMMAND_BUILD_FAILED"),
         }
         if state.gnss.utc.is_none() {
             rtc_sync_pending = true;
         } else if rtc_sync_pending && let Some(utc) = state.gnss.utc {
             if !(2000..=2099).contains(&utc.year) {
-                println!("[RTC] GNSS year outside RTC range: {}", utc.year);
+                warn!("[RTC] GNSS year outside RTC range: {}", utc.year);
             } else {
                 let rtc_time = RtcDateTime::with_weekday(
                     (utc.year % 100) as u8,
@@ -785,7 +785,7 @@ async fn sensor_task(task: SensorTask) {
                     Ok(()) => {
                         rtc_sync_pending = false;
                         clock_set = true;
-                        println!(
+                        info!(
                             "[RTC] synchronized from GNSS {:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03}",
                             utc.year,
                             utc.month,
@@ -796,7 +796,7 @@ async fn sensor_task(task: SensorTask) {
                             utc.milliseconds,
                         );
                     }
-                    Err(_) => println!("[RTC] GNSS synchronization failed"),
+                    Err(_) => warn!("[RTC] GNSS synchronization failed"),
                 }
             }
         }
@@ -821,7 +821,7 @@ async fn sensor_task(task: SensorTask) {
             && let Some(zone) = zones.follow(fix.latitude.get(), fix.longitude.get()).await
             && SETTINGS_WRITES.try_send(settings::Write::AutomaticZone(zone)).is_err()
         {
-            println!("[SETTINGS] queue full, automatic zone not saved");
+            warn!("[SETTINGS] queue full, automatic zone not saved");
         }
         state.zone = zones.state();
 
@@ -840,9 +840,9 @@ async fn sensor_task(task: SensorTask) {
             lora_sequence = lora_sequence.wrapping_add(1);
 
             if lora_path.transmit().await.is_err() {
-                println!("[LORA] LINK_TX_SWITCH_FAILED");
+                warn!("[LORA] LINK_TX_SWITCH_FAILED");
             } else if lora.tx(&payload).await.is_err() {
-                println!("[LORA] LINK_TX_FAILED");
+                warn!("[LORA] LINK_TX_FAILED");
             } else {
                 match select(
                     lora_dio0.wait_for_rising_edge(),
@@ -851,10 +851,10 @@ async fn sensor_task(task: SensorTask) {
                 .await
                 {
                     Either::First(_) => {
-                        println!("[LORA] LINK_TX_DONE sequence={}", lora_sequence - 1);
+                        info!("[LORA] LINK_TX_DONE sequence={}", lora_sequence - 1);
                         let _ = lora.clear_interrupt::<TxDone>().await;
                     }
-                    Either::Second(_) => println!("[LORA] LINK_TX_TIMEOUT"),
+                    Either::Second(_) => warn!("[LORA] LINK_TX_TIMEOUT"),
                 }
                 let _ = lora_path.receive().await;
             }
@@ -862,11 +862,11 @@ async fn sensor_task(task: SensorTask) {
 
         #[cfg(feature = "lora-link-rx")]
         {
-            println!("[LORA] LINK_RX_START");
+            info!("[LORA] LINK_RX_START");
             if lora_path.receive().await.is_err() {
-                println!("[LORA] LINK_RX_SWITCH_FAILED");
+                warn!("[LORA] LINK_RX_SWITCH_FAILED");
             } else if lora.rx(None).await.is_err() {
-                println!("[LORA] LINK_RX_START_FAILED");
+                warn!("[LORA] LINK_RX_START_FAILED");
             } else {
                 let mut received = false;
                 for _ in 0..100 {
@@ -878,17 +878,17 @@ async fn sensor_task(task: SensorTask) {
                 }
                 if received {
                     match lora.rx_packet().await {
-                        Ok(packet) => println!(
-                            "[LORA] LINK_RX_OK len={} rssi={} snr_raw={} payload={:?}",
+                        Ok(packet) => info!(
+                            "[LORA] LINK_RX_OK len={} rssi={} snr_raw={} payload={}",
                             packet.length,
                             packet.rssi,
                             packet.snr_raw,
                             packet.payload(),
                         ),
-                        Err(_) => println!("[LORA] LINK_RX_PACKET_FAILED"),
+                        Err(_) => warn!("[LORA] LINK_RX_PACKET_FAILED"),
                     }
                 } else {
-                    println!("[LORA] LINK_RX_TIMEOUT");
+                    warn!("[LORA] LINK_RX_TIMEOUT");
                 }
                 let _ = lora.clear_all_interrupts().await;
             }
@@ -911,7 +911,7 @@ fn bench_repeat<R>(mut the_thing: impl FnMut() -> R, name: &str) -> (R, Duration
         }
     }
     let took = start.elapsed() / ITERS;
-    println!("{name}: {:.1}ms", took.as_micros() as f32 / 1_000.,);
+    info!("{=str}: {}ms", name, took.as_micros() as f32 / 1_000.);
     (ret, took)
 }
 
@@ -953,8 +953,8 @@ async fn run_fontdue_target_benchmark(font: &'static dyn fontdue::FontRepr) -> !
         samples.sort_unstable();
         *result = (samples[SAMPLES / 2], checksum as u32);
     }
-    println!(
-        "[FONTDUE-BENCH] arm={} point_bytes={} px12={} px32={} px64={} checksums={},{},{}",
+    info!(
+        "[FONTDUE-BENCH] arm={=str} point_bytes={} px12={} px32={} px64={} checksums={},{},{}",
         ARM,
         POINT_BYTES,
         results[0].0,
@@ -965,8 +965,8 @@ async fn run_fontdue_target_benchmark(font: &'static dyn fontdue::FontRepr) -> !
         results[2].1
     );
     loop {
-        println!(
-            "[FONTDUE-BENCH] repeat arm={} point_bytes={} px12={} px32={} px64={} checksums={},{},{}",
+        info!(
+            "[FONTDUE-BENCH] repeat arm={=str} point_bytes={} px12={} px32={} px64={} checksums={},{},{}",
             ARM,
             POINT_BYTES,
             results[0].0,
@@ -1102,7 +1102,7 @@ async fn async_main(spawner: Spawner) {
 
     let mut exio = Tca9554::new(i2c.clone(), tca9554::Address::standard());
 
-    println!("[TCA9554] init_start");
+    debug!("[TCA9554] init_start");
     exio.init().await.unwrap();
     exio.write_output(u8::MAX).await.unwrap();
     let exio_output_mask = (1 << board::EXIO_GPS_RESET)
@@ -1110,100 +1110,85 @@ async fn async_main(spawner: Spawner) {
         | (1 << board::EXIO_LORA_RX_SWITCH)
         | (1 << board::EXIO_LORA_TX_SWITCH);
     exio.write_direction(!exio_output_mask).await.unwrap();
-    println!("[TCA9554] OK");
+    info!("[TCA9554] OK");
 
     let gps_reset = 1 << board::EXIO_GPS_RESET;
     let lora_reset = 1 << board::EXIO_LORA_RESET;
     let lora_rx_switch = 1 << board::EXIO_LORA_RX_SWITCH;
     let lora_tx_switch = 1 << board::EXIO_LORA_TX_SWITCH;
-    let gnss_trace_start = Instant::now();
-    macro_rules! gnss_trace {
-        ($($arg:tt)*) => {{
-            println!(
-                "[GNSS] STARTUP t_us={} {}",
-                gnss_trace_start.elapsed().as_micros(),
-                format_args!($($arg)*)
-            );
-        }};
-    }
 
-    gnss_trace!("RESET_SEQUENCE_BEGIN");
+    debug!("[GNSS] STARTUP RESET_SEQUENCE_BEGIN");
     exio.write_output(!(gps_reset | lora_reset | lora_tx_switch))
         .await
         .unwrap();
-    gnss_trace!(
-        "RESET_OUTPUT phase=initial value=0x{:02X}",
+    debug!("[GNSS] STARTUP RESET_OUTPUT phase=initial value={=u8:#04x}",
         !(gps_reset | lora_reset | lora_tx_switch)
     );
     Timer::after(Duration::from_millis(10)).await;
     exio.write_output(!lora_tx_switch)
         .await
         .unwrap();
-    gnss_trace!(
-        "RESET_OUTPUT phase=release_gps_pulse_lora value=0x{:02X}",
+    debug!("[GNSS] STARTUP RESET_OUTPUT phase=release_gps_pulse_lora value={=u8:#04x}",
         !lora_tx_switch
     );
     Timer::after(Duration::from_micros(200)).await;
     exio.write_output(!(lora_reset | lora_tx_switch))
         .await
         .unwrap();
-    gnss_trace!(
-        "RESET_OUTPUT phase=release_lora value=0x{:02X}",
+    debug!("[GNSS] STARTUP RESET_OUTPUT phase=release_lora value={=u8:#04x}",
         !(lora_reset | lora_tx_switch)
     );
     exio.write_direction(!(lora_reset | lora_rx_switch | lora_tx_switch))
         .await
         .unwrap();
-    gnss_trace!(
-        "RESET_DIRECTION value=0x{:02X}",
+    debug!("[GNSS] STARTUP RESET_DIRECTION value={=u8:#04x}",
         !(lora_reset | lora_rx_switch | lora_tx_switch)
     );
     Timer::after(Duration::from_millis(10)).await;
     exio.write_output(!(lora_reset | lora_tx_switch)).await.unwrap();
-    gnss_trace!(
-        "RESET_OUTPUT phase=select_rx value=0x{:02X}",
+    debug!("[GNSS] STARTUP RESET_OUTPUT phase=select_rx value={=u8:#04x}",
         !(lora_reset | lora_tx_switch)
     );
     let exio_direction = exio.read_direction().await.unwrap();
-    println!("[TCA9554] direction=0x{exio_direction:02X}");
+    debug!("[TCA9554] direction={=u8:#04x}", exio_direction);
     {
-        println!("[GNSS] STARTUP settle_begin");
+        debug!("[GNSS] STARTUP settle_begin");
         Timer::after(Duration::from_secs(1)).await;
-        println!("[GNSS] STARTUP settle_complete");
+        debug!("[GNSS] STARTUP settle_complete");
     }
     drop(exio);
 
     let mut gnss = Lc76g::new(i2c.clone(), embassy_time::Delay);
-    gnss_trace!("PAIR_SEND command=732 mode={GNSS_LOW_POWER_MODE:?}");
+    debug!("[GNSS] STARTUP PAIR_SEND command=732 mode={}", GNSS_LOW_POWER_MODE);
     match gnss.set_low_power_mode(GNSS_LOW_POWER_MODE).await {
-        Ok(()) => gnss_trace!("PAIR_SEND_RESULT command=732 status=accepted"),
-        Err(error) => gnss_trace!("PAIR_SEND_RESULT command=732 status=error error={error:?}"),
+        Ok(()) => debug!("[GNSS] STARTUP PAIR_SEND_RESULT command=732 status=accepted"),
+        Err(error) => warn!("[GNSS] STARTUP PAIR_SEND_RESULT command=732 status=error error={}", error),
     }
     for sentence in [NmeaSentence::Gsa, NmeaSentence::Gsv] {
-        gnss_trace!("PAIR_SEND command=062 sentence={sentence:?} rate=1");
+        debug!("[GNSS] STARTUP PAIR_SEND command=062 sentence={} rate=1", sentence);
         match gnss
             .set_nmea_output_rate(sentence, NmeaOutputRate::EVERY_FIX)
             .await
         {
-            Ok(()) => gnss_trace!("PAIR_SEND_RESULT command=062 status=accepted"),
+            Ok(()) => debug!("[GNSS] STARTUP PAIR_SEND_RESULT command=062 status=accepted"),
             Err(error) => {
-                gnss_trace!("PAIR_SEND_RESULT command=062 status=error error={error:?}")
+                warn!("[GNSS] STARTUP PAIR_SEND_RESULT command=062 status=error error={}", error)
             }
         }
-        gnss_trace!("PAIR_SEND command=063 sentence={sentence:?}");
+        debug!("[GNSS] STARTUP PAIR_SEND command=063 sentence={}", sentence);
         match gnss.query_nmea_output_rate(sentence).await {
-            Ok(()) => gnss_trace!("PAIR_SEND_RESULT command=063 status=accepted"),
+            Ok(()) => debug!("[GNSS] STARTUP PAIR_SEND_RESULT command=063 status=accepted"),
             Err(error) => {
-                gnss_trace!("PAIR_SEND_RESULT command=063 status=error error={error:?}")
+                warn!("[GNSS] STARTUP PAIR_SEND_RESULT command=063 status=error error={}", error)
             }
         }
     }
     if let Ok(command) = PairCommandBuilder::new(67).and_then(|builder| builder.finish()) {
-        gnss_trace!("PAIR_SEND command=067");
+        debug!("[GNSS] STARTUP PAIR_SEND command=067");
         match gnss.send_pair_command(&command).await {
-            Ok(()) => gnss_trace!("PAIR_SEND_RESULT command=067 status=accepted"),
+            Ok(()) => debug!("[GNSS] STARTUP PAIR_SEND_RESULT command=067 status=accepted"),
             Err(error) => {
-                gnss_trace!("PAIR_SEND_RESULT command=067 status=error error={error:?}")
+                warn!("[GNSS] STARTUP PAIR_SEND_RESULT command=067 status=error error={}", error)
             }
         }
     }
@@ -1216,30 +1201,29 @@ async fn async_main(spawner: Spawner) {
     let mut gnss_parse_ok = false;
     match gnss.read_nmea_chunk(&mut nmea).await {
         Ok(data) if !data.is_empty() => {
-            println!("[GNSS] NMEA_CHUNK_OK bytes={}", data.len());
+            debug!("[GNSS] NMEA_CHUNK_OK bytes={}", data.len());
             #[cfg(feature = "gnss-raw-log")]
             log_raw_nmea(data, &mut raw_nmea_line, &mut raw_nmea_line_len);
             for &byte in data {
                 match nmea_parser.push(byte) {
                     Ok(Some(NmeaUpdate::PairAck(ack))) => {
-                        gnss_trace!("PAIR_ACK command={} status={:?}", ack.command, ack.status)
+                        debug!("[GNSS] STARTUP PAIR_ACK command={} status={}", ack.command, ack.status)
                     }
                     Ok(Some(NmeaUpdate::NmeaOutputRate { sentence, rate })) => {
-                        gnss_trace!("PAIR_RESPONSE command=063 sentence={sentence:?} rate={rate:?}")
+                        debug!("[GNSS] STARTUP PAIR_RESPONSE command=063 sentence={} rate={}", sentence, rate)
                     }
-                    Ok(Some(NmeaUpdate::Pair(message))) => gnss_trace!(
-                        "PAIR_RESPONSE command={} fields={:?}",
+                    Ok(Some(NmeaUpdate::Pair(message))) => debug!("[GNSS] STARTUP PAIR_RESPONSE command={} fields={=[u8]:a}",
                         message.command(),
                         message.fields()
                     ),
                     Ok(_) => {}
-                    Err(error) => println!("[GNSS] NMEA_PARSE_ERROR {error}"),
+                    Err(error) => warn!("[GNSS] NMEA_PARSE_ERROR {=str}", error),
                 }
             }
             gnss_parse_ok = nmea_parser.state().fix.is_some();
             let signal = nmea_parser.state().signal;
-            println!(
-                "[GNSS] acquisition in_view={} with_signal={} used={} strongest_snr_db={:?} fix_type={:?} hdop_milli={:?}",
+            debug!(
+                "[GNSS] acquisition in_view={} with_signal={} used={} strongest_snr_db={} fix_type={} hdop_milli={}",
                 signal.satellites_in_view.get(),
                 signal.satellites_with_signal.get(),
                 signal.satellites_used.get(),
@@ -1248,12 +1232,12 @@ async fn async_main(spawner: Spawner) {
                 signal.hdop.map(|value| value.get()),
             );
         }
-        Ok(_) => println!("[GNSS] NMEA_EMPTY bytes=0"),
+        Ok(_) => debug!("[GNSS] NMEA_EMPTY bytes=0"),
         Err(GnssError::I2c { operation, error }) => {
-            println!("[GNSS] I2C_FAILED operation={operation:?} error={error:?}");
+            warn!("[GNSS] I2C_FAILED operation={} error={}", operation, error);
         }
-        Err(GnssError::BufferTooSmall { .. }) => println!("[GNSS] NMEA_BUFFER_TOO_SMALL"),
-        Err(GnssError::PairCommand(_)) => println!("[GNSS] PAIR_COMMAND_BUILD_FAILED"),
+        Err(GnssError::BufferTooSmall { .. }) => warn!("[GNSS] NMEA_BUFFER_TOO_SMALL"),
+        Err(GnssError::PairCommand(_)) => warn!("[GNSS] PAIR_COMMAND_BUILD_FAILED"),
     }
 
     let lora_spi_config = spi::master::Config::default()
@@ -1271,26 +1255,26 @@ async fn async_main(spawner: Spawner) {
     let mut lora_config = Sx127xLoraConfig::for_variant::<Sx1272>();
     lora_config.auto_optimize = true;
     lora_config.use_crc = true;
-    println!("[LORA] init_start");
+    debug!("[LORA] init_start");
     let mut lora = match Sx1272Lora::new_with_config(lora_spi, lora_config).await {
         Ok(lora) => {
-            println!("[LORA] init_ok");
+            info!("[LORA] init_ok");
             lora
         }
         Err(sx127xlora::driver::Sx127xError::InvalidVersion) => {
-            println!("[LORA] init_failed reason=invalid_version");
+            error!("[LORA] init_failed reason=invalid_version");
             loop {
                 Timer::after(Duration::from_secs(1)).await;
             }
         }
         Err(sx127xlora::driver::Sx127xError::SPI(_)) => {
-            println!("[LORA] init_failed reason=spi");
+            error!("[LORA] init_failed reason=spi");
             loop {
                 Timer::after(Duration::from_secs(1)).await;
             }
         }
         Err(_) => {
-            println!("[LORA] init_failed reason=configuration");
+            error!("[LORA] init_failed reason=configuration");
             loop {
                 Timer::after(Duration::from_secs(1)).await;
             }
@@ -1315,11 +1299,11 @@ async fn async_main(spawner: Spawner) {
     let mut rtc = Pcf85063aRtc::new(i2c.clone());
     rtc.init().await.unwrap();
     match rtc.get_time().await {
-        Ok(time) => println!(
+        Ok(time) => info!(
             "[RTC] OK 20{:02}-{:02}-{:02} {:02}:{:02}:{:02}",
             time.year, time.month, time.day, time.hours, time.minutes, time.seconds
         ),
-        Err(_) => println!("[RTC] TIME_INVALID"),
+        Err(_) => warn!("[RTC] TIME_INVALID"),
     }
 
     let mut magnetometer = Bmm350::new(i2c.clone());
@@ -1332,13 +1316,13 @@ async fn async_main(spawner: Spawner) {
             bmm_ready = magnetometer.data_ready().await.unwrap();
             match magnetometer.read_data().await {
                 Ok(data) => {
-                    println!(
+                    debug!(
                         "[BMM350] RAW x={} y={} z={} temp={} sensor_time={}",
                         data.raw.x, data.raw.y, data.raw.z, data.raw.temperature, data.sensor_time
                     );
                     if let Some(compensated) = magnetometer.compensate(&data) {
-                        println!(
-                            "[BMM350] COMP x={:.3}uT y={:.3}uT z={:.3}uT temp={:.3}C",
+                        debug!(
+                            "[BMM350] COMP x={}uT y={}uT z={}uT temp={}C",
                             compensated.x_microtesla,
                             compensated.y_microtesla,
                             compensated.z_microtesla,
@@ -1347,10 +1331,10 @@ async fn async_main(spawner: Spawner) {
                         bmm_compensated = true;
                     }
                 }
-                Err(error) => println!("[BMM350] burst read failed: {error:?}"),
+                Err(error) => warn!("[BMM350] burst read failed: {}", error),
             }
         }
-        Err(error) => println!("[BMM350] unavailable: {error:?}"),
+        Err(error) => error!("[BMM350] unavailable: {}", error),
     }
     let lpf = ph_qmi8658::LowPassFilterMode::OdrPercent2_62;
     let config = ph_qmi8658::Config {
@@ -1396,9 +1380,9 @@ async fn async_main(spawner: Spawner) {
     .unwrap();
     imu.set_sync_sample(true).await.unwrap();
 
-    println!("[IMU] INIT");
-    println!(
-        "[LORA] {}",
+    info!("[IMU] INIT");
+    info!(
+        "[LORA] {=str}",
         match lora_result {
             0 => "SX1272_OK",
             1 => "BAD_VERSION",
@@ -1409,20 +1393,21 @@ async fn async_main(spawner: Spawner) {
         }
     );
     match lora_probe {
-        Ok([op_mode, frf_msb, irq_flags, version]) => println!(
-            "[LORA] REGISTERS OP_MODE=0x{op_mode:02X} FRF_MSB=0x{frf_msb:02X} IRQ=0x{irq_flags:02X} VERSION=0x{version:02X}"
+        Ok([op_mode, frf_msb, irq_flags, version]) => debug!(
+            "[LORA] REGISTERS OP_MODE={=u8:#04x} FRF_MSB={=u8:#04x} IRQ={=u8:#04x} VERSION={=u8:#04x}",
+            op_mode, frf_msb, irq_flags, version
         ),
-        Err(_) => println!("[LORA] REGISTER_PROBE_FAILED"),
+        Err(_) => warn!("[LORA] REGISTER_PROBE_FAILED"),
     }
-    println!(
-        "[GNSS] {}",
+    info!(
+        "[GNSS] {=str}",
         if gnss_parse_ok {
             "NMEA_PARSE_OK"
         } else {
             "NMEA_NO_COMPLETE_LINE"
         }
     );
-    println!("[BMM350] DATA_READY={bmm_ready} COMPENSATION={bmm_compensated}");
+    info!("[BMM350] DATA_READY={} COMPENSATION={}", bmm_ready, bmm_compensated);
 
     let touch_rst = Output::new(peripherals.GPIO40, Level::High, OutputConfig::default());
     let touch_int = Input::new(peripherals.GPIO11, InputConfig::default());
@@ -1435,14 +1420,17 @@ async fn async_main(spawner: Spawner) {
         scale_y: None,
         swap_xy: false,
     });
-    let res = touch.resolution();
-    println!("[TOUCH] OK, Resolution: {res}");
+    let (resolution, (firmware, checksum)) = (touch.resolution(), touch.firmware());
+    info!(
+        "[TOUCH] OK resolution={}x{} firmware={=u32:#x} checksum={=u32:#x}",
+        resolution.width, resolution.height, firmware, checksum
+    );
 
     // SAFETY: the display core has not started, and `settings_task` holds it for every write.
     let mut store = unsafe { Store::new(esp_storage::FlashStorage::new(peripherals.FLASH)) };
     let saved = store.load();
-    println!(
-        "[SETTINGS] zone mode={:?} manual={:?} automatic={:?}",
+    info!(
+        "[SETTINGS] zone mode={} manual={} automatic={}",
         saved.zone_mode,
         saved.manual_zone.map(|zone| DATABASE.zone(zone).name),
         saved.automatic_zone.map(|zone| DATABASE.zone(zone).name),
@@ -1493,7 +1481,7 @@ async fn async_main(spawner: Spawner) {
 
     let mut stage = Stage::new(PeripheralState::default());
     let mut touch_data = TouchData::default();
-    println!(
+    info!(
         "[MEM] internal_used={} psram_used={}",
         esp_alloc::HEAP.used(),
         PSRAM_HEAP.used(),
@@ -1566,7 +1554,7 @@ async fn async_main(spawner: Spawner) {
                 }),
             });
             if update.recalibrate {
-                println!("[TOUCH] cover accepted, recalibrating");
+                info!("[TOUCH] cover accepted, recalibrating");
                 COMPASS_RECALIBRATE.store(true, Ordering::Relaxed);
             }
             COMPASS_ACTIVE.store(update.samples_fast, Ordering::Relaxed);
@@ -1602,7 +1590,7 @@ async fn async_main(spawner: Spawner) {
             timings.swap_draw = prev_swap_draw;
 
             #[cfg(feature = "timing-log")]
-            defmt::info!(
+            info!(
                 "timing draw: frame={}us swap={}us",
                 timings.frametime.as_micros(),
                 timings.swap_draw.as_micros(),

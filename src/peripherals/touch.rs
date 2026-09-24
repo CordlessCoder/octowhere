@@ -1,7 +1,6 @@
 use embedded_graphics::prelude::Size;
 use embedded_hal::digital::OutputPin;
 use embedded_hal_async::{digital::Wait, i2c::I2c};
-use log::{Level, log};
 
 use crate::peripherals::i2c_helper;
 
@@ -96,6 +95,7 @@ pub struct Cst9217<I, INT, RST, DELAY> {
     delay: DELAY,
     width: u16,
     height: u16,
+    firmware: (u32, u32),
     config: Cst9217Config,
 }
 
@@ -142,6 +142,7 @@ impl<I: I2c, RST, INT, DELAY> Cst9217<I, INT, RST, DELAY> {
             delay,
             width: 0,
             height: 0,
+            firmware: (0, 0),
             config: Default::default(),
         }
     }
@@ -209,6 +210,11 @@ impl<I: I2c, RST, INT, DELAY> Cst9217<I, INT, RST, DELAY> {
         }
         Ok(TouchData::Points(points))
     }
+    /// The controller's firmware version and checksum, as `init` read them.
+    pub fn firmware(&self) -> (u32, u32) {
+        self.firmware
+    }
+
     pub fn resolution(&self) -> Size {
         Size {
             width: self.width as u32,
@@ -236,7 +242,6 @@ impl<I: I2c, RST: OutputPin, INT, DELAY: embedded_hal_async::delay::DelayNs>
             .await?;
         let checkcode = u32::from_le_bytes(buf);
         if (checkcode & 0xffff0000) != 0xCACA0000 {
-            log!(Level::Error, "Firmware info read error");
             return Err(Cst9217Error::InvalidCheckcode);
         }
 
@@ -263,15 +268,10 @@ impl<I: I2c, RST: OutputPin, INT, DELAY: embedded_hal_async::delay::DelayNs>
         let fw_version = u32::from_le_bytes(buf[0..4].try_into().unwrap());
         let checksum = u32::from_le_bytes(buf[4..8].try_into().unwrap());
 
-        log!(
-            Level::Info,
-            "Chip IC version: 0x{fw_version:x}, checksum: 0x{checksum:0>16x}"
-        );
-
         if fw_version == 0xA5A5A5A5 {
-            log!(Level::Error, "Chip ic don't have firmware");
             return Err(Cst9217Error::NoFirmware);
         }
+        self.firmware = (fw_version, checksum);
 
         Ok(())
     }

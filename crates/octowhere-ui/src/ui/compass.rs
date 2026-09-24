@@ -331,6 +331,7 @@ pub struct Calibration {
 
 /// What [`Calibration::update`] did with a sample, for the log.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum CalibrationEvent {
     None,
     Calibrated,
@@ -486,6 +487,7 @@ fn normalize(v: Vec3) -> Option<Vec3> {
 
 /// What the compass screen draws, in whole units so the UI state keeps `Eq`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct CompassView {
     /// Both sensors produced a sample.
     pub live: bool,

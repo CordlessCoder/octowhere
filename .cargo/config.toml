@@ -2,7 +2,7 @@
 target = "xtensa-esp32s3-none-elf"
 
 [target.xtensa-esp32s3-none-elf]
-runner = "espflash flash --monitor"
+runner = "espflash flash --monitor --log-format defmt"
 rustflags = ["-C", "link-arg=-Tlinkall.x", "-C", "link-arg=-Tdefmt.x"]
 
 [unstable]
@@ -10,10 +10,8 @@ build-std = ["core", "alloc"]
 build-std-features = ["optimize_for_size"]
 
 [env]
-# "error" silences the harmless esp_wifi_internal_tx warnings that fire
-# when the network runner task tries to send DHCP DISCOVER before the radio
-# is started. Set back to "info" or "warn" for debugging.
-ESP_LOG = "error"
+# The level is fixed at compile time. "debug" adds the periodic sensor samples and the GNSS
+# start-up trace.
 DEFMT_LOG = "info"
 # Provides a performance boost at the cost of using additional SRAM.
 # Problem: without optimizations, uses way more ram.

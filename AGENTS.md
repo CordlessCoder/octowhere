@@ -112,7 +112,13 @@ The firmware's clippy run does not reach `crates/octowhere-ui`, because a path d
 a workspace member. Its own clippy line above is what lints it. The stable clippy there is newer
 than the `esp` one and flags more.
 
-`cargo run --release` uses the configured `espflash` runner to flash and monitor the board.
+`cargo run --release` uses the configured `espflash` runner to flash the board and decode its
+log. The firmware logs only through defmt, so the image holds an index per message rather than
+its text, and the serial stream needs the ELF to read. `espflash monitor --no-reset
+--log-format defmt --elf <elf>` reads it without restarting the board. `DEFMT_LOG` in
+[`.cargo/config.toml`](.cargo/config.toml) sets the level at compile time. It is `info`, which
+leaves out the periodic sensor samples and the GNSS start-up trace; build with `DEFMT_LOG=debug`
+for them.
 
 Every release build emits one `linker_messages` warning about a LOAD segment with RWX permissions.
 It is expected for this target and is not a regression.
@@ -140,7 +146,7 @@ Weigh that cost before adding one.
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 958,832 bytes, 23.22% of the 4,128,768-byte app partition. The time zone
+The image is currently 930,160 bytes, 22.53% of the 4,128,768-byte app partition. The time zone
 data is about 390 KB of that, and its boundary tolerance in `tools/tz-data.py` is the lever: the
 bench branch `bench/tz-boundary-size` tabulates size against accuracy. PP Fraktion Mono Bold with
 all of printable ASCII is about 54 KB; subsetting it to the glyphs the compass uses is the other

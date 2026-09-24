@@ -17,6 +17,7 @@ pub struct ClockState {
 
 /// How the zone the clocks show is chosen.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum ZoneMode {
     /// The zone GNSS last placed the device in.
     #[default]

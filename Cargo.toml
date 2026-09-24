@@ -4,14 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-esp-hal = { version = "1.2.2", features = ["esp32s3", "requires-unstable", "unstable"] }
-esp-rtos = { version = "0.4.0", features = ["esp32s3", "embassy", "esp-alloc"] }
+esp-hal = { version = "1.2.2", features = ["defmt", "esp32s3", "requires-unstable", "unstable"] }
+esp-rtos = { version = "0.4.0", features = ["esp32s3", "embassy", "esp-alloc", "defmt"] }
 esp-alloc = { version = "0.11.0", features = ["nightly"] }
 esp-println = { version = "0.18.0", features = ["esp32s3", "defmt-espflash"] }
 esp-backtrace = { version = "0.20.0", features = ["esp32s3", "panic-handler", "defmt"] }
 esp-bootloader-esp-idf = { version = "0.6.0", features = ["embedded-storage", "esp32s3"] }
-log = "0.4"
-defmt = "1.0.1"
+defmt = "1.1.1"
 
 # Allows for truly statically allocated tasks instead of a bump allocator
 embassy-executor = { version = "0.10.0", features = ["nightly"] }
@@ -26,13 +25,13 @@ embedded-graphics-core = "0.4"
 embedded-hal = "1.0"
 embedded-hal-bus = { version = "0.3", features = ["async"] }
 embedded-hal-async = "1.0.0"
-lc76g = { path = "crates/lc76g" }
-octowhere-ui = { path = "crates/octowhere-ui", features = ["allocator-api"] }
+lc76g = { path = "crates/lc76g", features = ["defmt"] }
+octowhere-ui = { path = "crates/octowhere-ui", features = ["allocator-api", "defmt"] }
 sx127xlora = { path = "crates/sx127x-lora", features = ["defmt"] }
 embedded-io-async = "0.7"
 futures = { version = "0.3.32", default-features = false, features = ["async-await"] }
-embassy-embedded-hal = "0.6.0"
-ph-qmi8658 = { version = "0.1.1", features = ["fixed"] }
+embassy-embedded-hal = { version = "0.6.0", features = ["defmt"] }
+ph-qmi8658 = { version = "0.1.1", features = ["defmt", "fixed"] }
 tca9554 = "0.2.0"
 heapless = { version = "0.9.3", features = ["nightly"] }
 esp-storage = { version = "0.10.0", features = ["esp32s3"] }

@@ -25,6 +25,7 @@ const ALP_ENABLE: &[u8] = b"$PAIR732,1*21\r\n";
 const ALP_DISABLE: &[u8] = b"$PAIR732,0*20\r\n";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum GnssOperation {
     WriteConfig,
     ReadLength,
@@ -33,6 +34,7 @@ pub enum GnssOperation {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum GnssError<E> {
     I2c { operation: GnssOperation, error: E },
     BufferTooSmall { required: usize, available: usize },
@@ -41,6 +43,7 @@ pub enum GnssError<E> {
 
 /// Error returned while constructing a proprietary PAIR command.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum PairCommandError {
     /// The command identifier does not fit the three decimal digits required
     /// by the LC76G protocol.
@@ -51,6 +54,7 @@ pub enum PairCommandError {
 
 /// A checked, checksummed LC76G proprietary command.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct PairCommand {
     bytes: Vec<u8, PAIR_COMMAND_CAPACITY>,
 }
@@ -142,6 +146,7 @@ impl PairCommandBuilder {
 
 /// The low-power policy requested from the receiver.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum LowPowerMode {
     /// Continuous tracking with the receiver's normal duty cycle.
     Disabled,
@@ -151,6 +156,7 @@ pub enum LowPowerMode {
 
 /// Position-fix interval accepted by PAIR050, in milliseconds.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct FixIntervalMs(u16);
 
 impl FixIntervalMs {
@@ -174,6 +180,7 @@ impl FixIntervalMs {
 
 /// Minimum signal-to-noise ratio accepted for satellites in use.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct MinimumSnrDb(u8);
 
 impl MinimumSnrDb {
@@ -194,6 +201,7 @@ impl MinimumSnrDb {
 
 /// Satellite constellation search configuration.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct GnssSearchMode {
     gps: bool,
     glonass: bool,
@@ -242,6 +250,7 @@ impl GnssSearchMode {
 
 /// Static-navigation speed threshold in decimetres per second.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct StaticNavigationThreshold(u8);
 
 impl StaticNavigationThreshold {
@@ -265,6 +274,7 @@ impl StaticNavigationThreshold {
 
 /// Satellite elevation mask in degrees.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct ElevationMaskDegrees(i8);
 
 impl ElevationMaskDegrees {
@@ -285,6 +295,7 @@ impl ElevationMaskDegrees {
 
 /// Navigation model used by the receiver.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum NavigationMode {
     /// General-purpose navigation.
     Normal,
@@ -321,6 +332,7 @@ impl NavigationMode {
 
 /// Active interference cancellation state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum AicMode {
     Disabled,
     Enabled,
@@ -337,6 +349,7 @@ impl AicMode {
 
 /// Binary debug-log output mode.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum DebugLogOutput {
     Disabled,
     Full,
@@ -355,6 +368,7 @@ impl DebugLogOutput {
 
 /// Standard NMEA sentence types whose output rate can be configured.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum NmeaSentence {
     /// Geographic position, altitude and fix-quality data.
     Gga,
@@ -427,6 +441,7 @@ impl NmeaSentence {
 
 /// Rate at which a standard NMEA sentence is emitted.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct NmeaOutputRate(u8);
 
 impl NmeaOutputRate {
@@ -464,6 +479,7 @@ impl NmeaOutputRate {
 
 /// The NMEA GGA fix-quality code.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum FixQuality {
     /// No position solution.
     #[default]
@@ -490,6 +506,7 @@ macro_rules! coordinate_newtype {
     ($(#[$meta:meta])* $name:ident, $inner:ty, $unit:literal) => {
         $(#[$meta])*
         #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
+        #[cfg_attr(feature = "defmt", derive(defmt::Format))]
         pub struct $name($inner);
 
         impl $name {
@@ -568,6 +585,7 @@ coordinate_newtype!(
 
 /// The dimensionality of the latest navigation solution.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum GnssFixType {
     /// No position solution is available.
     #[default]
@@ -580,6 +598,7 @@ pub enum GnssFixType {
 
 /// Satellite and dilution data reported while the receiver is acquiring a fix.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct GnssSignal {
     pub fix_type: GnssFixType,
     pub satellites_in_view: SatelliteCount,
@@ -593,6 +612,7 @@ pub struct GnssSignal {
 
 /// UTC date and time reported by the receiver.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct GnssDateTime {
     pub year: u16,
     pub month: u8,
@@ -606,6 +626,7 @@ pub struct GnssDateTime {
 
 /// The latest position solution assembled from RMC and GGA sentences.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct GnssFix {
     pub latitude: LatitudeE7,
     pub longitude: LongitudeE7,
@@ -619,6 +640,7 @@ pub struct GnssFix {
 
 /// Receiver state assembled from the latest valid NMEA sentences.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct GnssState {
     pub fix: Option<GnssFix>,
     pub utc: Option<GnssDateTime>,
@@ -662,6 +684,7 @@ pub enum NmeaUpdate {
 
 /// A checksummed NMEA frame preserved without interpreting its fields.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct RawNmeaSentence {
     bytes: Vec<u8, PAIR_COMMAND_CAPACITY>,
 }
@@ -675,6 +698,7 @@ impl RawNmeaSentence {
 
 /// Acknowledgement returned for a proprietary `PAIR` command.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct PairAck {
     pub command: u16,
     pub status: PairAckStatus,
@@ -682,6 +706,7 @@ pub struct PairAck {
 
 /// A checksummed proprietary response with its fields preserved as ASCII.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct PairMessage {
     command: u16,
     fields: [u8; PAIR_MESSAGE_FIELDS_CAPACITY],
@@ -702,6 +727,7 @@ impl PairMessage {
 
 /// Result reported by the receiver for a proprietary `PAIR` command.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum PairAckStatus {
     /// The command was accepted by the receiver.
     Accepted,

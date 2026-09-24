@@ -8,6 +8,9 @@
 //!
 //! It prints each calibration event; `VERBOSE=1` prints every sample. A `[COMPASS]
 //! recalibrating` line restarts it, as the tap did.
+//!
+//! The samples are logged at debug level, so record from firmware built with `DEFMT_LOG=debug`,
+//! decoded by `espflash monitor --log-format defmt`.
 
 use std::io::BufRead;
 

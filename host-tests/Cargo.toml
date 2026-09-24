@@ -15,7 +15,6 @@ embedded-hal = "1.0"
 embedded-hal-async = "1.0"
 futures = { version = "0.3.32", default-features = false, features = ["async-await", "executor"] }
 heapless = "0.9.3"
-log = "0.4"
 lc76g = { path = "../crates/lc76g" }
 octowhere-ui = { path = "../crates/octowhere-ui" }
 libm = "0.2.16"
