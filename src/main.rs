@@ -435,6 +435,10 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
 
     let mut prev_swap_spi = Duration::MIN;
     let mut first_flush = true;
+    #[cfg(feature = "tearing-bench")]
+    measure_te(&display.te_pin);
+    #[cfg(feature = "tearing-bench")]
+    let mut bench = TearStats::default();
     loop {
         settings::hold_display_core_if_asked();
         let level = BRIGHTNESS.swap(NO_BRIGHTNESS, Ordering::Relaxed);
@@ -461,6 +465,10 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
                 debug!("[DISPLAY] first_flush_without_te");
                 first_flush = false;
             } else {
+                #[cfg(feature = "tearing-bench")]
+                {
+                    bench.high_at_wait += u32::from(display.te_pin.is_high());
+                }
                 match select(
                     display.wait_for_vsync(),
                     Timer::after(Duration::from_millis(17)),
@@ -468,7 +476,13 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
                 .await
                 {
                     Either::First(()) => {}
-                    Either::Second(()) => warn!("[DISPLAY] te_timeout"),
+                    Either::Second(()) => {
+                        warn!("[DISPLAY] te_timeout");
+                        #[cfg(feature = "tearing-bench")]
+                        {
+                            bench.timeouts += 1;
+                        }
+                    }
                 }
             }
             timings.vsync_wait = start.elapsed();
@@ -513,6 +527,10 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
         };
 
         timings.spi_time = start.elapsed() - timings.vsync_wait;
+        #[cfg(feature = "tearing-bench")]
+        if !dirty.is_empty() {
+            bench.record(timings.vsync_wait, timings.spi_time, dirty.is_full());
+        }
 
         timings.swap_spi = prev_swap_spi;
 
@@ -530,6 +548,91 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
         swap.swap().await;
         prev_swap_spi = start.elapsed() - before_swap;
     }
+}
+
+/// Polls TE for a second and logs its period and high time, in microseconds.
+#[cfg(feature = "tearing-bench")]
+fn measure_te(te: &Input<'_>) {
+    let end = Instant::now() + Duration::from_secs(1);
+    let mut was_high = te.is_high();
+    let mut rise: Option<Instant> = None;
+    let (mut periods, mut period_min, mut period_max) = (0u32, u64::MAX, 0u64);
+    let (mut width_min, mut width_max) = (u64::MAX, 0u64);
+    while Instant::now() < end {
+        let high = te.is_high();
+        let now = Instant::now();
+        if high && !was_high {
+            if let Some(last) = rise {
+                let period = (now - last).as_micros();
+                periods += 1;
+                period_min = period_min.min(period);
+                period_max = period_max.max(period);
+            }
+            rise = Some(now);
+        } else if !high && was_high {
+            if let Some(last) = rise {
+                let width = (now - last).as_micros();
+                width_min = width_min.min(width);
+                width_max = width_max.max(width);
+            }
+        }
+        was_high = high;
+    }
+    info!(
+        "[TEAR] te periods={} period_us={}..{} high_us={}..{}",
+        periods, period_min, period_max, width_min, width_max
+    );
+}
+
+#[cfg(feature = "tearing-bench")]
+#[derive(Default)]
+struct TearStats {
+    frames: u32,
+    full: u32,
+    high_at_wait: u32,
+    timeouts: u32,
+    wait_max: u64,
+    flush_min: u64,
+    flush_max: u64,
+    flush_sum: u64,
+    over_16ms: u32,
+}
+
+#[cfg(feature = "tearing-bench")]
+impl TearStats {
+    fn record(&mut self, wait: Duration, flush: Duration, full: bool) {
+        let (wait, flush) = (wait.as_micros(), flush.as_micros());
+        if self.frames == 0 {
+            self.flush_min = u64::MAX;
+        }
+        self.frames += 1;
+        self.full += u32::from(full);
+        self.wait_max = self.wait_max.max(wait);
+        self.flush_min = self.flush_min.min(flush);
+        self.flush_max = self.flush_max.max(flush);
+        self.flush_sum += flush;
+        self.over_16ms += u32::from(flush > 16_000);
+        if self.frames == 120 {
+            info!(
+                "[TEAR] frames={} full={} te_high_at_wait={} timeouts={} wait_max_us={} flush_us={}..{} mean={} over_16ms={}",
+                self.frames, self.full, self.high_at_wait, self.timeouts, self.wait_max,
+                self.flush_min, self.flush_max, self.flush_sum / u64::from(self.frames), self.over_16ms,
+            );
+            *self = Self::default();
+        }
+    }
+}
+
+/// Where the synthetic finger is: a 500 ms swipe across the panel, a 300 ms pause, and back.
+#[cfg(feature = "tearing-bench")]
+fn bench_finger(since: Duration) -> Option<Point> {
+    let t = since.as_millis() % 1600;
+    let x = match t {
+        0..500 => 400 - (340 * t / 500) as i32,
+        800..1300 => 60 + (340 * (t - 800) / 500) as i32,
+        _ => return None,
+    };
+    Some(Point::new(x, 233))
 }
 
 /// Sensor axes into the screen frame of `ui::compass`, fitted from twelve logged poses by the
@@ -1569,6 +1672,8 @@ async fn async_main(spawner: Spawner) {
     let mut outlined = Dirty::new();
     let mut last_touch_poll = Instant::now();
     const TOUCH_REPOLL: Duration = Duration::from_micros(16_667);
+    #[cfg(feature = "tearing-bench")]
+    let bench_start = Instant::now();
     // A write waits for the frame showing its result to reach the panel, since the display
     // freezes while it runs: core 1 has flushed a frame once the swap after the one that
     // handed it over completes.
@@ -1589,6 +1694,8 @@ async fn async_main(spawner: Spawner) {
             // Keep reading while either tracker holds a contact, or neither sees it lift.
             let in_contact = stage.in_contact();
             let touch_repoll_due = in_contact && last_touch_poll.elapsed() >= TOUCH_REPOLL;
+            #[cfg(feature = "tearing-bench")]
+            let touch_repoll_due = true;
             let wait_timeout = if touch_repoll_due || stage.is_animating() {
                 Duration::from_micros(0)
             } else if in_contact {
@@ -1620,6 +1727,19 @@ async fn async_main(spawner: Spawner) {
                 }
                 last_touch_poll = Instant::now();
             }
+            #[cfg(feature = "tearing-bench")]
+            let (touch_ready, touch_data) = {
+                let _ = touch_ready;
+                let finger = bench_finger(bench_start.elapsed());
+                (true, match finger {
+                    Some(point) => TouchData::Points(
+                        [octowhere::peripherals::touch::TouchPoint { x: point.x as u16, y: point.y as u16 }]
+                            .into_iter()
+                            .collect(),
+                    ),
+                    None => TouchData::Points(Default::default()),
+                })
+            };
             let update = stage.step(StageInput {
                 now: Instant::now().as_micros(),
                 touch: touch_ready.then(|| match &touch_data {
