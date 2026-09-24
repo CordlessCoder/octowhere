@@ -171,7 +171,10 @@ where
     D: chrome::CoverageTarget<Color = Color>,
 {
     let bounds = target.bounding_box();
-    clear_visible(target, &bounds)?;
+    // The settled compass paints its slab over whatever is there, so the clear leaves it.
+    let painted = (state.screen == Screen::Compass && state.offset == 0 && state.neighbour.is_none())
+        .then_some(super::compass_screen::SLAB);
+    clear_visible(target, &bounds, painted)?;
 
     render_page(architecture, state, state.offset, font, target)?;
     if let Some((screen, offset)) = state.neighbour {
@@ -192,11 +195,13 @@ where
     Ok(())
 }
 
-/// Clears the part of `area` on the round panel. The corners outside it are never seen, and
-/// the clear is bound by memory bandwidth, so skipping them saves in proportion.
+/// Clears the part of `area` on the round panel, leaving `painted`, which the caller covers
+/// itself. The corners outside the panel are never seen, and the clear is bound by memory
+/// bandwidth, so skipping them saves in proportion.
 fn clear_visible<D: DrawTarget<Color = Color>>(
     target: &mut D,
     area: &Rectangle,
+    painted: Option<Rectangle>,
 ) -> Result<(), D::Error> {
     const RADIUS: f32 = board::LCD_WIDTH as f32 / 2.0;
     let Some(bottom_right) = area.bottom_right() else {
@@ -209,7 +214,22 @@ fn clear_visible<D: DrawTarget<Color = Color>>(
             Point::new(libm::floorf(RADIUS - half) as i32, y),
             Point::new(libm::ceilf(RADIUS + half) as i32 - 1, y),
         );
-        target.fill_solid(&row.intersection(area), chrome::BLACK)?;
+        let row = row.intersection(area);
+        let hole = painted
+            .map(|painted| painted.intersection(&row))
+            .filter(|hole| !hole.is_zero_sized());
+        let Some(hole) = hole else {
+            target.fill_solid(&row, chrome::BLACK)?;
+            continue;
+        };
+        let right = hole.top_left.x + hole.size.width as i32;
+        let row_right = row.top_left.x + row.size.width as i32;
+        for (from, to) in [(row.top_left.x, hole.top_left.x), (right, row_right)] {
+            if from < to {
+                let part = Rectangle::new(Point::new(from, y), Size::new((to - from) as u32, 1));
+                target.fill_solid(&part, chrome::BLACK)?;
+            }
+        }
     }
     Ok(())
 }

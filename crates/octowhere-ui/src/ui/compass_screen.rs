@@ -26,8 +26,8 @@ const _: () = assert!(
 const RING_RADIUS: f32 = 231.0;
 const RING_STROKE: f32 = 2.0;
 /// Every state shares the slab, so a state change does not move it. It ends 16 px above the tilt
-/// line's ink.
-const SLAB: Rectangle = Rectangle::new(Point::new(135, 186), Size::new(196, 91));
+/// line's ink. Every state fills it, which the clear before the screen relies on.
+pub(crate) const SLAB: Rectangle = Rectangle::new(Point::new(135, 186), Size::new(196, 91));
 /// The gap between the inks of the icon, caption, state line and slab, which stack as one group.
 const GROUP_GAP: i32 = 7;
 /// Where a state's line of text sits between the caption and the slab, centred by its ink. It is
