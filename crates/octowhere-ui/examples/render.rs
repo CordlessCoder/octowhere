@@ -206,6 +206,12 @@ fn settings_frames() -> Vec<(String, Stage)> {
         driver.stroke(&[Point::new(x, y)]);
         driver.wait(400_000);
     };
+    // DEVICE is in the last column: each tap on the cropped column scrolls one on.
+    let open_device = |driver: &mut Driver| {
+        tap(driver, 420, 300);
+        tap(driver, 420, 300);
+        tap(driver, 300, 300);
+    };
     let mut frames = Vec::new();
 
     let mut pulling = start();
@@ -214,9 +220,17 @@ fn settings_frames() -> Vec<(String, Stage)> {
     }
     frames.push(("panel-pulling".into(), pulling.stage));
     frames.push(("panel-rest".into(), open().stage));
+    let mut middle = open();
+    tap(&mut middle, 300, 300);
+    middle.swipe(Point::new(380, 250), Point::new(200, 250), 300_000);
+    middle.settle();
+    middle.wait(400_000);
+    frames.push(("panel-middle-always-on".into(), middle.stage));
     let mut end = open();
-    end.swipe(Point::new(380, 250), Point::new(200, 250), 200_000);
-    end.settle();
+    for _ in 0..2 {
+        end.swipe(Point::new(380, 250), Point::new(200, 250), 300_000);
+        end.settle();
+    }
     end.wait(400_000);
     frames.push(("panel-end".into(), end.stage));
     let mut scrolling = open();
@@ -228,21 +242,24 @@ fn settings_frames() -> Vec<(String, Stage)> {
     let mut brightness = open();
     tap(&mut brightness, 150, 300);
     frames.push(("settings-brightness".into(), brightness.stage));
+    let mut timeout = open();
+    tap(&mut timeout, 300, 150);
+    frames.push(("settings-timeout".into(), timeout.stage));
     let mut device = open();
-    tap(&mut device, 300, 300);
+    open_device(&mut device);
     frames.push(("panel-device".into(), device.stage));
     let mut device_end = open();
-    tap(&mut device_end, 300, 300);
+    open_device(&mut device_end);
     device_end.swipe(Point::new(233, 400), Point::new(233, 200), 300_000);
     frames.push(("panel-device-end".into(), device_end.stage));
     let mut clear = open();
-    tap(&mut clear, 300, 300);
+    open_device(&mut clear);
     clear.swipe(Point::new(233, 400), Point::new(233, 200), 300_000);
     tap(&mut clear, 233, 342);
     frames.push(("settings-clear".into(), clear.stage));
     let chooser = |steps: i32| {
         let mut driver = open();
-        tap(&mut driver, 300, 300);
+        open_device(&mut driver);
         driver.swipe(Point::new(233, 400), Point::new(233, 200), 300_000);
         tap(&mut driver, 233, 398);
         if steps > 0 {

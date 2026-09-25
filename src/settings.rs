@@ -16,7 +16,10 @@ use esp_bootloader_esp_idf::partitions::{self, DataPartitionSubType, PartitionTy
 use esp_storage::{FlashStorage, FlashStorageError};
 use octowhere_ui::{
     tz::DATABASE,
-    ui::clock::{ZoneId, ZoneMode},
+    ui::{
+        clock::{ZoneId, ZoneMode},
+        rest::Timeout,
+    },
 };
 
 /// The partition's label in `partitions.csv`.
@@ -24,9 +27,12 @@ const PARTITION: &str = "storage";
 const PAGE_SIZE: u32 = ekv::config::PAGE_SIZE as u32;
 
 // Keys, in the order a transaction must write them.
+const KEY_ALWAYS_ON: &[u8] = b"always_on";
 const KEY_AUTOMATIC_ZONE: &[u8] = b"automatic_zone";
 const KEY_BRIGHTNESS: &[u8] = b"brightness";
 const KEY_MANUAL_ZONE: &[u8] = b"manual_zone";
+/// The screen timeout in seconds, little-endian, 0 for never.
+const KEY_TIMEOUT: &[u8] = b"timeout";
 const KEY_ZONE_MODE: &[u8] = b"zone_mode";
 const MODE_AUTOMATIC: u8 = 0;
 const MODE_MANUAL: u8 = 1;
@@ -42,6 +48,8 @@ pub struct Saved {
     pub automatic_zone: Option<ZoneId>,
     /// The display's level, out of 255.
     pub brightness: Option<u8>,
+    pub timeout: Option<Timeout>,
+    pub always_on: Option<bool>,
 }
 
 /// One change to save.
@@ -54,6 +62,8 @@ pub enum Write {
     /// Back to automatic mode.
     Automatic,
     Brightness(u8),
+    Timeout(Timeout),
+    AlwaysOn(bool),
     /// Forget every setting.
     Clear,
 }
@@ -68,6 +78,8 @@ impl defmt::Format for Write {
             Self::ManualZone(zone) => defmt::write!(f, "ManualZone({=str})", DATABASE.zone(*zone).name),
             Self::Automatic => defmt::write!(f, "Automatic"),
             Self::Brightness(level) => defmt::write!(f, "Brightness({})", level),
+            Self::Timeout(timeout) => defmt::write!(f, "Timeout({=str})", timeout.label()),
+            Self::AlwaysOn(on) => defmt::write!(f, "AlwaysOn({})", on),
             Self::Clear => defmt::write!(f, "Clear"),
         }
     }
@@ -179,9 +191,14 @@ impl Store {
                 let name = name?;
                 DATABASE.find(core::str::from_utf8(&name).ok()?).map(|zone| zone.id)
             };
+            let always_on = value(KEY_ALWAYS_ON).await.and_then(|on| on.first().map(|&on| on != 0));
             let automatic_zone = zone(value(KEY_AUTOMATIC_ZONE).await);
             let brightness = value(KEY_BRIGHTNESS).await.and_then(|level| level.first().copied());
             let manual_zone = zone(value(KEY_MANUAL_ZONE).await);
+            let timeout = value(KEY_TIMEOUT)
+                .await
+                .and_then(|seconds| Some(u16::from_le_bytes(seconds.as_slice().try_into().ok()?)))
+                .and_then(Timeout::from_seconds);
             let mode = value(KEY_ZONE_MODE).await.and_then(|mode| mode.first().copied());
             Saved {
                 // A manual choice needs its zone, which a rebuilt zone table may have dropped.
@@ -192,6 +209,8 @@ impl Store {
                 manual_zone,
                 automatic_zone,
                 brightness,
+                timeout,
+                always_on,
             }
         })
     }
@@ -218,6 +237,8 @@ impl Store {
                 }
                 Write::Automatic => transaction.write(KEY_ZONE_MODE, &[MODE_AUTOMATIC]).await,
                 Write::Brightness(level) => transaction.write(KEY_BRIGHTNESS, &[level]).await,
+                Write::Timeout(timeout) => transaction.write(KEY_TIMEOUT, &timeout.seconds().to_le_bytes()).await,
+                Write::AlwaysOn(on) => transaction.write(KEY_ALWAYS_ON, &[u8::from(on)]).await,
                 Write::Clear => unreachable!("handled above"),
             };
             written.is_ok() && transaction.commit().await.is_ok()

@@ -154,9 +154,10 @@ is 14 px, about 1 mm tall in capitals, and it reads. Touch targets are no smalle
   the 66 px outlined icon. It no longer has cover-to-recalibrate, its `COVER SCREEN TO RECAL`
   hint, or the divider above it. The tilt line ends the stack. Calibration restarts from the
   panel's COMPASS cell.
-- **Settings panel:** a registration grid of six cells in three columns, two in view, scrolling
-  sideways: ZONE, BRIGHTNESS, COMPASS, GNSS, BATTERY, DEVICE. ZONE opens the picker and
-  BRIGHTNESS the editor. COMPASS restarts calibration and closes to the compass. GNSS, BATTERY
+- **Settings panel:** a registration grid of eight cells in four columns, two in view,
+  scrolling sideways: ZONE, BRIGHTNESS, TIMEOUT, ALWAYS ON, COMPASS, GNSS, BATTERY, DEVICE
+  (round 3 spec section 5). ZONE opens the picker, BRIGHTNESS the editor and TIMEOUT the
+  timeout screen. A tap on ALWAYS ON toggles and stores it. COMPASS restarts calibration and closes to the compass. GNSS, BATTERY
   and DEVICE open the device page, which ends with the attribution, `CLEAR SETTINGS` and
   `REPLAY START-UP`, which opens a chooser: the identity and logo card again, or a marked
   demonstration of one part failing (settings spec decisions 11 and 12).
@@ -168,8 +169,9 @@ is 14 px, about 1 mm tall in capitals, and it reads. Touch targets are no smalle
   GNSS sets it), a zone is listed under every offset it keeps in a year. Rows then show `--:--`.
 
 Captures drawn by the firmware's own code come from `crates/octowhere-ui/examples/render.rs`.
-It draws the faces' stills and `panel-rest`, `panel-end`, `panel-scrolling`, `panel-pulling`,
-`panel-device`, `panel-device-end`, `settings-brightness`, `settings-clear`, `picker-offset` and
+It draws the faces' stills and `panel-rest`, `panel-middle-always-on`, `panel-end`,
+`panel-scrolling`, `panel-pulling`, `panel-device`, `panel-device-end`, `settings-brightness`,
+`settings-timeout`, `settings-clear`, `picker-offset` and
 `picker-zone`, and the start-up's `startup-selftest-*`, `startup-frame-*` and `startup-fault-*`;
 `context/screen-captures/` keeps `startup-selftest`, `startup-selftest-failed`,
 `startup-identity` (frame 40), `startup-card` and `startup-fault`. It also draws the
@@ -332,10 +334,11 @@ show it with a 15 s timeout. Where the build differs from the spec or interprets
   other time. It draws each digit at its own pen, so the regular weight sits where the clock
   face's bold digits do. In NO ZONE it shows dashes, as the spec's table has it, not the clock
   face's UTC line.
-- **Not yet settable.** The timeout and ALWAYS ON are fields of the screens' state, not stored
-  settings. Until the TIMEOUT and ALWAYS ON cells are built, the device uses the spec's
-  defaults: 1 min and off. So the always-on face shows only in the simulator, the renders and
-  the tests.
+- **The cells** are section 5's. The timeout screen is the replay chooser's stepper with the
+  spec's text. The grid rests at a whole column, so it has three resting places, and a tap on
+  a cropped column scrolls one column, whichever side it is on. The clear warning, which the
+  spec leaves open, reads `ERASES ZONE, LAST FIX ZONE,` `BRIGHTNESS, TIMEOUT` `AND ALWAYS ON`
+  on three lines.
 - **Pixel shift** is not built yet, so nothing moves at a wake or on the always-on face's
   minute.
 
@@ -368,8 +371,8 @@ Physics:
 - **Page and sheet:** follow 1:1. A release commits past a quarter of the width or height, or
   faster than 600 px/s. The remainder, or the way back, eases out cubically over 160 ms
   whatever the distance, and the page's entry starts on the frame it lands.
-- **Grid snap:** a cubic ease-out over 160 ms, to either end, or one step in the flick's
-  direction past 600 px/s.
+- **Grid snap:** a cubic ease-out over 160 ms, to the nearest whole column, or one column on in
+  the flick's direction past 600 px/s.
 - **Picker list:** one row per 40 px of travel. A release faster than 500 px/s keeps stepping,
   its speed decaying with a 200 ms time constant until it is under 60 px/s or at the list's end.
 
@@ -413,10 +416,11 @@ plumbing it is firmware work. There are three grades.
 | Last zone GNSS found (automatic mode's memory) | yes | shown through ZONE |
 | Brightness | yes | BRIGHTNESS |
 | Compass calibration | no. It is learned at run time and restarted from the COMPASS cell | COMPASS |
-| Timeout, and ALWAYS ON | not yet: the device uses 1 min and off | not yet |
+| Screen timeout | yes | TIMEOUT, then the timeout screen |
+| Always-on face | yes | ALWAYS ON |
 
-- Settings live in an ekv database in flash. Clearing erases all four stored keys. The panel
-  spec has the device return to its defaults: automatic zone and brightness 120.
+- Settings live in an ekv database in flash. Clearing erases all six stored keys. The device
+  returns to its defaults: automatic zone, brightness 120, a 1 min timeout, and ALWAYS ON off.
 - Adding a setting is a new key.
 - Every write erases a 4 KiB flash page, and the display core waits through it. The first saved
   brightness held the screen for 331 ms. The same freeze follows tapping to keep a brightness,

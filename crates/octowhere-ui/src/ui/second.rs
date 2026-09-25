@@ -1,5 +1,5 @@
-//! The screens the settings panel opens: the brightness editor, the device page and the clear
-//! confirm, with the zone picker in `picker`. They share a top cap with a hint, a button and a
+//! The screens the settings panel opens: the brightness editor, the timeout screen, the device
+//! page, the clear confirm and the replay chooser, with the zone picker in `picker`. They share a top cap with a hint, a button and a
 //! 96 px icon, and most of them an open field between two rules.
 //! `context/settings-panel/SETTINGS-PANEL-SPEC.md` is their design.
 
@@ -17,6 +17,7 @@ use super::{
     icon::{Glyph, Tile},
     panel,
     picker::Picker,
+    rest::Timeout,
     reveal::{Reveal, draw_revealed},
     screens::PeripheralState,
     startup::Replay,
@@ -51,6 +52,8 @@ pub enum Store {
     Brightness(u8),
     ManualZone(super::clock::ZoneId),
     AutomaticZone,
+    Timeout(Timeout),
+    AlwaysOn(bool),
     /// Erase every stored setting and go back to the defaults.
     Clear,
 }
@@ -65,6 +68,8 @@ impl defmt::Format for Store {
                 defmt::write!(f, "ManualZone({=str})", crate::tz::DATABASE.zone(*zone).name);
             }
             Self::AutomaticZone => defmt::write!(f, "AutomaticZone"),
+            Self::Timeout(timeout) => defmt::write!(f, "Timeout({=str})", timeout.label()),
+            Self::AlwaysOn(on) => defmt::write!(f, "AlwaysOn({})", on),
             Self::Clear => defmt::write!(f, "Clear"),
         }
     }
@@ -95,6 +100,7 @@ pub enum Page {
     Clear(Clear),
     Picker(Picker),
     Replay(ReplayChooser),
+    Timeout(TimeoutChooser),
 }
 
 /// How far a second-level screen's icon and hint have come in since it opened.
@@ -125,6 +131,7 @@ impl Page {
             Self::Device(page) => page.handle(event, peripherals),
             Self::Clear(confirm) => confirm.handle(event, effects),
             Self::Replay(chooser) => chooser.handle(event),
+            Self::Timeout(chooser) => chooser.handle(event, effects),
             Self::Picker(picker) => picker.handle(event, peripherals, effects),
         }
     }
@@ -156,6 +163,7 @@ impl Page {
             Self::Device(page) => page.draw(peripherals, accents, font, target),
             Self::Clear(confirm) => confirm.draw(accents, font, target),
             Self::Replay(chooser) => chooser.draw(accents, font, target),
+            Self::Timeout(chooser) => chooser.draw(accents, font, target),
             Self::Picker(picker) => picker.draw(peripherals, accents, font, target),
         }
     }
@@ -547,13 +555,20 @@ impl Device {
     }
 }
 
-/// The replay chooser: a good start-up or one part failing, stepped through by a vertical
-/// drag and played by a tap below the top cap. Its layout is round 3's timeout screen.
+/// A list stepped by a vertical drag and chosen by a tap below the top cap: the layout of
+/// round 3's timeout screen, which the replay chooser shares.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct ReplayChooser {
+struct Stepper {
     index: usize,
     /// The index when the current drag started.
     grabbed: Option<usize>,
+}
+
+/// What a gesture did to a [`Stepper`].
+enum Step {
+    Stay,
+    Cancel,
+    Choose(usize),
 }
 
 /// Travel per step of the choices, as the zone picker's.
@@ -562,66 +577,63 @@ const CHOICE_PX: u32 = 56;
 const CHOICE_MIDDLE: f32 = 257.5;
 const CHOICE_NEIGHBOURS: [f32; 2] = [174.0, 341.0];
 const POSITION_TOP: i32 = 381;
-const PLAY_TOP: i32 = 401;
+const CHOOSE_TOP: i32 = 401;
 
-impl ReplayChooser {
-    fn stepped(from: usize, travel: i32) -> usize {
-        let steps = libm::truncf(-travel as f32 / CHOICE_TRAVEL) as isize;
-        (from as isize + steps).clamp(0, Replay::ALL.len() as isize - 1) as usize
+impl Stepper {
+    fn at(index: usize) -> Self {
+        Self { index, grabbed: None }
     }
 
-    fn handle(&mut self, event: &GestureEvent) -> Next {
+    fn stepped(from: usize, travel: i32, len: usize) -> usize {
+        let steps = libm::truncf(-travel as f32 / CHOICE_TRAVEL) as isize;
+        (from as isize + steps).clamp(0, len as isize - 1) as usize
+    }
+
+    fn handle(&mut self, event: &GestureEvent, len: usize) -> Step {
         match *event {
             GestureEvent::DragStart(drag) => {
                 self.grabbed = Some(self.index);
-                self.index = Self::stepped(self.index, drag.offset().y);
+                self.index = Self::stepped(self.index, drag.offset().y, len);
             }
             GestureEvent::DragMove(drag) | GestureEvent::DragEnd(drag) => {
                 if let Some(from) = self.grabbed {
-                    self.index = Self::stepped(from, drag.offset().y);
+                    self.index = Self::stepped(from, drag.offset().y, len);
                 }
                 if matches!(event, GestureEvent::DragEnd(_)) {
                     self.grabbed = None;
                 }
             }
-            GestureEvent::Tap(point) if in_top_cap(point) => {
-                return Next::Open(Page::Device(Device::default()));
-            }
-            GestureEvent::Tap(_) => return Next::ReplayStartUp(Replay::ALL[self.index]),
+            GestureEvent::Tap(point) if in_top_cap(point) => return Step::Cancel,
+            GestureEvent::Tap(_) => return Step::Choose(self.index),
             _ => {}
         }
-        Next::Stay
+        Step::Stay
     }
 
+    /// Draws the choice, its neighbours, the position and `choose`, the hint under it, from
+    /// `label` of each of `len` choices.
     fn draw<D: CoverageTarget<Color = Color>>(
         &self,
-        accents: Accents,
+        len: usize,
+        label: impl Fn(usize) -> &'static str,
+        choose: &str,
         font: &FontdueRenderer<'static, Color>,
         target: &mut D,
     ) -> Result<(), D::Error> {
-        let chosen = Replay::ALL[self.index];
-        let hint = "DRAG TO CHOOSE START-UP";
-        match chosen.glyph() {
-            Some(glyph) => draw_cap(hint, "CANCEL", glyph, chrome::WHITE, accents, font, target)?,
-            None => {
-                draw_cap_around_icon(hint, "CANCEL", accents, font, target)?;
-                super::startup::draw_mark_icon(ICON.bounds(), chrome::WHITE, target)?;
-            }
-        }
         draw_field(target)?;
         let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
         let big = style(font, chrome::WHITE, CHOICE_PX, FRAKTION_BOLD);
-        let label = chosen.label();
+        let chosen = label(self.index);
         let pen = Point::new(
-            text::pen_x_for_ink_left(&big, label, TEXT_LEFT),
-            text::baseline_for_ink_middle(&big, label, CHOICE_MIDDLE),
+            text::pen_x_for_ink_left(&big, chosen, TEXT_LEFT),
+            text::baseline_for_ink_middle(&big, chosen, CHOICE_MIDDLE),
         );
-        big.draw_on_baseline(label, pen, field)?;
+        big.draw_on_baseline(chosen, pen, field)?;
         let small = style(font, chrome::GRAY, 23, FRAKTION);
-        let neighbours = [self.index.checked_sub(1), Some(self.index + 1).filter(|&next| next < Replay::ALL.len())];
+        let neighbours = [self.index.checked_sub(1), Some(self.index + 1).filter(|&next| next < len)];
         for (neighbour, row) in neighbours.into_iter().zip(CHOICE_NEIGHBOURS) {
             if let Some(index) = neighbour {
-                let line = Replay::ALL[index].label();
+                let line = label(index);
                 // Centred on the row by the capitals' ink, so every row sits alike.
                 let pen = Point::new(
                     text::pen_x_for_ink_left(&small, line, TEXT_LEFT),
@@ -632,8 +644,8 @@ impl ReplayChooser {
         }
         let hint = hint_style(font);
         let mut position = String::<8>::new();
-        _ = write!(position, "{}/{}", self.index + 1, Replay::ALL.len());
-        for (line, top) in [(position.as_str(), POSITION_TOP), ("TAP TO PLAY", PLAY_TOP)] {
+        _ = write!(position, "{}/{}", self.index + 1, len);
+        for (line, top) in [(position.as_str(), POSITION_TOP), (choose, CHOOSE_TOP)] {
             let pen = Point::new(
                 text::pen_x_for_ink_centre(&hint, line, CENTER.x as f32),
                 text::baseline_for_ink_top(&hint, line, top),
@@ -641,6 +653,74 @@ impl ReplayChooser {
             hint.draw_on_baseline(line, pen, field)?;
         }
         Ok(())
+    }
+}
+
+/// The replay chooser: a good start-up or one part failing.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ReplayChooser {
+    stepper: Stepper,
+}
+
+impl ReplayChooser {
+    fn handle(&mut self, event: &GestureEvent) -> Next {
+        match self.stepper.handle(event, Replay::ALL.len()) {
+            Step::Stay => Next::Stay,
+            Step::Cancel => Next::Open(Page::Device(Device::default())),
+            Step::Choose(index) => Next::ReplayStartUp(Replay::ALL[index]),
+        }
+    }
+
+    fn draw<D: CoverageTarget<Color = Color>>(
+        &self,
+        accents: Accents,
+        font: &FontdueRenderer<'static, Color>,
+        target: &mut D,
+    ) -> Result<(), D::Error> {
+        let hint = "DRAG TO CHOOSE START-UP";
+        match Replay::ALL[self.stepper.index].glyph() {
+            Some(glyph) => draw_cap(hint, "CANCEL", glyph, chrome::WHITE, accents, font, target)?,
+            None => {
+                draw_cap_around_icon(hint, "CANCEL", accents, font, target)?;
+                super::startup::draw_mark_icon(ICON.bounds(), chrome::WHITE, target)?;
+            }
+        }
+        self.stepper.draw(Replay::ALL.len(), |index| Replay::ALL[index].label(), "TAP TO PLAY", font, target)
+    }
+}
+
+/// The timeout screen: a timeout from the five, kept by a tap below the top cap.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TimeoutChooser {
+    stepper: Stepper,
+}
+
+impl TimeoutChooser {
+    #[must_use]
+    pub fn new(timeout: Timeout) -> Self {
+        let index = Timeout::ALL.iter().position(|&each| each == timeout).unwrap_or(0);
+        Self { stepper: Stepper::at(index) }
+    }
+
+    fn handle(&mut self, event: &GestureEvent, effects: &mut Effects) -> Next {
+        match self.stepper.handle(event, Timeout::ALL.len()) {
+            Step::Stay => Next::Stay,
+            Step::Cancel => Next::Panel,
+            Step::Choose(index) => {
+                effects.store = Some(Store::Timeout(Timeout::ALL[index]));
+                Next::Panel
+            }
+        }
+    }
+
+    fn draw<D: CoverageTarget<Color = Color>>(
+        &self,
+        accents: Accents,
+        font: &FontdueRenderer<'static, Color>,
+        target: &mut D,
+    ) -> Result<(), D::Error> {
+        draw_cap("DRAG TO SET TIMEOUT", "CANCEL", &panel::TIMEOUT, chrome::WHITE, accents, font, target)?;
+        self.stepper.draw(Timeout::ALL.len(), |index| Timeout::ALL[index].label(), "TAP TO KEEP", font, target)
     }
 }
 
@@ -657,7 +737,7 @@ const RAIL_LEFT: i32 = TEXT_LEFT;
 const RAIL_RIGHT: i32 = 466 - TEXT_LEFT;
 const TARGET_LEFT: i32 = RAIL_RIGHT - HANDLE;
 const TRAVEL: i32 = TARGET_LEFT - RAIL_LEFT;
-const WARNING: [&str; 2] = ["ERASES ZONE, LAST FIX ZONE", "AND BRIGHTNESS"];
+const WARNING: [&str; 3] = ["ERASES ZONE, LAST FIX ZONE,", "BRIGHTNESS, TIMEOUT", "AND ALWAYS ON"];
 
 impl Clear {
     fn handle_at(travel: i32) -> Rectangle {
@@ -725,7 +805,7 @@ impl Clear {
         }
         let small = hint_style(font);
         let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
-        for (line, top) in WARNING.into_iter().zip([338, 356]) {
+        for (line, top) in WARNING.into_iter().zip([338, 356, 374]) {
             let pen = Point::new(
                 text::pen_x_for_ink_centre(&small, line, CENTER.x as f32),
                 text::baseline_for_ink_top(&small, line, top),

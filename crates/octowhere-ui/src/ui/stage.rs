@@ -15,7 +15,7 @@ use super::{
     pager::Pager,
     panel::{self, Cell},
     picker::Picker,
-    rest::{self, Fade, Rest},
+    rest::{self, Fade, Rest, Timeout},
     screens::{self, Battery, Gnss, PeripheralState, Screen, DEFAULT_BRIGHTNESS},
     second::{self, Effects, Next, Page},
     sheet::Sheet,
@@ -983,20 +983,19 @@ impl Stage {
         }
     }
 
+    /// Snaps the grid to the nearest whole column, or a column on in a flick's direction.
     fn release_grid(&mut self, drag: &Drag, now: Micros) {
         self.grid.grabbed = None;
         let scroll = self.grid.scroll;
         let velocity = drag.velocity.0;
-        let target = if velocity <= -SNAP_FLICK {
-            panel::MAX_SCROLL
+        let column = if velocity <= -SNAP_FLICK {
+            scroll.div_euclid(panel::COLUMN) + 1
         } else if velocity >= SNAP_FLICK {
-            0
-        } else if scroll * 2 >= panel::MAX_SCROLL {
-            panel::MAX_SCROLL
+            (scroll + panel::COLUMN - 1).div_euclid(panel::COLUMN) - 1
         } else {
-            0
+            (scroll + panel::COLUMN / 2).div_euclid(panel::COLUMN)
         };
-        self.grid.snap_to(target, now);
+        self.grid.snap_to((column * panel::COLUMN).clamp(0, panel::MAX_SCROLL), now);
     }
 
     fn tap_panel(&mut self, point: Point, now: Micros, update: &mut Update) {
@@ -1005,12 +1004,19 @@ impl Stage {
             return;
         };
         if !panel::in_view(cell.column(), scroll) {
-            self.grid.snap_to(panel::scroll_to(cell.column()), now);
+            self.grid.snap_to(panel::scroll_to(cell.column(), scroll), now);
             return;
         }
         let page = match cell {
             Cell::Zone => Page::Picker(Picker::new(&self.peripherals)),
             Cell::Brightness => Page::Brightness(second::Brightness::new(self.peripherals.brightness)),
+            Cell::Timeout => Page::Timeout(second::TimeoutChooser::new(self.peripherals.timeout)),
+            Cell::AlwaysOn => {
+                let on = !self.peripherals.always_on;
+                self.peripherals.always_on = on;
+                update.store = Some(Store::AlwaysOn(on));
+                return;
+            }
             Cell::Gnss | Cell::Battery | Cell::Device => Page::Device(second::Device::default()),
             Cell::Compass => {
                 update.recalibrate = true;
@@ -1046,8 +1052,12 @@ impl Stage {
             }
             Store::ManualZone(id) => zone = ZoneState { mode: ZoneMode::Manual, zone: Some(id) },
             Store::AutomaticZone => zone.mode = ZoneMode::Automatic,
+            Store::Timeout(timeout) => self.peripherals.timeout = timeout,
+            Store::AlwaysOn(on) => self.peripherals.always_on = on,
             Store::Clear => {
                 zone.mode = ZoneMode::Automatic;
+                self.peripherals.timeout = Timeout::default();
+                self.peripherals.always_on = false;
                 self.peripherals.brightness = DEFAULT_BRIGHTNESS;
                 self.level = DEFAULT_BRIGHTNESS;
                 update.brightness = Some(DEFAULT_BRIGHTNESS);
@@ -1098,9 +1108,9 @@ impl Stage {
             ring: leaving(p, 0.6, 0.4),
             title: leaving(p, 0.5, 0.3),
             rules: leaving(p, 0.4, 0.4),
-            rows: [rows_leaving(p, 0.3, 0.4); 6],
-            index: [leaving(p, 0.15, 0.25); 6],
-            name: [leaving(p, 0.1, 0.3); 6],
+            rows: [rows_leaving(p, 0.3, 0.4); panel::CELLS],
+            index: [leaving(p, 0.15, 0.25); panel::CELLS],
+            name: [leaving(p, 0.1, 0.3); panel::CELLS],
             markers: p <= 0.1,
             hint: leaving(p, 0.0, 0.2),
         };

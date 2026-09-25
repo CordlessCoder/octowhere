@@ -54,7 +54,7 @@ pub const SCENES: &[Scene] = &[
     },
     Scene {
         name: "settings",
-        about: "the settings panel: opening, scrolling, brightness, the zone picker, and closing",
+        about: "the settings panel: opening, scrolling, brightness, timeout, always on, the zone picker, and closing",
         run: settings,
     },
     Scene {
@@ -304,6 +304,15 @@ fn settings_walk(driver: &mut Driver) {
     driver.swipe(Point::new(220, 285), Point::new(333, 285), ms(500));
     driver.wait(ms(600));
     tap(driver, 233, 250);
+    driver.wait(ms(700));
+    // The timeout to 5 MIN, kept, then ALWAYS ON on.
+    tap(driver, 300, 150);
+    driver.wait(ms(700));
+    driver.swipe(Point::new(233, 300), Point::new(233, 250), ms(300));
+    driver.wait(ms(600));
+    tap(driver, 233, 250);
+    driver.wait(ms(700));
+    tap(driver, 300, 300);
     driver.wait(ms(700));
     // The zone picker: one offset later, its zones, and back out.
     tap(driver, 150, 150);

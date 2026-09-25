@@ -15,6 +15,30 @@ pub enum Timeout {
 }
 
 impl Timeout {
+    pub const ALL: [Self; 5] = [Self::Seconds15, Self::Seconds30, Self::Minute1, Self::Minutes5, Self::Never];
+
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Seconds15 => "15 S",
+            Self::Seconds30 => "30 S",
+            Self::Minute1 => "1 MIN",
+            Self::Minutes5 => "5 MIN",
+            Self::Never => "NEVER",
+        }
+    }
+
+    /// What the settings store keeps: the timeout in seconds, 0 for never.
+    #[must_use]
+    pub fn seconds(self) -> u16 {
+        self.duration().map_or(0, |duration| (duration / 1_000_000) as u16)
+    }
+
+    #[must_use]
+    pub fn from_seconds(seconds: u16) -> Option<Self> {
+        Self::ALL.into_iter().find(|timeout| timeout.seconds() == seconds)
+    }
+
     #[must_use]
     pub fn duration(self) -> Option<Micros> {
         match self {
@@ -119,6 +143,14 @@ mod tests {
         assert_eq!(fade.level(101_000), 200);
         assert_eq!(fade.level(500_000), 200);
         assert!(!fade.done(100_999) && fade.done(101_000));
+    }
+
+    #[test]
+    fn a_timeout_survives_the_store() {
+        for timeout in Timeout::ALL {
+            assert_eq!(Timeout::from_seconds(timeout.seconds()), Some(timeout));
+        }
+        assert_eq!(Timeout::from_seconds(7), None);
     }
 
     #[test]

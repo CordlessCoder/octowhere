@@ -39,8 +39,8 @@ initialization or peripheral mappings.
   has the command. The boundaries are ODbL, and `crates/tz/data/NOTICE.md` carries the
   attribution the licence asks for.
 - `src/settings.rs` keeps settings in flash across restarts, in an ekv database: the time zone
-  mode, the manually chosen zone, the zone GNSS last placed the device in, and the display's
-  brightness. `partitions.csv` is the flash layout, and the cargo runner flashes it.
+  mode, the manually chosen zone, the zone GNSS last placed the device in, the display's
+  brightness, the screen timeout, and whether the screen rests on the always-on face. `partitions.csv` is the flash layout, and the cargo runner flashes it.
 - `tools/tz-references.py` writes each zone's reference point into `crates/tz/src/references.rs`,
   which the picker ranks zones by.
 - `crates/` also holds the local `lc76g`, `sx127x-lora` and `sx127x-common` crates.
@@ -81,7 +81,8 @@ initialization or peripheral mappings.
   is the approved round 3 design: the compass's changes of state, a start-up sequence, screen
   timeout with dimming and an always-on face, pixel shift, and two panel cells. The owner
   approved all of it, to be built a part at a time. The compass's changes (section 1), the
-  start-up (section 2) and the timeout with the always-on face (section 3) are built;
+  start-up (section 2), the timeout with the always-on face (section 3) and the panel cells
+  (section 5) are built;
   `SCREEN-DESIGN-BRIEF.md` has where the build interpreted them. The level fades where the
   spec steps it (owner). Only the start-up's identity, logo card and fault screen run at 30 fps; everything
   else keeps timings in ms.
@@ -164,7 +165,7 @@ Weigh that cost before adding one.
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 1,097,488 bytes, 7.01% of the 15,663,104-byte app partition that
+The image is currently 1,101,952 bytes, 7.04% of the 15,663,104-byte app partition that
 `partitions.csv` gives it. Measure with `espflash save-image --chip esp32s3 --flash-size 16mb
 --partition-table partitions.csv <elf> <out>`; without those two options it assumes 4 MB of flash
 and the default table. The time zone

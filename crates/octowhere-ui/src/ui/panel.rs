@@ -1,5 +1,6 @@
-//! The settings panel: six cells in three columns, two columns in view, that scroll sideways.
-//! `context/settings-panel/SETTINGS-PANEL-SPEC.md` is its design.
+//! The settings panel: eight cells in four columns, two columns in view, that scroll sideways.
+//! `context/settings-panel/SETTINGS-PANEL-SPEC.md` is its design, and section 5 of the round 3
+//! spec adds the TIMEOUT and ALWAYS ON column.
 
 use core::fmt::Write as _;
 
@@ -23,12 +24,13 @@ use crate::chrome::{
 
 /// How far a column's left rule is from the next.
 pub const COLUMN: i32 = 146;
-/// The scroll at the end, with the last two columns in view.
-pub const MAX_SCROLL: i32 = COLUMN;
+/// The scroll at the end, with the last two columns in view. The grid rests at a whole number
+/// of columns.
+pub const MAX_SCROLL: i32 = 2 * COLUMN;
 /// Column 0's left rule at rest.
 const GRID: i32 = 87;
 const RULES: [i32; 3] = [72, 218, 364];
-const COLUMNS: i32 = 3;
+const COLUMNS: i32 = 4;
 const CENTER: Point = Point::new(233, 233);
 /// Everything in the grid is cut at the page's circle.
 const CLIP_RADIUS: f32 = 232.0;
@@ -37,13 +39,15 @@ const TITLE: &str = "SETTINGS";
 const TITLE_TOP: i32 = 38;
 const MARKERS_TOP: i32 = 386;
 const MARKER: i32 = 8;
-const MARKERS_LEFT: i32 = 215;
+const MARKERS_LEFT: i32 = 208;
 const MARKER_PITCH: i32 = 14;
 pub const HINT: &str = "DRAG UP TO CLOSE";
 const HINT_TOP: i32 = 406;
 
 pub const ZONE: Glyph = [0b11011, 0b10001, 0b00100, 0b10001, 0b11011];
 pub const BRIGHTNESS: Glyph = [0b00001, 0b00011, 0b00111, 0b01111, 0b11111];
+pub const TIMEOUT: Glyph = [0b11111, 0b01110, 0b00100, 0b01110, 0b11111];
+const ALWAYS_ON: Glyph = [0b00000, 0b01110, 0b11011, 0b01110, 0b00000];
 const CALIBRATING: Glyph = [0b01110, 0b10001, 0b10000, 0b10001, 0b01110];
 const GNSS: Glyph = [0b00100, 0b01010, 0b10101, 0b01010, 0b00100];
 const BATTERY: Glyph = [0b01110, 0b11111, 0b10001, 0b11111, 0b11111];
@@ -55,6 +59,8 @@ pub const DEVICE: Glyph = [0b00100, 0b00000, 0b01100, 0b00100, 0b01110];
 pub enum Cell {
     Zone,
     Brightness,
+    Timeout,
+    AlwaysOn,
     Compass,
     Gnss,
     Battery,
@@ -62,8 +68,16 @@ pub enum Cell {
 }
 
 impl Cell {
-    pub const ALL: [Self; 6] =
-        [Self::Zone, Self::Brightness, Self::Compass, Self::Gnss, Self::Battery, Self::Device];
+    pub const ALL: [Self; 8] = [
+        Self::Zone,
+        Self::Brightness,
+        Self::Timeout,
+        Self::AlwaysOn,
+        Self::Compass,
+        Self::Gnss,
+        Self::Battery,
+        Self::Device,
+    ];
 
     #[must_use]
     pub fn index(self) -> usize {
@@ -79,6 +93,8 @@ impl Cell {
         match self {
             Self::Zone => "ZONE",
             Self::Brightness => "BRIGHTNESS",
+            Self::Timeout => "TIMEOUT",
+            Self::AlwaysOn => "ALWAYS ON",
             Self::Compass => "COMPASS",
             Self::Gnss => "GNSS",
             Self::Battery => "BATTERY",
@@ -108,10 +124,14 @@ pub fn in_view(column: i32, scroll: i32) -> bool {
     left(column, scroll) >= GRID && left(column, scroll) + COLUMN <= GRID + 2 * COLUMN
 }
 
-/// The scroll that brings `column` into view, moving as little as it can.
+/// The scroll from `scroll` that brings `column` into view, moving as little as it can.
 #[must_use]
-pub fn scroll_to(column: i32) -> i32 {
-    ((column - 1) * COLUMN).clamp(0, MAX_SCROLL)
+pub fn scroll_to(column: i32, scroll: i32) -> i32 {
+    if left(column, scroll) < GRID {
+        (column * COLUMN).clamp(0, MAX_SCROLL)
+    } else {
+        ((column - 1) * COLUMN).clamp(scroll, MAX_SCROLL)
+    }
 }
 
 /// The cell under `point`, if any.
@@ -119,6 +139,8 @@ pub fn scroll_to(column: i32) -> i32 {
 pub fn cell_at(point: Point, scroll: i32) -> Option<Cell> {
     Cell::ALL.into_iter().find(|cell| cell.bounds(scroll).contains(point))
 }
+
+pub const CELLS: usize = Cell::ALL.len();
 
 /// How far each of the panel's accents has come in: the ring's fade, the title's reveal and the
 /// rules' draw-out, 0 to 255; per cell, how many rows of its icon's modules show, 0 to 5, and
@@ -129,9 +151,9 @@ pub struct Accents {
     pub ring: u8,
     pub title: u8,
     pub rules: u8,
-    pub rows: [u8; 6],
-    pub index: [u8; 6],
-    pub name: [u8; 6],
+    pub rows: [u8; CELLS],
+    pub index: [u8; CELLS],
+    pub name: [u8; CELLS],
     pub markers: bool,
     pub hint: u8,
 }
@@ -141,9 +163,9 @@ impl Accents {
         ring: u8::MAX,
         title: u8::MAX,
         rules: u8::MAX,
-        rows: [5; 6],
-        index: [u8::MAX; 6],
-        name: [u8::MAX; 6],
+        rows: [5; CELLS],
+        index: [u8::MAX; CELLS],
+        name: [u8::MAX; CELLS],
         markers: true,
         hint: u8::MAX,
     };
@@ -151,9 +173,9 @@ impl Accents {
         ring: 0,
         title: 0,
         rules: 0,
-        rows: [0; 6],
-        index: [0; 6],
-        name: [0; 6],
+        rows: [0; CELLS],
+        index: [0; CELLS],
+        name: [0; CELLS],
         markers: false,
         hint: 0,
     };
@@ -161,7 +183,7 @@ impl Accents {
     /// Each accent at the lesser of the two.
     #[must_use]
     pub fn min(self, other: Self) -> Self {
-        let each = |a: [u8; 6], b: [u8; 6]| core::array::from_fn(|i| a[i].min(b[i]));
+        let each = |a: [u8; CELLS], b: [u8; CELLS]| core::array::from_fn(|i| a[i].min(b[i]));
         Self {
             ring: self.ring.min(other.ring),
             title: self.title.min(other.title),
@@ -217,6 +239,19 @@ fn content(cell: Cell, peripherals: &PeripheralState) -> Content {
         Cell::Brightness => {
             _ = write!(value, "{}%", percent(peripherals.brightness));
             &BRIGHTNESS
+        }
+        Cell::Timeout => {
+            _ = value.push_str(peripherals.timeout.label());
+            &TIMEOUT
+        }
+        Cell::AlwaysOn => {
+            if peripherals.always_on {
+                tag = Some("ON");
+            } else {
+                _ = value.push_str("OFF");
+                value_color = chrome::GRAY;
+            }
+            &ALWAYS_ON
         }
         Cell::Compass => {
             let compass = &peripherals.compass;
@@ -317,10 +352,10 @@ fn marker(index: i32) -> Rectangle {
     )
 }
 
-/// All three column markers.
+/// All the column markers.
 pub const MARKERS: Rectangle = Rectangle::new(
     Point::new(MARKERS_LEFT, MARKERS_TOP),
-    Size::new((2 * MARKER_PITCH + MARKER) as u32, MARKER as u32),
+    Size::new(((COLUMNS - 1) * MARKER_PITCH + MARKER) as u32, MARKER as u32),
 );
 
 /// The rows the grid, its rules and everything in its cells occupy.
@@ -489,21 +524,28 @@ mod tests {
 
     #[test]
     fn the_first_two_columns_show_at_rest_and_the_last_two_at_the_end() {
-        assert_eq!((0..3).map(|c| in_view(c, 0)).collect::<heapless::Vec<_, 3>>(), [true, true, false]);
-        assert_eq!(
-            (0..3).map(|c| in_view(c, MAX_SCROLL)).collect::<heapless::Vec<_, 3>>(),
-            [false, true, true]
-        );
-        assert_eq!(scroll_to(2), MAX_SCROLL);
-        assert_eq!(scroll_to(0), 0);
+        let shown = |scroll| (0..4).map(|c| in_view(c, scroll)).collect::<heapless::Vec<_, 4>>();
+        assert_eq!(shown(0), [true, true, false, false]);
+        assert_eq!(shown(COLUMN), [false, true, true, false]);
+        assert_eq!(shown(MAX_SCROLL), [false, false, true, true]);
+    }
+
+    #[test]
+    fn a_cropped_column_scrolls_into_view_the_short_way() {
+        assert_eq!(scroll_to(2, 0), COLUMN);
+        assert_eq!(scroll_to(3, COLUMN), MAX_SCROLL);
+        assert_eq!(scroll_to(1, MAX_SCROLL), COLUMN);
+        assert_eq!(scroll_to(0, COLUMN), 0);
     }
 
     #[test]
     fn cells_are_hit_between_their_rules() {
         assert_eq!(cell_at(Point::new(150, 150), 0), Some(Cell::Zone));
         assert_eq!(cell_at(Point::new(150, 300), 0), Some(Cell::Brightness));
-        assert_eq!(cell_at(Point::new(300, 100), 0), Some(Cell::Compass));
-        assert_eq!(cell_at(Point::new(400, 100), 0), Some(Cell::Battery));
+        assert_eq!(cell_at(Point::new(300, 100), 0), Some(Cell::Timeout));
+        assert_eq!(cell_at(Point::new(300, 300), 0), Some(Cell::AlwaysOn));
+        assert_eq!(cell_at(Point::new(400, 100), 0), Some(Cell::Compass));
+        assert_eq!(cell_at(Point::new(300, 100), MAX_SCROLL), Some(Cell::Battery));
         assert_eq!(cell_at(Point::new(150, 218), 0), None);
         assert_eq!(cell_at(Point::new(150, 30), 0), None);
     }

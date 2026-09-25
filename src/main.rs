@@ -1214,11 +1214,13 @@ async fn async_main(spawner: Spawner) {
     let mut store = unsafe { Store::new(esp_storage::FlashStorage::new(peripherals.FLASH), seed) };
     let saved = store.load();
     info!(
-        "[SETTINGS] zone mode={} manual={} automatic={} brightness={}",
+        "[SETTINGS] zone mode={} manual={} automatic={} brightness={} timeout={} always_on={}",
         saved.zone_mode,
         saved.manual_zone.map(|zone| DATABASE.zone(zone).name),
         saved.automatic_zone.map(|zone| DATABASE.zone(zone).name),
         saved.brightness,
+        saved.timeout.map(|timeout| timeout.label()),
+        saved.always_on,
     );
     spawner.spawn(settings_task(store).unwrap());
 
@@ -1227,6 +1229,8 @@ async fn async_main(spawner: Spawner) {
 
     let stage = Stage::starting(PeripheralState {
         brightness: saved.brightness.unwrap_or(DEFAULT_BRIGHTNESS),
+        timeout: saved.timeout.unwrap_or_default(),
+        always_on: saved.always_on.unwrap_or(false),
         firmware: env!("CARGO_PKG_VERSION"),
         ..PeripheralState::default()
     });
@@ -1724,6 +1728,8 @@ async fn frame_loop(
                 info!("[SETTINGS] chosen {}", choice);
                 let write = match choice {
                     Choice::Brightness(level) => settings::Write::Brightness(level),
+                    Choice::Timeout(timeout) => settings::Write::Timeout(timeout),
+                    Choice::AlwaysOn(on) => settings::Write::AlwaysOn(on),
                     Choice::ManualZone(zone) => {
                         ZONE_CHOICE.signal(ZoneChoice::Manual(zone));
                         settings::Write::ManualZone(zone)
