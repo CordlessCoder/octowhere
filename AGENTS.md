@@ -21,13 +21,14 @@ initialization or peripheral mappings.
   gestures and paging, IMU unit conversion, the compass maths, the clock and compass screens with
   the icon and cell reveal they share, the settings panel (`panel`, the grid; `sheet`, its
   travel over the faces; `second`, the screens it opens; `picker`, the zone picker; `text`,
-  placing text by its ink), `stage`, which holds the screen state and turns touch and readings
-  into redraws and settings to store, and `script`, which steps a stage on a simulated clock for
+  placing text by its ink), `startup`, the self-test, identity, logo card and fault screen that
+  open the firmware, `scatter`, the identity's halftone scatter, kept apart for other screens
+  to use, `stage`, which holds the screen state and turns touch and readings into redraws and settings to store, and `script`, which steps a stage on a simulated clock for
   tests and scenes. `src/chrome.rs` is the font and draw-target layer, and `src/framebuffer.rs`
   holds the pixels. The firmware re-exports
   its `chrome`, `framebuffer` and `ui` modules, so `octowhere::ui::…` paths still resolve.
-- `src/main.rs` holds both cores, the sensor and motion tasks, and the frame loop, which feeds
-  the stage and flushes what it draws.
+- `src/main.rs` holds both cores, the bring-up of the parts behind the self-test, the sensor
+  and motion tasks, and the frame loop, which feeds the stage and flushes what it draws.
 - `src/board.rs` holds display geometry, the TCA9554 line indices, and the I2C addresses that
   external crates take. GPIO numbers are not there: they live at the binding sites in `main.rs`,
   and `docs/hardware-notes.md` has the pin map.
@@ -75,6 +76,13 @@ initialization or peripheral mappings.
   [`context/settings-panel/SETTINGS-DESIGN-RESPONSE.md`](context/settings-panel/SETTINGS-DESIGN-RESPONSE.md)
   is the design's reply, whose two changes are built: a fixed-time settle for pages and the
   panel, and a save that starts after its confirming frame.
+- [`context/octowhere-round3-display-motion-v5/DISPLAY-AND-MOTION-SPEC.md`](context/octowhere-round3-display-motion-v5/DISPLAY-AND-MOTION-SPEC.md)
+  is the approved round 3 design: the compass's changes of state, a start-up sequence, screen
+  timeout with dimming and an always-on face, pixel shift, and two panel cells. The owner
+  approved all of it, to be built a part at a time. The compass's changes (section 1) and
+  the start-up (section 2) are built; `SCREEN-DESIGN-BRIEF.md` has where the build interpreted
+  the start-up. Only the start-up's identity, logo card and fault screen run at 30 fps; everything
+  else keeps timings in ms.
 - [`context/HARDWARE-VERIFICATION.md`](context/HARDWARE-VERIFICATION.md) lists open hardware
   questions from static review. They are questions, not confirmed defects.
 - [`context/IMPLEMENTATION.md`](context/IMPLEMENTATION.md) is a finished multi-agent brief kept as
@@ -154,7 +162,7 @@ Weigh that cost before adding one.
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 1,026,624 bytes, 6.55% of the 15,663,104-byte app partition that
+The image is currently 1,074,976 bytes, 6.86% of the 15,663,104-byte app partition that
 `partitions.csv` gives it. Measure with `espflash save-image --chip esp32s3 --flash-size 16mb
 --partition-table partitions.csv <elf> <out>`; without those two options it assumes 4 MB of flash
 and the default table. The time zone
@@ -225,9 +233,14 @@ from an optional timer in `octowhere_ui::part_timing` (`clock-draw-bench`).
 Four parties run concurrently. Core 0 runs the frame loop, the sensor task and the motion task;
 core 1 owns the display SPI/DMA path.
 
-- `async_main` on core 0 owns touch and drawing. It reads touch directly, takes the latest sensor
-  values from `SENSOR_STATE` and `MOTION_STATE`, draws into its current framebuffer, records
-  `dirty`, and hands the state to core 1.
+- `async_main` on core 0 loads the settings, starts core 1, then runs `bring_up` and
+  `frame_loop` together. `bring_up` brings each part up against its deadline, reports each
+  outcome to the start-up's self-test through `BOOT_REPORTS`, then spawns the sensor and
+  motion tasks with the parts that answered and hands the touch controller to the frame loop.
+  A part that fails is left out, and its owner runs without it; there is no motion task
+  without the IMU. `frame_loop` owns touch and drawing. It reads touch directly, takes the
+  latest sensor values from `SENSOR_STATE` and `MOTION_STATE`, draws into its current
+  framebuffer, records `dirty` and the display level to set, and hands the state to core 1.
 - `sensor_task`, also on core 0, owns the PMIC, RTC, GNSS and LoRa. It publishes a whole
   `SensorSnapshot` through the `SENSOR_STATE` signal. In automatic zone mode it looks the zone
   up again whenever a fix moves about a kilometre, a zone at a time with a yield between, and
@@ -238,7 +251,8 @@ core 1 owns the display SPI/DMA path.
   `COMPASS_ACTIVE`, and publishes a `MotionSnapshot` through `MOTION_STATE`. The frame loop
   never touches these devices.
 - `second_core` on core 1 waits for display TE with a timeout, flushes the handed-off regions
-  through `Co5300Display`, and returns the other framebuffer. TE pulses when the panel's scan
+  through `Co5300Display`, sets the display level a frame carries before flushing it, and
+  returns the other framebuffer. The panel comes up dark. TE pulses when the panel's scan
   reaches `TE_LINE` in `src/drivers/co5300.rs`, so a flush runs behind the scan. A full flush
   takes about as long as the scan, so moving the line, or waiting for TE's level instead of its
   edge, brings back tearing.
@@ -378,7 +392,8 @@ renderer.
 
 The firmware has two faces, the clock and the compass, and the settings panel over them, and all
 follow approved designs: the clock face specification with its wordmark addendum, the compass
-animation addendum, and the settings panel specification, all listed above. Change how any of
+animation addendum, the settings panel specification, and the round 3 display and motion
+specification, all listed above. Change how any of
 them looks or moves only against those documents or a new design round. A new screen starts
 from a design round rather than from a sketch in code.
 

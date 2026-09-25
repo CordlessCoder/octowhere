@@ -6,6 +6,11 @@ owner decided during implementation, where the build had to interpret the spec, 
 matches the concept images, and the state of the UI a next round starts from. The spec itself
 has been edited to carry the owner's decisions; this document says why and what else changed.
 
+It is a record of the build at `c2d6af4`. Since then the pager and the sheet settle over a fixed
+160 ms and the entry starts on arrival, a save starts after its confirming frame (both from
+`SETTINGS-DESIGN-RESPONSE.md`), and `SCREEN-DESIGN-BRIEF.md` describes the panel as built.
+Where this document says otherwise, the brief is current.
+
 ## Where to see it
 
 - `crates/octowhere-ui/examples/render.rs` draws stills through the firmware's own code:

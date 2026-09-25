@@ -13,17 +13,24 @@ compile_error!("lora-link-tx and lora-link-rx are mutually exclusive");
 extern crate alloc;
 
 use alloc::{alloc::Allocator, boxed::Box};
-use core::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+use core::{
+    cell::Cell,
+    future::Future,
+    sync::atomic::{AtomicBool, Ordering},
+};
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_executor::Spawner;
-use embassy_futures::select::{Either, Either3, Either4, select, select3, select4};
+use embassy_futures::{
+    join::join,
+    select::{Either, Either3, Either4, select, select3, select4},
+};
 use embassy_sync::{
     blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex},
     channel::Channel,
     mutex::Mutex,
     signal::Signal,
 };
-use embassy_time::{Duration, Instant, Timer};
+use embassy_time::{Duration, Instant, TimeoutError, Timer, with_timeout};
 use embedded_graphics::prelude::*;
 use embedded_hal_async::i2c::I2c as _;
 use embedded_hal_bus::spi::ExclusiveDevice;
@@ -48,20 +55,21 @@ use octowhere::{
     fontdue,
     framebuffer::Framebuffer,
     peripherals::{
-        magnetometer::Bmm350,
-        power::Axp2101Power,
-        rtc::{DateTime as RtcDateTime, Pcf85063aRtc},
-        touch::{Cst9217, Cst9217Config, TouchData},
+        magnetometer::{Bmm350, MagnetometerError},
+        power::{Axp2101Error, Axp2101Power},
+        rtc::{DateTime as RtcDateTime, Pcf85063aRtc, RtcError},
+        touch::{Cst9217, Cst9217Config, Cst9217Error, TouchData},
     },
     settings::{self, Store},
     tz::{self, DATABASE},
     ui::{
         clock::{ClockState, ZoneId, ZoneMode, ZoneState},
-        compass::{AxisMap, Calibration, CalibrationEvent, CompassView, Vec3},
+        compass::{AxisMap, Calibration, CalibrationEvent, CompassView, Holds, Vec3},
         fusion::Fusion,
         imu::{accel_micro_ms2, gyro_micro_rad_s},
         screens::{Battery, DEFAULT_BRIGHTNESS, Gnss, PeripheralState},
         stage::{Input as StageInput, Motion, Sensors, Stage, Store as Choice, Touch},
+        startup::{Outcome, Part, Report},
     },
     util::{Swap, SwapThread},
 };
@@ -150,9 +158,6 @@ static COMPASS_RECALIBRATE: AtomicBool = AtomicBool::new(false);
 static SETTINGS_WRITES: Channel<CriticalSectionRawMutex, settings::Write, 4> = Channel::new();
 /// A zone choice from the settings panel, for `sensor_task`, which owns the zone.
 static ZONE_CHOICE: Signal<CriticalSectionRawMutex, ZoneChoice> = Signal::new();
-/// A display level for the display core to apply before its next flush, or `NO_BRIGHTNESS`.
-static BRIGHTNESS: AtomicU16 = AtomicU16::new(NO_BRIGHTNESS);
-const NO_BRIGHTNESS: u16 = u16::MAX;
 
 #[derive(Clone, Copy)]
 enum ZoneChoice {
@@ -186,14 +191,14 @@ struct SensorSnapshot {
 }
 
 struct SensorTask {
-    power: Axp2101Power<SharedI2cDevice>,
-    lora: SensorLora,
+    power: Option<Axp2101Power<SharedI2cDevice>>,
+    lora: Option<SensorLora>,
     lora_dio0: Input<'static>,
     lora_path: LoraPath,
     gnss: Lc76g<SharedI2cDevice, embassy_time::Delay>,
     nmea: [u8; 512],
     nmea_parser: NmeaParser,
-    rtc: Pcf85063aRtc<SharedI2cDevice>,
+    rtc: Option<Pcf85063aRtc<SharedI2cDevice>>,
     state: SensorSnapshot,
     rtc_sync_pending: bool,
     zones: ZoneTracker,
@@ -319,6 +324,7 @@ macro_rules! start_display_core {
                     fb: FB::alloc(&PSRAM_HEAP),
                     dirty: Dirty::new(),
                     drawn: false,
+                    brightness: None,
                     #[cfg(feature = "damage-debug")]
                     debug_changed: Dirty::new(),
                     timings: Timings::default(),
@@ -327,6 +333,7 @@ macro_rules! start_display_core {
                     fb: FB::alloc(&PSRAM_HEAP),
                     dirty: Dirty::new(),
                     drawn: false,
+                    brightness: None,
                     #[cfg(feature = "damage-debug")]
                     debug_changed: Dirty::new(),
                     timings: Timings::default(),
@@ -423,30 +430,19 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
     let mut display = Co5300Display::new(spi, reset, te, dma_tx, dma_tx_swap)
         .await
         .expect("display init failed");
-    let level = match BRIGHTNESS.swap(NO_BRIGHTNESS, Ordering::Relaxed) {
-        NO_BRIGHTNESS => DEFAULT_BRIGHTNESS,
-        level => level as u8,
-    };
-    display
-        .set_brightness(level)
-        .expect("brightness command failed");
-
     info!("[DISPLAY] OK");
 
     let mut prev_swap_spi = Duration::MIN;
     let mut first_flush = true;
     loop {
         settings::hold_display_core_if_asked();
-        let level = BRIGHTNESS.swap(NO_BRIGHTNESS, Ordering::Relaxed);
-        if level != NO_BRIGHTNESS && display.set_brightness(level as u8).is_err() {
-            warn!("[DISPLAY] brightness command failed");
-        }
         let state = swap.get();
         let SwapState {
             fb,
             timings,
             dirty,
             drawn: _,
+            brightness,
             #[cfg(feature = "damage-debug")]
             debug_changed,
         } = state;
@@ -473,6 +469,11 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
                 }
             }
             timings.vsync_wait = start.elapsed();
+        }
+        if let Some(level) = brightness.take()
+            && display.set_brightness(level).is_err()
+        {
+            warn!("[DISPLAY] brightness command failed");
         }
 
         #[cfg(feature = "timing-log")]
@@ -560,6 +561,7 @@ async fn motion_task(task: MotionTask) {
     let mut calibrated = false;
     // The latest calibrated field, for the interference check between magnetometer samples.
     let mut field: Option<Vec3> = None;
+    let mut holds = Holds::default();
     let mut last_update: Option<Instant> = None;
     let mut last_log = Instant::now();
 
@@ -657,7 +659,7 @@ async fn motion_task(task: MotionTask) {
             }
             fusion.update(gyro, accel, raw_field, trusted_field, dt);
         }
-        let compass = CompassView::new(fusion.attitude(), field, &calibration);
+        let compass = CompassView::new(fusion.attitude(), field, &calibration, &mut holds, now.as_micros());
         if log && compass_active {
             debug!(
                 "[COMPASS] screen accel={} field={}uT offset={}uT gyro_offset={} candidate={} view={}",
@@ -714,9 +716,13 @@ async fn sensor_task(task: SensorTask) {
     let mut raw_nmea_line_len = 0;
 
     #[cfg(feature = "lora-link-tx")]
-    lora.map_dio0::<TxDone>().await.unwrap();
+    if let Some(lora) = &mut lora {
+        lora.map_dio0::<TxDone>().await.unwrap();
+    }
     #[cfg(feature = "lora-link-rx")]
-    lora.map_dio0::<RxDone>().await.unwrap();
+    if let Some(lora) = &mut lora {
+        lora.map_dio0::<RxDone>().await.unwrap();
+    }
 
     #[cfg(feature = "lora-link-tx")]
     let mut lora_sequence = 0u32;
@@ -727,31 +733,35 @@ async fn sensor_task(task: SensorTask) {
         if let Some(choice) = ZONE_CHOICE.try_take() {
             zones.choose(choice);
         }
-        let present = power.is_battery_present().await.ok();
-        let battery_present = present.unwrap_or(false);
-        let battery_mv = power.get_battery_voltage().await.ok();
-        let vbus_mv = power.get_vbus_voltage().await.ok();
-        let vsys_mv = power.get_system_voltage().await.ok();
-        let percent = power.get_battery_percent().await.ok();
-        let charging = power.is_charging().await.ok();
-        let usb = power.is_vbus_in().await.ok();
-        state.battery = present.map(|present| Battery {
-            present,
-            percent: percent.unwrap_or(0).min(100),
-            millivolts: battery_mv.unwrap_or(0),
-            charging: charging.unwrap_or(false),
-            usb: usb.unwrap_or(false),
-        });
-        state.battery_present = battery_present;
-        state.battery_mv = battery_present.then_some(battery_mv).flatten();
-        state.vbus_mv = vbus_mv;
-        state.vsys_mv = vsys_mv;
-        debug!(
-            "[PMIC] sample battery_present={} VBAT={}mV VBUS={}mV VSYS={}mV",
-            battery_present, battery_mv, vbus_mv, vsys_mv
-        );
+        if let Some(power) = &mut power {
+            let present = power.is_battery_present().await.ok();
+            let battery_present = present.unwrap_or(false);
+            let battery_mv = power.get_battery_voltage().await.ok();
+            let vbus_mv = power.get_vbus_voltage().await.ok();
+            let vsys_mv = power.get_system_voltage().await.ok();
+            let percent = power.get_battery_percent().await.ok();
+            let charging = power.is_charging().await.ok();
+            let usb = power.is_vbus_in().await.ok();
+            state.battery = present.map(|present| Battery {
+                present,
+                percent: percent.unwrap_or(0).min(100),
+                millivolts: battery_mv.unwrap_or(0),
+                charging: charging.unwrap_or(false),
+                usb: usb.unwrap_or(false),
+            });
+            state.battery_present = battery_present;
+            state.battery_mv = battery_present.then_some(battery_mv).flatten();
+            state.vbus_mv = vbus_mv;
+            state.vsys_mv = vsys_mv;
+            debug!(
+                "[PMIC] sample battery_present={} VBAT={}mV VBUS={}mV VSYS={}mV",
+                battery_present, battery_mv, vbus_mv, vsys_mv
+            );
+        }
 
-        if let Ok(irq) = lora.read(IRQ_FLAGS).await {
+        if let Some(lora) = &mut lora
+            && let Ok(irq) = lora.read(IRQ_FLAGS).await
+        {
             state.lora_irq = irq;
             debug!("[LORA] sample IRQ={=u8:#04x}", irq);
         }
@@ -825,7 +835,10 @@ async fn sensor_task(task: SensorTask) {
         }
         if state.gnss.utc.is_none() {
             rtc_sync_pending = true;
-        } else if rtc_sync_pending && let Some(utc) = state.gnss.utc {
+        } else if rtc_sync_pending
+            && let Some(utc) = state.gnss.utc
+            && let Some(rtc) = &mut rtc
+        {
             if !(2000..=2099).contains(&utc.year) {
                 warn!("[RTC] GNSS year outside RTC range: {}", utc.year);
             } else {
@@ -857,7 +870,11 @@ async fn sensor_task(task: SensorTask) {
                 }
             }
         }
-        let utc = rtc.get_time().await.ok().map(|time| {
+        let utc = match &mut rtc {
+            Some(rtc) => rtc.get_time().await.ok(),
+            None => None,
+        };
+        let utc = utc.map(|time| {
             tz::DateTime {
                 year: 2000 + i32::from(time.year),
                 month: time.month,
@@ -871,7 +888,7 @@ async fn sensor_task(task: SensorTask) {
         state.clock = ClockState {
             utc,
             set_from_gnss: clock_set,
-            stopped: rtc.oscillator_stopped(),
+            stopped: rtc.as_ref().is_some_and(|rtc| rtc.oscillator_stopped()),
         };
 
         if let Some(fix) = state.gnss.fix {
@@ -886,7 +903,7 @@ async fn sensor_task(task: SensorTask) {
         state.zone = zones.state();
 
         #[cfg(feature = "lora-link-tx")]
-        {
+        if let Some(lora) = &mut lora {
             let payload = [
                 b'O',
                 b'W',
@@ -921,7 +938,7 @@ async fn sensor_task(task: SensorTask) {
         }
 
         #[cfg(feature = "lora-link-rx")]
-        {
+        if let Some(lora) = &mut lora {
             info!("[LORA] LINK_RX_START");
             if lora_path.receive().await.is_err() {
                 warn!("[LORA] LINK_RX_SWITCH_FAILED");
@@ -1091,10 +1108,58 @@ struct SwapState<A: Allocator = alloc::alloc::Global> {
     dirty: Dirty,
     /// `fb` holds a whole frame. Until it does, it is drawn in full.
     drawn: bool,
+    /// The display level to set as this frame goes out.
+    brightness: Option<u8>,
     /// The step's own damage, which the display core outlines.
     #[cfg(feature = "damage-debug")]
     debug_changed: Dirty,
     timings: Timings,
+}
+
+type TouchDriver = Cst9217<SharedI2cDevice, Input<'static>, Output<'static>, embassy_time::Delay>;
+
+/// What each part gets before the self-test fails it. The touch controller's own start-up
+/// settles for 220 ms, and the magnetometer's reads its trim in steps with waits between.
+const POWER_DEADLINE: Duration = Duration::from_millis(200);
+const CLOCK_DEADLINE: Duration = Duration::from_millis(200);
+const TOUCH_DEADLINE: Duration = Duration::from_millis(600);
+const MOTION_DEADLINE: Duration = Duration::from_millis(500);
+const MAGNET_DEADLINE: Duration = Duration::from_millis(500);
+const GNSS_DEADLINE: Duration = Duration::from_millis(1500);
+
+/// Each part's outcome as boot decides it, for the self-test.
+static BOOT_REPORTS: Channel<CriticalSectionRawMutex, Report, 6> = Channel::new();
+
+/// Runs one part's bring-up against its deadline and reports how it ended. Returns whether the
+/// part answered.
+async fn probe(part: Part, deadline: Duration, bring_up: impl Future<Output = Result<(), Outcome>>) -> bool {
+    let started = Instant::now();
+    let outcome = match with_timeout(deadline, bring_up).await {
+        Ok(Ok(())) => Outcome::Answered,
+        Ok(Err(outcome)) => outcome,
+        Err(TimeoutError) => Outcome::NoReply,
+    };
+    info!("[BOOT] {} {} in {}ms", part, outcome, started.elapsed().as_millis());
+    if BOOT_REPORTS.try_send(Report { part, outcome }).is_err() {
+        warn!("[BOOT] report queue full, {} not shown", part);
+    }
+    outcome == Outcome::Answered
+}
+
+/// The peripherals the parts behind the self-test take.
+struct Parts {
+    i2c: peripherals::I2C0<'static>,
+    scl: peripherals::GPIO14<'static>,
+    sda: peripherals::GPIO15<'static>,
+    lora_spi: peripherals::SPI3<'static>,
+    lora_sck: peripherals::GPIO16<'static>,
+    lora_mosi: peripherals::GPIO43<'static>,
+    lora_miso: peripherals::GPIO17<'static>,
+    lora_cs: peripherals::GPIO18<'static>,
+    lora_dio0: peripherals::GPIO44<'static>,
+    touch_rst: peripherals::GPIO40<'static>,
+    touch_int: peripherals::GPIO11<'static>,
+    imu_int2: peripherals::GPIO21<'static>,
 }
 
 #[embassy_executor::task]
@@ -1131,271 +1196,103 @@ async fn async_main(spawner: Spawner) {
         run_fontdue_target_benchmark(chrome::FONTS[0]).await;
     }
 
+    // Settings load before the display core starts, since a flash read holds it.
+    // SAFETY: the display core has not started, and `settings_task` holds it for every write.
+    // The seed only spreads wear across pages, so the RNG need not be at full entropy.
+    let seed = esp_hal::rng::Rng::new().random();
+    let mut store = unsafe { Store::new(esp_storage::FlashStorage::new(peripherals.FLASH), seed) };
+    let saved = store.load();
+    info!(
+        "[SETTINGS] zone mode={} manual={} automatic={} brightness={}",
+        saved.zone_mode,
+        saved.manual_zone.map(|zone| DATABASE.zone(zone).name),
+        saved.automatic_zone.map(|zone| DATABASE.zone(zone).name),
+        saved.brightness,
+    );
+    spawner.spawn(settings_task(store).unwrap());
+
+    // The panel comes up first, so the self-test shows while the parts come up behind it.
+    start_display_core!(peripherals, fb_st);
+
+    let stage = Stage::starting(PeripheralState {
+        brightness: saved.brightness.unwrap_or(DEFAULT_BRIGHTNESS),
+        firmware: env!("CARGO_PKG_VERSION"),
+        ..PeripheralState::default()
+    });
+    let parts = Parts {
+        i2c: peripherals.I2C0,
+        scl: peripherals.GPIO14,
+        sda: peripherals.GPIO15,
+        lora_spi: peripherals.SPI3,
+        lora_sck: peripherals.GPIO16,
+        lora_mosi: peripherals.GPIO43,
+        lora_miso: peripherals.GPIO17,
+        lora_cs: peripherals.GPIO18,
+        lora_dio0: peripherals.GPIO44,
+        touch_rst: peripherals.GPIO40,
+        touch_int: peripherals.GPIO11,
+        imu_int2: peripherals.GPIO21,
+    };
+    let zones = ZoneTracker {
+        mode: saved.zone_mode,
+        manual: saved.manual_zone,
+        automatic: saved.automatic_zone,
+        looked_up_at: None,
+    };
+    let touch = Cell::new(None);
+    join(bring_up(spawner, parts, zones, &touch), frame_loop(stage, fb_st, &touch)).await;
+}
+
+/// Brings up every part behind the self-test, each against its deadline, then starts the tasks
+/// that own them and hands the touch controller to the frame loop. A part that fails is left
+/// out, and its owner runs without it.
+async fn bring_up(spawner: Spawner, parts: Parts, zones: ZoneTracker, touch_slot: &Cell<Option<TouchDriver>>) {
     // The I²C pull-ups share VCC3V3 with the secondary board.
     Timer::after(Duration::from_millis(board::I2C_POWER_SETTLE_MS)).await;
 
     let i2c = I2c::new(
-        peripherals.I2C0,
+        parts.i2c,
         esp_hal::i2c::master::Config::default().with_frequency(Rate::from_hz(board::I2C_FREQ_HZ)),
     )
     .expect("I2C failed")
-    .with_scl(peripherals.GPIO14)
-    .with_sda(peripherals.GPIO15)
+    .with_scl(parts.scl)
+    .with_sda(parts.sda)
     .into_async();
     let i2c = I2C_BUS.init(Mutex::<NoopRawMutex, _>::new(i2c));
     let i2c = I2cDevice::new(i2c);
 
+    let mut power = Axp2101Power::new(i2c.clone());
+    let answered = probe(Part::Power, POWER_DEADLINE, async {
+        power.init().await.map_err(|error| match error {
+            Axp2101Error::I2c(_) => Outcome::NoReply,
+            Axp2101Error::WrongChipId(_) => Outcome::BadReply,
+        })
+    })
+    .await;
+    let mut power = answered.then_some(power);
+    let mut initial_sensor_state = SensorSnapshot::default();
+    if let Some(power) = &mut power {
+        Timer::after(Duration::from_millis(100)).await;
+        let battery_present = power.is_battery_present().await.unwrap_or(false);
+        initial_sensor_state.battery_present = battery_present;
+        if battery_present {
+            initial_sensor_state.battery_mv = power.get_battery_voltage().await.ok();
+        }
+        initial_sensor_state.vbus_mv = power.get_vbus_voltage().await.ok();
+        initial_sensor_state.vsys_mv = power.get_system_voltage().await.ok();
+    }
+
+    if reset_radios(i2c.clone()).await.is_err() {
+        error!("[TCA9554] unavailable; the GNSS and LoRa resets and the RF switch are not driven");
+    }
+
+    // The parts on the I²C bus come up while the GNSS module settles out of reset.
+    let mut rtc = Pcf85063aRtc::new(i2c.clone());
+    let touch_rst = Output::new(parts.touch_rst, Level::High, OutputConfig::default());
+    let touch_int = Input::new(parts.touch_int, InputConfig::default());
+    let mut touch = Cst9217::new(i2c.clone(), touch_rst, touch_int, embassy_time::Delay);
     let gyro_range = ph_qmi8658::GyroRange::Dps512;
     let accel_range = ph_qmi8658::AccelRange::G2;
-    let accel_lsb_per_g = ph_qmi8658::accel_lsb_per_g(accel_range);
-    let gyro_lsb_per_dps = ph_qmi8658::gyro_lsb_per_dps(gyro_range);
-
-    let mut power = Axp2101Power::new(i2c.clone());
-    power.init().await.unwrap();
-    Timer::after(Duration::from_millis(100)).await;
-    let pmic_readings = (
-        power.get_battery_voltage().await,
-        power.get_vbus_voltage().await,
-        power.get_system_voltage().await,
-    );
-    let battery_present = power.is_battery_present().await.unwrap_or(false);
-
-    let mut exio = Tca9554::new(i2c.clone(), tca9554::Address::standard());
-
-    debug!("[TCA9554] init_start");
-    exio.init().await.unwrap();
-    exio.write_output(u8::MAX).await.unwrap();
-    let exio_output_mask = (1 << board::EXIO_GPS_RESET)
-        | (1 << board::EXIO_LORA_RESET)
-        | (1 << board::EXIO_LORA_RX_SWITCH)
-        | (1 << board::EXIO_LORA_TX_SWITCH);
-    exio.write_direction(!exio_output_mask).await.unwrap();
-    info!("[TCA9554] OK");
-
-    let gps_reset = 1 << board::EXIO_GPS_RESET;
-    let lora_reset = 1 << board::EXIO_LORA_RESET;
-    let lora_rx_switch = 1 << board::EXIO_LORA_RX_SWITCH;
-    let lora_tx_switch = 1 << board::EXIO_LORA_TX_SWITCH;
-
-    debug!("[GNSS] STARTUP RESET_SEQUENCE_BEGIN");
-    exio.write_output(!(gps_reset | lora_reset | lora_tx_switch))
-        .await
-        .unwrap();
-    debug!("[GNSS] STARTUP RESET_OUTPUT phase=initial value={=u8:#04x}",
-        !(gps_reset | lora_reset | lora_tx_switch)
-    );
-    Timer::after(Duration::from_millis(10)).await;
-    exio.write_output(!lora_tx_switch)
-        .await
-        .unwrap();
-    debug!("[GNSS] STARTUP RESET_OUTPUT phase=release_gps_pulse_lora value={=u8:#04x}",
-        !lora_tx_switch
-    );
-    Timer::after(Duration::from_micros(200)).await;
-    exio.write_output(!(lora_reset | lora_tx_switch))
-        .await
-        .unwrap();
-    debug!("[GNSS] STARTUP RESET_OUTPUT phase=release_lora value={=u8:#04x}",
-        !(lora_reset | lora_tx_switch)
-    );
-    exio.write_direction(!(lora_reset | lora_rx_switch | lora_tx_switch))
-        .await
-        .unwrap();
-    debug!("[GNSS] STARTUP RESET_DIRECTION value={=u8:#04x}",
-        !(lora_reset | lora_rx_switch | lora_tx_switch)
-    );
-    Timer::after(Duration::from_millis(10)).await;
-    exio.write_output(!(lora_reset | lora_tx_switch)).await.unwrap();
-    debug!("[GNSS] STARTUP RESET_OUTPUT phase=select_rx value={=u8:#04x}",
-        !(lora_reset | lora_tx_switch)
-    );
-    let exio_direction = exio.read_direction().await.unwrap();
-    debug!("[TCA9554] direction={=u8:#04x}", exio_direction);
-    {
-        debug!("[GNSS] STARTUP settle_begin");
-        Timer::after(Duration::from_secs(1)).await;
-        debug!("[GNSS] STARTUP settle_complete");
-    }
-    drop(exio);
-
-    let mut gnss = Lc76g::new(i2c.clone(), embassy_time::Delay);
-    debug!("[GNSS] STARTUP PAIR_SEND command=732 mode={}", GNSS_LOW_POWER_MODE);
-    match gnss.set_low_power_mode(GNSS_LOW_POWER_MODE).await {
-        Ok(()) => debug!("[GNSS] STARTUP PAIR_SEND_RESULT command=732 status=accepted"),
-        Err(error) => warn!("[GNSS] STARTUP PAIR_SEND_RESULT command=732 status=error error={}", error),
-    }
-    for sentence in [NmeaSentence::Gsa, NmeaSentence::Gsv] {
-        debug!("[GNSS] STARTUP PAIR_SEND command=062 sentence={} rate=1", sentence);
-        match gnss
-            .set_nmea_output_rate(sentence, NmeaOutputRate::EVERY_FIX)
-            .await
-        {
-            Ok(()) => debug!("[GNSS] STARTUP PAIR_SEND_RESULT command=062 status=accepted"),
-            Err(error) => {
-                warn!("[GNSS] STARTUP PAIR_SEND_RESULT command=062 status=error error={}", error)
-            }
-        }
-        debug!("[GNSS] STARTUP PAIR_SEND command=063 sentence={}", sentence);
-        match gnss.query_nmea_output_rate(sentence).await {
-            Ok(()) => debug!("[GNSS] STARTUP PAIR_SEND_RESULT command=063 status=accepted"),
-            Err(error) => {
-                warn!("[GNSS] STARTUP PAIR_SEND_RESULT command=063 status=error error={}", error)
-            }
-        }
-    }
-    if let Ok(command) = PairCommandBuilder::new(67).and_then(|builder| builder.finish()) {
-        debug!("[GNSS] STARTUP PAIR_SEND command=067");
-        match gnss.send_pair_command(&command).await {
-            Ok(()) => debug!("[GNSS] STARTUP PAIR_SEND_RESULT command=067 status=accepted"),
-            Err(error) => {
-                warn!("[GNSS] STARTUP PAIR_SEND_RESULT command=067 status=error error={}", error)
-            }
-        }
-    }
-    let mut nmea = [0u8; 512];
-    let mut nmea_parser = NmeaParser::new();
-    #[cfg(feature = "gnss-raw-log")]
-    let mut raw_nmea_line = [0; 256];
-    #[cfg(feature = "gnss-raw-log")]
-    let mut raw_nmea_line_len = 0;
-    let mut gnss_parse_ok = false;
-    match gnss.read_nmea_chunk(&mut nmea).await {
-        Ok(data) if !data.is_empty() => {
-            debug!("[GNSS] NMEA_CHUNK_OK bytes={}", data.len());
-            #[cfg(feature = "gnss-raw-log")]
-            log_raw_nmea(data, &mut raw_nmea_line, &mut raw_nmea_line_len);
-            for &byte in data {
-                match nmea_parser.push(byte) {
-                    Ok(Some(NmeaUpdate::PairAck(ack))) => {
-                        debug!("[GNSS] STARTUP PAIR_ACK command={} status={}", ack.command, ack.status)
-                    }
-                    Ok(Some(NmeaUpdate::NmeaOutputRate { sentence, rate })) => {
-                        debug!("[GNSS] STARTUP PAIR_RESPONSE command=063 sentence={} rate={}", sentence, rate)
-                    }
-                    Ok(Some(NmeaUpdate::Pair(message))) => debug!("[GNSS] STARTUP PAIR_RESPONSE command={} fields={=[u8]:a}",
-                        message.command(),
-                        message.fields()
-                    ),
-                    Ok(_) => {}
-                    Err(error) => warn!("[GNSS] NMEA_PARSE_ERROR {=str}", error),
-                }
-            }
-            gnss_parse_ok = nmea_parser.state().fix.is_some();
-            let signal = nmea_parser.state().signal;
-            debug!(
-                "[GNSS] acquisition in_view={} with_signal={} used={} strongest_snr_db={} fix_type={} hdop_milli={}",
-                signal.satellites_in_view.get(),
-                signal.satellites_with_signal.get(),
-                signal.satellites_used.get(),
-                signal.strongest_snr.map(|value| value.get()),
-                signal.fix_type,
-                signal.hdop.map(|value| value.get()),
-            );
-        }
-        Ok(_) => debug!("[GNSS] NMEA_EMPTY bytes=0"),
-        Err(GnssError::I2c { operation, error }) => {
-            warn!("[GNSS] I2C_FAILED operation={} error={}", operation, error);
-        }
-        Err(GnssError::BufferTooSmall { .. }) => warn!("[GNSS] NMEA_BUFFER_TOO_SMALL"),
-        Err(GnssError::PairCommand(_)) => warn!("[GNSS] PAIR_COMMAND_BUILD_FAILED"),
-    }
-
-    let lora_spi_config = spi::master::Config::default()
-        .with_frequency(Rate::from_mhz(8))
-        .with_mode(spi::Mode::_0);
-    let lora_spi = spi::master::Spi::new(peripherals.SPI3, lora_spi_config)
-        .expect("LoRa SPI failed")
-        .with_sck(peripherals.GPIO16)
-        .with_mosi(peripherals.GPIO43)
-        .with_miso(peripherals.GPIO17)
-        .into_async();
-    let lora_cs = Output::new(peripherals.GPIO18, Level::High, OutputConfig::default());
-    let lora_spi =
-        ExclusiveDevice::new(lora_spi, lora_cs, embassy_time::Delay).expect("LoRa CS failed");
-    let mut lora_config = Sx127xLoraConfig::for_variant::<Sx1272>();
-    lora_config.auto_optimize = true;
-    lora_config.use_crc = true;
-    debug!("[LORA] init_start");
-    let mut lora = match Sx1272Lora::new_with_config(lora_spi, lora_config).await {
-        Ok(lora) => {
-            info!("[LORA] init_ok");
-            lora
-        }
-        Err(sx127xlora::driver::Sx127xError::InvalidVersion) => {
-            error!("[LORA] init_failed reason=invalid_version");
-            loop {
-                Timer::after(Duration::from_secs(1)).await;
-            }
-        }
-        Err(sx127xlora::driver::Sx127xError::SPI(_)) => {
-            error!("[LORA] init_failed reason=spi");
-            loop {
-                Timer::after(Duration::from_secs(1)).await;
-            }
-        }
-        Err(_) => {
-            error!("[LORA] init_failed reason=configuration");
-            loop {
-                Timer::after(Duration::from_secs(1)).await;
-            }
-        }
-    };
-    let lora_probe = {
-        let op_mode = lora.read(OP_MODE).await;
-        let frf_msb = lora.read(FRF_MSB).await;
-        let irq_flags = lora.read(IRQ_FLAGS).await;
-        let version = lora.read(VERSION).await;
-        match (op_mode, frf_msb, irq_flags, version) {
-            (Ok(op_mode), Ok(frf_msb), Ok(irq_flags), Ok(version)) => {
-                Ok([op_mode, frf_msb, irq_flags, version])
-            }
-            _ => Err(()),
-        }
-    };
-    let lora_result = 0;
-    let lora_dio0 = Input::new(peripherals.GPIO44, InputConfig::default());
-    let lora_path = LoraPath::new(i2c.clone(), !(lora_reset | lora_tx_switch));
-
-    let mut rtc = Pcf85063aRtc::new(i2c.clone());
-    rtc.init().await.unwrap();
-    match rtc.get_time().await {
-        Ok(time) => info!(
-            "[RTC] OK 20{:02}-{:02}-{:02} {:02}:{:02}:{:02}",
-            time.year, time.month, time.day, time.hours, time.minutes, time.seconds
-        ),
-        Err(_) => warn!("[RTC] TIME_INVALID"),
-    }
-
-    let mut magnetometer = Bmm350::new(i2c.clone());
-    let mut bmm_ready = false;
-    let mut bmm_compensated = false;
-    match magnetometer.init().await {
-        Ok(()) => {
-            magnetometer.start_normal_mode().await.unwrap();
-            Timer::after(Duration::from_millis(15)).await;
-            bmm_ready = magnetometer.data_ready().await.unwrap();
-            match magnetometer.read_data().await {
-                Ok(data) => {
-                    debug!(
-                        "[BMM350] RAW x={} y={} z={} temp={} sensor_time={}",
-                        data.raw.x, data.raw.y, data.raw.z, data.raw.temperature, data.sensor_time
-                    );
-                    if let Some(compensated) = magnetometer.compensate(&data) {
-                        debug!(
-                            "[BMM350] COMP x={}uT y={}uT z={}uT temp={}C",
-                            compensated.x_microtesla,
-                            compensated.y_microtesla,
-                            compensated.z_microtesla,
-                            compensated.temperature_celsius
-                        );
-                        bmm_compensated = true;
-                    }
-                }
-                Err(error) => warn!("[BMM350] burst read failed: {}", error),
-            }
-        }
-        Err(error) => error!("[BMM350] unavailable: {}", error),
-    }
     let lpf = ph_qmi8658::LowPassFilterMode::OdrPercent2_62;
     let config = ph_qmi8658::Config {
         accel: Some(ph_qmi8658::AccelConfig {
@@ -1409,108 +1306,122 @@ async fn async_main(spawner: Spawner) {
             lpf: Some(lpf),
         }),
     };
-
-    let imu_int2 = Input::new(peripherals.GPIO21, InputConfig::default());
-
     let mut imu = ph_qmi8658::Qmi8658::with_i2c_config(
         i2c.clone(),
         None::<core::convert::Infallible>,
-        Some(imu_int2),
+        Some(Input::new(parts.imu_int2, InputConfig::default())),
         config,
         // The QMI8658 I2C output registers are low-byte first.
         ph_qmi8658::I2cConfig::new(board::IMU_I2C_ADDR).with_big_endian(false),
     );
-    imu.init(&mut embassy_time::Delay).await.unwrap();
-    // imu.apply_interrupt_config(ph_qmi8658::InterruptConfig {
-    //     ctrl9_handshake_statusint: false,
-    //     motion_pin: ph_qmi8658::InterruptPin::Int2,
-    //     pedometer: false,
-    //     significant_motion: false,
-    //     no_motion: false,
-    //     any_motion: false,
-    //     tap: false,
-    // })
-    // .await
-    // .unwrap();
-    imu.set_mode_with_delay(
-        &mut embassy_time::Delay,
-        ph_qmi8658::OperatingMode::AccelGyroOnly,
+    let mut magnetometer = Bmm350::new(i2c.clone());
+    let ((), (rtc_ok, touch_ok, imu_ok, magnetometer_ok)) = join(
+        async {
+            debug!("[GNSS] STARTUP settle_begin");
+            Timer::after(Duration::from_secs(1)).await;
+            debug!("[GNSS] STARTUP settle_complete");
+        },
+        async {
+            let rtc_ok = probe(Part::Clock, CLOCK_DEADLINE, async {
+                rtc.init().await.map_err(|_| Outcome::NoReply)?;
+                match rtc.get_time().await {
+                    Ok(time) => info!(
+                        "[RTC] OK 20{:02}-{:02}-{:02} {:02}:{:02}:{:02}",
+                        time.year, time.month, time.day, time.hours, time.minutes, time.seconds
+                    ),
+                    // It read, and holds no valid time. The clock face shows that.
+                    Err(RtcError::InvalidDateTime) => warn!("[RTC] TIME_INVALID"),
+                    Err(RtcError::I2c(_)) => return Err(Outcome::NoReply),
+                }
+                Ok(())
+            })
+            .await;
+            let touch_ok = probe(Part::Touch, TOUCH_DEADLINE, async {
+                touch.init().await.map_err(|error| match error {
+                    Cst9217Error::I2CError(_) | Cst9217Error::ResetError(_) => Outcome::NoReply,
+                    Cst9217Error::IDMismatch | Cst9217Error::NoFirmware | Cst9217Error::InvalidCheckcode => {
+                        Outcome::BadReply
+                    }
+                })
+            })
+            .await;
+            let imu_ok = probe(Part::Motion, MOTION_DEADLINE, async {
+                let outcome = |error| match error {
+                    ph_qmi8658::Error::Bus | ph_qmi8658::Error::NotPresent => Outcome::NoReply,
+                    _ => Outcome::BadReply,
+                };
+                imu.init(&mut embassy_time::Delay).await.map_err(outcome)?;
+                imu.set_mode_with_delay(&mut embassy_time::Delay, ph_qmi8658::OperatingMode::AccelGyroOnly)
+                    .await
+                    .map_err(outcome)?;
+                imu.set_sync_sample(true).await.map_err(outcome)
+            })
+            .await;
+            let magnetometer_ok = probe(Part::Magnet, MAGNET_DEADLINE, async {
+                let outcome = |error| match error {
+                    MagnetometerError::I2c(_) => Outcome::NoReply,
+                    _ => Outcome::BadReply,
+                };
+                magnetometer.init().await.map_err(outcome)?;
+                magnetometer.start_normal_mode().await.map_err(|_| Outcome::NoReply)?;
+                Timer::after(Duration::from_millis(15)).await;
+                if !magnetometer.data_ready().await.map_err(|_| Outcome::NoReply)? {
+                    return Err(Outcome::BadReply);
+                }
+                let data = magnetometer.read_data().await.map_err(|_| Outcome::NoReply)?;
+                let compensated = magnetometer.compensate(&data).ok_or(Outcome::BadReply)?;
+                debug!(
+                    "[BMM350] COMP x={}uT y={}uT z={}uT temp={}C",
+                    compensated.x_microtesla,
+                    compensated.y_microtesla,
+                    compensated.z_microtesla,
+                    compensated.temperature_celsius
+                );
+                Ok(())
+            })
+            .await;
+            (rtc_ok, touch_ok, imu_ok, magnetometer_ok)
+        },
     )
-    .await
-    .unwrap();
-    imu.set_sync_sample(true).await.unwrap();
+    .await;
 
-    info!("[IMU] INIT");
+    let mut gnss = Lc76g::new(i2c.clone(), embassy_time::Delay);
+    let mut nmea_parser = NmeaParser::new();
+    let gnss_ok = probe(Part::Gnss, GNSS_DEADLINE, configure_gnss(&mut gnss, &mut nmea_parser)).await;
     info!(
-        "[LORA] {=str}",
-        match lora_result {
-            0 => "SX1272_OK",
-            1 => "BAD_VERSION",
-            10 => "BAD_VERSION_00",
-            11 => "BAD_VERSION_FF",
-            2 => "SPI_FAILED",
-            _ => "CS_FAILED",
-        }
+        "[BOOT] answered: power={} clock={} touch={} motion={} magnet={} gnss={}",
+        power.is_some(),
+        rtc_ok,
+        touch_ok,
+        imu_ok,
+        magnetometer_ok,
+        gnss_ok
     );
-    match lora_probe {
-        Ok([op_mode, frf_msb, irq_flags, version]) => debug!(
-            "[LORA] REGISTERS OP_MODE={=u8:#04x} FRF_MSB={=u8:#04x} IRQ={=u8:#04x} VERSION={=u8:#04x}",
-            op_mode, frf_msb, irq_flags, version
-        ),
-        Err(_) => warn!("[LORA] REGISTER_PROBE_FAILED"),
+    initial_sensor_state.gnss = nmea_parser.state();
+
+    let lora = start_lora(parts.lora_spi, parts.lora_sck, parts.lora_mosi, parts.lora_miso, parts.lora_cs).await;
+    let lora_dio0 = Input::new(parts.lora_dio0, InputConfig::default());
+    let lora_path = LoraPath::new(
+        i2c.clone(),
+        !((1 << board::EXIO_LORA_RESET) | (1 << board::EXIO_LORA_TX_SWITCH)),
+    );
+
+    if touch_ok {
+        touch.set_config(Cst9217Config {
+            mirror_x: true,
+            mirror_y: true,
+            scale_x: None,
+            scale_y: None,
+            swap_xy: false,
+        });
+        let (resolution, (firmware, checksum)) = (touch.resolution(), touch.firmware());
+        info!(
+            "[TOUCH] OK resolution={}x{} firmware={=u32:#x} checksum={=u32:#x}",
+            resolution.width, resolution.height, firmware, checksum
+        );
+        touch_slot.set(Some(touch));
     }
-    info!(
-        "[GNSS] {=str}",
-        if gnss_parse_ok {
-            "NMEA_PARSE_OK"
-        } else {
-            "NMEA_NO_COMPLETE_LINE"
-        }
-    );
-    info!("[BMM350] DATA_READY={} COMPENSATION={}", bmm_ready, bmm_compensated);
 
-    let touch_rst = Output::new(peripherals.GPIO40, Level::High, OutputConfig::default());
-    let touch_int = Input::new(peripherals.GPIO11, InputConfig::default());
-    let mut touch = Cst9217::new(i2c.clone(), touch_rst, touch_int, embassy_time::Delay);
-    touch.init().await.unwrap();
-    touch.set_config(Cst9217Config {
-        mirror_x: true,
-        mirror_y: true,
-        scale_x: None,
-        scale_y: None,
-        swap_xy: false,
-    });
-    let (resolution, (firmware, checksum)) = (touch.resolution(), touch.firmware());
-    info!(
-        "[TOUCH] OK resolution={}x{} firmware={=u32:#x} checksum={=u32:#x}",
-        resolution.width, resolution.height, firmware, checksum
-    );
-
-    // SAFETY: the display core has not started, and `settings_task` holds it for every write.
-    // The seed only spreads wear across pages, so the RNG need not be at full entropy.
-    let seed = esp_hal::rng::Rng::new().random();
-    let mut store = unsafe { Store::new(esp_storage::FlashStorage::new(peripherals.FLASH), seed) };
-    let saved = store.load();
-    info!(
-        "[SETTINGS] zone mode={} manual={} automatic={} brightness={}",
-        saved.zone_mode,
-        saved.manual_zone.map(|zone| DATABASE.zone(zone).name),
-        saved.automatic_zone.map(|zone| DATABASE.zone(zone).name),
-        saved.brightness,
-    );
-    let brightness = saved.brightness.unwrap_or(DEFAULT_BRIGHTNESS);
-    // The display core applies it as it starts the panel.
-    BRIGHTNESS.store(u16::from(brightness), Ordering::Relaxed);
-    spawner.spawn(settings_task(store).unwrap());
-
-    let initial_sensor_state = SensorSnapshot {
-        battery_present,
-        battery_mv: battery_present.then(|| pmic_readings.0.ok()).flatten(),
-        vbus_mv: pmic_readings.1.ok(),
-        vsys_mv: pmic_readings.2.ok(),
-        gnss: nmea_parser.state(),
-        ..SensorSnapshot::default()
-    };
     spawner.spawn(
         sensor_task(SensorTask {
             power,
@@ -1520,47 +1431,156 @@ async fn async_main(spawner: Spawner) {
             gnss,
             nmea: [0; 512],
             nmea_parser,
-            rtc,
+            rtc: rtc_ok.then_some(rtc),
             state: initial_sensor_state,
             rtc_sync_pending: true,
-            zones: ZoneTracker {
-                mode: saved.zone_mode,
-                manual: saved.manual_zone,
-                automatic: saved.automatic_zone,
-                looked_up_at: None,
-            },
+            zones,
         })
         .unwrap(),
     );
+    // The compass needs the IMU for its tilt. Without it, it shows NO DATA.
+    if imu_ok {
+        spawner.spawn(
+            motion_task(MotionTask {
+                magnetometer: magnetometer_ok.then_some(magnetometer),
+                imu,
+                accel_lsb_per_g: ph_qmi8658::accel_lsb_per_g(accel_range),
+                gyro_lsb_per_dps: ph_qmi8658::gyro_lsb_per_dps(gyro_range),
+            })
+            .unwrap(),
+        );
+    }
+    info!("[MEM] internal_used={} psram_used={}", esp_alloc::HEAP.used(), PSRAM_HEAP.used());
+}
 
-    spawner.spawn(
-        motion_task(MotionTask {
-            magnetometer: (bmm_ready && bmm_compensated).then_some(magnetometer),
-            imu,
-            accel_lsb_per_g,
-            gyro_lsb_per_dps,
-        })
-        .unwrap(),
-    );
+/// Holds the GNSS module and the radio in reset, then releases them with the radio listening.
+async fn reset_radios(i2c: SharedI2cDevice) -> Result<(), ()> {
+    let mut exio = Tca9554::new(i2c, tca9554::Address::standard());
+    let gps_reset = 1 << board::EXIO_GPS_RESET;
+    let lora_reset = 1 << board::EXIO_LORA_RESET;
+    let lora_rx_switch = 1 << board::EXIO_LORA_RX_SWITCH;
+    let lora_tx_switch = 1 << board::EXIO_LORA_TX_SWITCH;
+    let fail = |_| ();
+    exio.init().await.map_err(fail)?;
+    exio.write_output(u8::MAX).await.map_err(fail)?;
+    let output_mask = gps_reset | lora_reset | lora_rx_switch | lora_tx_switch;
+    exio.write_direction(!output_mask).await.map_err(fail)?;
+    info!("[TCA9554] OK");
+    exio.write_output(!(gps_reset | lora_reset | lora_tx_switch)).await.map_err(fail)?;
+    Timer::after(Duration::from_millis(10)).await;
+    exio.write_output(!lora_tx_switch).await.map_err(fail)?;
+    Timer::after(Duration::from_micros(200)).await;
+    exio.write_output(!(lora_reset | lora_tx_switch)).await.map_err(fail)?;
+    exio.write_direction(!(lora_reset | lora_rx_switch | lora_tx_switch)).await.map_err(fail)?;
+    Timer::after(Duration::from_millis(10)).await;
+    exio.write_output(!(lora_reset | lora_tx_switch)).await.map_err(fail)?;
+    let direction = exio.read_direction().await.map_err(fail)?;
+    debug!("[TCA9554] direction={=u8:#04x}", direction);
+    Ok(())
+}
 
-    start_display_core!(peripherals, fb_st);
+/// Sends the receiver its configuration and reads what it has sent. It answers if any command
+/// is accepted or a read succeeds.
+async fn configure_gnss(
+    gnss: &mut Lc76g<SharedI2cDevice, embassy_time::Delay>,
+    nmea_parser: &mut NmeaParser,
+) -> Result<(), Outcome> {
+    let mut answered = false;
+    debug!("[GNSS] STARTUP PAIR_SEND command=732 mode={}", GNSS_LOW_POWER_MODE);
+    match gnss.set_low_power_mode(GNSS_LOW_POWER_MODE).await {
+        Ok(()) => answered = true,
+        Err(error) => warn!("[GNSS] STARTUP PAIR_SEND_RESULT command=732 status=error error={}", error),
+    }
+    for sentence in [NmeaSentence::Gsa, NmeaSentence::Gsv] {
+        match gnss.set_nmea_output_rate(sentence, NmeaOutputRate::EVERY_FIX).await {
+            Ok(()) => answered = true,
+            Err(error) => warn!("[GNSS] STARTUP PAIR_SEND_RESULT command=062 status=error error={}", error),
+        }
+        match gnss.query_nmea_output_rate(sentence).await {
+            Ok(()) => answered = true,
+            Err(error) => warn!("[GNSS] STARTUP PAIR_SEND_RESULT command=063 status=error error={}", error),
+        }
+    }
+    if let Ok(command) = PairCommandBuilder::new(67).and_then(|builder| builder.finish()) {
+        match gnss.send_pair_command(&command).await {
+            Ok(()) => answered = true,
+            Err(error) => warn!("[GNSS] STARTUP PAIR_SEND_RESULT command=067 status=error error={}", error),
+        }
+    }
+    let mut nmea = [0u8; 512];
+    match gnss.read_nmea_chunk(&mut nmea).await {
+        Ok(data) => {
+            answered = true;
+            for &byte in data {
+                if let Err(error) = nmea_parser.push(byte) {
+                    warn!("[GNSS] NMEA_PARSE_ERROR {=str}", error);
+                }
+            }
+        }
+        Err(GnssError::I2c { operation, error }) => {
+            warn!("[GNSS] I2C_FAILED operation={} error={}", operation, error);
+        }
+        Err(GnssError::BufferTooSmall { .. }) => warn!("[GNSS] NMEA_BUFFER_TOO_SMALL"),
+        Err(GnssError::PairCommand(_)) => warn!("[GNSS] PAIR_COMMAND_BUILD_FAILED"),
+    }
+    if answered { Ok(()) } else { Err(Outcome::NoReply) }
+}
 
-    let mut stage = Stage::new(PeripheralState {
-        brightness,
-        firmware: env!("CARGO_PKG_VERSION"),
-        ..PeripheralState::default()
-    });
+async fn start_lora(
+    spi: peripherals::SPI3<'static>,
+    sck: peripherals::GPIO16<'static>,
+    mosi: peripherals::GPIO43<'static>,
+    miso: peripherals::GPIO17<'static>,
+    cs: peripherals::GPIO18<'static>,
+) -> Option<SensorLora> {
+    let config = spi::master::Config::default()
+        .with_frequency(Rate::from_mhz(8))
+        .with_mode(spi::Mode::_0);
+    let spi = spi::master::Spi::new(spi, config)
+        .expect("LoRa SPI failed")
+        .with_sck(sck)
+        .with_mosi(mosi)
+        .with_miso(miso)
+        .into_async();
+    let cs = Output::new(cs, Level::High, OutputConfig::default());
+    let spi = ExclusiveDevice::new(spi, cs, embassy_time::Delay).expect("LoRa CS failed");
+    let mut config = Sx127xLoraConfig::for_variant::<Sx1272>();
+    config.auto_optimize = true;
+    config.use_crc = true;
+    match Sx1272Lora::new_with_config(spi, config).await {
+        Ok(lora) => {
+            info!("[LORA] init_ok");
+            Some(lora)
+        }
+        Err(sx127xlora::driver::Sx127xError::InvalidVersion) => {
+            error!("[LORA] init_failed reason=invalid_version");
+            None
+        }
+        Err(sx127xlora::driver::Sx127xError::SPI(_)) => {
+            error!("[LORA] init_failed reason=spi");
+            None
+        }
+        Err(_) => {
+            error!("[LORA] init_failed reason=configuration");
+            None
+        }
+    }
+}
+
+/// Steps and draws the stage for ever, handing each frame to the display core. Touch is read
+/// once boot has put the controller in `touch_slot`.
+async fn frame_loop(
+    mut stage: Stage,
+    mut fb_st: SwapThread<'static, SwapState<&'static esp_alloc::EspHeap>>,
+    touch_slot: &Cell<Option<TouchDriver>>,
+) {
+    let mut touch: Option<TouchDriver> = None;
     // The last report the controller wrote, which a stale read repeats.
     let mut touch_data = TouchData::default();
     let mut last_report = Instant::now();
     /// A contact with no fresh report for this long has ended without its lift report. Held
     /// fingers were reported at most 101 ms apart.
     const LIFT_WITHOUT_REPORT: Duration = Duration::from_millis(300);
-    info!(
-        "[MEM] internal_used={} psram_used={}",
-        esp_alloc::HEAP.used(),
-        PSRAM_HEAP.used(),
-    );
     let mut prev_swap_draw = Duration::MIN;
     // The buffer drawn next last held the frame before the current one, so it repaints the
     // current step's damage as well as its own.
@@ -1575,6 +1595,9 @@ async fn async_main(spawner: Spawner) {
     // handed it over completes.
     let mut pending_write: Option<(settings::Write, u8)> = None;
     loop {
+        if touch.is_none() {
+            touch = touch_slot.take();
+        }
         let start = Instant::now();
         {
             let state = fb_st.get();
@@ -1583,42 +1606,67 @@ async fn async_main(spawner: Spawner) {
                 dirty,
                 timings,
                 drawn,
+                brightness,
                 #[cfg(feature = "damage-debug")]
                 debug_changed,
             } = state;
             let fb = &mut **fb;
             // Keep reading while either tracker holds a contact, or neither sees it lift.
             let in_contact = stage.in_contact();
-            let touch_repoll_due = in_contact && last_touch_poll.elapsed() >= TOUCH_REPOLL;
-            let wait_timeout = if touch_repoll_due || stage.is_animating() {
+            let touch_repoll_due =
+                touch.is_some() && in_contact && last_touch_poll.elapsed() >= TOUCH_REPOLL;
+            let mut wait_timeout = if touch_repoll_due || stage.is_animating() {
                 Duration::from_micros(0)
             } else if in_contact {
                 TOUCH_REPOLL
             } else {
                 Duration::from_millis(250)
             };
-            let (touch_ready, sensor_state, motion_state) = match select4(
-                touch.wait_for_touch(),
-                SENSOR_STATE.wait(),
+            if let Some(due) = stage.next_change() {
+                let until = Duration::from_micros(due.saturating_sub(Instant::now().as_micros()));
+                wait_timeout = wait_timeout.min(until);
+            }
+            let touch_wait = async {
+                match touch.as_mut() {
+                    Some(touch) => touch.wait_for_touch().await.is_ok(),
+                    None => core::future::pending().await,
+                }
+            };
+            let (touch_ready, sensor_state, motion_state, boot) = match select4(
+                touch_wait,
+                select(SENSOR_STATE.wait(), BOOT_REPORTS.receive()),
                 MOTION_STATE.wait(),
                 Timer::after(wait_timeout),
             )
             .await
             {
-                Either4::First(result) => (result.is_ok(), None, None),
-                Either4::Second(state) => (false, Some(state), None),
-                Either4::Third(state) => (false, None, Some(state)),
-                Either4::Fourth(()) => (touch_repoll_due, None, None),
+                Either4::First(ready) => (ready, None, None, None),
+                Either4::Second(Either::First(state)) => (false, Some(state), None, None),
+                Either4::Second(Either::Second(report)) => (false, None, None, Some(report)),
+                Either4::Third(state) => (false, None, Some(state), None),
+                Either4::Fourth(()) => (touch_repoll_due, None, None, None),
             };
+            let touch_ready = touch_ready
+                && match touch.as_mut().map(|touch| touch.read_touch_data()) {
+                    Some(read) => match read.await {
+                        Ok(TouchData::Stale) if last_report.elapsed() < LIFT_WITHOUT_REPORT => true,
+                        Ok(TouchData::Stale) => {
+                            touch_data = TouchData::default();
+                            true
+                        }
+                        Ok(fresh) => {
+                            touch_data = fresh;
+                            last_report = Instant::now();
+                            true
+                        }
+                        Err(_) => {
+                            warn!("[TOUCH] read failed");
+                            false
+                        }
+                    },
+                    None => false,
+                };
             if touch_ready {
-                match touch.read_touch_data().await.unwrap() {
-                    TouchData::Stale if last_report.elapsed() < LIFT_WITHOUT_REPORT => {}
-                    TouchData::Stale => touch_data = TouchData::default(),
-                    fresh => {
-                        touch_data = fresh;
-                        last_report = Instant::now();
-                    }
-                }
                 last_touch_poll = Instant::now();
             }
             let update = stage.step(StageInput {
@@ -1649,14 +1697,13 @@ async fn async_main(spawner: Spawner) {
                         },
                     }
                 }),
+                boot,
             });
             if update.recalibrate {
                 info!("[COMPASS] recalibrating on request");
                 COMPASS_RECALIBRATE.store(true, Ordering::Relaxed);
             }
-            if let Some(level) = update.brightness {
-                BRIGHTNESS.store(u16::from(level), Ordering::Relaxed);
-            }
+            *brightness = update.brightness;
             if let Some(choice) = update.store {
                 info!("[SETTINGS] chosen {}", choice);
                 let write = match choice {
@@ -1730,6 +1777,7 @@ async fn async_main(spawner: Spawner) {
         }
     }
 }
+
 
 fn queue_write(write: settings::Write) {
     if SETTINGS_WRITES.try_send(write).is_err() {

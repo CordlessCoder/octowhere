@@ -1,7 +1,7 @@
 # Screen design brief
 
-This brief is for a design agent designing a new screen for this device. It covers the
-hardware, the screens as built, the gestures, what the renderer draws and what that costs, and
+This brief is for a design agent working on this device's screens. "This round" has the
+current round's questions. The rest covers the hardware, the screens as built, the gestures, what the renderer draws and what that costs, and
 what data and settings exist. Read it with:
 
 - [`marathon-ui-cross-project-handoff.md`](marathon-ui-cross-project-handoff.md), the design
@@ -24,6 +24,81 @@ Everything those documents specify is implemented and has been approved on the p
 as fixed. A new design fits beside it, and changes it only as an explicit, separate proposal.
 Where a spec and this brief disagree about what is built, the spec's own Decisions section and
 the responses are newer.
+
+## This round
+
+The owner set three questions on 2026-09-25. Each changes how approved screens behave, so each
+answer is an explicit proposal against the documents above.
+
+The design's answer is `octowhere-round3-display-motion-v5/DISPLAY-AND-MOTION-SPEC.md`, which
+also adds a start-up sequence and an always-on face. Its compass section and its start-up are
+built; the rest is being built a part at a time.
+
+### 1. Smoother changes between the compass's states
+
+Today only a heading arriving animates. Everything else, interference coming and going above
+all, changes in one frame. "The compass's states and changes, as built" below has the states,
+the conditions behind them and every change. Things to settle:
+
+- How each change in that section's table moves, or which stay a cut.
+- The flicker. Interference is decided on every reading with no hysteresis, so near its
+  threshold it switches 50 times a second, and top edge up does the same near vertical. A
+  motion design cannot smooth that on its own. A hold time or hysteresis in the firmware can,
+  and the design may ask for one: say how long, and which states it covers.
+- The bound rules that meet this question: a fault shows at once (NO DATA), and digits never
+  animate on a change of value. INTERFERENCE is attention, not a fault.
+
+### 2. Pixel shift against burn-in
+
+The panel is lit whenever the device is on, and much of each screen never moves: the ring, the
+clock's band and wordmark, the compass's slab and captions. The owner wants the picture shifted
+by a few pixels over time on every screen, whether or not an always-on face follows.
+
+- **How the firmware would do it:** in the transfer to the panel, which copies every row
+  through a small buffer already. Reading each row from an offset moves the whole picture
+  at no drawing cost. A new offset costs one full transfer. The side the picture leaves is
+  filled black, and whatever moves past the far edge is lost.
+- **The catch:** the ring sits at radius 231 and the bands meet radius 232, on a visible circle
+  of radius 233. A shift of 2 px or more clips them on one side. Choose between accepting that,
+  bringing them inward on every screen, or shifting only what is inside them. The last one
+  means redrawing in full on every shift, and every screen's layout gains an offset.
+- **Also settle:** the step and range, the pattern, how often it moves, whether a move is
+  animated or waits for a moment that hides it (a page change, the panel opening, the screen
+  waking), and whether touch follows the picture. Touch following is cheap.
+
+### 3. Screen timeout and dimming
+
+Neither exists. The screen stays at its set brightness until power is removed.
+
+- **What the hardware offers:**
+  - Brightness is a command to the panel, from 0 to 255, and takes effect at once. The firmware
+    can step it on every frame without drawing, so a dim or a fade costs nothing in draw time.
+    The stored setting is 10–100 %.
+  - The panel's driver can switch the display off and put it to sleep, and back. Nothing calls
+    that yet.
+  - Waking:
+    - Touch and the cover report arrive on an interrupt pin. Whether the touch controller keeps
+      reporting while the panel is off is not tested.
+    - The IMU has wake-on-motion: any movement over a threshold raises an interrupt pin. It is
+      not a raise gesture. Detecting a raise, or a turn of the wrist, would be firmware work on
+      the accelerometer.
+    - The two buttons are wired, but the firmware reads neither and their pins are unverified.
+    - There is no ambient light sensor.
+- **To settle:**
+  - The timeout, and whether it differs by screen: the compass in use, the panel, an editor, the
+    picker.
+  - Whether it dims before switching off, and by how much.
+  - What wakes the screen, and what the waking touch does. For example, a waking touch might do
+    nothing else.
+  - What a wake shows: where it lands, and whether the page's entry builds again.
+  - How it meets cover. Cover means "go to the clock face" and is the only cover gesture.
+  - Whether the timeout is a setting, and where it lives on the panel. A setting is a new cell
+    or lives under an existing one, BRIGHTNESS being the obvious host.
+  - An always-on face is not asked for. A timeout design that leaves room for one later is
+    welcome.
+
+Letting the processor sleep while the screen is off is firmware work the design need not plan
+around.
 
 ## Hardware
 
@@ -65,7 +140,10 @@ is 14 px, about 1 mm tall in capitals, and it reads. Touch targets are no smalle
 | Pager | Clock face, compass. A ring of two that wraps |
 | Sheet | Settings panel, over whichever face it was opened from |
 | Second level, under the panel | Zone picker (two steps), brightness editor, device page, clear-settings confirm |
+| Before the pager | Start-up: the self-test, then the identity and the logo card, or the fault screen |
 
+- **Start-up:** as section 2 of the round 3 spec describes. "Start-up as built" below has
+  where the build interpreted it.
 - **Clock face:** as the clock face spec and the wordmark addendum describe. A time that a fix
   or zone change replaces types in again by cell reveal: the hours, minutes and seconds over
   180 ms, and the date line over 160 ms from 120 ms. A tick never animates the digits.
@@ -76,7 +154,9 @@ is 14 px, about 1 mm tall in capitals, and it reads. Touch targets are no smalle
 - **Settings panel:** a registration grid of six cells in three columns, two in view, scrolling
   sideways: ZONE, BRIGHTNESS, COMPASS, GNSS, BATTERY, DEVICE. ZONE opens the picker and
   BRIGHTNESS the editor. COMPASS restarts calibration and closes to the compass. GNSS, BATTERY
-  and DEVICE open the device page, which ends with the attribution and `CLEAR SETTINGS`.
+  and DEVICE open the device page, which ends with the attribution, `CLEAR SETTINGS` and
+  `REPLAY START-UP`, which opens a chooser: the identity and logo card again, or a marked
+  demonstration of one part failing (settings spec decisions 11 and 12).
 - **Brightness:** any whole percentage from 10 to 100, set from the finger's x over the track:
   p = clamp(round(100 (x − 66) / 334), 10, 100), and the controller gets round(255 p / 100). Each
   of the ten track cells is a tenth of full. The cell the level falls in fills from its left as
@@ -87,10 +167,137 @@ is 14 px, about 1 mm tall in capitals, and it reads. Touch targets are no smalle
 Captures drawn by the firmware's own code come from `crates/octowhere-ui/examples/render.rs`.
 It draws the faces' stills and `panel-rest`, `panel-end`, `panel-scrolling`, `panel-pulling`,
 `panel-device`, `panel-device-end`, `settings-brightness`, `settings-clear`, `picker-offset` and
-`picker-zone`. `tools/ui-sim` records scenes as GIF or MP4 at 20 ms per frame, with the finger
-marked: `--record settings` and `--record tour`. The captures' fixture is 13:07:42 on Thu 24 Sep
-2026 in Europe/Dublin, and heading 047°, pitch +05, roll −12, calibration 54 %. None of it is a
-reading.
+`picker-zone`, and the start-up's `startup-selftest-*`, `startup-frame-*` and `startup-fault-*`;
+`context/screen-captures/` keeps `startup-selftest`, `startup-selftest-failed`,
+`startup-identity` (frame 40), `startup-card` and `startup-fault`. `tools/ui-sim` records scenes as GIF or MP4 at 20 ms per frame, with the finger
+marked: `--record compass-states`, `--record startup`, `--record startup-failed`, `--record
+settings` and `--record tour`; `--scenes` lists the
+rest. The captures' fixture is 13:07:42 on Thu 24 Sep 2026 in Europe/Dublin, and heading 047°,
+pitch +05, roll −12, calibration 54 %. None of it is a reading.
+
+## The compass's states and changes, as built
+
+The compass's original specification was removed once it was built, so this section is the
+record of its states and of what happens between them. The layout is in the clock face spec's
+"Compass changes"; the entry, swipe-out and heading-arrival motion is in the animation addendum.
+The captures `compass-calibrating`, `compass-heading`, `compass-interference`,
+`compass-top-edge-up` and `compass-no-data` show the five states. The `ui-sim` scene
+`compass-states` plays a change of each kind below, and
+`context/screen-captures/compass-states.gif` is its recording.
+
+### States
+
+Listed in precedence order: the first whose condition holds is shown.
+
+| State | Condition | Ring | Dial | Icon | Caption | State line | Slab | Readout | Tilt line |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| NO DATA | the motion sensors have not yet given an orientation | `RED` | none | no-data glyph, `RED` | `COMPASS`, `GRAY` | none | `RED` | `NO DATA` | none |
+| INTERFERENCE | a heading, and the field is disturbed | `GRAY` | turned to the heading | interference glyph, `ORANGE` | `MAGNETIC`, `GRAY` | `INTERFERENCE`, Mono Bold 24 px `ORANGE` | `ORANGE` | degrees | shown |
+| HEADING | a heading | `GRAY` | turned to the heading | arrow, `BLUE` | `MAGNETIC`, `GRAY` | none | `WHITE` | degrees | shown |
+| CALIBRATING | no heading, calibration under 100 % | `GRAY` | none | open loop, `ORANGE` | `CALIBRATION`, `ORANGE` | `TURN ALL WAYS`, Mono Regular 19 px `GRAY` | `ORANGE` | percent | shown |
+| TOP EDGE UP | no heading, calibrated | `GRAY` | none | top bar, `WHITE` | `MAGNETIC`, `GRAY` | `TOP EDGE UP`, Mono Regular 20 px `GRAY` | `WHITE` | `---` | shown |
+
+The slab, icon and caption never move or resize. The state line's space is kept when it is
+empty.
+
+### What drives the states
+
+The screens get a reading every 20 ms while the compass shows, and every 250 ms otherwise. The
+motion task holds the two conditions that would otherwise flicker, before the screens see them.
+
+- **Interference:** shown once the field's strength has been more than 35 % above or below the
+  strength the calibration measured for 200 ms without a break, and cleared once it has been
+  within 30 % for 1 s without a break. The fusion still stops using a field on the first
+  reading more than 35 % off, and the heading carries on from the gyroscope, without magnetic
+  correction.
+- **Top edge up:** the heading goes when the top edge points within about 11.5° of straight up
+  or straight down, at once, and comes back only past 15°.
+- **Calibration:** the percentage rises as the device turns through orientations and never
+  falls. Only the panel's COMPASS cell restarts it, and that re-enters the compass page, so the
+  page runs its entry rather than a change of state.
+- **NO DATA:** shows only at start-up, until the first orientation. Nothing returns the compass
+  to it afterwards today, but the screen handles the change as if something could.
+
+### Changes on the settled page
+
+The round 3 spec's section 1 (`octowhere-round3-display-motion-v5/DISPLAY-AND-MOTION-SPEC.md`)
+specifies these, and they are built as it says. In short:
+
+- **Slab wipe:** a new slab colour covers it from the top in four steps, 0, 20, 40 and 60 ms
+  after the change, with the readout redrawn over both colours.
+- **Icon rebuild:** the frame takes its new colour at once, and the new glyph builds a row
+  every 30 ms.
+- **State line:** a line that goes untypes right to left over 60 ms, and a new one types in over
+  the next 120 ms, or over the first 120 ms if there was none. A changed caption retypes over
+  120 ms.
+- **Cuts:** a change into NO DATA is a single frame. On leaving NO DATA, the ring, slab, readout
+  and tilt take their new state in the first frame. The dial and readout go in the first frame
+  when the heading goes, so no stale bearing shows.
+- The dial sweeps as before when a heading arrives. Back from TOP EDGE UP within 750 ms, the
+  dial and icon show at once, and only the state line and slab change.
+- A change that arrives while another runs starts from the state shown.
+
+A digit change in the readout or the tilt line always happens in one frame, whatever the
+state.
+
+A change of state redraws only the parts that changed, a step at a time: the rows of the slab
+the wipe covers, the icon's rows, and the state line's band. None of these frames has been
+measured on the device.
+
+## Start-up as built
+
+Section 2 of `octowhere-round3-display-motion-v5/DISPLAY-AND-MOTION-SPEC.md` is built. The
+captures `startup-*` and the recordings `startup.gif` and `startup-failed.gif`, also as `.mp4`,
+show it. Where the
+build interpreted the spec:
+
+- **Boot order.** The firmware loads its settings, starts the panel, and draws the self-test
+  while the parts come up behind it. The panel comes on dark and climbs to the stored level over
+  the first 200 ms. The parts come up in cell order, and the clock, touch, motion and magnet
+  checks run during the second the GNSS module needs to settle after its reset. On the device
+  the last cell decides about 2 s after power-on.
+- **What passes.** A cell passes when its part's driver brings it up: the power controller's
+  chip ID, the clock's registers read (a clock that holds no valid time still passes, and the
+  clock face shows it as stopped), the touch controller's start-up, the IMU's mode set, and the
+  magnetometer's first compensated sample. GNSS passes if the receiver accepts any command or
+  a read of its output succeeds. A part that fails is left out: the compass shows NO DATA
+  without the IMU, the clock face shows NO DATA without the clock, and a failed touch
+  controller leaves the device without touch.
+- **Deadlines.** POWER 200 ms, CLOCK 200 ms, TOUCH 600 ms (its start-up waits 220 ms),
+  MOTION 500 ms, MAGNET 500 ms, GNSS 1.5 s.
+- **The reason line** reads `NO REPLY BY DEADLINE` for a part that ran out of time or did not
+  answer on the bus. A part that answered wrongly, such as a wrong chip ID, reads
+  `REPLY NOT AS EXPECTED`, since the spec's line would not be true of it. With several failures
+  it is the first failure's.
+- **The UTC digits** show dashes (`000 000 111 000 000`) when the clock has no time or its
+  oscillator stopped, since a time it cannot vouch for is not data.
+- **The scatter's generator** is a hash of each point's index, not Python's generator with seed
+  4, so the pattern differs from the renders. Its density and the turn of its dense side match
+  the renders to within a few per cent on every frame. The scatter is its own module
+  (`ui::scatter`), with its circle, grid origin, the band it stops short of, its colour and its
+  seed as parameters, so another screen can use it. The owner wants it on more pages later.
+- **The mark** is the spec's (since v4): rectangles and a stripe test, drawn at any size from
+  one description.
+  In the microtext row it has no hatch, as the spec's text and its 15 × 15 rows say; the row
+  preview in `marks-hatched.png` shows one. The replay chooser shows it as `GOOD`'s icon.
+- **The stretched text** (the word at 1.8× and the running line at 1.3×) is drawn by the glyph
+  renderer with a vertical scale, not stored as bitmaps.
+- **The giant name** is rasterized at 100 px and drawn with each pixel as a 2 × 2 block. At
+  200 px its largest glyph needs a 140 KB raster, and that allocation failed on the device.
+  The edges show 2 px antialiasing steps.
+- **Touch.** A touch during the identity or the card goes to the clock face with its entry
+  finished. A touch during the fault screen goes to the clock face, which runs its entry. The
+  finger that skipped is not a gesture: the faces ignore it until it lifts.
+- **After the card** the clock runs its entry, and its time and date type in as the spec
+  describes. After the fault screen it runs its entry with the time whole.
+- **Timing.** The identity and the card hold 30 fps on the device. The fault screen draws a
+  frame in about 49 ms, so it shows about 20 frames a second. Its frames are counted by the
+  clock, so it still ends on time, with frames skipped. Making it faster is open work.
+- **Replay.** The spec's Replay section matches what is built, except that the identity's
+  line reads `SELF TEST 5/6 OK` after a failed boot, as the fault screen's does, where the spec
+  has `SELF TEST 5/6`. Beyond the spec, `REPLAY START-UP` opens a chooser of a good start-up
+  or a demonstration of one part failing (settings spec decision 12), which the design has not
+  seen.
 
 ## Gestures as built
 
@@ -187,6 +394,11 @@ target that takes antialiased coverage a row at a time and blends it with what i
     trial of KH Interference. Adding a face costs flash and needs its licence checked.
 - **Upright text:** aligned in a box, or pen on a baseline. Ink bounds can be measured before
   drawing, so a design can centre by ink and tests can check that text fits.
+- **Stretched text:** upright text scaled taller than its font without widening, as the
+  start-up's word and running line.
+- **Text larger than about 100 px** needs a glyph raster of 4 bytes a pixel of its box on the
+  240 KiB internal heap. Past that it is drawn at half size with each pixel doubled, as the
+  fault screen's giant name.
 - **Quarter-turned text:** a transpose and a flip of the upright raster. It costs about what
   upright text costs. The wordmark uses it.
 - **Rotated text at any angle:** a string centred on a point, as the compass's `N E S W`. It is
@@ -200,7 +412,8 @@ target that takes antialiased coverage a row at a time and blends it with what i
   antialiased pixel, as the clock's band and the field rules.
 - **Antialiased ring:** a full circle between two radii. There is no arc or partial ring yet.
 - **Antialiased polygons:** any polygon, and curves once flattened. A fill needs about 5 bytes of
-  scratch per pixel of its bounding box, from a 252 KiB heap, so very large shapes do not fit.
+  scratch per pixel of its bounding box, from the 240 KiB internal heap, so very large shapes
+  do not fit.
 - **Motion, all in use:** a colour fade toward black in steps; the icon row build; the cell
   reveal of text; the rule draw-out; the dial sweep. There are also three kinds of sliding
   content: the page swipe (horizontal), the sheet (vertical, a face and the panel), and the
@@ -234,6 +447,8 @@ that changed redraw. Measured on the device, per frame:
 | Compass, heading changes by a degree | about 13 ms |
 | Clock drawn in full | 17.5–22.6 ms |
 | Compass drawn in full | 13–23 ms |
+| Start-up identity, a frame (scatter, microtext, word, hatch) | under 33 ms: it holds 30 fps |
+| Start-up fault screen, a frame | about 49 ms |
 
 The wordmark is about 0.3 ms of a full clock draw. The screens of the settings round are not
 measured.
@@ -251,7 +466,7 @@ measured.
   separate region sent to the panel costs about as much as 1,000 more pixels.
 - A new screen redraws in full on every change until its own change tracking is written. The
   design should say which elements change and how often, as the specs' change tables do.
-- The flash image is 1,026,624 bytes, 6.55 % of the app partition. Flash is not a constraint.
+- The flash image is 1,074,976 bytes, 6.86 % of the app partition. Flash is not a constraint.
 
 ## Owner decisions that bind later screens
 

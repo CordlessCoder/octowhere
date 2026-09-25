@@ -10,6 +10,7 @@ use super::{
     gesture::{LIFT_SAMPLES, Micros},
     screens::{PeripheralState, Screen},
     stage::{Input, Motion, Sensors, Stage, Touch, Update},
+    startup::{Outcome, Part, Report},
 };
 
 /// The time between steps.
@@ -37,6 +38,11 @@ impl<'a> Driver<'a> {
             clock_runs: false,
             observer: None,
         }
+    }
+
+    /// A driver whose stage opens on the start-up sequence.
+    pub fn starting() -> Self {
+        Self { stage: Stage::starting(PeripheralState { firmware: "0.1.0", ..PeripheralState::default() }), ..Self::new() }
     }
 
     pub fn on(screen: Screen) -> Self {
@@ -100,6 +106,11 @@ impl<'a> Driver<'a> {
 
     pub fn sensors(&mut self, sensors: Sensors) -> Update {
         self.step(Input { sensors: Some(sensors), ..Input::default() })
+    }
+
+    /// Reports how boot left `part`.
+    pub fn boot(&mut self, part: Part, outcome: Outcome) -> Update {
+        self.step(Input { boot: Some(Report { part, outcome }), ..Input::default() })
     }
 
     /// Steps without input for at least `duration`.

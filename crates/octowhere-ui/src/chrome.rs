@@ -896,6 +896,90 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
         Ok(())
     }
 
+    /// The ink box of one glyph drawn by [`draw_stretched`](Self::draw_stretched), a pixel wider
+    /// each way for its edges.
+    fn stretched_glyph(origin: Point, offset: f32, metrics: &fontdue::Metrics, scale: f32) -> Rectangle {
+        let left = origin.x + libm::roundf(offset) as i32 + metrics.xmin - 1;
+        let top = libm::floorf(origin.y as f32 - (metrics.ymin + metrics.height as i32) as f32 * scale) as i32 - 1;
+        let bottom = libm::ceilf(origin.y as f32 - metrics.ymin as f32 * scale) as i32 + 1;
+        Rectangle::with_corners(Point::new(left, top), Point::new(left + metrics.width as i32 + 1, bottom))
+    }
+
+    /// The ink bounds [`draw_stretched`](Self::draw_stretched) can cover, edges included.
+    #[must_use]
+    pub fn stretched_bounds(&self, text: &str, origin: Point, scale: f32) -> Rectangle {
+        self.pens(text)
+            .filter(|(_, _, metrics)| metrics.width > 0 && metrics.height > 0)
+            .fold(Rectangle::zero(), |bounds, (_, offset, metrics)| {
+                Self::union_rect(bounds, Self::stretched_glyph(origin, offset, &metrics, scale))
+            })
+    }
+
+    /// Draws `text` with its pen starting at `origin` on the baseline, `scale` times as tall as
+    /// the font draws it and no wider.
+    pub fn draw_stretched<D: CoverageTarget<Color = C>>(
+        &self,
+        text: &str,
+        origin: Point,
+        scale: f32,
+        target: &mut D,
+    ) -> Result<(), D::Error> {
+        let font = self.fonts[self.font_index];
+        let px = self.font_size as f32;
+        let transform = fontdue::Transform::new(1.0, 0.0, 0.0, scale);
+        let ctx = &mut *self.ctx.borrow_mut();
+        for (index, offset, metrics) in self.pens(text) {
+            if metrics.width == 0
+                || metrics.height == 0
+                || !target.visible(&Self::stretched_glyph(origin, offset, &metrics, scale))
+            {
+                continue;
+            }
+            let pen = (origin.x as f32 + libm::roundf(offset), origin.y as f32);
+            let (metrics, bitmap) =
+                font.rasterize_indexed_transformed(&mut ctx.canvas, index, px, transform, pen);
+            ctx.coverage.resize(metrics.width, 0);
+            let color = self.text_color;
+            bitmap.rows(&mut ctx.coverage, |y, x, row| {
+                target.blend_row(metrics.x + x as i32, metrics.y + y as i32, row, color);
+            });
+        }
+        Ok(())
+    }
+
+    /// Draws `text` at twice this renderer's size with its pen at `origin` on the baseline. Each
+    /// glyph is rasterized at this size into a raster of its own, freed on return, and each pixel
+    /// drawn as a 2 × 2 block: at full size the largest glyph's raster would not fit the heap.
+    pub fn draw_doubled_on_baseline<D: CoverageTarget<Color = C>>(
+        &self,
+        text: &str,
+        origin: Point,
+        target: &mut D,
+    ) -> Result<(), D::Error> {
+        let px = self.font_size as f32;
+        let font = self.fonts[self.font_index];
+        let color = self.text_color;
+        let mut canvas = fontdue::raster::Raster::empty();
+        let (mut row, mut doubled) = (alloc::vec::Vec::new(), alloc::vec::Vec::new());
+        for (index, corner, metrics) in self.glyphs_on_baseline(text, Point::zero()) {
+            let corner = origin + corner * 2;
+            let size = Size::new(2 * metrics.width as u32, 2 * metrics.height as u32);
+            if size.width == 0 || size.height == 0 || !target.visible(&Rectangle::new(corner, size)) {
+                continue;
+            }
+            let (metrics, bitmap) = font.rasterize_indexed(&mut canvas, index, px);
+            row.resize(metrics.width, 0);
+            bitmap.rows(&mut row, |y, x, span| {
+                doubled.clear();
+                doubled.extend(span.iter().flat_map(|&coverage| [coverage, coverage]));
+                let (x, y) = (corner.x + 2 * x as i32, corner.y + 2 * y as i32);
+                target.blend_row(x, y, &doubled, color);
+                target.blend_row(x, y + 1, &doubled, color);
+            });
+        }
+        Ok(())
+    }
+
     fn lay_out(&self, ctx: &mut FontdueRendererCtx, text: &str) {
         ctx.reset_layout();
         ctx.layout.append(

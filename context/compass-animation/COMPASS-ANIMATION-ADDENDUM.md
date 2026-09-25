@@ -14,6 +14,14 @@ divider above it are gone, with their entry and exit steps. A cover on the compa
 the clock face, and calibration restarts from the settings panel's COMPASS cell. The tables
 below still list the two, as a record of the approved motion.
 
+The brief's compass Behaviour section this replaces no longer exists. `SCREEN-DESIGN-BRIEF.md`
+now records the compass's states and every change between them as built.
+
+Later change, round 3 (owner, 2026-09-25): section 1 of
+`../octowhere-round3-display-motion-v5/DISPLAY-AND-MOTION-SPEC.md` replaces "Changes while the
+page shows" below. The state line and the slab now animate, the icon rebuilds on every change
+of state, and interference and top edge up are held against flicker.
+
 Files, all at 466 × 466 with a frame every 20 ms:
 
 | File | Shows |

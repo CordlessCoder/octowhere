@@ -1,7 +1,7 @@
 use embedded_graphics::prelude::{Point, Size};
 use embedded_graphics::primitives::Rectangle;
 use octowhere_ui::{
-    chrome::{Clip, Dirty, Window, FB},
+    chrome::{Clip, Color, Dirty, Window, FB},
     tz::DATABASE,
     ui::{
         clock::{ClockState, DateTime, ZoneMode, ZoneState},
@@ -12,6 +12,7 @@ use octowhere_ui::{
         screens::Screen,
         script::Driver,
         stage::{Input, Motion, Sensors, Stage},
+        startup::{Outcome, Part},
     },
 };
 
@@ -306,7 +307,8 @@ fn heading_back_after(absence: Motion, gap: Micros) -> Accents {
 
 #[test]
 fn a_heading_back_quickly_from_top_edge_up_skips_the_reveal() {
-    assert_eq!(heading_back_after(top_edge_up(), 300_000), Accents::FULL);
+    let back = heading_back_after(top_edge_up(), 300_000);
+    assert_eq!((back.dial, back.icon_rows, back.caption), (255, 5, 255), "{back:?}");
 }
 
 #[test]
@@ -638,14 +640,40 @@ fn a_tap_on_the_clock_does_nothing() {
 }
 
 #[test]
-fn interference_swaps_the_icon_without_replaying_anything() {
+fn interference_rebuilds_the_icon_and_leaves_the_dial() {
     let mut driver = settled_on_compass();
     let mut disturbed = heading(470);
     disturbed.compass.disturbed = true;
+    for motion in [disturbed, heading(470)] {
+        driver.motion(motion);
+        let changing = accents(&driver);
+        assert_eq!((changing.ring, changing.dial, changing.caption), (255, 255, 255), "{changing:?}");
+        assert!(changing.icon_rows < 5 && !changing.change.done(), "{changing:?}");
+        assert!(driver.stage.is_animating());
+        driver.wait(200_000);
+        assert_eq!(accents(&driver), Accents::FULL);
+        assert!(!driver.stage.is_animating());
+    }
+}
+
+/// The slab's colour at its top row and its bottom row.
+fn slab_ends(stage: &Stage) -> (Option<Color>, Option<Color>) {
+    let fb = render(stage);
+    (fb.pixel(Point::new(140, 205)), fb.pixel(Point::new(140, 293)))
+}
+
+#[test]
+fn the_slab_wipes_to_its_new_colour_from_the_top() {
+    let mut driver = settled_on_compass();
+    let white = slab_ends(&driver.stage);
+    let mut disturbed = heading(470);
+    disturbed.compass.disturbed = true;
     driver.motion(disturbed);
-    assert_eq!(accents(&driver), Accents::FULL);
-    driver.motion(heading(470));
-    assert_eq!(accents(&driver), Accents::FULL);
+    let (top, bottom) = slab_ends(&driver.stage);
+    assert_ne!(top, white.0, "the wipe's first step did not land");
+    assert_eq!(bottom, white.1, "the wipe reached the bottom at once");
+    driver.wait(100_000);
+    assert_eq!(slab_ends(&driver.stage), (top, top));
 }
 
 #[test]
@@ -912,8 +940,8 @@ fn clearing_takes_a_drag_all_the_way_to_the_target() {
     driver.swipe(Point::new(150, 280), Point::new(420, 280), 300_000);
     tap(&mut driver, 233, 250);
     tap(&mut driver, 300, 300);
-    driver.swipe(Point::new(233, 400), Point::new(233, 250), 300_000);
-    tap(&mut driver, 233, 398);
+    scroll_device_to_end(&mut driver);
+    tap(&mut driver, 233, 342);
     assert!(matches!(driver.stage.page(), Some(Page::Clear(_))));
     // Short of the target, or not starting on the handle, erases nothing.
     let updates = driver.swipe(Point::new(90, 258), Point::new(250, 258), 300_000);
@@ -1059,5 +1087,245 @@ fn a_frame_replaces_everything_under_it() {
         stage.draw(&mut *over);
         let wrong = differing(&over, &render(&stage));
         assert_eq!(wrong, 0, "{name}: {wrong} pixels kept the old frame");
+    }
+}
+
+/// Reports every part a tenth of a second apart, `failing` with no reply.
+fn boot_all(driver: &mut Driver, failing: Option<Part>) {
+    for part in Part::ALL {
+        driver.wait(100_000);
+        let outcome = if failing == Some(part) { Outcome::NoReply } else { Outcome::Answered };
+        driver.boot(part, outcome);
+    }
+}
+
+/// Redrawing only what each step marked leaves both buffers and the panel as a full redraw
+/// would, from the first self-test frame through the identity, the card and the clock's entry,
+/// and through a failure's fault screen.
+#[test]
+fn start_up_damage_redraws_what_changed() {
+    for failing in [None, Some(Part::Magnet)] {
+        let mut driver = Driver::starting();
+        driver.sensors(sensors(clock_at(12, 7, 42), zone("Europe/Dublin", ZoneMode::Automatic)).sensors.unwrap());
+        let mut buffers = Buffers::new();
+        let mut check = |driver: &Driver, when: &str| {
+            let partial = buffers.draw(&driver.stage, driver.stage.changed());
+            let whole = render(&driver.stage);
+            assert_eq!(differing(partial, &whole), 0, "{failing:?} {when}");
+            assert_eq!(differing(&buffers.panel, &whole), 0, "{failing:?} {when}, on the panel");
+        };
+        for part in Part::ALL {
+            for _ in 0..6 {
+                driver.step(Input::default());
+                check(&driver, "waiting");
+            }
+            let outcome = if failing == Some(part) { Outcome::NoReply } else { Outcome::Answered };
+            driver.boot(part, outcome);
+            check(&driver, part.name());
+        }
+        for step in 0..300 {
+            driver.step(Input::default());
+            check(&driver, &format!("step {step}"));
+        }
+        assert!(!driver.stage.starting_up());
+    }
+}
+
+#[test]
+fn the_brightness_climbs_from_dark_on_the_first_frame() {
+    let mut driver = Driver::starting();
+    assert_eq!(driver.step(Input::default()).brightness, Some(0));
+    let levels: Vec<_> = (0..14).filter_map(|_| driver.step(Input::default()).brightness).collect();
+    assert!(levels.windows(2).all(|pair| pair[0] < pair[1]), "{levels:?}");
+    assert_eq!(levels.last(), Some(&120));
+}
+
+#[test]
+fn a_touch_during_the_self_test_does_nothing() {
+    let mut driver = Driver::starting();
+    driver.boot(Part::Power, Outcome::Answered);
+    driver.stroke(&[Point::new(400, 233), Point::new(200, 233)]);
+    assert!(driver.stage.starting_up());
+}
+
+#[test]
+fn a_touch_during_the_identity_goes_to_the_settled_clock_and_is_not_a_swipe() {
+    let mut driver = Driver::starting();
+    boot_all(&mut driver, None);
+    driver.wait(600_000);
+    assert!(driver.stage.starting_up());
+    driver.touch(Some(Point::new(400, 233)));
+    assert!(!driver.stage.starting_up());
+    assert_eq!(driver.stage.clock_accents(), ClockAccents::FULL);
+    for x in [340, 280, 220, 160] {
+        driver.touch(Some(Point::new(x, 233)));
+    }
+    driver.stroke(&[]);
+    driver.settle();
+    assert_eq!(driver.stage.screen(), Screen::Clock);
+}
+
+#[test]
+fn after_the_card_the_clock_runs_its_entry_and_types_its_time_in() {
+    let mut driver = Driver::starting();
+    driver.sensors(sensors(clock_at(12, 7, 42), zone("Europe/Dublin", ZoneMode::Automatic)).sensors.unwrap());
+    boot_all(&mut driver, None);
+    while driver.stage.starting_up() {
+        driver.step(Input::default());
+    }
+    let accents = driver.stage.clock_accents();
+    assert!(accents.time < u8::MAX && accents.ring < u8::MAX, "{accents:?}");
+}
+
+#[test]
+fn a_failure_shows_the_fault_screen_then_the_clock() {
+    let mut driver = Driver::starting();
+    boot_all(&mut driver, Some(Part::Gnss));
+    // The hold, then 120 frames at 30 fps.
+    driver.wait(4_200_000);
+    assert!(driver.stage.starting_up());
+    driver.wait(200_000);
+    assert!(!driver.stage.starting_up());
+    assert_eq!(driver.stage.screen(), Screen::Clock);
+}
+
+/// Scrolls the open device page past its end, which leaves the clear box on rows 320 to 363
+/// and the replay box on rows 376 to 419.
+fn scroll_device_to_end(driver: &mut Driver) {
+    driver.swipe(Point::new(233, 400), Point::new(233, 200), 300_000);
+}
+
+fn open_device_page() -> Driver<'static> {
+    let mut driver = open_panel(Screen::Clock);
+    tap(&mut driver, 300, 300);
+    assert!(matches!(driver.stage.page(), Some(Page::Device(_))));
+    driver
+}
+
+#[test]
+fn replay_on_the_device_page_plays_the_identity_and_the_card_then_the_clock() {
+    let mut driver = open_device_page();
+    scroll_device_to_end(&mut driver);
+    tap(&mut driver, 233, 398);
+    tap(&mut driver, 233, 258);
+    assert!(driver.stage.starting_up());
+    assert!(driver.stage.page().is_none());
+    assert_eq!(driver.stage.panel_offset(), 0);
+    // Seventy-one frames at 30 fps, 300 ms of them waited out after the tap.
+    driver.wait(2_000_000);
+    assert!(driver.stage.starting_up());
+    driver.wait(100_000);
+    assert!(!driver.stage.starting_up());
+    assert_eq!(driver.stage.screen(), Screen::Clock);
+}
+
+#[test]
+fn a_replay_after_a_failed_boot_still_shows_the_identity() {
+    let mut driver = Driver::starting();
+    boot_all(&mut driver, Some(Part::Magnet));
+    driver.wait(4_800_000);
+    assert!(!driver.stage.starting_up());
+    driver.swipe(Point::new(233, 80), Point::new(233, 420), 250_000);
+    driver.settle();
+    driver.wait(600_000);
+    tap(&mut driver, 300, 300);
+    scroll_device_to_end(&mut driver);
+    tap(&mut driver, 233, 398);
+    tap(&mut driver, 233, 258);
+    assert!(driver.stage.starting_up());
+    driver.wait(1_000_000);
+    assert!(driver.stage.starting_up(), "the fault screen would have ended by now");
+}
+
+#[test]
+fn replay_damage_redraws_what_changed() {
+    let mut driver = open_device_page();
+    scroll_device_to_end(&mut driver);
+    let mut buffers = Buffers::new();
+    for _ in 0..2 {
+        buffers.draw(&driver.stage, &Dirty::new_full());
+    }
+    tap(&mut driver, 233, 398);
+    driver.stroke(&[Point::new(233, 258)]);
+    for step in 0..160 {
+        let partial = buffers.draw(&driver.stage, driver.stage.changed());
+        let whole = render(&driver.stage);
+        assert_eq!(differing(partial, &whole), 0, "step {step}");
+        driver.step(Input::default());
+    }
+}
+
+/// Opens the replay chooser from the device page and drags it `steps` choices down the list.
+fn open_replay_chooser(steps: i32) -> Driver<'static> {
+    let mut driver = open_device_page();
+    scroll_device_to_end(&mut driver);
+    tap(&mut driver, 233, 398);
+    assert!(matches!(driver.stage.page(), Some(Page::Replay(_))));
+    if steps > 0 {
+        driver.swipe(Point::new(233, 330), Point::new(233, 330 - 40 * steps - 10), 300_000);
+    }
+    driver
+}
+
+#[test]
+fn cancel_on_the_replay_chooser_goes_back_to_the_device_page() {
+    let mut driver = open_replay_chooser(0);
+    tap(&mut driver, 100, 120);
+    assert!(matches!(driver.stage.page(), Some(Page::Device(_))));
+}
+
+#[test]
+fn a_demonstrated_failure_runs_the_self_test_and_the_fault_screen_then_the_clock() {
+    let mut driver = open_replay_chooser(5);
+    tap(&mut driver, 233, 258);
+    assert!(driver.stage.starting_up());
+    // The self-test to the last report at 1.3 s, its last glyph and its 300 ms hold, then 4 s.
+    driver.wait(5_300_000);
+    assert!(driver.stage.starting_up());
+    driver.wait(400_000);
+    assert!(!driver.stage.starting_up());
+    assert_eq!(driver.stage.screen(), Screen::Clock);
+}
+
+#[test]
+fn a_demonstration_leaves_the_boot_record_for_a_good_replay() {
+    let mut driver = Driver::starting();
+    boot_all(&mut driver, None);
+    driver.wait(2_700_000);
+    let replay = |driver: &mut Driver, steps: i32| {
+        driver.swipe(Point::new(233, 80), Point::new(233, 420), 250_000);
+        driver.settle();
+        driver.wait(600_000);
+        tap(driver, 300, 300);
+        scroll_device_to_end(driver);
+        tap(driver, 233, 398);
+        if steps > 0 {
+            driver.swipe(Point::new(233, 330), Point::new(233, 330 - 40 * steps - 10), 300_000);
+        }
+        tap(driver, 233, 258);
+    };
+    replay(&mut driver, 1);
+    driver.wait(6_000_000);
+    assert!(!driver.stage.starting_up());
+    // A good replay goes straight to the identity: no self-test, and no fault screen.
+    replay(&mut driver, 0);
+    driver.wait(2_200_000);
+    assert!(!driver.stage.starting_up());
+}
+
+#[test]
+fn demonstration_damage_redraws_what_changed() {
+    let mut driver = open_replay_chooser(3);
+    let mut buffers = Buffers::new();
+    for _ in 0..2 {
+        buffers.draw(&driver.stage, &Dirty::new_full());
+    }
+    driver.stroke(&[Point::new(233, 258)]);
+    for step in 0..360 {
+        let partial = buffers.draw(&driver.stage, driver.stage.changed());
+        let whole = render(&driver.stage);
+        assert_eq!(differing(partial, &whole), 0, "step {step}");
+        assert_eq!(differing(&buffers.panel, &whole), 0, "step {step}, on the panel");
+        driver.step(Input::default());
     }
 }

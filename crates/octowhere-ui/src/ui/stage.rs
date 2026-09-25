@@ -17,6 +17,7 @@ use super::{
     screens::{self, Battery, Gnss, PeripheralState, Screen, DEFAULT_BRIGHTNESS},
     second::{self, Effects, Next, Page},
     sheet::Sheet,
+    startup::{self, Phase, Replay, Report, Startup},
 };
 
 pub use super::second::Store;
@@ -64,6 +65,15 @@ const DIAL_SWEEP: Micros = 170_000;
 /// A heading back from TOP EDGE UP within this shows the dial at once, so tilting through
 /// vertical does not replay anything.
 const TOP_EDGE_GRACE: Micros = 750_000;
+
+/// The compass page since it settled.
+struct CompassSettled {
+    times: CompassTimes,
+    /// The state shown, with the value it had when that state began.
+    shown: Mode,
+    /// When the change of state running started, and the state it left.
+    change: Option<(Micros, Mode)>,
+}
 
 /// When each of the compass's accents started, or starts. `None` shows it whole at once.
 #[derive(Clone, Copy, Debug, Default)]
@@ -152,6 +162,8 @@ pub struct Input {
     pub touch: Option<Touch>,
     pub motion: Option<Motion>,
     pub sensors: Option<Sensors>,
+    /// A part boot brought up, or gave up on, while the start-up sequence shows.
+    pub boot: Option<Report>,
 }
 
 /// What the frame loop owes after a step. [`Stage::changed`] holds the pixels it changed.
@@ -218,8 +230,8 @@ pub struct Stage {
     renderer: FontdueRenderer<'static, Color>,
     /// When the last cover report arrived, while the hand that sent it may still be there.
     covered_at: Option<Micros>,
-    /// When the compass page last settled into view, and the state it showed last step.
-    compass_settled: Option<(CompassTimes, Mode)>,
+    /// The compass page, while it has settled into view.
+    compass_settled: Option<CompassSettled>,
     /// When the heading gave way to TOP EDGE UP, while nothing else has shown since.
     top_edge_since: Option<Micros>,
     accents: Accents,
@@ -247,9 +259,29 @@ pub struct Stage {
     page: Option<(Page, Micros)>,
     page_accents: second::Accents,
     drawn_page: Option<(Page, second::Accents, PeripheralState)>,
+    /// The start-up sequence, until it hands over to the clock face.
+    startup: Option<Startup>,
+    /// What the sequence showed after the last step.
+    startup_view: Option<startup::View>,
+    /// The brightness the sequence last asked for.
+    startup_level: Option<u8>,
+    /// When the sequence next changes on its own.
+    startup_due: Option<Micros>,
+    /// A contact that skipped the sequence, which the faces ignore until it lifts.
+    swallowed: bool,
+    /// The clock face's time and date type in as its next entry starts.
+    clock_types_in: bool,
+    /// The start-up once it has finished, which a replay counts its parts from.
+    last_boot: Option<Startup>,
 }
 
 impl Stage {
+    /// A stage that opens on the start-up sequence, for boot to report each part to.
+    #[must_use]
+    pub fn starting(peripherals: PeripheralState) -> Self {
+        Self { startup: Some(Startup::new()), ..Self::new(peripherals) }
+    }
+
     #[must_use]
     pub fn new(peripherals: PeripheralState) -> Self {
         Self {
@@ -284,7 +316,27 @@ impl Stage {
             page: None,
             page_accents: second::Accents::FULL,
             drawn_page: None,
+            startup: None,
+            startup_view: None,
+            startup_level: None,
+            startup_due: None,
+            swallowed: false,
+            clock_types_in: false,
+            last_boot: None,
         }
+    }
+
+    /// Whether the start-up sequence still shows.
+    #[must_use]
+    pub fn starting_up(&self) -> bool {
+        self.startup.is_some()
+    }
+
+    /// When the stage next changes on its own, if nothing arrives first and it is not
+    /// [animating](Self::is_animating), which wants a step as soon as possible.
+    #[must_use]
+    pub fn next_change(&self) -> Option<Micros> {
+        self.startup_due
     }
 
     /// Jumps to `screen` as though the pager had come to rest on it, with the panel closed.
@@ -396,6 +448,7 @@ impl Stage {
             touch,
             motion,
             sensors,
+            boot,
         } = input;
         self.changed.clear();
         self.fading = false;
@@ -421,9 +474,15 @@ impl Stage {
                 Touch::Cover => [None; 2],
             };
         }
+        if self.startup.is_some() && self.step_startup(now, boot, touch.is_some(), &mut update) {
+            return update;
+        }
+        if self.raw_touch[0].is_none() {
+            self.swallowed = false;
+        }
 
         let previous = (self.pager.view(), self.sheet.offset(), self.grid.scroll, self.page.is_some());
-        let event = if touch.is_some() {
+        let event = if touch.is_some() && !self.swallowed {
             self.gesture.update(self.raw_touch[0], now)
         } else {
             GestureEvent::None
@@ -502,6 +561,92 @@ impl Stage {
         update
     }
 
+    /// Steps the start-up sequence, with `touched` set when a fresh touch reading came in.
+    /// Returns whether it still shows; once it has handed over, the rest of the step shows the
+    /// clock face.
+    fn step_startup(&mut self, now: Micros, boot: Option<Report>, touched: bool, update: &mut Update) -> bool {
+        let Some(startup) = &mut self.startup else {
+            return false;
+        };
+        startup.begin(now);
+        if let Some(report) = boot {
+            startup.report(report, now);
+        }
+        let contact = touched && self.raw_touch[0].is_some();
+        if contact {
+            startup.touch(now);
+        }
+        let level = self.peripherals.brightness;
+        let brightness = match startup.phase(now) {
+            Phase::Done { entry, after_card } => {
+                // A replay or a demonstration leaves the boot's own record.
+                if let Some(finished) = self.startup.take().filter(Startup::is_boot) {
+                    self.last_boot = Some(finished);
+                }
+                self.startup_view = None;
+                self.startup_due = None;
+                // A finger still down came during the sequence, so it is not a gesture.
+                self.swallowed = self.raw_touch[0].is_some();
+                self.face(Screen::Clock);
+                if !entry {
+                    self.settle_clock(now);
+                }
+                self.clock_types_in = after_card;
+                level
+            }
+            _ => startup.brightness(now, level),
+        };
+        if self.startup_level != Some(brightness) {
+            self.startup_level = Some(brightness);
+            update.brightness = Some(brightness);
+        }
+        let Some(startup) = &self.startup else {
+            return false;
+        };
+        self.startup_due = startup.next_change(now);
+        let view = startup.view(now);
+        match (self.startup_view, view) {
+            (Some(startup::View::SelfTest(before)), Some(startup::View::SelfTest(after))) => {
+                if before != after {
+                    for (i, _) in before.iter().zip(&after).enumerate().filter(|(_, (a, b))| a != b) {
+                        self.changed.add(startup::cell_bounds(i));
+                    }
+                    self.changed.add(startup::counter_bounds(&self.renderer, &before));
+                    self.changed.add(startup::counter_bounds(&self.renderer, &after));
+                }
+            }
+            (before, after) if before != after => self.changed.make_full(),
+            _ => {}
+        }
+        self.startup_view = view;
+        true
+    }
+
+    /// Closes the panel and plays the start-up again: the identity and the card, or a
+    /// demonstration of a part failing.
+    fn replay_startup(&mut self, replay: Replay, now: Micros) {
+        let startup = match replay {
+            Replay::Good => self.last_boot.clone().unwrap_or_default().replay(now),
+            Replay::Failing(part) => Startup::demo(part, now),
+        };
+        self.show(Screen::Clock);
+        self.startup_due = startup.next_change(now);
+        self.startup_view = startup.view(now);
+        self.startup = Some(startup);
+        self.changed.make_full();
+    }
+
+    /// Shows the clock face as though its entry had finished.
+    fn settle_clock(&mut self, now: Micros) {
+        let time = clock_screen::shown_time(&self.peripherals.clock);
+        self.clock_settled = Some(ClockSettled {
+            times: ClockTimes::default(),
+            shown: clock_screen::Keys::of(&self.peripherals.clock),
+            time: time.map(|time| (time, now)),
+            retyped: None,
+        });
+    }
+
     /// Works out what the step changed, from what each settled screen showed before.
     fn track_damage(&mut self, full: bool) {
         let view = self.pager.view();
@@ -571,6 +716,7 @@ impl Stage {
                 Next::Stay => {}
                 Next::Panel => self.page = None,
                 Next::Open(page) => self.page = Some((page, now)),
+                Next::ReplayStartUp(replay) => self.replay_startup(replay, now),
             }
             return;
         }
@@ -777,7 +923,7 @@ impl Stage {
         }
         let offset = self.face_offset();
         let mode = Mode::of(&self.peripherals.compass);
-        let (times, shown) = match &mut self.compass_settled {
+        let CompassSettled { times, shown, change } = match &mut self.compass_settled {
             Some(settled) => settled,
             None if offset == 0 => {
                 let start = |delay: Micros| Some(now + delay);
@@ -791,28 +937,37 @@ impl Stage {
                     // A fault shows at once.
                     (times.ring, times.icon, times.caption) = (None, None, None);
                 }
-                self.compass_settled.insert((times, mode))
+                self.compass_settled.insert(CompassSettled {
+                    times,
+                    shown: mode,
+                    change: None,
+                })
             }
             None => return Accents::HIDDEN,
         };
-        if *shown != mode {
+        if !shown.same_state(mode) {
+            let from_now = |start: Option<Micros>| Some(start.map_or(now, |start| start.max(now)));
             if mode == Mode::NoData {
                 (times.ring, times.icon, times.caption) = (None, None, None);
-            } else if mode.heading().is_some() && shown.heading().is_none() {
+                *change = None;
+            } else {
+                // Back from TOP EDGE UP within the grace, the dial and icon show at once.
                 let quick = *shown == Mode::TopEdgeUp
+                    && mode.heading().is_some()
                     && self
                         .top_edge_since
                         .is_some_and(|since| now.saturating_sub(since) < TOP_EDGE_GRACE);
-                // The dial sweeps in, and the icon rebuilds with it. Only a sweep rebuilds the
-                // icon, so interference coming and going swaps it in place.
                 if !quick {
-                    let from_now = |start: Option<Micros>| Some(start.map_or(now, |start| start.max(now)));
-                    times.dial = from_now(times.dial);
                     times.icon = from_now(times.icon);
-                    if compass_screen::caption(*shown).0 != compass_screen::caption(mode).0 {
-                        times.caption = from_now(times.caption);
+                    if mode.heading().is_some() && shown.heading().is_none() {
+                        times.dial = from_now(times.dial);
                     }
                 }
+                if compass_screen::caption(*shown).0 != compass_screen::caption(mode).0 {
+                    times.caption = from_now(times.caption);
+                }
+                // A change still running gives way: the new one starts from the state shown.
+                *change = Some((now, *shown));
             }
             if mode == Mode::TopEdgeUp && shown.heading().is_some() {
                 self.top_edge_since = Some(now);
@@ -821,11 +976,18 @@ impl Stage {
             }
             *shown = mode;
         }
+        let running = change.map_or(compass_screen::Change::NONE, |(start, from)| {
+            compass_screen::Change::at(from, mode, now.saturating_sub(start))
+        });
+        if running.done() {
+            *change = None;
+        }
         let entry = Accents {
             ring: progress(now, times.ring, RING_FADE),
             icon_rows: rows_built(now, times.icon),
             caption: progress(now, times.caption, CAPTION_REVEAL),
             dial: progress(now, times.dial, DIAL_SWEEP),
+            change: running,
         };
         self.fading |= entry != Accents::FULL;
         // Going out, the accents follow the page's offset, so reversing a drag restores them.
@@ -835,6 +997,7 @@ impl Stage {
             icon_rows: rows_leaving(p, 0.3, 0.5),
             caption: leaving(p, 0.2, 0.3),
             dial: leaving(p, 0.2, 0.4),
+            change: compass_screen::Change::NONE,
         };
         entry.min(exit)
     }
@@ -849,6 +1012,7 @@ impl Stage {
         let offset = self.face_offset();
         let keys = clock_screen::Keys::of(&self.peripherals.clock);
         let time = clock_screen::shown_time(&self.peripherals.clock);
+        let types_in = self.clock_types_in && offset == 0;
         let settled = match &mut self.clock_settled {
             Some(settled) => settled,
             None if offset == 0 => {
@@ -869,11 +1033,14 @@ impl Stage {
                     times,
                     shown: keys.clone(),
                     time: time.map(|time| (time, now)),
-                    retyped: None,
+                    retyped: (types_in && time.is_some()).then_some(now),
                 })
             }
             None => return Accents::HIDDEN,
         };
+        if types_in {
+            self.clock_types_in = false;
+        }
         let ClockSettled { times, shown, .. } = settled;
         if *shown != keys {
             if keys.mode == clock_screen::Mode::NoData {
@@ -949,6 +1116,14 @@ impl Stage {
         D: CoverageTarget<Color = Color>,
         D::Error: core::fmt::Debug,
     {
+        if let (Some(startup), Some(view)) = (&self.startup, self.startup_view) {
+            let context = startup::Context {
+                clock: &self.peripherals.clock,
+                firmware: self.peripherals.firmware,
+            };
+            startup::draw(view, startup, &context, &self.renderer, target).expect("drawing the start-up failed");
+            return;
+        }
         if let Some((page, _)) = &self.page {
             screens::clear(target).expect("clearing the panel failed");
             page.draw(&self.peripherals, self.page_accents, &self.renderer, target)

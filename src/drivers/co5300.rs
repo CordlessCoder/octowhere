@@ -113,8 +113,8 @@ static CO5300_INIT_PRE_COLOR: [QSPIOperation; 7] = [
     QSPIOperation::CommandD8(CMD_WCTRLD1, 0x20),
     // High Brightness Mode max
     QSPIOperation::CommandD8(CMD_BRIGHTNESS_HBM, 0xFF),
-    // Brightness 80%
-    QSPIOperation::CommandD8(CMD_BRIGHTNESS, 0xD0),
+    // Dark until the first frame is in; the caller sets the level after it.
+    QSPIOperation::CommandD8(CMD_BRIGHTNESS, 0x00),
 ];
 
 static CO5300_INIT_POST_COLOR: [QSPIOperation; 7] = [

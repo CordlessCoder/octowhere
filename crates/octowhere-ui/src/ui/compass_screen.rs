@@ -16,8 +16,8 @@ use super::{
     reveal::{Reveal, draw_revealed, revealed_bounds},
 };
 use crate::chrome::{
-    self, Color, CoverageTarget, FontdueRenderer, OnBackground, RgbColorExt as _, FRAKTION,
-    FRAKTION_BOLD, SHAPIRO,
+    self, Color, CoverageTarget, FontdueRenderer, OnBackground, RgbColorExt as _, Window,
+    FRAKTION, FRAKTION_BOLD, SHAPIRO,
 };
 
 pub const CENTER: Point = Point::new(233, 233);
@@ -70,6 +70,12 @@ impl Mode {
         }
     }
 
+    /// Whether the two are the same state, whatever their values.
+    #[must_use]
+    pub fn same_state(self, other: Self) -> bool {
+        core::mem::discriminant(&self) == core::mem::discriminant(&other)
+    }
+
     /// The heading, in the two modes that turn the dial to it.
     #[must_use]
     pub fn heading(self) -> Option<u16> {
@@ -115,13 +121,14 @@ pub fn degrees(decidegrees: u16) -> u16 {
 
 /// How far each of the screen's accents has come in: the ring's fade, how many rows of the
 /// icon's modules show (0 to 5), and the caption's reveal and the dial's sweep, each 0 to 255.
-/// The stage animates these; the centre content always shows whole.
+/// The stage animates these, and the change of state running.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Accents {
     pub ring: u8,
     pub icon_rows: u8,
     pub caption: u8,
     pub dial: u8,
+    pub change: Change,
 }
 
 impl Accents {
@@ -130,15 +137,17 @@ impl Accents {
         icon_rows: 5,
         caption: u8::MAX,
         dial: u8::MAX,
+        change: Change::NONE,
     };
     pub const HIDDEN: Self = Self {
         ring: 0,
         icon_rows: 0,
         caption: 0,
         dial: 0,
+        change: Change::NONE,
     };
 
-    /// Each accent at the lesser of the two.
+    /// Each accent at the lesser of the two, with `self`'s change of state.
     #[must_use]
     pub fn min(self, other: Self) -> Self {
         Self {
@@ -146,7 +155,83 @@ impl Accents {
             icon_rows: self.icon_rows.min(other.icon_rows),
             caption: self.caption.min(other.caption),
             dial: self.dial.min(other.dial),
+            change: self.change,
         }
+    }
+}
+
+/// The slab wipe's steps: how many rows of the slab, from its top, each step gives the new
+/// colour.
+const WIPE_ROWS: [u32; 4] = [23, 46, 68, 91];
+const WIPE_STEP: u64 = 20_000;
+/// A state line that goes untypes over this, in µs, and one that replaces it types over the
+/// next [`LINE_TYPE`].
+const LINE_UNTYPE: u64 = 60_000;
+const LINE_TYPE: u64 = 120_000;
+
+/// The part of a change between states that the slab and the state line show: the slab wiping
+/// to its new colour, and the old line untyping while the new one types in.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Change {
+    /// The state left, while the change runs.
+    from: Option<Mode>,
+    /// How many of the wipe's steps have run, 1 to 4.
+    wipe: u8,
+    /// What is left of the old state line, and how far the new one has typed, 0 to 255.
+    old_line: u8,
+    new_line: u8,
+}
+
+impl Change {
+    pub const NONE: Self = Self {
+        from: None,
+        wipe: WIPE_ROWS.len() as u8,
+        old_line: 0,
+        new_line: u8::MAX,
+    };
+
+    /// How far a change from `from` to `to` has come `elapsed` µs after it started. A change
+    /// into or out of NO DATA shows at once, as a fault does, and so does one that leaves the
+    /// slab's colour and the state line as they were.
+    #[must_use]
+    pub fn at(from: Mode, to: Mode, elapsed: u64) -> Self {
+        if from == Mode::NoData || to == Mode::NoData {
+            return Self::NONE;
+        }
+        let wipe = if from.color() == to.color() {
+            WIPE_ROWS.len() as u8
+        } else {
+            (elapsed / WIPE_STEP + 1).min(WIPE_ROWS.len() as u64) as u8
+        };
+        let over = |start: u64, duration: u64| {
+            (elapsed.saturating_sub(start).min(duration) * 255 / duration) as u8
+        };
+        let (old_line, new_line) = match (status(from), status(to)) {
+            (old, new) if old == new => (0, u8::MAX),
+            (Some(_), Some(_)) => (u8::MAX - over(0, LINE_UNTYPE), over(LINE_UNTYPE, LINE_TYPE)),
+            (Some(_), None) => (u8::MAX - over(0, LINE_UNTYPE), u8::MAX),
+            (None, _) => (0, over(0, LINE_TYPE)),
+        };
+        let change = Self {
+            from: Some(from),
+            wipe,
+            old_line,
+            new_line,
+        };
+        let settled = Self { from: None, ..change } == Self::NONE;
+        if settled { Self::NONE } else { change }
+    }
+
+    /// Whether it has finished, so the screen shows the new state whole.
+    #[must_use]
+    pub fn done(self) -> bool {
+        self == Self::NONE
+    }
+}
+
+impl Default for Change {
+    fn default() -> Self {
+        Self::NONE
     }
 }
 
@@ -217,10 +302,45 @@ struct Parts {
     /// The glyph, its colour, and how many rows of its modules show.
     icon: (&'static Glyph, Color, u8),
     caption: (&'static str, Color, Reveal),
-    slab: Color,
+    slab: Slab,
     readout: Readout,
-    status: Option<Status>,
+    /// The line leaving and the line arriving, each with how much of it shows.
+    status: [Option<(Status, Reveal)>; 2],
     tilt: Option<heapless::String<24>>,
+}
+
+/// The slab's colour, or its two while a wipe runs: the new one down to `split` rows from the
+/// slab's top, and the old one below.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Slab {
+    new: Color,
+    old: Color,
+    split: u32,
+}
+
+impl Slab {
+    fn whole(color: Color) -> Self {
+        Self {
+            new: color,
+            old: color,
+            split: SLAB.size.height,
+        }
+    }
+
+    /// The two parts of the slab and their colours, the second empty when it is one colour.
+    fn parts(self) -> [(Rectangle, Color); 2] {
+        let top = Rectangle::new(SLAB.top_left, Size::new(SLAB.size.width, self.split));
+        let bottom = Rectangle::new(
+            SLAB.top_left + Point::new(0, self.split as i32),
+            Size::new(SLAB.size.width, SLAB.size.height - self.split),
+        );
+        [(top, self.new), (bottom, self.old)]
+    }
+
+    /// The colour of the slab's row `y`.
+    fn row(self, y: i32) -> Color {
+        if y < SLAB.top_left.y + self.split as i32 { self.new } else { self.old }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -249,14 +369,33 @@ impl Parts {
         });
         let (caption, caption_color) = caption(mode);
         let marks = swept(accents.dial);
+        let change = accents.change;
+        let from = change.from.unwrap_or(mode);
+        let slab = if change.wipe as usize >= WIPE_ROWS.len() {
+            Slab::whole(mode.color())
+        } else {
+            Slab {
+                new: mode.color(),
+                old: from.color(),
+                split: WIPE_ROWS[usize::from(change.wipe) - 1],
+            }
+        };
+        let line = |status: Option<Status>, progress: u8| {
+            status
+                .map(|status| (status, Reveal::of(progress, status.text.len())))
+                .filter(|(_, reveal)| reveal.cells() > 0)
+        };
         Self {
             ring: (accents.ring > 0).then(|| chrome::BLACK.lerp(&ring_color, accents.ring)),
             dial: mode.heading().filter(|_| marks > 0).map(|heading| (heading, marks)),
             icon: (mode.icon(), mode.icon_color(), accents.icon_rows),
             caption: (caption, caption_color, Reveal::of(accents.caption, caption.len())),
-            slab: mode.color(),
+            slab,
             readout,
-            status: status(mode),
+            status: [
+                line(status(from), change.old_line).filter(|_| change.from.is_some()),
+                line(status(mode), change.new_line),
+            ],
             tilt,
         }
     }
@@ -328,13 +467,19 @@ where
     let style = caption_style(font, caption_color);
     draw_revealed(&style, caption, caption_pen(&style, caption), reveal, field)?;
 
-    target.fill_solid(&SLAB, parts.slab)?;
-    draw_readout(&parts.readout, font, &mut OnBackground::new(&mut *target, parts.slab))?;
+    for (part, color) in parts.slab.parts() {
+        if part.is_zero_sized() || !target.visible(&part) {
+            continue;
+        }
+        target.fill_solid(&part, color)?;
+        let slab = &mut Window::new(&mut *target, Point::zero(), part);
+        draw_readout(&parts.readout, font, &mut OnBackground::new(slab, color))?;
+    }
 
     let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
-    if let Some(status) = parts.status {
+    for (status, reveal) in parts.status.into_iter().flatten() {
         let (style, baseline) = status.style(font);
-        centred(&style, status.text, CENTER.x, baseline, field)?;
+        draw_revealed(&style, status.text, status.pen(&style, baseline), reveal, field)?;
     }
     if let Some(tilt) = &parts.tilt {
         centred(&tilt_style(font), tilt, CENTER.x, TILT_BASELINE, field)?;
@@ -383,14 +528,22 @@ pub fn damage(
         }
     }
     if old.slab != new.slab {
-        damage.add(SLAB);
-    } else if old.readout != new.readout {
+        // Whole rows of the slab whose colour changed, which the readout is redrawn across.
+        let mut rows = SLAB.rows().filter(|&y| old.slab.row(y) != new.slab.row(y));
+        if let (Some(first), Some(last)) = (rows.clone().next(), rows.next_back()) {
+            damage.add(Rectangle::with_corners(
+                Point::new(SLAB.top_left.x, first),
+                Point::new(SLAB.top_left.x + SLAB.size.width as i32 - 1, last),
+            ));
+        }
+    }
+    if old.readout != new.readout {
         readout_damage(&old.readout, &new.readout, font, damage);
     }
     if old.status != new.status {
-        for status in [old.status, new.status].into_iter().flatten() {
+        for (status, _) in old.status.into_iter().chain(new.status).flatten() {
             let (style, baseline) = status.style(font);
-            damage.add(centred_bounds(&style, status.text, CENTER.x, baseline));
+            damage.add(revealed_bounds(&style, status.text, status.pen(&style, baseline)));
         }
     }
     if old.tilt != new.tilt {
@@ -523,6 +676,11 @@ impl Status {
             + (STATUS_BAND.size.height as i32 - ink.size.height as i32) / 2
             - ink.top_left.y;
         (style, baseline)
+    }
+
+    /// Where its pen starts on `baseline`, centred on the panel.
+    fn pen(self, style: &FontdueRenderer<'static, Color>, baseline: i32) -> Point {
+        Point::new(centred_left(style, self.text, CENTER.x), baseline)
     }
 }
 

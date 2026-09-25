@@ -11,6 +11,7 @@ use octowhere_ui::ui::{
     screens::{Battery, Gnss, Screen},
     script::Driver,
     stage::{Motion, Sensors},
+    startup::{Outcome, Part},
 };
 
 pub struct Scene {
@@ -20,6 +21,16 @@ pub struct Scene {
 }
 
 pub const SCENES: &[Scene] = &[
+    Scene {
+        name: "startup",
+        about: "the self-test as each part answers, the identity, the logo card and the clock",
+        run: startup,
+    },
+    Scene {
+        name: "startup-failed",
+        about: "the self-test with the magnetometer failing, the fault screen and the clock",
+        run: startup_failed,
+    },
     Scene {
         name: "clock-entry",
         about: "the clock face building in, then ticking",
@@ -34,6 +45,11 @@ pub const SCENES: &[Scene] = &[
         name: "compass-calibration",
         about: "the compass calibrating, finding its heading, turning, and meeting interference",
         run: compass_calibration,
+    },
+    Scene {
+        name: "compass-states",
+        about: "each change between the compass's states",
+        run: compass_states,
     },
     Scene {
         name: "settings",
@@ -164,6 +180,63 @@ fn compass_calibration(driver: &mut Driver) {
     compass_walk(driver);
 }
 
+/// Calibrated, with the top edge raised too near vertical for a heading.
+fn top_edge_up() -> Motion {
+    Motion {
+        compass: CompassView {
+            live: true,
+            calibration_percent: 100,
+            heading_decidegrees: None,
+            pitch_deg: 84,
+            ..CompassView::default()
+        },
+    }
+}
+
+fn disturbed(degrees: f32) -> Motion {
+    let mut motion = facing(degrees);
+    motion.compass.disturbed = true;
+    motion
+}
+
+/// A row of each kind in `SCREEN-DESIGN-BRIEF.md`'s table of the compass's changes of state.
+fn compass_states(driver: &mut Driver) {
+    driver.stage.show(Screen::Compass);
+    driver.motion(calibrating(80));
+    driver.wait(ms(600));
+    driver.motion_over(ms(600), |t| calibrating(80 + (t * 19.0) as u8));
+    // Calibration completes with the top edge raised, then the device is laid level.
+    driver.motion(top_edge_up());
+    driver.wait(ms(1_000));
+    driver.motion(facing(120.0));
+    driver.wait(ms(1_000));
+    // Raised briefly, inside the grace, and then for longer than it.
+    driver.motion(top_edge_up());
+    driver.wait(ms(400));
+    driver.motion(facing(120.0));
+    driver.wait(ms(800));
+    driver.motion(top_edge_up());
+    driver.wait(ms(1_200));
+    driver.motion(facing(120.0));
+    driver.wait(ms(1_000));
+    // Interference as the motion task's holds let it through: shown at least a second.
+    driver.motion(disturbed(120.0));
+    driver.wait(ms(1_200));
+    driver.motion(facing(120.0));
+    driver.wait(ms(800));
+    driver.motion(Motion { compass: CompassView::default() });
+    driver.wait(ms(1_000));
+    // Calibration never falls on the device, but going through NO DATA shows both of its rows.
+    driver.motion(calibrating(96));
+    driver.wait(ms(1_000));
+    driver.motion(facing(120.0));
+    driver.wait(ms(1_200));
+    driver.motion(Motion { compass: CompassView::default() });
+    driver.wait(ms(1_000));
+    driver.motion(facing(120.0));
+    driver.wait(ms(1_200));
+}
+
 fn tour(driver: &mut Driver) {
     // Before a fix: the clock's own time, unconfirmed, and no zone, so the face shows UTC.
     let mut before = dublin();
@@ -236,4 +309,41 @@ fn settings_walk(driver: &mut Driver) {
     driver.swipe(Point::new(233, 420), Point::new(233, 80), ms(300));
     driver.settle();
     driver.wait(ms(1_000));
+}
+
+/// Boots with the clock running in Dublin, each part reporting at `at` ms from power-on.
+fn boot(driver: &mut Driver, reports: [(Part, Outcome, u64); 6]) {
+    driver.stage = Stage::starting(PeripheralState { firmware: "0.1.0", ..PeripheralState::default() });
+    driver.run_clock();
+    driver.sensors(dublin());
+    for (part, outcome, at) in reports {
+        driver.wait(ms(at).saturating_sub(driver.now()));
+        driver.boot(part, outcome);
+    }
+}
+
+fn startup(driver: &mut Driver) {
+    use Outcome::Answered;
+    boot(driver, [
+        (Part::Power, Answered, 150),
+        (Part::Clock, Answered, 250),
+        (Part::Touch, Answered, 500),
+        (Part::Motion, Answered, 600),
+        (Part::Magnet, Answered, 750),
+        (Part::Gnss, Answered, 1_300),
+    ]);
+    driver.wait(ms(3_600));
+}
+
+fn startup_failed(driver: &mut Driver) {
+    use Outcome::{Answered, NoReply};
+    boot(driver, [
+        (Part::Power, Answered, 150),
+        (Part::Clock, Answered, 250),
+        (Part::Touch, Answered, 500),
+        (Part::Motion, Answered, 600),
+        (Part::Magnet, NoReply, 1_000),
+        (Part::Gnss, Answered, 1_300),
+    ]);
+    driver.wait(ms(5_200));
 }

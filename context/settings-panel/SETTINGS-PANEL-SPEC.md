@@ -146,13 +146,14 @@ The detail page for DEVICE, BATTERY and GNSS.
 | Rows | from row 206, every 30 px: key Mono Bold 14 px `GRAY` at x 70, value Mono Regular 16 px `WHITE` ink right 396, a 1 px rule in `GRAY` at half level under each | `VERSION`, `BATTERY` (percentage and voltage), `POWER` (`USB`, `CHARGING`), `GNSS` (`FIX` or `NO FIX`), `SATELLITES` (in use `OF` in view) |
 | Attribution | centred by ink, lines 20 px apart, after the rows | Regular 14 px `GRAY`, five lines: `TIME ZONE BOUNDARIES:`, `TIMEZONE-BOUNDARY-BUILDER 2026D`, `© OPENSTREETMAP CONTRIBUTORS`, `ODBL 1.0`, `ZONE RULES: IANA TZDATA 2026D` |
 | `CLEAR SETTINGS` | box x 143–322, 44 px tall, 18 px after the attribution | Outlined, as `BACK` |
+| `REPLAY START-UP` | box x 143–322, 44 px tall, 12 px after `CLEAR SETTINGS` | Outlined, as `BACK`. Added by decision 11 |
 
-- The list is clipped to rows 196–440. A vertical drag scrolls it 1:1, from 0 to the end (108 px
+- The list is clipped to rows 196–440. A vertical drag scrolls it 1:1, from 0 to the end (164 px
   with the fixture's rows), and stops there.
 - The release names in the attribution come from the zone data, so the text follows a rebuild.
   It keeps the copyright holder and the licence.
 - `BACK` (top cap, rows 0–150) returns to the panel. A tap on `CLEAR SETTINGS` opens the
-  confirm.
+  confirm. A tap on `REPLAY START-UP` opens the replay chooser (decision 12).
 
 ## Clear settings
 
@@ -317,6 +318,22 @@ The owner settled these on 24 Sep 2026.
    Recalibration is from the COMPASS cell only.
 10. On the brightness editor, a tap anywhere below the top cap keeps the level, not only a tap
     in the field.
+11. The device page ends with `REPLAY START-UP` (owner, 2026-09-25). It plays the identity and
+    the logo card of section 2 of the round 3 spec from their first frame, with no self-test and
+    no fault screen, whatever the boot found. The identity's `SELF TEST n/6 OK` line counts the
+    parts that answered at boot. A touch skips to the settled clock face, as at boot. It was
+    built as the owner directed, without a design round, on the pattern of `CLEAR SETTINGS`.
+12. `REPLAY START-UP` opens a chooser (owner, 2026-09-25), laid out as round 3's timeout
+    screen: hint `DRAG TO CHOOSE START-UP`, `CANCEL` back to the device page, the choice's glyph
+    as the 96 px icon (the OCTOWHERE mark for `GOOD`, the part's self-test glyph otherwise, all
+    `WHITE`), the choice in Mono Bold 56 px with its neighbours in Regular 23 px, `n/7`, and
+    `TAP TO PLAY`. A drag steps 40 px a choice, and a tap below the top cap plays it. The choices
+    are `GOOD`, which plays decision 11's replay, and `POWER FAIL` to `GNSS FAIL`, each a
+    demonstration: the self-test with the parts reporting at 150, 250, 500, 600, 750 and 1300 ms
+    and that part failing, the fault screen, then the clock face. The doctrine asks for synthetic
+    data to be recognisable, so a demonstration says so: the self-test's version line reads `DEMO`
+    and the fault screen's reason line `DEMO, NOT A FAULT`. It leaves the boot's own record, which
+    a later `GOOD` still counts from.
 
 ## Verification record
 

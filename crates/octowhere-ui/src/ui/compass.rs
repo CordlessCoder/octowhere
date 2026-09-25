@@ -30,6 +30,17 @@ pub const DISTURBANCE_FRACTION: f32 = 0.35;
 /// [`DISTURBANCE_FRACTION`], so a field weakened by something nearby is neither flagged nor
 /// learned.
 pub const FIT_ADMIT_FRACTION: f32 = 0.15;
+/// Once the screen shows interference, the field must come back within this fraction for
+/// [`INTERFERENCE_LEAVE_US`] before it stops. Looser than [`DISTURBANCE_FRACTION`], so a field
+/// hovering at the threshold keeps showing interference rather than flickering.
+pub const INTERFERENCE_CLEAR_FRACTION: f32 = 0.30;
+/// How long, in µs, the field must stay disturbed without a break before the screen shows it.
+pub const INTERFERENCE_ENTER_US: u64 = 200_000;
+/// How long, in µs, it must stay clear without a break before the screen stops showing it.
+pub const INTERFERENCE_LEAVE_US: u64 = 1_000_000;
+/// Once the heading has gone with the top edge near vertical, it comes back only when the top
+/// edge's horizontal part exceeds this: 15° from vertical, against the 11.5° it goes at.
+const TOP_EDGE_CLEAR: f32 = 0.258_819;
 
 /// A sample joins the sphere fit only this far, in µT, from the last one that did, so a board held
 /// still does not outweigh every other direction.
@@ -431,6 +442,12 @@ impl Calibration {
         self.main.disturbed(field)
     }
 
+    /// Whether `field`'s strength is more than `fraction` off the calibration's.
+    #[must_use]
+    pub fn strays(&self, field: Vec3, fraction: f32) -> bool {
+        self.main.strays(field, fraction)
+    }
+
     #[must_use]
     pub fn candidate(&self) -> Option<&HardIron> {
         self.candidate.as_ref()
@@ -501,9 +518,62 @@ pub struct CompassView {
     pub disturbed: bool,
 }
 
+/// What the screen has shown of the two conditions that would otherwise flicker: interference,
+/// held on both edges, and the heading withheld with the top edge near vertical, with
+/// hysteresis. The fusion still stops trusting a disturbed field on the reading it strays.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Holds {
+    interference: bool,
+    /// When the field started reading against what `interference` shows, while it still does.
+    contrary_since: Option<u64>,
+    top_edge_up: bool,
+}
+
+impl Holds {
+    fn update(&mut self, now_us: u64, attitude: &Attitude, field: Option<Vec3>, calibration: &Calibration) {
+        if calibration.progress() < 1.0 {
+            self.interference = false;
+            self.contrary_since = None;
+        } else if let Some(field) = field {
+            let contrary = if self.interference {
+                !calibration.strays(field, INTERFERENCE_CLEAR_FRACTION)
+            } else {
+                calibration.strays(field, DISTURBANCE_FRACTION)
+            };
+            if contrary {
+                let since = *self.contrary_since.get_or_insert(now_us);
+                let hold = if self.interference {
+                    INTERFERENCE_LEAVE_US
+                } else {
+                    INTERFERENCE_ENTER_US
+                };
+                if now_us.saturating_sub(since) >= hold {
+                    self.interference = !self.interference;
+                    self.contrary_since = None;
+                }
+            } else {
+                self.contrary_since = None;
+            }
+        }
+        self.top_edge_up = if self.top_edge_up {
+            libm::cosf(attitude.pitch_deg.to_radians()) <= TOP_EDGE_CLEAR
+        } else {
+            attitude.heading_deg.is_none()
+        };
+    }
+}
+
 impl CompassView {
+    /// The view of a reading at `now_us`, advancing `holds` by it. `field` is the latest
+    /// calibrated field, which may be from an earlier reading.
     #[must_use]
-    pub fn new(attitude: Option<Attitude>, field: Option<Vec3>, calibration: &Calibration) -> Self {
+    pub fn new(
+        attitude: Option<Attitude>,
+        field: Option<Vec3>,
+        calibration: &Calibration,
+        holds: &mut Holds,
+        now_us: u64,
+    ) -> Self {
         let calibration_percent = (calibration.progress() * 100.0) as u8;
         let Some(attitude) = attitude else {
             return Self {
@@ -511,17 +581,17 @@ impl CompassView {
                 ..Self::default()
             };
         };
+        holds.update(now_us, &attitude, field, calibration);
         Self {
             live: true,
             calibration_percent,
             heading_decidegrees: attitude
                 .heading_deg
-                .filter(|_| calibration_percent >= 100)
+                .filter(|_| calibration_percent >= 100 && !holds.top_edge_up)
                 .map(|degrees| (libm::roundf(degrees * 10.0) as u16) % 3600),
             pitch_deg: libm::roundf(attitude.pitch_deg) as i8,
             roll_deg: libm::roundf(attitude.roll_deg) as i8,
-            disturbed: calibration_percent >= 100
-                && field.is_some_and(|field| calibration.disturbed(field)),
+            disturbed: calibration_percent >= 100 && holds.interference,
         }
     }
 }
@@ -638,14 +708,72 @@ mod tests {
         let mut calibration = Calibration::new();
         calibration.update([0.0; 3]);
         calibration.update([20.0; 3]);
-        let partial = CompassView::new(level, None, &calibration);
+        let partial = CompassView::new(level, None, &calibration, &mut Holds::default(), 0);
         assert_eq!(partial.calibration_percent, 50);
         assert_eq!(partial.heading_decidegrees, None);
         calibration.update([40.0; 3]);
         assert_eq!(
-            CompassView::new(level, None, &calibration).heading_decidegrees,
+            CompassView::new(level, None, &calibration, &mut Holds::default(), 0).heading_decidegrees,
             Some(0)
         );
+    }
+
+    fn fully_calibrated() -> Calibration {
+        let mut calibration = Calibration::new();
+        for sample in [[0.0; 3], [20.0; 3], [40.0; 3]] {
+            calibration.update(sample);
+        }
+        assert!(calibration.progress() >= 1.0);
+        calibration
+    }
+
+    fn held(pitch_deg: f32, heading_deg: Option<f32>) -> Option<Attitude> {
+        Some(Attitude { heading_deg, pitch_deg, roll_deg: 0.0 })
+    }
+
+    /// Feeds a field `strength` times the calibrated one every 20 ms over `from..to` ms, and
+    /// returns whether the view showed interference after each.
+    fn disturbed_over(holds: &mut Holds, calibration: &Calibration, strength: f32, from: u64, to: u64) -> Vec<bool> {
+        let field = Some([calibration.radius() * strength, 0.0, 0.0]);
+        (from..to)
+            .step_by(20)
+            .map(|ms| CompassView::new(held(0.0, Some(10.0)), field, calibration, holds, ms * 1_000).disturbed)
+            .collect()
+    }
+
+    #[test]
+    fn interference_shows_after_it_has_held_and_clears_after_a_clean_second() {
+        let calibration = fully_calibrated();
+        let mut holds = Holds::default();
+        let entering = disturbed_over(&mut holds, &calibration, 1.5, 0, 220);
+        assert_eq!(entering.iter().position(|&shown| shown), Some(10), "{entering:?}");
+        // Between the two thresholds it stays.
+        assert!(disturbed_over(&mut holds, &calibration, 1.32, 220, 3_000).iter().all(|&shown| shown));
+        let leaving = disturbed_over(&mut holds, &calibration, 1.1, 3_000, 4_100);
+        assert_eq!(leaving.iter().position(|&shown| !shown), Some(50), "{leaving:?}");
+    }
+
+    #[test]
+    fn a_clean_reading_restarts_the_interference_hold() {
+        let calibration = fully_calibrated();
+        let mut holds = Holds::default();
+        assert!(!disturbed_over(&mut holds, &calibration, 1.5, 0, 180).contains(&true));
+        disturbed_over(&mut holds, &calibration, 1.0, 180, 200);
+        let again = disturbed_over(&mut holds, &calibration, 1.5, 200, 420);
+        assert_eq!(again.iter().position(|&shown| shown), Some(10), "{again:?}");
+    }
+
+    #[test]
+    fn the_heading_comes_back_only_well_clear_of_vertical() {
+        let calibration = fully_calibrated();
+        let mut holds = Holds::default();
+        let mut heading = |pitch: f32, heading: Option<f32>| {
+            CompassView::new(held(pitch, heading), None, &calibration, &mut holds, 0).heading_decidegrees
+        };
+        assert_eq!(heading(70.0, Some(10.0)), Some(100));
+        assert_eq!(heading(80.0, None), None);
+        assert_eq!(heading(77.0, Some(10.0)), None, "back within 15° of vertical");
+        assert_eq!(heading(74.0, Some(10.0)), Some(100));
     }
 
     #[test]

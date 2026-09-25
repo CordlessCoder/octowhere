@@ -517,6 +517,7 @@ fn interact(mut window: Window, masked: bool, extension: &str) {
             }),
             motion: motion_due.then(|| readings.motion()),
             sensors: sensors_due.then(|| sensors(&readings)),
+            boot: None,
         });
         samples_fast = update.samples_fast;
         if update.recalibrate {

@@ -14,18 +14,35 @@ until the feature set is complete, because profiling an incomplete firmware pric
   about 1.3 ms for a write into a sector with room (`bench/zone-lookup`). Options: hold core 1
   only around each flash operation rather than the whole transaction, erase a spare page ahead
   of time, defer the write until the panel is idle, or batch saves.
-- Smoother transitions between the compass's states, such as interference coming and going
-  (owner, 2026-09-24). Today the slab recolours, the state line appears and the icon swaps in one
-  frame, as the compass animation addendum specifies ("the state line is never animated").
-  Changing that is a design change to an approved screen, so it starts with a design round
-  against `context/compass-animation/COMPASS-ANIMATION-ADDENDUM.md`.
+- Build the rest of the round 3 design,
+  [`octowhere-round3-display-motion-v5/DISPLAY-AND-MOTION-SPEC.md`](octowhere-round3-display-motion-v5/DISPLAY-AND-MOTION-SPEC.md),
+  a part at a time (owner, 2026-09-25): pixel shift, screen timeout with dimming and the
+  always-on face, and the TIMEOUT and ALWAYS ON cells. The owner picks the order. The
+  compass's changes of state and the start-up are built. Notes for each part:
+  - Pixel shift in the flush path would carry the ring off a 466 px framebuffer at a 3 px
+    offset. A 3 px margin on the framebuffers, with the ring and the clip circle drawn at the
+    inverse offset, keeps drawing and damage in content coordinates.
+  - The ALWAYS ON cell saves on every tap, so shortening settings saves (above) comes first.
+    The clear warning's new wording is not specified.
+  - Optimise `ui::scatter` (owner, 2026-09-25), which the owner wants on more pages. Today
+    it redraws every mark on every frame: a hash, a square root, a trigonometric blend and up
+    to four fills per grid point, about 3,400 points on the identity. Candidates: skip points
+    outside the circle without the square root, work out each point's radial weight and
+    direction once rather than per frame, and damage only the marks that change between two
+    facings, since most do not. Measure a frame on the device first.
+  - The start-up's fault screen draws a frame in about 49 ms, so it shows about 20 of its 30
+    frames a second. Its identity holds 30. The clear under the red field, the field itself,
+    the doubled giant name and the running line's stretched glyphs are the candidates; time
+    each before choosing. Deferred until the round's features are built (owner's rule).
 
 - Lay out the 512 KiB of SRAM deliberately. esp-hal's linker script gives `.data`, `.bss` and
   core 0's stack 341,760 bytes (`0x3FC88000` to `0x3FCDB700`); the stack is whatever the other
   two leave. The internal heap is a static in `.bss`: 252 KiB from the first commit, cut to
   240 KiB when moving settings to ekv grew `.bss` and left a 13.9 KiB stack that overflowed
-  silently in the partition table read. At boot the heap held 4,548 bytes; its peak while the
-  screens run has not been measured. Unused so far: `dram2` (`0x3FCDB700` to `0x3FCED710`, about 72 KiB, which the ROM
+  silently in the partition table read. The heap holds 17,636 bytes once boot has brought the
+  parts up; its peak while the screens run has not been measured. With that little used, a
+  single 140 KB allocation (a 200 px glyph's raster) still failed, so the largest block free
+  is smaller than the free total suggests. Unused so far: `dram2` (`0x3FCDB700` to `0x3FCED710`, about 72 KiB, which the ROM
   needs only during boot and `esp_alloc` can take with `#[esp_hal::ram(reclaimed)]`, as the
   commented line by `heap_allocator!` in `src/main.rs` shows), and the data cache's reclaimed
   segment above `0x3FCF0000`. Also look at what IRAM holds (15 KiB of `.rwtext`), the two 8 KiB

@@ -24,6 +24,7 @@ use octowhere_ui::{
         screens::{Battery, Gnss, PeripheralState, Screen},
         script::Driver,
         stage::{Input, Motion, Sensors, Stage, Touch},
+        startup::{Outcome, Part, Report},
     },
 };
 
@@ -162,6 +163,7 @@ fn main() {
     frames.push(("compass-swiping".into(), swiping));
 
     frames.extend(settings_frames());
+    frames.extend(startup_frames());
 
     for (name, stage) in frames {
         let mut fb = FB::boxed();
@@ -229,13 +231,34 @@ fn settings_frames() -> Vec<(String, Stage)> {
     frames.push(("panel-device".into(), device.stage));
     let mut device_end = open();
     tap(&mut device_end, 300, 300);
-    device_end.swipe(Point::new(233, 400), Point::new(233, 250), 300_000);
+    device_end.swipe(Point::new(233, 400), Point::new(233, 200), 300_000);
     frames.push(("panel-device-end".into(), device_end.stage));
     let mut clear = open();
     tap(&mut clear, 300, 300);
-    clear.swipe(Point::new(233, 400), Point::new(233, 250), 300_000);
-    tap(&mut clear, 233, 398);
+    clear.swipe(Point::new(233, 400), Point::new(233, 200), 300_000);
+    tap(&mut clear, 233, 342);
     frames.push(("settings-clear".into(), clear.stage));
+    let chooser = |steps: i32| {
+        let mut driver = open();
+        tap(&mut driver, 300, 300);
+        driver.swipe(Point::new(233, 400), Point::new(233, 200), 300_000);
+        tap(&mut driver, 233, 398);
+        if steps > 0 {
+            driver.swipe(Point::new(233, 330), Point::new(233, 330 - 40 * steps - 10), 300_000);
+            driver.wait(400_000);
+        }
+        driver
+    };
+    frames.push(("replay-chooser".into(), chooser(0).stage));
+    frames.push(("replay-chooser-magnet".into(), chooser(5).stage));
+    let mut demo = chooser(4);
+    tap(&mut demo, 233, 258);
+    demo.wait(1_100_000);
+    frames.push(("replay-demo-selftest".into(), demo.stage));
+    let mut demo = chooser(4);
+    tap(&mut demo, 233, 258);
+    demo.wait(2_000_000);
+    frames.push(("replay-demo-fault".into(), demo.stage));
     let mut picker = open();
     tap(&mut picker, 150, 150);
     frames.push(("picker-offset".into(), picker.stage));
@@ -243,6 +266,37 @@ fn settings_frames() -> Vec<(String, Stage)> {
     tap(&mut zone, 150, 150);
     tap(&mut zone, 233, 250);
     frames.push(("picker-zone".into(), zone.stage));
+    frames
+}
+
+/// The start-up sequence: the self-test as parts answer, the identity and the card by frame, and
+/// the fault screen. Every part reports a tenth of a second after the last.
+fn startup_frames() -> Vec<(String, Stage)> {
+    let boot = |failing: Option<Part>, parts: usize, now: u64| {
+        let mut stage = Stage::starting(PeripheralState { firmware: "0.1.0", ..PeripheralState::default() });
+        stage.step(Input { now: 1, sensors: Some(sensors()), ..Input::default() });
+        for (i, part) in Part::ALL.into_iter().take(parts).enumerate() {
+            let outcome = if failing == Some(part) { Outcome::NoReply } else { Outcome::Answered };
+            stage.step(Input { now: 100_000 * (i as u64 + 1), boot: Some(Report { part, outcome }), ..Input::default() });
+        }
+        stage.step(Input { now, ..Input::default() });
+        stage
+    };
+    // The last glyph lands at 720 ms, and the hold ends 200 ms later.
+    let frame = |n: u64| 920_000 + (n * 1_000_000).div_ceil(30);
+    let mut frames = vec![
+        ("startup-selftest".to_string(), boot(None, 0, 50_000)),
+        ("startup-selftest-building".into(), boot(None, 3, 345_000)),
+        ("startup-selftest-passed".into(), boot(None, 6, 850_000)),
+        ("startup-selftest-failed".into(), boot(Some(Part::Magnet), 6, 850_000)),
+    ];
+    for n in [0, 6, 9, 13, 17, 20, 40, 57, 58, 61, 65, 69, 70, 71] {
+        frames.push((format!("startup-frame-{n:02}"), boot(None, 6, frame(n))));
+    }
+    // With a failure the hold is 300 ms, from 720 ms.
+    for n in [0, 30] {
+        frames.push((format!("startup-fault-{n:02}"), boot(Some(Part::Magnet), 6, frame(n) + 100_000)));
+    }
     frames
 }
 
