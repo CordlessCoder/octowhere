@@ -229,7 +229,10 @@ size `DIRECT_CHUNK`) at a build-time SPI clock (`SPI_MHZ`), PSRAM block size (`E
 transmit FIFO depth (`OUT_FIFO`), optionally with core 0 no longer drawing (`idle-core0`); and
 `bench/clock-draw`, which alternates the clock face (20 s, the RTC's time in a fixed zone) and
 the compass (3 s), and logs every draw's time and area with the clock face's time per part,
-from an optional timer in `octowhere_ui::part_timing` (`clock-draw-bench`).
+from an optional timer in `octowhere_ui::part_timing` (`clock-draw-bench`); and
+`bench/fault-draw`, which plays the start-up's fault demonstration for each part in turn and
+logs each fault frame's draw per part, and at start-up times the knocked-out row write and
+outlined text alone (`fault-draw-bench`).
 
 ## Concurrency
 
