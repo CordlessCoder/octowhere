@@ -1,3 +1,4 @@
+pub mod always_on;
 pub mod clock;
 pub mod clock_screen;
 pub mod compass;
@@ -12,6 +13,7 @@ pub mod imu;
 pub mod pager;
 pub mod picker;
 pub mod panel;
+pub mod rest;
 pub mod reveal;
 pub mod scatter;
 pub mod screens;

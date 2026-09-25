@@ -206,6 +206,8 @@ struct Panel {
     /// Where a finger is down, or where one lifted and when, while its marker fades.
     contact: Option<Point>,
     lifted: Option<(Point, u64)>,
+    /// The display's level against the stored one, which the window shows by scaling colours.
+    light: f32,
 }
 
 /// The touch marker's radius, and how long it fades after a lift, in microseconds.
@@ -222,6 +224,7 @@ impl Panel {
             masked,
             contact: None,
             lifted: None,
+            light: 1.0,
         }
     }
 
@@ -242,11 +245,21 @@ impl Panel {
             self.lifted = None;
         }
         self.contact = contact;
+        let stored = stage.peripherals().brightness.max(1);
+        self.light = (f32::from(stage.shown_level()) / f32::from(stored)).min(1.0);
         self.compose(now);
     }
 
     fn compose(&mut self, now: u64) {
         self.pixels.copy_from_slice(&self.base);
+        if self.light < 1.0 {
+            let panel = self.pixels.iter_mut().zip(&self.mask).filter(|(_, on)| **on || !self.masked);
+            for (pixel, _) in panel {
+                let [_, r, g, b] = pixel.to_be_bytes();
+                let dim = |channel: u8| (f32::from(channel) * self.light) as u8;
+                *pixel = u32::from_be_bytes([0, dim(r), dim(g), dim(b)]);
+            }
+        }
         let (center, fill, ring) = match (self.contact, self.lifted) {
             (Some(point), _) => (point, 0.45, 0.9),
             (None, Some((point, at))) if now.saturating_sub(at) < MARKER_FADE => {

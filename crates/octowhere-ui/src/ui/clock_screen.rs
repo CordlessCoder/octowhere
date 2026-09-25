@@ -309,8 +309,8 @@ impl Line {
     }
 }
 
-const WEEKDAYS: [&str; 7] = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
-const MONTHS: [&str; 12] = [
+pub(crate) const WEEKDAYS: [&str; 7] = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
+pub(crate) const MONTHS: [&str; 12] = [
     "JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC",
 ];
 
@@ -410,7 +410,7 @@ impl Parts {
     }
 }
 
-fn style(
+pub(crate) fn style(
     font: &FontdueRenderer<'static, Color>,
     color: Color,
     size: u32,
@@ -439,7 +439,7 @@ fn zone_style(font: &FontdueRenderer<'static, Color>) -> FontdueRenderer<'static
     style(font, chrome::GRAY, 14, FRAKTION)
 }
 
-fn no_data_style(font: &FontdueRenderer<'static, Color>) -> FontdueRenderer<'static, Color> {
+pub(crate) fn no_data_style(font: &FontdueRenderer<'static, Color>) -> FontdueRenderer<'static, Color> {
     style(font, chrome::BLACK, 28, SHAPIRO)
 }
 
@@ -463,7 +463,7 @@ fn date_origin(font: &FontdueRenderer<'static, Color>, text: &str, line: Line) -
     (style, origin)
 }
 
-fn no_data_origin(font: &FontdueRenderer<'static, Color>) -> Point {
+pub(crate) fn no_data_origin(font: &FontdueRenderer<'static, Color>) -> Point {
     let ink = no_data_style(font).baseline_bounds("NO DATA", Point::zero());
     let top = (NO_DATA_MIDDLE_TWICE - ink.size.height as i32) / 2;
     Point::new(NO_DATA_LEFT - ink.top_left.x, top - ink.top_left.y)

@@ -144,6 +144,9 @@ is 14 px, about 1 mm tall in capitals, and it reads. Touch targets are no smalle
 
 - **Start-up:** as section 2 of the round 3 spec describes. "Start-up as built" below has
   where the build interpreted it.
+- **Timeout, dimming and the always-on face:** as section 3 of the round 3 spec describes,
+  except that the level fades rather than steps (owner). "Timeout and rest as built" below
+  has the details.
 - **Clock face:** as the clock face spec and the wordmark addendum describe. A time that a fix
   or zone change replaces types in again by cell reveal: the hours, minutes and seconds over
   180 ms, and the date line over 160 ms from 120 ms. A tick never animates the digits.
@@ -169,10 +172,13 @@ It draws the faces' stills and `panel-rest`, `panel-end`, `panel-scrolling`, `pa
 `panel-device`, `panel-device-end`, `settings-brightness`, `settings-clear`, `picker-offset` and
 `picker-zone`, and the start-up's `startup-selftest-*`, `startup-frame-*` and `startup-fault-*`;
 `context/screen-captures/` keeps `startup-selftest`, `startup-selftest-failed`,
-`startup-identity` (frame 40), `startup-card` and `startup-fault`. `tools/ui-sim` records scenes as GIF or MP4 at 20 ms per frame, with the finger
-marked: `--record compass-states`, `--record startup`, `--record startup-failed`, `--record
-settings` and `--record tour`; `--scenes` lists the
-rest. The captures' fixture is 13:07:42 on Thu 24 Sep 2026 in Europe/Dublin, and heading 047°,
+`startup-identity` (frame 40), `startup-card` and `startup-fault`. It also draws the
+always-on face's `always-on-local`, `always-on-stopped`, `always-on-no-zone` and
+`always-on-no-data`, which `context/screen-captures/` keeps. `tools/ui-sim` records scenes as
+GIF or MP4 at 20 ms per frame, with the finger marked: `--record compass-states`, `--record
+startup`, `--record startup-failed`, `--record settings`, `--record rest-always-on`, `--record
+rest-off` and `--record tour`; `--scenes` lists the rest. The simulator shows the display's
+level by scaling colours against the stored level. The captures' fixture is 13:07:42 on Thu 24 Sep 2026 in Europe/Dublin, and heading 047°,
 pitch +05, roll −12, calibration 54 %. None of it is a reading.
 
 ## The compass's states and changes, as built
@@ -299,6 +305,40 @@ build interpreted the spec:
   or a demonstration of one part failing (settings spec decision 12), which the design has not
   seen.
 
+## Timeout and rest as built
+
+Section 3 of the round 3 spec is built. The recordings `rest-always-on.mp4` and `rest-off.mp4`
+show it with a 15 s timeout. Where the build differs from the spec or interprets it:
+
+- **Fades (owner, 25 Sep 2026).** The level fades instead of stepping. The dim fades down over
+  500 ms. On the way to off, the level fades from the dim to dark over 300 ms, and then the
+  panel gets its display-off and sleep commands. A wake fades up over 250 ms, from the dim, the
+  always-on face or dark. The cut to the always-on face is still one frame, as the spec has it.
+- **The dim** lasts 5 s from its start, fade included, then the always-on face or the fade to
+  off.
+- **Off** is the panel's display-off and sleep. The touch controller still reports with the
+  panel asleep, so the spec's fallback (a black frame at level 0) is not needed.
+- **A wake from off** runs the page's entry and the fade up after 140 ms, once the panel is
+  out of sleep, so neither plays on a dark panel.
+- **The timer restarts** on any contact, a cover, the pager, the panel or the grid moving, a
+  second-level screen opening or closing, and on the compass a heading more than 10° from the
+  heading at the last restart. It does not run during the start-up or a replay, and restarts
+  when the clock face takes over.
+- **The levels.** The dim is 30 % of the level that shows, at least 8 (3 % of 255) and never
+  above the level itself. The always-on face is at 26 (10 %), or the set level if lower. With
+  the brightness editor open, the dim is taken from the level being previewed. A wake from the
+  panel discards the preview and fades up to the stored level.
+- **The always-on face** redraws in full when its minute, date or state changes, and at no
+  other time. It draws each digit at its own pen, so the regular weight sits where the clock
+  face's bold digits do. In NO ZONE it shows dashes, as the spec's table has it, not the clock
+  face's UTC line.
+- **Not yet settable.** The timeout and ALWAYS ON are fields of the screens' state, not stored
+  settings. Until the TIMEOUT and ALWAYS ON cells are built, the device uses the spec's
+  defaults: 1 min and off. So the always-on face shows only in the simulator, the renders and
+  the tests.
+- **Pixel shift** is not built yet, so nothing moves at a wake or on the always-on face's
+  minute.
+
 ## Gestures as built
 
 A contact becomes a drag after 16 px of movement, and its axis is decided then. One that lifts
@@ -318,6 +358,9 @@ velocity. It sees a second contact but no gesture uses one.
 | Picker, device page | A vertical drag | Steps the list (picker) or scrolls it (device page) |
 | Brightness | A tap in the top cap, or anywhere else | Cancels, or keeps the level |
 | Brightness, clear confirm | A horizontal drag | Sets the level, or moves the handle (only if the drag starts on the handle) |
+| Dimmed | A contact | Fades back to the level and does nothing else. The finger is ignored until it lifts |
+| Always-on face, off | A contact | Wakes the screen (see "Timeout and rest as built"), and does nothing else |
+| Dimmed, always-on face, off | Cover | Nothing |
 | Any screen | Cover | Goes to the clock face, discarding any edit in progress. From the panel it closes with the released-drag motion, and the face under it becomes the clock. It is the only cover gesture |
 
 Physics:
@@ -370,6 +413,7 @@ plumbing it is firmware work. There are three grades.
 | Last zone GNSS found (automatic mode's memory) | yes | shown through ZONE |
 | Brightness | yes | BRIGHTNESS |
 | Compass calibration | no. It is learned at run time and restarted from the COMPASS cell | COMPASS |
+| Timeout, and ALWAYS ON | not yet: the device uses 1 min and off | not yet |
 
 - Settings live in an ekv database in flash. Clearing erases all four stored keys. The panel
   spec has the device return to its defaults: automatic zone and brightness 120.

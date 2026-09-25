@@ -10,7 +10,7 @@ use octowhere_ui::{
         gesture::{LIFT_SAMPLES, Micros},
         compass_screen::{Accents, CENTER as COMPASS_CENTER},
         screens::Screen,
-        script::Driver,
+        script::{self, Driver},
         stage::{Input, Motion, Sensors, Stage},
         startup::{Outcome, Part},
     },
@@ -1327,5 +1327,258 @@ fn demonstration_damage_redraws_what_changed() {
         assert_eq!(differing(partial, &whole), 0, "step {step}");
         assert_eq!(differing(&buffers.panel, &whole), 0, "step {step}, on the panel");
         driver.step(Input::default());
+    }
+}
+
+use octowhere_ui::ui::rest::{self, Rest, Timeout};
+
+/// Settled on `screen` with the clock running, resting after `timeout`.
+fn resting_on(screen: Screen, timeout: Timeout, always_on: bool) -> Driver<'static> {
+    let mut driver = Driver::on(screen);
+    driver.stage = Stage::new(PeripheralState { firmware: "0.1.0", timeout, always_on, ..PeripheralState::default() });
+    driver.stage.show(screen);
+    driver.step(sensors(clock_at(12, 7, 42), zone("Europe/Dublin", ZoneMode::Automatic)));
+    driver.motion(heading(470));
+    driver.run_clock();
+    driver.wait(600_000);
+    driver
+}
+
+/// Steps without input until the screen's rest passes `reached`, and returns every update on
+/// the way.
+fn wait_until(driver: &mut Driver, within: Micros, reached: impl Fn(Rest) -> bool) -> Vec<Update> {
+    let end = driver.now() + within;
+    let mut updates = Vec::new();
+    while !reached(driver.stage.rest()) {
+        assert!(driver.now() < end, "still {:?}", driver.stage.rest());
+        updates.push(driver.step(Input::default()));
+    }
+    updates
+}
+
+/// The levels sent over `duration` of steps without input.
+fn levels_over(driver: &mut Driver, duration: Micros) -> Vec<u8> {
+    (0..frames_in(duration)).filter_map(|_| driver.step(Input::default()).brightness).collect()
+}
+
+fn is_dimmed(rest: Rest) -> bool {
+    matches!(rest, Rest::Dimmed { .. })
+}
+
+#[test]
+fn the_screen_dims_at_the_timeout_and_a_touch_only_restores_it() {
+    let mut driver = resting_on(Screen::Clock, Timeout::default(), false);
+    // The timer starts with the first step, and nothing has restarted it since.
+    let start = script::FRAME;
+    driver.wait(58_000_000);
+    assert_eq!(driver.stage.rest(), Rest::Awake);
+    wait_until(&mut driver, 3_000_000, is_dimmed);
+    let after = driver.now() - start;
+    assert!((59_900_000..60_100_000).contains(&after), "{after}");
+    let levels = levels_over(&mut driver, rest::DIM_FADE + script::FRAME);
+    assert!(levels.len() > 5 && levels.is_sorted_by(|a, b| a >= b), "{levels:?}");
+    assert_eq!(levels.last(), Some(&rest::dim_level(120)));
+
+    let mut updates = driver.swipe(Point::new(400, 233), Point::new(100, 233), 200_000);
+    updates.extend((0..30).map(|_| driver.step(Input::default())));
+    let levels: Vec<_> = updates.iter().filter_map(|update| update.brightness).collect();
+    assert!(levels.len() > 5 && levels.is_sorted(), "{levels:?}");
+    assert_eq!(levels.last(), Some(&120));
+    assert_eq!(driver.stage.rest(), Rest::Awake);
+    assert!(!driver.stage.is_animating(), "the touch that lifted the dim turned the page");
+    assert_eq!(driver.stage.screen(), Screen::Clock);
+}
+
+
+#[test]
+fn a_cover_while_dimmed_does_nothing() {
+    let mut driver = resting_on(Screen::Compass, Timeout::Seconds15, false);
+    wait_until(&mut driver, 16_000_000, is_dimmed);
+    driver.wait(rest::DIM_FADE);
+    let update = driver.cover();
+    assert_eq!(update.brightness, None);
+    driver.wait(300_000);
+    assert!(is_dimmed(driver.stage.rest()));
+    assert_eq!(driver.stage.screen(), Screen::Compass);
+}
+
+#[test]
+fn after_the_dim_the_panel_goes_off_and_nothing_redraws() {
+    let mut driver = resting_on(Screen::Clock, Timeout::Seconds15, false);
+    wait_until(&mut driver, 16_000_000, is_dimmed);
+    let since = driver.now();
+    let updates = wait_until(&mut driver, 6_000_000, |rest| rest == Rest::Off);
+    let off = updates.last().unwrap();
+    let after = driver.now() - since;
+    assert!((5_300_000..5_400_000).contains(&after), "{after}");
+    assert_eq!((off.brightness, off.display_on), (Some(0), Some(false)));
+    let darkening: Vec<_> = updates.iter().rev().skip(1).take(10).filter_map(|update| update.brightness).collect();
+    assert!(darkening.len() > 5 && darkening.is_sorted(), "the level fades out before the panel goes off: {darkening:?}");
+    for _ in 0..200 {
+        let update = driver.step(Input::default());
+        assert!(driver.stage.changed().is_empty());
+        assert_eq!((update.brightness, update.display_on), (None, None));
+    }
+    assert_eq!(driver.stage.next_change(), None);
+}
+
+#[test]
+fn a_wake_from_off_runs_the_entry_and_the_climb_once_the_panel_is_on() {
+    let mut driver = resting_on(Screen::Compass, Timeout::Seconds15, false);
+    wait_until(&mut driver, 22_000_000, |rest| rest == Rest::Off);
+    let woken = driver.now() + script::FRAME;
+    let mut updates = driver.stroke(&[Point::new(400, 233), Point::new(300, 233), Point::new(200, 233)]);
+    assert_eq!(updates[0].display_on, Some(true));
+    assert_eq!(driver.stage.rest(), Rest::Awake);
+    assert_eq!(driver.stage.screen(), Screen::Compass);
+    while driver.now() < woken + rest::PANEL_WAKE - script::FRAME {
+        updates.push(driver.step(Input::default()));
+        assert_eq!(accents(&driver), Accents::HIDDEN, "the entry started on a dark panel");
+    }
+    while driver.stage.is_animating() {
+        updates.push(driver.step(Input::default()));
+    }
+    let levels: Vec<_> = updates.iter().filter_map(|update| update.brightness).collect();
+    assert!(levels.len() > 3, "{levels:?}");
+    assert!(levels.is_sorted() && levels.last() == Some(&120), "{levels:?}");
+    assert_eq!(accents(&driver), Accents::FULL);
+    assert_eq!(driver.stage.screen(), Screen::Compass, "the waking touch turned the page");
+}
+
+#[test]
+fn the_always_on_face_shows_after_the_dim_and_redraws_once_a_minute() {
+    let mut driver = resting_on(Screen::Compass, Timeout::Seconds15, true);
+    let updates = wait_until(&mut driver, 22_000_000, |rest| rest == Rest::AlwaysOn);
+    assert_eq!(updates.last().unwrap().brightness, Some(rest::always_on_level(120)));
+    assert!(driver.stage.changed().is_full());
+    assert_eq!(tiled_differs(&driver.stage), 0);
+    // The clock started at 12:07:42 and is now about 21 seconds on, so the next two minutes
+    // change twice.
+    let redraws = (0..frames_in(120_000_000))
+        .filter(|_| {
+            driver.step(Input::default());
+            !driver.stage.changed().is_empty()
+        })
+        .count();
+    assert_eq!(redraws, 2);
+}
+
+fn frames_in(duration: Micros) -> Micros {
+    duration / script::FRAME
+}
+
+#[test]
+fn a_wake_from_the_always_on_face_climbs_from_its_level() {
+    let mut driver = resting_on(Screen::Clock, Timeout::Seconds15, true);
+    wait_until(&mut driver, 22_000_000, |rest| rest == Rest::AlwaysOn);
+    let mut updates = driver.stroke(&[Point::new(233, 233)]);
+    assert_eq!(updates[0].display_on, None);
+    while driver.stage.is_animating() {
+        updates.push(driver.step(Input::default()));
+    }
+    let levels: Vec<_> = updates.iter().filter_map(|update| update.brightness).collect();
+    assert!(levels[0] > rest::always_on_level(120) && levels.is_sorted(), "{levels:?}");
+    assert_eq!(levels.last(), Some(&120));
+    assert_eq!(clock_accents(&driver), ClockAccents::FULL);
+}
+
+#[test]
+fn a_wake_from_the_panel_lands_on_the_clock_and_drops_the_edit() {
+    let mut driver = open_panel(Screen::Compass);
+    tap(&mut driver, 150, 300);
+    driver.swipe(Point::new(150, 280), Point::new(420, 280), 300_000);
+    let updates = wait_until(&mut driver, 70_000_000, |rest| rest == Rest::Off);
+    assert!(
+        updates.iter().any(|update| update.brightness == Some(rest::dim_level(255))),
+        "the dim is taken from the level that shows"
+    );
+    let mut updates = driver.stroke(&[Point::new(233, 233)]);
+    while driver.stage.is_animating() {
+        updates.push(driver.step(Input::default()));
+    }
+    assert_eq!(stored(&updates), None);
+    assert!(driver.stage.page().is_none());
+    assert_eq!(driver.stage.panel_offset(), 0);
+    assert_eq!(driver.stage.screen(), Screen::Clock);
+    assert_eq!(updates.iter().rev().find_map(|update| update.brightness), Some(120));
+    assert_eq!(driver.stage.peripherals().brightness, 120);
+}
+
+#[test]
+fn turning_the_compass_keeps_the_screen_lit() {
+    let mut driver = resting_on(Screen::Compass, Timeout::Seconds15, false);
+    for turn in 1..=8 {
+        driver.wait(5_000_000);
+        driver.motion(heading(470 + turn * 150));
+    }
+    assert_eq!(driver.stage.rest(), Rest::Awake);
+    let turned = driver.now();
+    for nudge in 1..=3 {
+        driver.wait(5_000_000);
+        driver.motion(heading(470 + 8 * 150 + nudge * 30));
+    }
+    driver.wait(500_000);
+    assert!(is_dimmed(driver.stage.rest()));
+    let Rest::Dimmed { since } = driver.stage.rest() else { unreachable!() };
+    assert!((15_000_000..15_100_000).contains(&(since - turned)), "{}", since - turned);
+}
+
+#[test]
+fn the_timer_waits_for_the_start_up() {
+    let mut driver = Driver::starting();
+    driver.stage = Stage::starting(PeripheralState {
+        firmware: "0.1.0",
+        timeout: Timeout::Seconds15,
+        ..PeripheralState::default()
+    });
+    driver.wait(20_000_000);
+    assert!(driver.stage.starting_up());
+    assert_eq!(driver.stage.rest(), Rest::Awake);
+    boot_all(&mut driver, None);
+    while driver.stage.starting_up() {
+        driver.step(Input::default());
+    }
+    driver.wait(14_000_000);
+    assert_eq!(driver.stage.rest(), Rest::Awake);
+    driver.wait(1_100_000);
+    assert!(is_dimmed(driver.stage.rest()));
+}
+
+#[test]
+fn never_keeps_the_screen_lit() {
+    let mut driver = resting_on(Screen::Clock, Timeout::Never, true);
+    driver.wait(600_000_000);
+    assert_eq!(driver.stage.rest(), Rest::Awake);
+    assert_eq!(driver.stage.next_change(), None);
+}
+
+/// Redrawing only what each step marked leaves the buffers as a full redraw would, through the
+/// dim, the always-on face, a wake and the entry after it.
+#[test]
+fn rest_damage_redraws_what_changed() {
+    let mut driver = resting_on(Screen::Clock, Timeout::Seconds15, true);
+    let mut buffers = Buffers::new();
+    let mut check = |driver: &Driver, when: &str| {
+        let partial = buffers.draw(&driver.stage, driver.stage.changed());
+        let whole = render(&driver.stage);
+        assert_eq!(differing(partial, &whole), 0, "{when}");
+        assert_eq!(differing(&buffers.panel, &whole), 0, "{when}, on the panel");
+    };
+    check(&driver, "awake");
+    while driver.stage.rest() != Rest::AlwaysOn {
+        driver.step(Input::default());
+        check(&driver, &format!("{:?}", driver.stage.rest()));
+    }
+    for step in 0..frames_in(61_000_000) {
+        driver.step(Input::default());
+        if !driver.stage.changed().is_empty() || step < 3 {
+            check(&driver, "always on");
+        }
+    }
+    driver.touch(Some(Point::new(233, 233)));
+    check(&driver, "woken");
+    for step in 0..40 {
+        driver.touch(None);
+        check(&driver, &format!("entry {step}"));
     }
 }

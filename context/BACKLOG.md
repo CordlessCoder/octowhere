@@ -16,14 +16,16 @@ until the feature set is complete, because profiling an incomplete firmware pric
   of time, defer the write until the panel is idle, or batch saves.
 - Build the rest of the round 3 design,
   [`octowhere-round3-display-motion-v5/DISPLAY-AND-MOTION-SPEC.md`](octowhere-round3-display-motion-v5/DISPLAY-AND-MOTION-SPEC.md),
-  a part at a time (owner, 2026-09-25): pixel shift, screen timeout with dimming and the
-  always-on face, and the TIMEOUT and ALWAYS ON cells. The owner picks the order. The
-  compass's changes of state and the start-up are built. Notes for each part:
+  a part at a time (owner, 2026-09-25): pixel shift, and the TIMEOUT and ALWAYS ON cells.
+  The owner picks the order. The compass's changes of state, the start-up, and the timeout
+  with the always-on face are built. Notes for each part:
   - Pixel shift in the flush path would carry the ring off a 466 px framebuffer at a 3 px
     offset. A 3 px margin on the framebuffers, with the ring and the clip circle drawn at the
     inverse offset, keeps drawing and damage in content coordinates.
   - The ALWAYS ON cell saves on every tap, so shortening settings saves (above) comes first.
-    The clear warning's new wording is not specified.
+    The clear warning's new wording is not specified. The stage already takes `timeout` and
+    `always_on` in `PeripheralState`; the cells add the stored keys and set them. The always-on
+    face has not been seen on the panel, since nothing turns it on yet.
   - Optimise `ui::scatter` (owner, 2026-09-25), which the owner wants on more pages. Today
     it redraws every mark on every frame: a hash, a square root, a trigonometric blend and up
     to four fills per grid point, about 3,400 points on the identity. Candidates: skip points

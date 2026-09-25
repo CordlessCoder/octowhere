@@ -21,6 +21,7 @@ use octowhere_ui::{
     ui::{
         clock::{ClockState, DateTime, ZoneMode, ZoneState},
         compass::CompassView,
+        rest::{Rest, Timeout},
         screens::{Battery, Gnss, PeripheralState, Screen},
         script::Driver,
         stage::{Input, Motion, Sensors, Stage, Touch},
@@ -164,6 +165,7 @@ fn main() {
 
     frames.extend(settings_frames());
     frames.extend(startup_frames());
+    frames.extend(always_on_frames());
 
     for (name, stage) in frames {
         let mut fb = FB::boxed();
@@ -298,6 +300,36 @@ fn startup_frames() -> Vec<(String, Stage)> {
         frames.push((format!("startup-fault-{n:02}"), boot(Some(Part::Magnet), 6, frame(n) + 100_000)));
     }
     frames
+}
+
+/// The always-on face in each of the clock's states, reached by waiting out a 15 s timeout and
+/// the dim after it.
+fn always_on_frames() -> Vec<(String, Stage)> {
+    let fixture = sensors();
+    [
+        ("local", fixture.clock, fixture.zone),
+        ("stopped", ClockState { stopped: true, ..fixture.clock }, fixture.zone),
+        ("no-zone", fixture.clock, ZoneState { zone: None, ..fixture.zone }),
+        ("no-data", ClockState { utc: None, ..fixture.clock }, fixture.zone),
+    ]
+    .into_iter()
+    .map(|(name, clock, zone)| {
+        let mut stage = Stage::new(PeripheralState {
+            firmware: "0.1.0",
+            timeout: Timeout::Seconds15,
+            always_on: true,
+            ..PeripheralState::default()
+        });
+        stage.show(Screen::Clock);
+        stage.step(Input { now: 1, sensors: Some(fixture), ..Input::default() });
+        stage.step(Input { now: 2, sensors: Some(Sensors { clock, zone, ..fixture }), ..Input::default() });
+        for now in [16_000_000, 21_000_000] {
+            stage.step(Input { now, ..Input::default() });
+        }
+        assert_eq!(stage.rest(), Rest::AlwaysOn);
+        (format!("always-on-{name}"), stage)
+    })
+    .collect()
 }
 
 fn stage(screen: Screen, compass: CompassView) -> Stage {

@@ -13,6 +13,7 @@ use super::{
     compass::CompassView,
     compass_screen,
     panel,
+    rest::Timeout,
 };
 use crate::{
     board,
@@ -74,6 +75,9 @@ pub struct PeripheralState {
     pub gnss: Gnss,
     /// The display's level, out of 255.
     pub brightness: u8,
+    pub timeout: Timeout,
+    /// The screen rests on the always-on face rather than going dark.
+    pub always_on: bool,
     /// The firmware's version.
     pub firmware: &'static str,
 }
@@ -86,6 +90,8 @@ impl Default for PeripheralState {
             battery: None,
             gnss: Gnss::default(),
             brightness: DEFAULT_BRIGHTNESS,
+            timeout: Timeout::default(),
+            always_on: false,
             firmware: "",
         }
     }

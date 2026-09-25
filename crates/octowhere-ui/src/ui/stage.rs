@@ -5,6 +5,7 @@
 use embedded_graphics::prelude::Point;
 
 use super::{
+    always_on,
     clock::{ClockState, ClockView, ZoneMode, ZoneState},
     clock_screen,
     compass::CompassView,
@@ -14,6 +15,7 @@ use super::{
     pager::Pager,
     panel::{self, Cell},
     picker::Picker,
+    rest::{self, Fade, Rest},
     screens::{self, Battery, Gnss, PeripheralState, Screen, DEFAULT_BRIGHTNESS},
     second::{self, Effects, Next, Page},
     sheet::Sheet,
@@ -177,6 +179,9 @@ pub struct Update {
     pub brightness: Option<u8>,
     /// Store this setting. The stage already shows it.
     pub store: Option<Store>,
+    /// Switch the display on before this frame goes out, or off, after setting any level, once
+    /// it has.
+    pub display_on: Option<bool>,
 }
 
 /// Where the drag in progress goes, decided when it leaves the tap slop.
@@ -273,6 +278,21 @@ pub struct Stage {
     clock_types_in: bool,
     /// The start-up once it has finished, which a replay counts its parts from.
     last_boot: Option<Startup>,
+    rest: Rest,
+    /// When the timeout timer last restarted, and the heading then.
+    active_since: Micros,
+    heading_anchor: Option<u16>,
+    /// The level the display shows while awake, which the dim and the always-on face are taken
+    /// from.
+    level: u8,
+    /// The level last sent to the display.
+    shown_level: u8,
+    /// A change of level under way.
+    fade: Option<Fade>,
+    /// No entry starts before this, so one does not run on a panel still waking.
+    entry_from: Micros,
+    /// What the always-on face showed after the last step, while it shows.
+    drawn_always_on: Option<always_on::View>,
 }
 
 impl Stage {
@@ -289,7 +309,6 @@ impl Stage {
             raw_touch: [None; 2],
             gesture: GestureTracker::default(),
             pager: Pager::new(0, Screen::ALL.len(), board::LCD_WIDTH as i32),
-            peripherals,
             renderer: FontdueRenderer::new(
                 FontdueRendererCtx::new_rc(),
                 20,
@@ -323,6 +342,15 @@ impl Stage {
             swallowed: false,
             clock_types_in: false,
             last_boot: None,
+            rest: Rest::Awake,
+            active_since: 0,
+            heading_anchor: None,
+            level: peripherals.brightness,
+            shown_level: peripherals.brightness,
+            fade: None,
+            entry_from: 0,
+            drawn_always_on: None,
+            peripherals,
         }
     }
 
@@ -336,7 +364,25 @@ impl Stage {
     /// [animating](Self::is_animating), which wants a step as soon as possible.
     #[must_use]
     pub fn next_change(&self) -> Option<Micros> {
-        self.startup_due
+        let rest = match self.rest {
+            Rest::Awake if self.startup.is_none() => self.peripherals.timeout.duration().map(|timeout| self.active_since + timeout),
+            Rest::Dimmed { since } => Some(since + rest::DIM_HOLD),
+            Rest::Darkening { since } => Some(since + rest::OFF_FADE),
+            _ => None,
+        };
+        [self.startup_due, rest].into_iter().flatten().min()
+    }
+
+    /// Where the screen is on its way to rest.
+    #[must_use]
+    pub fn rest(&self) -> Rest {
+        self.rest
+    }
+
+    /// The level last sent to the display.
+    #[must_use]
+    pub fn shown_level(&self) -> u8 {
+        self.shown_level
     }
 
     /// Jumps to `screen` as though the pager had come to rest on it, with the panel closed.
@@ -439,10 +485,18 @@ impl Stage {
     /// input.
     #[must_use]
     pub fn is_animating(&self) -> bool {
-        self.pager.is_moving() || self.sheet.is_moving() || self.grid.snap.is_some() || self.fading
+        self.pager.is_moving() || self.sheet.is_moving() || self.grid.snap.is_some() || self.fading || self.fade.is_some()
     }
 
     pub fn step(&mut self, input: Input) -> Update {
+        let update = self.advance(input);
+        if let Some(level) = update.brightness {
+            self.shown_level = level;
+        }
+        update
+    }
+
+    fn advance(&mut self, input: Input) -> Update {
         let Input {
             now,
             touch,
@@ -474,9 +528,19 @@ impl Stage {
                 Touch::Cover => [None; 2],
             };
         }
-        if self.startup.is_some() && self.step_startup(now, boot, touch.is_some(), &mut update) {
+        // The timer does not run during the start-up; it restarts when the clock face takes over.
+        if self.startup.is_some() {
+            self.restart(now);
+            if self.step_startup(now, boot, touch.is_some(), &mut update) {
+                return update;
+            }
+        }
+        let contact = touch.is_some() && self.raw_touch[0].is_some();
+        let mut touch = touch;
+        if self.step_rest(now, contact, &mut touch, &mut update) {
             return update;
         }
+        self.step_fade(now, &mut update);
         if self.raw_touch[0].is_none() {
             self.swallowed = false;
         }
@@ -558,7 +622,134 @@ impl Stage {
         let grid_only = current.2 != previous.2 && (current.0, current.1, current.3) == (previous.0, previous.1, previous.3);
         full |= current != previous && !grid_only;
         self.track_damage(full);
+
+        let moved = current != previous || self.pager.is_moving() || self.sheet.is_moving() || self.grid.snap.is_some();
+        let cover = touch == Some(Touch::Cover);
+        if contact || cover || moved || self.heading_moved(face_shows) {
+            self.restart(now);
+        }
+        if let (Rest::Awake, Some(timeout)) = (self.rest, self.peripherals.timeout.duration())
+            && now.saturating_sub(self.active_since) >= timeout
+        {
+            self.rest = Rest::Dimmed { since: now };
+            self.fade_to(rest::dim_level(self.level), rest::DIM_FADE, now);
+        }
         update
+    }
+
+    /// Restarts the timeout timer.
+    fn restart(&mut self, now: Micros) {
+        self.active_since = now;
+        self.heading_anchor = self.peripherals.compass.heading_decidegrees;
+    }
+
+    /// Whether the compass shows and its heading has turned far enough to count as use.
+    fn heading_moved(&mut self, face_shows: bool) -> bool {
+        let heading = self.peripherals.compass.heading_decidegrees;
+        if !face_shows || self.screen != Screen::Compass {
+            return false;
+        }
+        match (self.heading_anchor, heading) {
+            (Some(anchor), Some(heading)) => rest::heading_apart(anchor, heading) > rest::HEADING_RESTART,
+            (None, Some(_)) => {
+                self.heading_anchor = heading;
+                false
+            }
+            _ => false,
+        }
+    }
+
+    /// Wakes the screen on a contact, and takes a dimmed screen on to rest. Returns whether the
+    /// screen rests, so nothing else steps. A cover while dimmed is dropped from `touch`.
+    fn step_rest(&mut self, now: Micros, contact: bool, touch: &mut Option<Touch>, update: &mut Update) -> bool {
+        match self.rest {
+            Rest::Awake => return false,
+            // The contact that lifts the dim does nothing else.
+            Rest::Dimmed { .. } | Rest::Darkening { .. } if contact => {
+                self.rest = Rest::Awake;
+                self.swallowed = true;
+                self.fade_to(self.level, rest::WAKE_FADE, now);
+                return false;
+            }
+            Rest::Dimmed { since } if now.saturating_sub(since) >= rest::DIM_HOLD => {
+                if self.peripherals.always_on {
+                    self.rest = Rest::AlwaysOn;
+                    self.drawn_always_on = None;
+                    self.fade = None;
+                    update.brightness = Some(rest::always_on_level(self.level));
+                } else {
+                    self.rest = Rest::Darkening { since: now };
+                    self.fade_to(0, rest::OFF_FADE, now);
+                    return false;
+                }
+            }
+            Rest::Darkening { since } if now.saturating_sub(since) >= rest::OFF_FADE => {
+                self.rest = Rest::Off;
+                self.fade = None;
+                update.brightness = Some(0);
+                update.display_on = Some(false);
+            }
+            Rest::Dimmed { .. } | Rest::Darkening { .. } => {
+                if *touch == Some(Touch::Cover) {
+                    *touch = None;
+                }
+                return false;
+            }
+            Rest::AlwaysOn | Rest::Off if contact => {
+                self.wake(now, update);
+                return false;
+            }
+            Rest::AlwaysOn | Rest::Off => {}
+        }
+        if self.rest == Rest::AlwaysOn {
+            let view = always_on::View::of(&self.peripherals.clock);
+            if self.drawn_always_on.as_ref() != Some(&view) {
+                self.drawn_always_on = Some(view);
+                self.changed.make_full();
+            }
+        }
+        true
+    }
+
+    /// Wakes from the always-on face or from off, onto the face that showed, which runs its
+    /// entry, or from the panel onto the clock face. The level fades back up to the stored one,
+    /// so an unsaved brightness goes with any other edit.
+    fn wake(&mut self, now: Micros, update: &mut Update) {
+        self.entry_from = now;
+        if self.rest == Rest::Off {
+            update.display_on = Some(true);
+            self.entry_from += rest::PANEL_WAKE;
+        }
+        self.rest = Rest::Awake;
+        self.swallowed = true;
+        self.drawn_always_on = None;
+        if self.page.is_some() || !self.sheet.is_closed() {
+            self.route = None;
+            self.show(Screen::Clock);
+        } else {
+            self.face(self.screen);
+        }
+        self.level = self.peripherals.brightness;
+        self.fade_to(self.level, rest::WAKE_FADE, self.entry_from);
+        self.changed.make_full();
+    }
+
+    /// Fades from the level that shows to `to`, starting at `start`.
+    fn fade_to(&mut self, to: u8, duration: Micros, start: Micros) {
+        self.fade = Some(Fade { from: self.shown_level, to, start, duration });
+    }
+
+    fn step_fade(&mut self, now: Micros, update: &mut Update) {
+        let Some(fade) = self.fade else {
+            return;
+        };
+        let level = fade.level(now);
+        if level != self.shown_level {
+            update.brightness = Some(level);
+        }
+        if fade.done(now) {
+            self.fade = None;
+        }
     }
 
     /// Steps the start-up sequence, with `touched` set when a fresh touch reading came in.
@@ -592,6 +783,7 @@ impl Stage {
                     self.settle_clock(now);
                 }
                 self.clock_types_in = after_card;
+                self.level = level;
                 level
             }
             _ => startup.brightness(now, level),
@@ -838,6 +1030,7 @@ impl Stage {
     /// Takes what a screen asked for into the update, and shows a stored setting at once.
     fn apply(&mut self, effects: Effects, update: &mut Update) {
         if let Some(level) = effects.brightness {
+            self.level = level;
             update.brightness = Some(level);
         }
         let Some(store) = effects.store else {
@@ -848,6 +1041,7 @@ impl Stage {
         match store {
             Store::Brightness(level) => {
                 self.peripherals.brightness = level;
+                self.level = level;
                 update.brightness = Some(level);
             }
             Store::ManualZone(id) => zone = ZoneState { mode: ZoneMode::Manual, zone: Some(id) },
@@ -855,6 +1049,7 @@ impl Stage {
             Store::Clear => {
                 zone.mode = ZoneMode::Automatic;
                 self.peripherals.brightness = DEFAULT_BRIGHTNESS;
+                self.level = DEFAULT_BRIGHTNESS;
                 update.brightness = Some(DEFAULT_BRIGHTNESS);
             }
         }
@@ -926,7 +1121,8 @@ impl Stage {
         let CompassSettled { times, shown, change } = match &mut self.compass_settled {
             Some(settled) => settled,
             None if offset == 0 => {
-                let start = |delay: Micros| Some(now + delay);
+                let from = now.max(self.entry_from);
+                let start = |delay: Micros| Some(from + delay);
                 let mut times = CompassTimes {
                     ring: start(COMPASS_ENTRY.ring),
                     icon: start(COMPASS_ENTRY.icon),
@@ -1016,7 +1212,8 @@ impl Stage {
         let settled = match &mut self.clock_settled {
             Some(settled) => settled,
             None if offset == 0 => {
-                let start = |delay: Micros| Some(now + delay);
+                let from = now.max(self.entry_from);
+                let start = |delay: Micros| Some(from + delay);
                 let mut times = ClockTimes {
                     ring: start(CLOCK_ENTRY.ring),
                     icon: start(CLOCK_ENTRY.icon),
@@ -1122,6 +1319,10 @@ impl Stage {
                 firmware: self.peripherals.firmware,
             };
             startup::draw(view, startup, &context, &self.renderer, target).expect("drawing the start-up failed");
+            return;
+        }
+        if let (Rest::AlwaysOn, Some(view)) = (self.rest, &self.drawn_always_on) {
+            always_on::draw(view, &self.renderer, target).expect("drawing the always-on face failed");
             return;
         }
         if let Some((page, _)) = &self.page {

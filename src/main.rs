@@ -325,6 +325,7 @@ macro_rules! start_display_core {
                     dirty: Dirty::new(),
                     drawn: false,
                     brightness: None,
+                    display_on: None,
                     #[cfg(feature = "damage-debug")]
                     debug_changed: Dirty::new(),
                     timings: Timings::default(),
@@ -334,6 +335,7 @@ macro_rules! start_display_core {
                     dirty: Dirty::new(),
                     drawn: false,
                     brightness: None,
+                    display_on: None,
                     #[cfg(feature = "damage-debug")]
                     debug_changed: Dirty::new(),
                     timings: Timings::default(),
@@ -443,12 +445,16 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
             dirty,
             drawn: _,
             brightness,
+            display_on,
             #[cfg(feature = "damage-debug")]
             debug_changed,
         } = state;
 
         let start = Instant::now();
 
+        if *display_on == Some(true) && display.display_on().await.is_err() {
+            warn!("[DISPLAY] display on failed");
+        }
         let is_first_flush = first_flush;
         if dirty.is_empty() && !is_first_flush {
             timings.vsync_wait = Duration::MIN;
@@ -514,6 +520,9 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
             }
         };
 
+        if display_on.take() == Some(false) && display.display_off().await.is_err() {
+            warn!("[DISPLAY] display off failed");
+        }
         timings.spi_time = start.elapsed() - timings.vsync_wait;
 
         timings.swap_spi = prev_swap_spi;
@@ -1110,6 +1119,8 @@ struct SwapState<A: Allocator = alloc::alloc::Global> {
     drawn: bool,
     /// The display level to set as this frame goes out.
     brightness: Option<u8>,
+    /// Switch the panel on before this frame goes out, or off once it has.
+    display_on: Option<bool>,
     /// The step's own damage, which the display core outlines.
     #[cfg(feature = "damage-debug")]
     debug_changed: Dirty,
@@ -1607,6 +1618,7 @@ async fn frame_loop(
                 timings,
                 drawn,
                 brightness,
+                display_on,
                 #[cfg(feature = "damage-debug")]
                 debug_changed,
             } = state;
@@ -1704,6 +1716,10 @@ async fn frame_loop(
                 COMPASS_RECALIBRATE.store(true, Ordering::Relaxed);
             }
             *brightness = update.brightness;
+            *display_on = update.display_on;
+            if let Some(on) = update.display_on {
+                info!("[DISPLAY] panel {=str}", if on { "on" } else { "off" });
+            }
             if let Some(choice) = update.store {
                 info!("[SETTINGS] chosen {}", choice);
                 let write = match choice {

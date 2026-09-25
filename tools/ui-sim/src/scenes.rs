@@ -3,6 +3,7 @@
 
 use embedded_graphics::prelude::Point;
 use octowhere_ui::ui::{
+    rest::Timeout,
     screens::PeripheralState,
     stage::Stage,
     clock::{ClockState, DateTime, ZoneMode, ZoneState},
@@ -55,6 +56,16 @@ pub const SCENES: &[Scene] = &[
         name: "settings",
         about: "the settings panel: opening, scrolling, brightness, the zone picker, and closing",
         run: settings,
+    },
+    Scene {
+        name: "rest-always-on",
+        about: "a 15 s timeout: the dim, the always-on face, and a touch back to the clock",
+        run: rest_always_on,
+    },
+    Scene {
+        name: "rest-off",
+        about: "a 15 s timeout on the compass: the dim, the panel off, and a touch back",
+        run: rest_off,
     },
     Scene {
         name: "tour",
@@ -346,4 +357,26 @@ fn startup_failed(driver: &mut Driver) {
         (Part::Gnss, Answered, 1_300),
     ]);
     driver.wait(ms(5_200));
+}
+
+/// Settles on `screen` with a 15 s timeout, and waits out the timeout and the dim.
+fn rest(driver: &mut Driver, screen: Screen, always_on: bool) {
+    driver.stage = Stage::new(PeripheralState {
+        firmware: "0.1.0",
+        timeout: Timeout::Seconds15,
+        always_on,
+        ..PeripheralState::default()
+    });
+    start(driver, screen);
+    driver.wait(ms(22_000));
+    tap(driver, 233, 300);
+    driver.wait(ms(2_000));
+}
+
+fn rest_always_on(driver: &mut Driver) {
+    rest(driver, Screen::Clock, true);
+}
+
+fn rest_off(driver: &mut Driver) {
+    rest(driver, Screen::Compass, false);
 }

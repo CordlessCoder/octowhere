@@ -23,7 +23,8 @@ initialization or peripheral mappings.
   travel over the faces; `second`, the screens it opens; `picker`, the zone picker; `text`,
   placing text by its ink), `startup`, the self-test, identity, logo card and fault screen that
   open the firmware, `scatter`, the identity's halftone scatter, kept apart for other screens
-  to use, `stage`, which holds the screen state and turns touch and readings into redraws and settings to store, and `script`, which steps a stage on a simulated clock for
+  to use, `rest`, the screen timeout, the dim and the fades between levels, `always_on`, the
+  face the screen rests on, `stage`, which holds the screen state and turns touch and readings into redraws and settings to store, and `script`, which steps a stage on a simulated clock for
   tests and scenes. `src/chrome.rs` is the font and draw-target layer, and `src/framebuffer.rs`
   holds the pixels. The firmware re-exports
   its `chrome`, `framebuffer` and `ui` modules, so `octowhere::ui::…` paths still resolve.
@@ -79,9 +80,10 @@ initialization or peripheral mappings.
 - [`context/octowhere-round3-display-motion-v5/DISPLAY-AND-MOTION-SPEC.md`](context/octowhere-round3-display-motion-v5/DISPLAY-AND-MOTION-SPEC.md)
   is the approved round 3 design: the compass's changes of state, a start-up sequence, screen
   timeout with dimming and an always-on face, pixel shift, and two panel cells. The owner
-  approved all of it, to be built a part at a time. The compass's changes (section 1) and
-  the start-up (section 2) are built; `SCREEN-DESIGN-BRIEF.md` has where the build interpreted
-  the start-up. Only the start-up's identity, logo card and fault screen run at 30 fps; everything
+  approved all of it, to be built a part at a time. The compass's changes (section 1), the
+  start-up (section 2) and the timeout with the always-on face (section 3) are built;
+  `SCREEN-DESIGN-BRIEF.md` has where the build interpreted them. The level fades where the
+  spec steps it (owner). Only the start-up's identity, logo card and fault screen run at 30 fps; everything
   else keeps timings in ms.
 - [`context/HARDWARE-VERIFICATION.md`](context/HARDWARE-VERIFICATION.md) lists open hardware
   questions from static review. They are questions, not confirmed defects.
@@ -162,7 +164,7 @@ Weigh that cost before adding one.
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 1,074,976 bytes, 6.86% of the 15,663,104-byte app partition that
+The image is currently 1,097,488 bytes, 7.01% of the 15,663,104-byte app partition that
 `partitions.csv` gives it. Measure with `espflash save-image --chip esp32s3 --flash-size 16mb
 --partition-table partitions.csv <elf> <out>`; without those two options it assumes 4 MB of flash
 and the default table. The time zone
@@ -252,7 +254,8 @@ core 1 owns the display SPI/DMA path.
   never touches these devices.
 - `second_core` on core 1 waits for display TE with a timeout, flushes the handed-off regions
   through `Co5300Display`, sets the display level a frame carries before flushing it, and
-  returns the other framebuffer. The panel comes up dark. TE pulses when the panel's scan
+  returns the other framebuffer. A frame can also switch the panel out of sleep before it goes
+  out, or into sleep after. The panel comes up dark. TE pulses when the panel's scan
   reaches `TE_LINE` in `src/drivers/co5300.rs`, so a flush runs behind the scan. A full flush
   takes about as long as the scan, so moving the line, or waiting for TE's level instead of its
   edge, brings back tearing.
