@@ -157,18 +157,40 @@ impl<T: CoverageTarget> CoverageTarget for OnBackground<'_, T> {
 
 impl CoverageTarget for FB {
     fn blend_row(&mut self, x: i32, y: i32, coverage: &[u8], color: Color) {
-        self.blend_row_with(x, y, coverage, color, None, |pixel, covered| {
+        self.blend_row_with(x, y, coverage, color, |pixel, covered| {
             let under = Rgb565::from(RawU16::new(u16::from_be_bytes([pixel[0], pixel[1]])));
             under.lerp(&color, covered)
         });
     }
 
     fn blend_row_over(&mut self, x: i32, y: i32, coverage: &[u8], color: Color, background: Color) {
-        self.blend_row_with(x, y, coverage, color, None, |_, covered| background.lerp(&color, covered));
+        self.blend_row_with(x, y, coverage, color, |_, covered| background.lerp(&color, covered));
     }
 
+    // PERF: storing uniform runs as words, two pixels a word, or eight bytes of coverage at a
+    // time all measured slower in the fault screen's frame than this, though faster alone.
     fn paint_row(&mut self, x: i32, y: i32, coverage: &[u8], color: Color, background: Color) {
-        self.blend_row_with(x, y, coverage, color, Some(background), |_, covered| background.lerp(&color, covered));
+        const WIDTH: i32 = board::LCD_WIDTH as i32;
+        if !(0..board::LCD_HEIGHT as i32).contains(&y) {
+            return;
+        }
+        let start = x.max(0);
+        let end = x.saturating_add(coverage.len() as i32).min(WIDTH);
+        if start >= end {
+            return;
+        }
+        let coverage = &coverage[(start - x) as usize..(end - x) as usize];
+        let row = (y * WIDTH) as usize;
+        let pixels = &mut self.buffer_mut()[(row + start as usize) * 2..(row + end as usize) * 2];
+        let raw = |color: Color| RawU16::from(color).into_inner().to_be_bytes();
+        let (full, empty) = (raw(color), raw(background));
+        for (pixel, &covered) in pixels.as_chunks_mut::<2>().0.iter_mut().zip(coverage) {
+            *pixel = match covered {
+                0 => empty,
+                u8::MAX => full,
+                _ => raw(background.lerp(&color, covered)),
+            };
+        }
     }
 }
 
@@ -188,15 +210,13 @@ impl FB {
 
 trait BlendRowWith {
     /// Clips the row to the framebuffer, skips uncovered pixels, stores `color` over fully covered
-    /// ones, and stores what `mix` returns for the rest, given the pixel's bytes. With `uncovered`,
-    /// uncovered pixels take that colour instead of being skipped.
+    /// ones, and stores what `mix` returns for the rest, given the pixel's bytes.
     fn blend_row_with(
         &mut self,
         x: i32,
         y: i32,
         coverage: &[u8],
         color: Color,
-        uncovered: Option<Color>,
         mix: impl Fn(&[u8], u8) -> Color,
     );
 }
@@ -209,7 +229,6 @@ impl BlendRowWith for FB {
         y: i32,
         coverage: &[u8],
         color: Color,
-        uncovered: Option<Color>,
         mix: impl Fn(&[u8], u8) -> Color,
     ) {
         const WIDTH: i32 = board::LCD_WIDTH as i32;
@@ -225,14 +244,9 @@ impl BlendRowWith for FB {
         let row = (y * WIDTH) as usize;
         let pixels = &mut self.buffer_mut()[(row + start as usize) * 2..(row + end as usize) * 2];
         let full = RawU16::from(color).into_inner().to_be_bytes();
-        let empty = uncovered.map(|color| RawU16::from(color).into_inner().to_be_bytes());
         for (pixel, &covered) in pixels.as_chunks_mut::<2>().0.iter_mut().zip(coverage) {
             match covered {
-                0 => {
-                    if let Some(empty) = empty {
-                        *pixel = empty;
-                    }
-                }
+                0 => {}
                 u8::MAX => *pixel = full,
                 _ => *pixel = RawU16::from(mix(pixel, covered)).into_inner().to_be_bytes(),
             }

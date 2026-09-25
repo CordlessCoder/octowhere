@@ -1584,6 +1584,134 @@ async fn start_lora(
 
 /// Steps and draws the stage for ever, handing each frame to the display core. Touch is read
 /// once boot has put the controller in `touch_slot`.
+/// Times the band's row writes alone, before core 1 flushes anything: a fill, and painting
+/// coverage a pixel at a time, two pixels a word, and in runs.
+#[cfg(feature = "fault-draw-bench")]
+fn row_write_bench() {
+    use octowhere::chrome::RgbColorExt as _;
+    const W: usize = 466;
+    let (color, background) = (chrome::RED, chrome::BLACK);
+    let raw = |c: chrome::Color| embedded_graphics::pixelcolor::raw::RawU16::from(c).into_inner().to_be_bytes();
+    let (full, empty) = (raw(color), raw(background));
+    let pixel = |covered: u8| match covered {
+        0 => empty,
+        u8::MAX => full,
+        _ => raw(background.lerp(&color, covered)),
+    };
+    let mut text = [0u8; W];
+    let pattern: &[u8] = &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 60, 190, 255, 255, 255, 255, 255, 255, 255, 255, 190, 60];
+    for (i, c) in text.iter_mut().enumerate() {
+        *c = pattern[i % pattern.len()];
+    }
+    let patterns: [(&str, [u8; W]); 3] = [("zeros", [0; W]), ("full", [u8::MAX; W]), ("text", text)];
+    let mut fb = FB::alloc(&PSRAM_HEAP);
+    let rows = 198..318usize;
+    let time = |f: &mut dyn FnMut()| {
+        let mut best = u64::MAX;
+        for _ in 0..5 {
+            let t = Instant::now();
+            f();
+            best = best.min(t.elapsed().as_micros());
+        }
+        best
+    };
+    let fill = time(&mut || {
+        let area = embedded_graphics::primitives::Rectangle::new(Point::new(0, 198), Size::new(W as u32, 120));
+        let _ = fb.fill_solid(&area, background);
+    });
+    info!("[BENCH] rows fill={}", fill);
+    for (name, coverage) in &patterns {
+        let per_pixel = time(&mut || {
+            for y in rows.clone() {
+                let pixels = &mut fb.buffer_mut()[y * W * 2..(y + 1) * W * 2];
+                for (bytes, &c) in pixels.as_chunks_mut::<2>().0.iter_mut().zip(coverage) {
+                    *bytes = pixel(c);
+                }
+            }
+        });
+        let pairs = time(&mut || {
+            for y in rows.clone() {
+                let pixels = &mut fb.buffer_mut()[y * W * 2..(y + 1) * W * 2];
+                let (_, words, _) = unsafe { pixels.align_to_mut::<u32>() };
+                for (word, pair) in words.iter_mut().zip(coverage.as_chunks::<2>().0) {
+                    let ([a, b], [c, d]) = (pixel(pair[0]), pixel(pair[1]));
+                    *word = u32::from_ne_bytes([a, b, c, d]);
+                }
+            }
+        });
+        let runs = time(&mut || {
+            for y in rows.clone() {
+                let pixels = &mut fb.buffer_mut()[y * W * 2..(y + 1) * W * 2];
+                let mut i = 0;
+                while i < W {
+                    let c = coverage[i];
+                    if c == 0 || c == u8::MAX {
+                        let run = coverage[i..].iter().position(|&v| v != c).unwrap_or(W - i);
+                        let fill = if c == 0 { empty } else { full };
+                        let bytes = &mut pixels[i * 2..(i + run) * 2];
+                        let (head, words, tail) = unsafe { bytes.align_to_mut::<u32>() };
+                        for end in [head, tail] {
+                            end.as_chunks_mut::<2>().0.fill(fill);
+                        }
+                        words.fill(u32::from_ne_bytes([fill[0], fill[1], fill[0], fill[1]]));
+                        i += run;
+                    } else {
+                        pixels[i * 2..i * 2 + 2].copy_from_slice(&pixel(c));
+                        i += 1;
+                    }
+                }
+            }
+        });
+        let quads = time(&mut || {
+            let (empty2, full2) = (
+                u32::from_ne_bytes([empty[0], empty[1], empty[0], empty[1]]),
+                u32::from_ne_bytes([full[0], full[1], full[0], full[1]]),
+            );
+            for y in rows.clone() {
+                let pixels = &mut fb.buffer_mut()[y * W * 2..(y + 1) * W * 2];
+                let (_, words, _) = unsafe { pixels.align_to_mut::<u32>() };
+                let (quads, _) = coverage.as_chunks::<4>();
+                let (word_pairs, _) = words.as_chunks_mut::<2>();
+                for (out, quad) in word_pairs.iter_mut().zip(quads) {
+                    match u32::from_ne_bytes(*quad) {
+                        0 => *out = [empty2; 2],
+                        u32::MAX => *out = [full2; 2],
+                        _ => {
+                            let ([a, b], [c, d], [e, f], [g, h]) = (pixel(quad[0]), pixel(quad[1]), pixel(quad[2]), pixel(quad[3]));
+                            *out = [u32::from_ne_bytes([a, b, c, d]), u32::from_ne_bytes([e, f, g, h])];
+                        }
+                    }
+                }
+            }
+        });
+        let octs = time(&mut || {
+            let (empty2, full2) = (
+                u32::from_ne_bytes([empty[0], empty[1], empty[0], empty[1]]),
+                u32::from_ne_bytes([full[0], full[1], full[0], full[1]]),
+            );
+            for y in rows.clone() {
+                let pixels = &mut fb.buffer_mut()[y * W * 2..(y + 1) * W * 2];
+                let (_, words, _) = unsafe { pixels.align_to_mut::<u32>() };
+                let (eights, _) = coverage.as_chunks::<8>();
+                let (word_quads, _) = words.as_chunks_mut::<4>();
+                for (out, eight) in word_quads.iter_mut().zip(eights) {
+                    match u64::from_ne_bytes(*eight) {
+                        0 => *out = [empty2; 4],
+                        u64::MAX => *out = [full2; 4],
+                        _ => {
+                            for (word, pair) in out.iter_mut().zip(eight.as_chunks::<2>().0) {
+                                let ([a, b], [c, d]) = (pixel(pair[0]), pixel(pair[1]));
+                                *word = u32::from_ne_bytes([a, b, c, d]);
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        info!("[BENCH] rows {=str} per_pixel={} pairs={} runs={} quads={} octs={}", name, per_pixel, pairs, runs, quads, octs);
+    }
+}
+
 async fn frame_loop(
     mut stage: Stage,
     mut fb_st: SwapThread<'static, SwapState<&'static esp_alloc::EspHeap>>,
@@ -1610,6 +1738,12 @@ async fn frame_loop(
     // handed it over completes.
     let mut pending_write: Option<(settings::Write, u8)> = None;
     #[cfg(feature = "fault-draw-bench")]
+    // After the reset's USB reconnect, whose first seconds of log are lost.
+    #[cfg(feature = "fault-draw-bench")]
+    {
+        Timer::after(Duration::from_secs(3)).await;
+        row_write_bench();
+    }
     let (mut bench_part, mut bench_last, mut bench_started) = {
         octowhere_ui::part_timing::install(|| Instant::now().as_micros() as u32);
         (0usize, Instant::now(), false)

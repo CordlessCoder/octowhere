@@ -7,9 +7,9 @@ const SKIP: core::ops::Range<i32> = 18..22;
 /// A glyph's box and the rows it sends: each row's start column, row and coverage.
 type Glyph = (Rectangle, Vec<(i32, i32, Vec<u8>)>);
 
-/// Two glyphs whose boxes overlap and a third after a gap, each sending rows that start part
-/// way into its box.
-fn glyphs() -> [Glyph; 3] {
+/// Two glyphs whose boxes overlap, and two after gaps, the last on an odd column and of odd
+/// width. Each sends rows that start part way into its box.
+fn glyphs() -> [Glyph; 4] {
     let glyph = |left: i32, top: i32, width: u32, height: u32, seed: usize| {
         let bounds = Rectangle::new(Point::new(left, top), Size::new(width, height));
         let rows = (top..top + height as i32)
@@ -27,7 +27,7 @@ fn glyphs() -> [Glyph; 3] {
             .collect();
         (bounds, rows)
     };
-    [glyph(100, 5, 40, 30, 1), glyph(130, 8, 40, 20, 2), glyph(200, 12, 30, 25, 3)]
+    [glyph(100, 5, 40, 30, 1), glyph(130, 8, 40, 20, 2), glyph(200, 12, 30, 25, 3), glyph(241, 6, 29, 28, 4)]
 }
 
 fn channels(color: Rgb565) -> [i32; 3] {
