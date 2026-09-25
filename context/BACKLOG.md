@@ -28,12 +28,15 @@ until the feature set is complete, because profiling an incomplete firmware pric
     it. Panel pixels whose source falls outside the framebuffer are sent black, the clear
     reaches 3 px past the visible circle, touch subtracts the offset, and the stage picks the
     position and the moment (a full redraw), with the start-up at the middle position.
-  - Optimise `ui::scatter` (owner, 2026-09-25), which the owner wants on more pages. Today
-    it redraws every mark on every frame: a hash, a square root, a trigonometric blend and up
-    to four fills per grid point, about 3,400 points on the identity. Candidates: skip points
-    outside the circle without the square root, work out each point's radial weight and
-    direction once rather than per frame, and damage only the marks that change between two
-    facings, since most do not. Measure a frame on the device first.
+  - The scatter (`ui::scatter`) damages only the marks that appear or go, and the identity
+    draws about 5 ms a frame once its band settles, 4.3 to 16.4 ms while it types in. What is
+    left is overhead that does not shrink with the damage: working out which points show,
+    about 1.8 ms a frame in the step; the scatter's draw asking `Clip::visible` for each
+    point, about 1.7 ms; the clear, 1.6 ms for about 2,000 pixels; and the hatch's and the
+    microtext's fills, which the clip rejects one at a time. A 6 × 2 `fill_solid` on the
+    framebuffer costs about 1.7 µs even where the cache holds its lines, so small fills are
+    call overhead rather than memory, on every screen. `bench/scatter` times each part
+    (`scatter-bench`), and at start-up the scatter, its arithmetic and small fills alone.
   - The start-up's fault screen draws a frame in about 25 ms, at most 28. The band and the
     strip are painted once, black with their text knocked out (`chrome::Knockout`). The
     clear of the rows outside them is 7 ms, the band with the giant name 7.2 and the strip

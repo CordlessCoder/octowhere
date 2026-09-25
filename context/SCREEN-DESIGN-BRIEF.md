@@ -229,6 +229,8 @@ build interpreted the spec:
   the renders to within a few per cent on every frame. The scatter is its own module
   (`ui::scatter`), with its circle, grid origin, the band it stops short of, its colour and its
   seed as parameters, so another screen can use it. The owner wants it on more pages later.
+  A frame redraws only the marks that appear or go, 20 to 45 of about 700 once its density
+  stops rising, and working out which costs about 1.8 ms a frame.
 - **The mark** is the spec's (since v4): rectangles and a stripe test, drawn at any size from
   one description.
   In the microtext row it has no hatch, as the spec's text and its 15 × 15 rows say; the row
@@ -460,7 +462,8 @@ that changed redraw. Measured on the device, per frame:
 | Compass, heading changes by a degree | about 13 ms |
 | Clock drawn in full | 17.5–22.6 ms |
 | Compass drawn in full | 13–23 ms |
-| Start-up identity, a frame (scatter, microtext, word, hatch) | under 33 ms: it holds 30 fps |
+| Start-up identity, a frame while its word and hatch type in | 4.3–16.4 ms |
+| Start-up identity, a frame once they settle (the scatter turns) | 3.9–5.9 ms |
 | Start-up fault screen, a frame | about 25 ms, at most 28 ms |
 
 The wordmark is about 0.3 ms of a full clock draw. The screens of the settings round are not
