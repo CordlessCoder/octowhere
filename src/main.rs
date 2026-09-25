@@ -1712,6 +1712,43 @@ fn row_write_bench() {
     }
 }
 
+/// Times outlined text against the same text drawn plainly, in the faces and sizes the screens
+/// use, before core 1 flushes anything.
+#[cfg(feature = "fault-draw-bench")]
+fn outline_bench() {
+    use octowhere::chrome::FontdueRenderer;
+    let mut fb = FB::alloc(&PSRAM_HEAP);
+    let base = FontdueRenderer::new(chrome::FontdueRendererCtx::new_rc(), 12, chrome::WHITE, chrome::FONTS);
+    let time = |f: &mut dyn FnMut()| {
+        let mut best = u64::MAX;
+        for _ in 0..5 {
+            let t = Instant::now();
+            f();
+            best = best.min(t.elapsed().as_micros());
+        }
+        best
+    };
+    for (name, text, size, font) in [
+        ("shapiro-40", "OCTOWHERE", 40, chrome::SHAPIRO),
+        ("bold-136", "48", 136, chrome::FRAKTION_BOLD),
+        ("fraktion-16", "WED 25 SEP", 16, chrome::FRAKTION),
+    ] {
+        let mut style = base.clone();
+        (style.font_size, style.font_index) = (size, font);
+        let pen = Point::new(40, 300);
+        let plain = time(&mut || {
+            let _ = style.draw_on_baseline(text, pen, &mut *fb);
+        });
+        let one = time(&mut || {
+            let _ = style.draw_outline_on_baseline(text, pen, 1, &mut *fb);
+        });
+        let two = time(&mut || {
+            let _ = style.draw_outline_on_baseline(text, pen, 2, &mut *fb);
+        });
+        info!("[BENCH] outline {=str} plain={} ring1={} ring2={}", name, plain, one, two);
+    }
+}
+
 async fn frame_loop(
     mut stage: Stage,
     mut fb_st: SwapThread<'static, SwapState<&'static esp_alloc::EspHeap>>,
@@ -1743,6 +1780,7 @@ async fn frame_loop(
     {
         Timer::after(Duration::from_secs(3)).await;
         row_write_bench();
+        outline_bench();
     }
     let (mut bench_part, mut bench_last, mut bench_started) = {
         octowhere_ui::part_timing::install(|| Instant::now().as_micros() as u32);

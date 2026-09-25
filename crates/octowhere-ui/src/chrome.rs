@@ -897,6 +897,40 @@ fn blend_glyph<D: CoverageTarget>(
     });
 }
 
+/// Grows `coverage`, `width` bytes a row, by a pixel into its neighbours: a plus shape, or with
+/// `square` a 3 × 3 square, each byte taking the most of those around it. Alternating the two
+/// keeps an outline's width close to even across angles, where the square alone thickens
+/// diagonals and the plus alone thins them. Only the interior is worked out, so the outermost
+/// pixels must stay zero: the caller pads the coverage by one more pixel than it grows it.
+fn dilate(coverage: &mut [u8], width: usize, square: bool, scratch: &mut alloc::vec::Vec<u8>) {
+    let max3 = |three: &[u8]| three[0].max(three[1]).max(three[2]);
+    scratch.clear();
+    scratch.extend_from_slice(coverage);
+    let rows = scratch.chunks_exact(width);
+    let out = coverage.chunks_exact_mut(width).skip(1);
+    if square {
+        // Three across into `scratch`, then three of those down.
+        for (source, across) in coverage.chunks_exact(width).zip(scratch.chunks_exact_mut(width)) {
+            for (out, three) in across[1..width - 1].iter_mut().zip(source.windows(3)) {
+                *out = max3(three);
+            }
+        }
+        let rows = scratch.chunks_exact(width);
+        let out = coverage.chunks_exact_mut(width).skip(1);
+        for ((out, up), (middle, down)) in out.zip(rows.clone()).zip(rows.clone().skip(1).zip(rows.skip(2))) {
+            for (((out, &up), &middle), &down) in out[1..width - 1].iter_mut().zip(&up[1..]).zip(&middle[1..]).zip(&down[1..]) {
+                *out = up.max(middle).max(down);
+            }
+        }
+    } else {
+        for ((out, up), (middle, down)) in out.zip(rows.clone()).zip(rows.clone().skip(1).zip(rows.skip(2))) {
+            for (((out, &up), three), &down) in out[1..width - 1].iter_mut().zip(&up[1..]).zip(middle.windows(3)).zip(&down[1..]) {
+                *out = max3(three).max(up).max(down);
+            }
+        }
+    }
+}
+
 /// The farthest a glyph's ink box reaches from `origin`, given its pen at `pen` relative to it, y
 /// down, plus a pixel for the edges' coverage.
 fn glyph_reach(pen: (f32, f32), metrics: &fontdue::Metrics) -> f32 {
@@ -1382,6 +1416,56 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
             }
             let color = self.text_color;
             blend_glyph(canvas, coverage, font, index, px, corner, color, target);
+        }
+        Ok(())
+    }
+
+    /// Draws the outline of `text`, its pen at `origin` on the baseline: a ring `radius` px wide
+    /// just outside each glyph's edge, in the text colour, leaving the glyph's inside alone. Text
+    /// drawn over it in another colour gives a halo. The ring is the glyph's coverage grown by
+    /// `radius` less the coverage itself, so it keeps the glyph's antialiasing, but its width is
+    /// whole pixels, and a counter or gap narrower than twice `radius` fills in. Each glyph's ring
+    /// is its own, so where glyphs sit closer than `radius`, a ring crosses its neighbour.
+    pub fn draw_outline_on_baseline<D: CoverageTarget<Color = C>>(
+        &self,
+        text: &str,
+        origin: Point,
+        radius: u8,
+        target: &mut D,
+    ) -> Result<(), D::Error> {
+        let px = self.font_size as f32;
+        let font = self.fonts[self.font_index];
+        // One pixel more than the ring, which the dilation leaves zero.
+        let r = usize::from(radius) + 1;
+        let mut ctx = self.ctx.borrow_mut();
+        let FontdueRendererCtx { canvas, coverage, .. } = &mut *ctx;
+        let (mut glyph, mut grown, mut scratch) = (alloc::vec::Vec::new(), alloc::vec::Vec::new(), alloc::vec::Vec::new());
+        for (index, corner, metrics) in self.glyphs_on_baseline(text, origin) {
+            let corner = corner - Point::new_equal(r as i32);
+            let (width, height) = (metrics.width + 2 * r, metrics.height + 2 * r);
+            let size = Size::new(width as u32, height as u32);
+            if metrics.width == 0 || metrics.height == 0 || !target.visible(&Rectangle::new(corner, size)) {
+                continue;
+            }
+            let (metrics, bitmap) = font.rasterize_indexed(canvas, index, px);
+            glyph.clear();
+            glyph.resize(width * height, 0);
+            coverage.resize(metrics.width, 0);
+            bitmap.rows(coverage, |y, x, span| {
+                let at = (y + r) * width + x + r;
+                glyph[at..at + span.len()].copy_from_slice(span);
+            });
+            grown.clear();
+            grown.extend_from_slice(&glyph);
+            for pass in 0..usize::from(radius) {
+                dilate(&mut grown, width, pass % 2 == 1, &mut scratch);
+            }
+            for (y, (ring, inside)) in grown.chunks_exact_mut(width).zip(glyph.chunks_exact(width)).enumerate() {
+                for (ring, &inside) in ring.iter_mut().zip(inside) {
+                    *ring = ring.saturating_sub(inside);
+                }
+                target.blend_row(corner.x, corner.y + y as i32, ring, self.text_color);
+            }
         }
         Ok(())
     }
