@@ -19,13 +19,13 @@ use super::{
     clock::ClockView,
     gesture::Micros,
     icon::{self, Glyph, Tile},
-    scatter::Scatter,
+    scatter::{Scatter, Shown},
     screens,
     smooth,
     text,
 };
 use crate::chrome::{
-    self, Color, CoverageTarget, FontdueRenderer, Knockout, OnBackground, Round, Window, FRAKTION, FRAKTION_BOLD,
+    self, Color, CoverageTarget, Dirty, FontdueRenderer, Knockout, OnBackground, Round, Window, FRAKTION, FRAKTION_BOLD,
     SHAPIRO,
 };
 
@@ -631,6 +631,18 @@ const MICRO_GNSS_LEFT: i32 = 201;
 const MICRO_TEXT_LEFT: i32 = 227;
 const MICRO_TEXT_TOPS: [i32; 2] = [209, 225];
 const MICRO_MODULE: i32 = 3;
+/// The rows the identity's word, hatch and microtext lie on, which the scatter leaves clear.
+const IDENTITY_BAND: Rectangle = Rectangle::new(Point::new(0, 198), Size::new(466, 120));
+/// The microtext's four pixel digits, which follow the clock.
+const IDENTITY_DIGITS: Rectangle = Rectangle::new(Point::new(DIGITS_LEFT, MICRO_TOP), Size::new(51, 15));
+/// The frame from which the band holds still but for its digits: the microtext and the hatch
+/// are in, the word is typed, and its last flicker is over.
+const IDENTITY_SETTLED: u32 = FLICKER[1] + 1;
+const _: () = assert!(
+    MICRO_FROM + 4 < IDENTITY_SETTLED
+        && HATCH_FROM + 3 < IDENTITY_SETTLED
+        && WORD_FROM + (WORD.len() as u32) < IDENTITY_SETTLED
+);
 
 /// Pixel digits, three modules wide, and a dash for a time the clock cannot vouch for.
 const PIXEL_DIGITS: [[u8; 5]; 10] = [
@@ -656,15 +668,58 @@ fn utc_digits(clock: &ClockView) -> Option<[u8; 4]> {
     Some([hours / 10, hours % 10, minutes / 10, minutes % 10])
 }
 
-/// The identity's scatter on `frame`: at half density on frame 0, filling to full over frames
-/// 2–8, its dense side turning slowly all through.
-fn draw_scatter<D: DrawTarget<Color = Color>>(frame: u32, target: &mut D) -> Result<(), D::Error> {
+/// The identity scatter's facing and density on `frame`: at half density on frame 0, filling
+/// to full over frames 2–8, its dense side turning slowly all through.
+fn scatter_on(frame: u32) -> (f32, f32) {
     let appear = match frame {
         ..2 => 0.5,
         2..8 => 0.5 + 0.5 * (frame - 2) as f32 / 6.0,
         _ => 1.0,
     };
-    Scatter::IDENTITY.draw(0.8 + 0.055 * frame as f32, 1.15 * appear, target)
+    (0.8 + 0.055 * frame as f32, 1.15 * appear)
+}
+
+fn draw_scatter<D: CoverageTarget<Color = Color>>(frame: u32, target: &mut D) -> Result<(), D::Error> {
+    let (facing, density) = scatter_on(frame);
+    Scatter::IDENTITY.draw(facing, density, target)
+}
+
+/// The identity scatter's points on the last frame [`IdentityMarks::changes`] saw, so each
+/// frame's damage works out only its own, and the digits it saw.
+#[derive(Clone, Debug, Default)]
+pub struct IdentityMarks {
+    scatter: Option<(u32, Shown)>,
+    digits: Option<Option<[u8; 4]>>,
+}
+
+impl IdentityMarks {
+    /// Adds what the identity changes from frame `before` to frame `after`, which may be the
+    /// same: the marks that appear or go, the band until it settles, and the digits if the
+    /// clock moved them.
+    pub fn changes(&mut self, before: u32, after: u32, clock: &ClockView, changed: &mut Dirty) {
+        let digits = Some(utc_digits(clock));
+        if self.digits != digits {
+            changed.add(IDENTITY_DIGITS);
+            self.digits = digits;
+        }
+        if before == after {
+            return;
+        }
+        let shown = |frame| {
+            let (facing, density) = scatter_on(frame);
+            Scatter::IDENTITY.shown(facing, density)
+        };
+        let earlier = match self.scatter.take() {
+            Some((frame, marks)) if frame == before => marks,
+            _ => shown(before),
+        };
+        let later = shown(after);
+        Scatter::IDENTITY.changed(&earlier, &later, changed);
+        if before.min(after) < IDENTITY_SETTLED {
+            changed.add(IDENTITY_BAND);
+        }
+        self.scatter = Some((after, later));
+    }
 }
 
 fn word_style(font: &FontdueRenderer<'static, Color>) -> FontdueRenderer<'static, Color> {

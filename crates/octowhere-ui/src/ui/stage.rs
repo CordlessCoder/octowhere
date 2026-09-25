@@ -268,6 +268,7 @@ pub struct Stage {
     startup: Option<Startup>,
     /// What the sequence showed after the last step.
     startup_view: Option<startup::View>,
+    identity_marks: startup::IdentityMarks,
     /// The brightness the sequence last asked for.
     startup_level: Option<u8>,
     /// When the sequence next changes on its own.
@@ -337,6 +338,7 @@ impl Stage {
             drawn_page: None,
             startup: None,
             startup_view: None,
+            identity_marks: startup::IdentityMarks::default(),
             startup_level: None,
             startup_due: None,
             swallowed: false,
@@ -806,6 +808,9 @@ impl Stage {
                     self.changed.add(startup::counter_bounds(&self.renderer, &before));
                     self.changed.add(startup::counter_bounds(&self.renderer, &after));
                 }
+            }
+            (Some(startup::View::Identity(before)), Some(startup::View::Identity(after))) => {
+                self.identity_marks.changes(before, after, &self.peripherals.clock, &mut self.changed);
             }
             (before, after) if before != after => self.changed.make_full(),
             _ => {}

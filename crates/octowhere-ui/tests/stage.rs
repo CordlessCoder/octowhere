@@ -1160,7 +1160,13 @@ fn start_up_damage_redraws_what_changed() {
             check(&driver, part.name());
         }
         for step in 0..300 {
-            driver.step(Input::default());
+            // A new minute every few steps, some between the identity's frames.
+            if step % 7 == 3 {
+                let clock = clock_at(12, (8 + step / 7) as u8, 0);
+                driver.sensors(sensors(clock, zone("Europe/Dublin", ZoneMode::Automatic)).sensors.unwrap());
+            } else {
+                driver.step(Input::default());
+            }
             check(&driver, &format!("step {step}"));
         }
         assert!(!driver.stage.starting_up());
