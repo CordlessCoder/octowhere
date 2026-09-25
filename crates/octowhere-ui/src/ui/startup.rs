@@ -964,13 +964,17 @@ fn draw_fault<D: CoverageTarget<Color = Color>>(
         return Ok(());
     };
     let frame = frame as i32;
+    crate::part_timing::start();
     screens::clear(target)?;
+    crate::part_timing::mark(0);
     smooth::disc_rows(target, 0..466, CENTER, FIELD_RADIUS, chrome::RED)?;
+    crate::part_timing::mark(1);
     for y in DASH_ROWS {
         for x in (DASH_FROM..466).step_by(DASH_PITCH as usize) {
             target.fill_solid(&Rectangle::new(Point::new(x, y), DASH), chrome::BLACK)?;
         }
     }
+    crate::part_timing::mark(2);
     for centre in PART_CENTRES {
         let half = 5 * PART_MODULE / 2;
         modules(first.glyph(), 5, centre - Point::new_equal(half), PART_MODULE, chrome::BLACK, target)?;
@@ -979,7 +983,9 @@ fn draw_fault<D: CoverageTarget<Color = Color>>(
         }
     }
 
+    crate::part_timing::mark(3);
     smooth::disc_rows(target, BAND_ROWS, CENTER, FIELD_RADIUS, chrome::BLACK)?;
+    crate::part_timing::mark(4);
     {
         let band = Rectangle::new(Point::new(0, BAND_ROWS.start), Size::new(466, BAND_ROWS.len() as u32));
         let band = &mut Window::new(&mut *target, Point::zero(), band);
@@ -996,7 +1002,9 @@ fn draw_fault<D: CoverageTarget<Color = Color>>(
         );
         style.draw_doubled_on_baseline(name, pen, band)?;
     }
+    crate::part_timing::mark(5);
     smooth::disc_rows(target, STRIP_ROWS, CENTER, FIELD_RADIUS, chrome::BLACK)?;
+    crate::part_timing::mark(6);
     {
         let strip = &mut OnBackground::new(&mut *target, chrome::BLACK);
         let strip = &mut Round::new(strip, CENTER, FIELD_RADIUS);
@@ -1018,6 +1026,7 @@ fn draw_fault<D: CoverageTarget<Color = Color>>(
         }
     }
 
+    crate::part_timing::mark(7);
     let field = &mut OnBackground::new(&mut *target, chrome::RED);
     let bold = small(font, chrome::BLACK, 12, FRAKTION_BOLD);
     let regular = small(font, chrome::BLACK, 12, FRAKTION);
@@ -1027,11 +1036,16 @@ fn draw_fault<D: CoverageTarget<Color = Color>>(
     let mut failure = heapless::String::<24>::new();
     let _ = write!(failure, "{:02} {} FAIL", first.index() + 1, first.name());
     at_ink(&regular, &failure, MICRO_LEFT, ABOVE_TOPS[1], field)?;
+    crate::part_timing::mark(8);
     hatch(FAULT_HATCH, 8, 4, FAULT_HATCH_SPEED * frame, chrome::BLACK, field)?;
+    crate::part_timing::mark(9);
     let reason = if startup.demo { "DEMO, NOT A FAULT" } else { outcome.reason() };
     at_ink(&regular, reason, MICRO_LEFT, REASON_TOP, field)?;
+    crate::part_timing::mark(10);
     let end = barcode(version, MICRO_LEFT, FAULT_BARCODE_TOP, 12, chrome::BLACK, field)?;
-    at_ink(&bold, version, end + FAULT_VERSION_GAP, FAULT_BARCODE_TOP, field)
+    at_ink(&bold, version, end + FAULT_VERSION_GAP, FAULT_BARCODE_TOP, field)?;
+    crate::part_timing::mark(11);
+    Ok(())
 }
 
 #[cfg(test)]

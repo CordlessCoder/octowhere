@@ -49,6 +49,9 @@ fontdue-target-bench = []
 fontdue-target-bench-gcc = ["fontdue-target-bench"]
 lora-link-tx = []
 lora-link-rx = []
+# Once the boot's start-up ends, plays the fault screen's demonstration for each part in turn,
+# and logs every fault frame's draw time per part, the step, and the frame's period.
+fault-draw-bench = []
 
 [patch.crates-io]
 tca9554 = { git = "https://github.com/CordlessCoder/tca9554-rs", rev = "dd76e69" }

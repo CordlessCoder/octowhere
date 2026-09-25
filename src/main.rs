@@ -1609,6 +1609,11 @@ async fn frame_loop(
     // freezes while it runs: core 1 has flushed a frame once the swap after the one that
     // handed it over completes.
     let mut pending_write: Option<(settings::Write, u8)> = None;
+    #[cfg(feature = "fault-draw-bench")]
+    let (mut bench_part, mut bench_last) = {
+        octowhere_ui::part_timing::install(|| Instant::now().as_micros() as u32);
+        (0usize, Instant::now())
+    };
     loop {
         if touch.is_none() {
             touch = touch_slot.take();
@@ -1685,6 +1690,15 @@ async fn frame_loop(
             if touch_ready {
                 last_touch_poll = Instant::now();
             }
+            #[cfg(feature = "fault-draw-bench")]
+            if !stage.starting_up() {
+                let part = octowhere::ui::startup::Part::ALL[bench_part % 6];
+                bench_part += 1;
+                info!("[BENCH] demo {}", part);
+                stage.bench_fault(part, Instant::now().as_micros());
+            }
+            #[cfg(feature = "fault-draw-bench")]
+            let step_start = Instant::now();
             let update = stage.step(StageInput {
                 now: Instant::now().as_micros(),
                 touch: touch_ready.then(|| match &touch_data {
@@ -1748,6 +1762,8 @@ async fn frame_loop(
                 }
             }
             COMPASS_ACTIVE.store(update.samples_fast, Ordering::Relaxed);
+            #[cfg(feature = "fault-draw-bench")]
+            let step_us = step_start.elapsed().as_micros();
             let changed = stage.changed();
             (*repaint).clone_from(&previous_changed);
             repaint.extend(changed);
@@ -1755,10 +1771,30 @@ async fn frame_loop(
                 repaint.make_full();
                 *drawn = true;
             }
+            #[cfg(feature = "fault-draw-bench")]
+            let draw_start = Instant::now();
             if repaint.is_full() {
                 stage.draw(fb);
             } else if !repaint.is_empty() {
                 stage.draw(&mut chrome::Clip::new(fb, &repaint));
+            }
+            #[cfg(feature = "fault-draw-bench")]
+            if let Some(octowhere::ui::startup::View::Fault(frame)) = stage.bench_startup_view() {
+                let draw_us = draw_start.elapsed().as_micros();
+                let p = octowhere_ui::part_timing::take();
+                let period = bench_last.elapsed().as_micros();
+                bench_last = start;
+                info!(
+                    "[BENCH] frame={} period={} step={} draw={} swap={} flush={} vsync={} clear={} field={} dashes={} parts={} band={} name={} strip={} line={} micro={} hatch={} reason={} barcode={} name_raster={} line_raster={}",
+                    frame,
+                    period,
+                    step_us,
+                    draw_us,
+                    prev_swap_draw.as_micros(),
+                    timings.spi_time.as_micros(),
+                    timings.vsync_wait.as_micros(),
+                    p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8], p[9], p[10], p[11], p[12], p[13],
+                );
             }
             // The panel already shows the step before, so only this step's pixels change on it.
             dirty.clone_from(changed);

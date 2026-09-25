@@ -937,7 +937,7 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
             }
             let pen = (origin.x as f32 + libm::roundf(offset), origin.y as f32);
             let (metrics, bitmap) =
-                font.rasterize_indexed_transformed(&mut ctx.canvas, index, px, transform, pen);
+                crate::part_timing::charge(13, || font.rasterize_indexed_transformed(&mut ctx.canvas, index, px, transform, pen));
             ctx.coverage.resize(metrics.width, 0);
             let color = self.text_color;
             bitmap.rows(&mut ctx.coverage, |y, x, row| {
@@ -967,7 +967,7 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
             if size.width == 0 || size.height == 0 || !target.visible(&Rectangle::new(corner, size)) {
                 continue;
             }
-            let (metrics, bitmap) = font.rasterize_indexed(&mut canvas, index, px);
+            let (metrics, bitmap) = crate::part_timing::charge(12, || font.rasterize_indexed(&mut canvas, index, px));
             row.resize(metrics.width, 0);
             bitmap.rows(&mut row, |y, x, span| {
                 doubled.clear();

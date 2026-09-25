@@ -828,6 +828,16 @@ impl Stage {
         self.changed.make_full();
     }
 
+    /// Plays a demonstration of `part` failing, for the fault screen bench.
+    pub fn bench_fault(&mut self, part: startup::Part, now: Micros) {
+        self.replay_startup(Replay::Failing(part), now);
+    }
+
+    #[must_use]
+    pub fn bench_startup_view(&self) -> Option<startup::View> {
+        self.startup_view
+    }
+
     /// Shows the clock face as though its entry had finished.
     fn settle_clock(&mut self, now: Micros) {
         let time = clock_screen::shown_time(&self.peripherals.clock);
