@@ -2,7 +2,7 @@
 
 use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
-pub const PARTS: usize = 14;
+pub const PARTS: usize = 17;
 pub const NAMES: [&str; PARTS] = [
     "clear",
     "field",
@@ -18,6 +18,9 @@ pub const NAMES: [&str; PARTS] = [
     "barcode",
     "name_raster",
     "line_raster",
+    "ko_gather",
+    "ko_combine",
+    "ko_write",
 ];
 pub static TOTALS: [AtomicU32; PARTS] = [const { AtomicU32::new(0) }; PARTS];
 static TIMER: AtomicUsize = AtomicUsize::new(0);
@@ -57,4 +60,13 @@ pub fn charge<T>(part: usize, f: impl FnOnce() -> T) -> T {
 /// Takes and zeroes the totals.
 pub fn take() -> [u32; PARTS] {
     core::array::from_fn(|i| TOTALS[i].swap(0, Ordering::Relaxed))
+}
+
+pub fn now_pub() -> u32 {
+    now()
+}
+
+/// Charges the time since `since` to `part`, apart from the marks.
+pub fn add(part: usize, since: u32) {
+    TOTALS[part].fetch_add(now().wrapping_sub(since), Ordering::Relaxed);
 }

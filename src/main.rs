@@ -1790,7 +1790,7 @@ async fn frame_loop(
                 let period = bench_last.elapsed().as_micros();
                 bench_last = start;
                 info!(
-                    "[BENCH] frame={} period={} step={} draw={} swap={} flush={} vsync={} clear={} field={} dashes={} parts={} band={} name={} strip={} line={} micro={} hatch={} reason={} barcode={} name_raster={} line_raster={}",
+                    "[BENCH] frame={} period={} step={} draw={} swap={} flush={} vsync={} clear={} field={} dashes={} parts={} band={} name={} strip={} line={} micro={} hatch={} reason={} barcode={} name_raster={} line_raster={} ko_gather={} ko_combine={} ko_write={}",
                     frame,
                     period,
                     step_us,
@@ -1798,7 +1798,7 @@ async fn frame_loop(
                     prev_swap_draw.as_micros(),
                     timings.spi_time.as_micros(),
                     timings.vsync_wait.as_micros(),
-                    p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8], p[9], p[10], p[11], p[12], p[13],
+                    p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8], p[9], p[10], p[11], p[12], p[13], p[14], p[15], p[16],
                 );
             }
             // The panel already shows the step before, so only this step's pixels change on it.
