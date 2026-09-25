@@ -912,7 +912,6 @@ fn draw_card<D: CoverageTarget<Color = Color>>(card: Card, target: &mut D) -> Re
 
 // The fault screen.
 
-const FIELD_RADIUS: f32 = 229.0;
 const DASH_ROWS: [i32; 4] = [86, 150, 366, 430];
 const DASH: Size = Size::new(9, 2);
 const DASH_PITCH: i32 = 46;
@@ -965,9 +964,8 @@ fn draw_fault<D: CoverageTarget<Color = Color>>(
     };
     let frame = frame as i32;
     crate::part_timing::start();
-    screens::clear(target)?;
+    screens::clear_to(target, chrome::RED)?;
     crate::part_timing::mark(0);
-    smooth::disc_rows(target, 0..466, CENTER, FIELD_RADIUS, chrome::RED)?;
     crate::part_timing::mark(1);
     for y in DASH_ROWS {
         for x in (DASH_FROM..466).step_by(DASH_PITCH as usize) {
@@ -984,13 +982,12 @@ fn draw_fault<D: CoverageTarget<Color = Color>>(
     }
 
     crate::part_timing::mark(3);
-    smooth::disc_rows(target, BAND_ROWS, CENTER, FIELD_RADIUS, chrome::BLACK)?;
+    let band = Rectangle::new(Point::new(0, BAND_ROWS.start), Size::new(466, BAND_ROWS.len() as u32));
+    target.fill_solid(&band, chrome::BLACK)?;
     crate::part_timing::mark(4);
     {
-        let band = Rectangle::new(Point::new(0, BAND_ROWS.start), Size::new(466, BAND_ROWS.len() as u32));
         let band = &mut Window::new(&mut *target, Point::zero(), band);
         let band = &mut OnBackground::new(band, chrome::BLACK);
-        let band = &mut Round::new(band, CENTER, FIELD_RADIUS);
         // Drawn doubled from half its size, with its ink measured at that size.
         let style = small(font, chrome::RED, NAME_PX / 2, SHAPIRO);
         let name = first.name();
@@ -1003,11 +1000,11 @@ fn draw_fault<D: CoverageTarget<Color = Color>>(
         style.draw_doubled_on_baseline(name, pen, band)?;
     }
     crate::part_timing::mark(5);
-    smooth::disc_rows(target, STRIP_ROWS, CENTER, FIELD_RADIUS, chrome::BLACK)?;
+    let strip = Rectangle::new(Point::new(0, STRIP_ROWS.start), Size::new(466, STRIP_ROWS.len() as u32));
+    target.fill_solid(&strip, chrome::BLACK)?;
     crate::part_timing::mark(6);
     {
         let strip = &mut OnBackground::new(&mut *target, chrome::BLACK);
-        let strip = &mut Round::new(strip, CENTER, FIELD_RADIUS);
         let style = small(font, chrome::WHITE, LINE_PX, SHAPIRO);
         let mut line = heapless::String::<64>::new();
         for (part, _) in startup.failed() {

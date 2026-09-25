@@ -833,6 +833,12 @@ impl Stage {
         self.replay_startup(Replay::Failing(part), now);
     }
 
+    /// Marks the whole panel changed. A step clears the damage first, so a demonstration started
+    /// before one needs this after it.
+    pub fn bench_mark_full(&mut self) {
+        self.changed.make_full();
+    }
+
     #[must_use]
     pub fn bench_startup_view(&self) -> Option<startup::View> {
         self.startup_view

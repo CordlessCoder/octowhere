@@ -1610,9 +1610,9 @@ async fn frame_loop(
     // handed it over completes.
     let mut pending_write: Option<(settings::Write, u8)> = None;
     #[cfg(feature = "fault-draw-bench")]
-    let (mut bench_part, mut bench_last) = {
+    let (mut bench_part, mut bench_last, mut bench_started) = {
         octowhere_ui::part_timing::install(|| Instant::now().as_micros() as u32);
-        (0usize, Instant::now())
+        (0usize, Instant::now(), false)
     };
     loop {
         if touch.is_none() {
@@ -1696,6 +1696,7 @@ async fn frame_loop(
                 bench_part += 1;
                 info!("[BENCH] demo {}", part);
                 stage.bench_fault(part, Instant::now().as_micros());
+                bench_started = true;
             }
             #[cfg(feature = "fault-draw-bench")]
             let step_start = Instant::now();
@@ -1762,6 +1763,10 @@ async fn frame_loop(
                 }
             }
             COMPASS_ACTIVE.store(update.samples_fast, Ordering::Relaxed);
+            #[cfg(feature = "fault-draw-bench")]
+            if core::mem::take(&mut bench_started) {
+                stage.bench_mark_full();
+            }
             #[cfg(feature = "fault-draw-bench")]
             let step_us = step_start.elapsed().as_micros();
             let changed = stage.changed();
