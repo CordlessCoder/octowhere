@@ -165,7 +165,7 @@ Weigh that cost before adding one.
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 1,101,952 bytes, 7.04% of the 15,663,104-byte app partition that
+The image is currently 1,104,528 bytes, 7.05% of the 15,663,104-byte app partition that
 `partitions.csv` gives it. Measure with `espflash save-image --chip esp32s3 --flash-size 16mb
 --partition-table partitions.csv <elf> <out>`; without those two options it assumes 4 MB of flash
 and the default table. The time zone
@@ -302,6 +302,11 @@ poisons the thread and a later `get()` panics.
   clips once per row, and stands in for embedded-graphics' `translated` and `clipped`, which go
   per pixel. `chrome::OnBackground` names a known background so edges skip the read-back. Nothing
   checks that promise.
+- `chrome::Knockout` paints text over a solid background across a run of rows, writing each
+  pixel once instead of filling and then blending; the fault screen's band and strip use it.
+  It keeps only two glyphs' coverage, so it takes text drawn left to right through
+  `CoverageTarget::begin_glyph`. `FontdueRenderer::draw_outline_on_baseline` draws text's
+  outline from its coverage grown by a radius; no screen uses it yet.
 - `screens::render` clears only the round panel's visible circle. The square's corners are
   never cleared or seen. The clear also leaves the settled compass's slab and the clock's band
   interior, wherever its page is, because those screens paint them solid.

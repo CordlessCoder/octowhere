@@ -1,7 +1,7 @@
 # Screen design brief
 
-This brief is for a design agent working on this device's screens. "This round" has the
-current round's questions. The rest covers the hardware, the screens as built, the gestures, what the renderer draws and what that costs, and
+This brief is for a design agent working on this device's screens. "This round" says where
+the rounds stand. The rest covers the hardware, the screens as built, the gestures, what the renderer draws and what that costs, and
 what data and settings exist. Read it with:
 
 - [`marathon-ui-cross-project-handoff.md`](marathon-ui-cross-project-handoff.md), the design
@@ -19,86 +19,28 @@ what data and settings exist. Read it with:
   [`settings-panel/SETTINGS-DESIGN-RESPONSE.md`](settings-panel/SETTINGS-DESIGN-RESPONSE.md):
   what the build interpreted in the settings round, and the design's reply. The reply's two
   changes are built.
+- [`octowhere-round3-display-motion-v5/DISPLAY-AND-MOTION-SPEC.md`](octowhere-round3-display-motion-v5/DISPLAY-AND-MOTION-SPEC.md):
+  round 3, the compass's changes of state, the start-up, screen timeout with the always-on
+  face, pixel shift and two panel cells.
 
-Everything those documents specify is implemented and has been approved on the panel. Treat it
-as fixed. A new design fits beside it, and changes it only as an explicit, separate proposal.
+Everything those documents specify is implemented and has been approved on the panel, except
+round 3's pixel shift, which the owner deferred (see "Owner decisions that bind later
+screens"). Treat it as fixed. A new design fits beside it, and changes it only as an explicit, separate proposal.
 Where a spec and this brief disagree about what is built, the spec's own Decisions section and
-the responses are newer.
+the responses are newer, except for round 3: its spec has no decisions section, and the owner's
+later decisions are in this brief's "as built" sections.
 
 ## This round
 
-The owner set three questions on 2026-09-25. Each changes how approved screens behave, so each
-answer is an explicit proposal against the documents above.
+Round 3 answered the owner's last three questions: smoother changes between the compass's
+states, pixel shift against burn-in, and a screen timeout with dimming. Its spec is built
+except pixel shift, and the sections below marked "as built" record where the build
+interpreted it.
 
-The design's answer is `octowhere-round3-display-motion-v5/DISPLAY-AND-MOTION-SPEC.md`, which
-also adds a start-up sequence and an always-on face. Its compass section and its start-up are
-built; the rest is being built a part at a time.
-
-### 1. Smoother changes between the compass's states
-
-Today only a heading arriving animates. Everything else, interference coming and going above
-all, changes in one frame. "The compass's states and changes, as built" below has the states,
-the conditions behind them and every change. Things to settle:
-
-- How each change in that section's table moves, or which stay a cut.
-- The flicker. Interference is decided on every reading with no hysteresis, so near its
-  threshold it switches 50 times a second, and top edge up does the same near vertical. A
-  motion design cannot smooth that on its own. A hold time or hysteresis in the firmware can,
-  and the design may ask for one: say how long, and which states it covers.
-- The bound rules that meet this question: a fault shows at once (NO DATA), and digits never
-  animate on a change of value. INTERFERENCE is attention, not a fault.
-
-### 2. Pixel shift against burn-in
-
-The panel is lit whenever the device is on, and much of each screen never moves: the ring, the
-clock's band and wordmark, the compass's slab and captions. The owner wants the picture shifted
-by a few pixels over time on every screen, whether or not an always-on face follows.
-
-- **How the firmware would do it:** in the transfer to the panel, which copies every row
-  through a small buffer already. Reading each row from an offset moves the whole picture
-  at no drawing cost. A new offset costs one full transfer. The side the picture leaves is
-  filled black, and whatever moves past the far edge is lost.
-- **The catch:** the ring sits at radius 231 and the bands meet radius 232, on a visible circle
-  of radius 233. A shift of 2 px or more clips them on one side. Choose between accepting that,
-  bringing them inward on every screen, or shifting only what is inside them. The last one
-  means redrawing in full on every shift, and every screen's layout gains an offset.
-- **Also settle:** the step and range, the pattern, how often it moves, whether a move is
-  animated or waits for a moment that hides it (a page change, the panel opening, the screen
-  waking), and whether touch follows the picture. Touch following is cheap.
-
-### 3. Screen timeout and dimming
-
-Neither exists. The screen stays at its set brightness until power is removed.
-
-- **What the hardware offers:**
-  - Brightness is a command to the panel, from 0 to 255, and takes effect at once. The firmware
-    can step it on every frame without drawing, so a dim or a fade costs nothing in draw time.
-    The stored setting is 10–100 %.
-  - The panel's driver can switch the display off and put it to sleep, and back. Nothing calls
-    that yet.
-  - Waking:
-    - Touch and the cover report arrive on an interrupt pin. Whether the touch controller keeps
-      reporting while the panel is off is not tested.
-    - The IMU has wake-on-motion: any movement over a threshold raises an interrupt pin. It is
-      not a raise gesture. Detecting a raise, or a turn of the wrist, would be firmware work on
-      the accelerometer.
-    - The two buttons are wired, but the firmware reads neither and their pins are unverified.
-    - There is no ambient light sensor.
-- **To settle:**
-  - The timeout, and whether it differs by screen: the compass in use, the panel, an editor, the
-    picker.
-  - Whether it dims before switching off, and by how much.
-  - What wakes the screen, and what the waking touch does. For example, a waking touch might do
-    nothing else.
-  - What a wake shows: where it lands, and whether the page's entry builds again.
-  - How it meets cover. Cover means "go to the clock face" and is the only cover gesture.
-  - Whether the timeout is a setting, and where it lives on the panel. A setting is a new cell
-    or lives under an existing one, BRIGHTNESS being the obvious host.
-  - An always-on face is not asked for. A timeout design that leaves room for one later is
-    welcome.
-
-Letting the processor sleep while the screen is off is firmware work the design need not plan
-around.
+The owner sets the next round's questions. One topic they have named is where outlined text
+belongs in the screens and animations. The primitive exists and is costed under "What the
+renderer draws", and `screen-captures/outline-*.png` show it at the sizes in use. No screen
+uses it yet.
 
 ## Hardware
 
@@ -113,7 +55,8 @@ The device is a round 1.75-inch touch module: a Waveshare ESP32-S3-Touch-AMOLED-
 | Module | 46.00 mm diameter PCB, 10.40 mm deep including the glass |
 | Colour | RGB565, 65,536 colours. Smooth gradients band visibly, so use solid fills and stepped fades |
 | Black | An unlit AMOLED pixel is off, not dim. Pure black is the field and the strongest contrast step |
-| Brightness | Set from the stored setting at boot (10–100 %, default 120 of 255). Changes apply at once. No ambient light sensor, no sleep or always-on mode |
+| Brightness | Set from the stored setting at boot (10–100 %, default 120 of 255). Changes apply at once, and the firmware can step it every frame at no draw cost. No ambient light sensor |
+| Sleep | The panel's display-off and sleep, used by the screen timeout. Touch still reports while it sleeps |
 | Touch | CST9217 capacitive, in the same 466 × 466 coordinates. Two contacts, plus a recognised "hand covers the screen" report. No hover, no pressure. A held finger stays held however still it is |
 | Buttons | A boot and a power button, on GPIO0 and GPIO10 according to the vendor's pin list, not verified on this board. The firmware reads neither |
 | Sensors | 6-axis IMU (QMI8658), magnetometer (BMM350), GNSS receiver (LC76G), real-time clock (PCF85063A), battery and USB power (AXP2101) |
@@ -173,6 +116,8 @@ It draws the faces' stills and `panel-rest`, `panel-middle-always-on`, `panel-en
 `panel-scrolling`, `panel-pulling`, `panel-device`, `panel-device-end`, `settings-brightness`,
 `settings-timeout`, `settings-clear`, `picker-offset` and
 `picker-zone`, and the start-up's `startup-selftest-*`, `startup-frame-*` and `startup-fault-*`;
+`examples/outline.rs` draws the outline samples, which `context/screen-captures/` keeps as
+`outline-shapiro-40`, `outline-fraktion-bold-136` and `outline-fraktion-16`;
 `context/screen-captures/` keeps `startup-selftest`, `startup-selftest-failed`,
 `startup-identity` (frame 40), `startup-card` and `startup-fault`. It also draws the
 always-on face's `always-on-local`, `always-on-stopped`, `always-on-no-zone` and
@@ -293,14 +238,18 @@ build interpreted the spec:
 - **The giant name** is rasterized at 100 px and drawn with each pixel as a 2 × 2 block. At
   200 px its largest glyph needs a 140 KB raster, and that allocation failed on the device.
   The edges show 2 px antialiasing steps.
+- **The fault screen's field** runs red to the glass's edge, where the spec stops it at
+  radius 229 (owner, 2026-09-25). The band and the strip run to the edge with it, and the text
+  in them is no longer clipped to 229. The black rim cost a clear of the whole panel under
+  the red.
 - **Touch.** A touch during the identity or the card goes to the clock face with its entry
   finished. A touch during the fault screen goes to the clock face, which runs its entry. The
   finger that skipped is not a gesture: the faces ignore it until it lifts.
 - **After the card** the clock runs its entry, and its time and date type in as the spec
   describes. After the fault screen it runs its entry with the time whole.
-- **Timing.** The identity and the card hold 30 fps on the device. The fault screen draws a
-  frame in about 49 ms, so it shows about 20 frames a second. Its frames are counted by the
-  clock, so it still ends on time, with frames skipped. Making it faster is open work.
+- **Timing.** The identity, the card and the fault screen hold 30 fps on the device. Their
+  frames are counted by the clock, so a slow frame is skipped rather than stretching the
+  sequence.
 - **Replay.** The spec's Replay section matches what is built, except that the identity's
   line reads `SELF TEST 5/6 OK` after a failed boot, as the fault screen's does, where the spec
   has `SELF TEST 5/6`. Beyond the spec, `REPLAY START-UP` opens a chooser of a good start-up
@@ -403,8 +352,8 @@ plumbing it is firmware work. There are three grades.
    - Touch contacts and the cover report.
 2. **Known to the firmware, not passed to the screens:** GNSS time to the millisecond, fix
    quality, and when the clock was last set from GNSS. Also the compass calibration's internals.
-3. **Does not exist:** sleep, screen timeout, always-on or raise to wake; a 12-hour clock (ruled
-   out by the clock spec); units, languages, sounds or vibration; pairing, the location mesh,
+3. **Does not exist:** raise to wake, or any wake but touch (the IMU's wake-on-motion and the
+   buttons are unused); a 12-hour clock (ruled out by the clock spec); units, languages, sounds or vibration; pairing, the location mesh,
    Wi-Fi or Bluetooth; alarms, timers, step counting and notifications.
 
 ## Settings
@@ -451,6 +400,22 @@ target that takes antialiased coverage a row at a time and blends it with what i
   upright text costs. The wordmark uses it.
 - **Rotated text at any angle:** a string centred on a point, as the compass's `N E S W`. It is
   the costliest text.
+- **Outlined text:** upright text drawn as a ring just outside each glyph's edge, 1 or 2 px wide
+  (any whole number works; wider ones cost more). Drawn alone it gives hollow letters; with the
+  text drawn over it in another colour it gives a halo. The ring keeps the glyphs'
+  antialiasing. Counters and gaps narrower than twice the width fill in: at 16 px, Fraktion's
+  small counters close even at 1 px. Each glyph's ring is its own, so letters set closer than
+  the width get rings that cross their neighbours. No screen uses it yet. The captures
+  `outline-*.png` show it at the sizes in use. Measured on the device, against the same text drawn plainly:
+
+  | Text | Plain | 1 px ring | 2 px ring |
+  | --- | ---: | ---: | ---: |
+  | Shapiro 40 px, `OCTOWHERE` | 2.1 ms | 4.4 ms | 6.4 ms |
+  | Fraktion Bold 136 px, `48` | 2.0 ms | 4.6 ms | 6.8 ms |
+  | Fraktion 16 px, `WED 25 SEP` | 0.6 ms | 1.0 ms | 1.4 ms |
+
+  A halo costs the ring plus the plain text. Stretched, doubled and rotated text have no outline
+  yet.
 - **Solid rectangles:** exact, and the cheapest thing to draw.
 - **The 5 × 5 icon system:** outlined, at any module size. The frame is a quarter of the module
   (at least 2 px), black inside, and the modules are in the state colour. In use: 96 px (clock
@@ -496,7 +461,7 @@ that changed redraw. Measured on the device, per frame:
 | Clock drawn in full | 17.5–22.6 ms |
 | Compass drawn in full | 13–23 ms |
 | Start-up identity, a frame (scatter, microtext, word, hatch) | under 33 ms: it holds 30 fps |
-| Start-up fault screen, a frame | about 49 ms |
+| Start-up fault screen, a frame | about 25 ms, at most 28 ms |
 
 The wordmark is about 0.3 ms of a full clock draw. The screens of the settings round are not
 measured.
@@ -514,7 +479,7 @@ measured.
   separate region sent to the panel costs about as much as 1,000 more pixels.
 - A new screen redraws in full on every change until its own change tracking is written. The
   design should say which elements change and how often, as the specs' change tables do.
-- The flash image is 1,074,976 bytes, 6.86 % of the app partition. Flash is not a constraint.
+- The flash image is 1,104,528 bytes, 7.05 % of the app partition. Flash is not a constraint.
 
 ## Owner decisions that bind later screens
 
@@ -534,6 +499,9 @@ measured.
 - Cover means "go to the clock face" everywhere, discarding any edit in progress. It is the only
   cover gesture.
 - Settings live on the panel. A new setting is a new cell or lives under an existing one.
+- Pixel shift is deferred, since the timeout makes burn-in unlikely. When it is built, the
+  whole picture moves, the perimeter ring and bands included, so layouts will keep a margin
+  between the ring and the glass's edge. The margin is not settled yet.
 
 ## Colour
 

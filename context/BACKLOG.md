@@ -19,19 +19,32 @@ until the feature set is complete, because profiling an incomplete firmware pric
   [`octowhere-round3-display-motion-v5/DISPLAY-AND-MOTION-SPEC.md`](octowhere-round3-display-motion-v5/DISPLAY-AND-MOTION-SPEC.md),
   a part at a time (owner, 2026-09-25). Only pixel shift is left; the compass's changes of
   state, the start-up, the timeout with the always-on face, and the panel cells are built.
-  - Pixel shift in the flush path would carry the ring off a 466 px framebuffer at a 3 px
-    offset. A 3 px margin on the framebuffers, with the ring and the clip circle drawn at the
-    inverse offset, keeps drawing and damage in content coordinates.
+  - Pixel shift is deferred (owner, 2026-09-25): with the screen timeout in, retention is
+    unlikely to matter. When it is built, the whole picture moves, ring included, and core 1
+    applies the offset while it copies each flush chunk into its DMA buffers, so core 0, the
+    bottleneck, draws exactly as it does unshifted (owner). This overrides the spec's fixed
+    ring. The ring moves inward so the shifted ring stays on the glass (outer edge 230 rather
+    than 232 is the least that fits a 3 px offset), and everything cut at radius 232 follows
+    it. Panel pixels whose source falls outside the framebuffer are sent black, the clear
+    reaches 3 px past the visible circle, touch subtracts the offset, and the stage picks the
+    position and the moment (a full redraw), with the start-up at the middle position.
   - Optimise `ui::scatter` (owner, 2026-09-25), which the owner wants on more pages. Today
     it redraws every mark on every frame: a hash, a square root, a trigonometric blend and up
     to four fills per grid point, about 3,400 points on the identity. Candidates: skip points
     outside the circle without the square root, work out each point's radial weight and
     direction once rather than per frame, and damage only the marks that change between two
     facings, since most do not. Measure a frame on the device first.
-  - The start-up's fault screen draws a frame in about 49 ms, so it shows about 20 of its 30
-    frames a second. Its identity holds 30. The clear under the red field, the field itself,
-    the doubled giant name and the running line's stretched glyphs are the candidates; time
-    each before choosing. Deferred until the round's features are built (owner's rule).
+  - The start-up's fault screen draws a frame in about 25 ms, at most 28. The band and the
+    strip are painted once, black with their text knocked out (`chrome::Knockout`). The
+    clear of the rows outside them is 7 ms, the band with the giant name 7.2 and the strip
+    with the running line 5.5. Writing the band's and strip's pixels is about 4.2 ms of that;
+    a fill of the same rows would take about 2.3. Writing uniform runs as words, two pixels a
+    word, or eight bytes of coverage at a time each beat the pixel-at-a-time write alone on
+    the device and lost to it in the frame, for a reason not found. Without the writes, the
+    name and the line still take about 3.7 and 3.2 ms beyond rasterizing: turning the
+    raster into coverage rows, gathering and combining them. Damaging only the band and the
+    hatch, the only parts that change between frames, is the other lever. `bench/fault-draw`
+    times each part (`fault-draw-bench`), and at start-up the row write alone.
 
 - Lay out the 512 KiB of SRAM deliberately. esp-hal's linker script gives `.data`, `.bss` and
   core 0's stack 341,760 bytes (`0x3FC88000` to `0x3FCDB700`); the stack is whatever the other
