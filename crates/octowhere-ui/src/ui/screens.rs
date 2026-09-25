@@ -143,7 +143,7 @@ where
                 Rectangle::new(band.top_left + Point::new(offset, state.sheet), band.size)
             })
     };
-    clear_visible(target, &bounds, painted)?;
+    clear_visible(target, &bounds, painted, chrome::BLACK)?;
 
     if state.sheet > 0 {
         let visible = Rectangle::new(Point::zero(), Size::new(board::LCD_WIDTH.into(), state.sheet as u32));
@@ -173,8 +173,13 @@ where
 
 /// Clears the round panel.
 pub fn clear<D: DrawTarget<Color = Color>>(target: &mut D) -> Result<(), D::Error> {
+    clear_to(target, chrome::BLACK)
+}
+
+/// Fills the round panel with `color`.
+pub fn clear_to<D: DrawTarget<Color = Color>>(target: &mut D, color: Color) -> Result<(), D::Error> {
     let bounds = target.bounding_box();
-    clear_visible(target, &bounds, None)
+    clear_visible(target, &bounds, None, color)
 }
 
 /// Clears the part of `area` on the round panel, leaving `painted`, which the caller covers
@@ -184,6 +189,7 @@ fn clear_visible<D: DrawTarget<Color = Color>>(
     target: &mut D,
     area: &Rectangle,
     painted: Option<Rectangle>,
+    color: Color,
 ) -> Result<(), D::Error> {
     const RADIUS: f32 = board::LCD_WIDTH as f32 / 2.0;
     let Some(bottom_right) = area.bottom_right() else {
@@ -201,7 +207,7 @@ fn clear_visible<D: DrawTarget<Color = Color>>(
             .map(|painted| painted.intersection(&row))
             .filter(|hole| !hole.is_zero_sized());
         let Some(hole) = hole else {
-            target.fill_solid(&row, chrome::BLACK)?;
+            target.fill_solid(&row, color)?;
             continue;
         };
         let right = hole.top_left.x + hole.size.width as i32;
@@ -209,7 +215,7 @@ fn clear_visible<D: DrawTarget<Color = Color>>(
         for (from, to) in [(row.top_left.x, hole.top_left.x), (right, row_right)] {
             if from < to {
                 let part = Rectangle::new(Point::new(from, y), Size::new((to - from) as u32, 1));
-                target.fill_solid(&part, chrome::BLACK)?;
+                target.fill_solid(&part, color)?;
             }
         }
     }

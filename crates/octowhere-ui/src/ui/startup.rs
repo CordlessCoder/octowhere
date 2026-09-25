@@ -25,7 +25,7 @@ use super::{
     text,
 };
 use crate::chrome::{
-    self, Color, CoverageTarget, FontdueRenderer, OnBackground, Round, Window, FRAKTION, FRAKTION_BOLD,
+    self, Color, CoverageTarget, FontdueRenderer, Knockout, OnBackground, Round, Window, FRAKTION, FRAKTION_BOLD,
     SHAPIRO,
 };
 
@@ -912,7 +912,6 @@ fn draw_card<D: CoverageTarget<Color = Color>>(card: Card, target: &mut D) -> Re
 
 // The fault screen.
 
-const FIELD_RADIUS: f32 = 229.0;
 const DASH_ROWS: [i32; 4] = [86, 150, 366, 430];
 const DASH: Size = Size::new(9, 2);
 const DASH_PITCH: i32 = 46;
@@ -964,8 +963,12 @@ fn draw_fault<D: CoverageTarget<Color = Color>>(
         return Ok(());
     };
     let frame = frame as i32;
-    screens::clear(target)?;
-    smooth::disc_rows(target, 0..466, CENTER, FIELD_RADIUS, chrome::RED)?;
+    // The field, band and strip run to the glass's edge, and the corners past it are never seen.
+    // The band paints its own rows, black with the text knocked out of it.
+    for rows in [0..BAND_ROWS.start, BAND_ROWS.end..466] {
+        let area = Rectangle::new(Point::new(0, rows.start), Size::new(466, rows.len() as u32));
+        screens::clear_to(&mut Window::new(&mut *target, Point::zero(), area), chrome::RED)?;
+    }
     for y in DASH_ROWS {
         for x in (DASH_FROM..466).step_by(DASH_PITCH as usize) {
             target.fill_solid(&Rectangle::new(Point::new(x, y), DASH), chrome::BLACK)?;
@@ -979,12 +982,8 @@ fn draw_fault<D: CoverageTarget<Color = Color>>(
         }
     }
 
-    smooth::disc_rows(target, BAND_ROWS, CENTER, FIELD_RADIUS, chrome::BLACK)?;
     {
-        let band = Rectangle::new(Point::new(0, BAND_ROWS.start), Size::new(466, BAND_ROWS.len() as u32));
-        let band = &mut Window::new(&mut *target, Point::zero(), band);
-        let band = &mut OnBackground::new(band, chrome::BLACK);
-        let band = &mut Round::new(band, CENTER, FIELD_RADIUS);
+        let mut band = Knockout::new(&mut *target, BAND_ROWS, STRIP_ROWS, chrome::BLACK);
         // Drawn doubled from half its size, with its ink measured at that size.
         let style = small(font, chrome::RED, NAME_PX / 2, SHAPIRO);
         let name = first.name();
@@ -994,12 +993,11 @@ fn draw_fault<D: CoverageTarget<Color = Color>>(
             libm::roundf(x - ink.size.width as f32) as i32 - 2 * ink.top_left.x,
             libm::roundf(LINE_MIDDLE - ink.size.height as f32) as i32 - 2 * ink.top_left.y,
         );
-        style.draw_doubled_on_baseline(name, pen, band)?;
+        style.draw_doubled_on_baseline(name, pen, &mut band)?;
+        band.finish();
     }
-    smooth::disc_rows(target, STRIP_ROWS, CENTER, FIELD_RADIUS, chrome::BLACK)?;
     {
-        let strip = &mut OnBackground::new(&mut *target, chrome::BLACK);
-        let strip = &mut Round::new(strip, CENTER, FIELD_RADIUS);
+        let mut strip = Knockout::new(&mut *target, STRIP_ROWS, 0..0, chrome::BLACK);
         let style = small(font, chrome::WHITE, LINE_PX, SHAPIRO);
         let mut line = heapless::String::<64>::new();
         for (part, _) in startup.failed() {
@@ -1013,9 +1011,10 @@ fn draw_fault<D: CoverageTarget<Color = Color>>(
         // The repeat whose pen is at or just left of the panel's edge, then each after it.
         let mut pen = start - libm::ceilf(start / period) * period;
         while pen < 466.0 {
-            style.draw_stretched(&line, Point::new(libm::roundf(pen) as i32, baseline), LINE_SCALE, strip)?;
+            style.draw_stretched(&line, Point::new(libm::roundf(pen) as i32, baseline), LINE_SCALE, &mut strip)?;
             pen += period;
         }
+        strip.finish();
     }
 
     let field = &mut OnBackground::new(&mut *target, chrome::RED);
