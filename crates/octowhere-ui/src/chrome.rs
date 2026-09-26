@@ -1515,44 +1515,6 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
         Ok(())
     }
 
-    /// Draws `text` turned a quarter clockwise, reading down with the tops of its letters to the
-    /// right. `origin` is where the pen starts on the baseline, which runs down from it.
-    pub fn draw_turned_on_baseline<D: CoverageTarget<Color = C>>(
-        &self,
-        text: &str,
-        origin: Point,
-        target: &mut D,
-    ) -> Result<(), D::Error> {
-        let px = self.font_size as f32;
-        let font = self.fonts[self.font_index];
-        let mut ctx = self.ctx.borrow_mut();
-        let FontdueRendererCtx { canvas, coverage, .. } = &mut *ctx;
-        let (mut glyph, mut column) = (alloc::vec::Vec::new(), alloc::vec::Vec::new());
-        for (index, corner, metrics) in self.glyphs_on_baseline(text, Point::zero()) {
-            let (width, height) = (metrics.width, metrics.height);
-            // Upright (u, v) lands at (origin.x - v, origin.y + u).
-            let left = origin.x - corner.y - height as i32 + 1;
-            let top = origin.y + corner.x;
-            if width == 0 || height == 0 || !target.visible(&Rectangle::new(Point::new(left, top), Size::new(height as u32, width as u32))) {
-                continue;
-            }
-            let (_, bitmap) = font.rasterize_indexed(canvas, index, px);
-            glyph.clear();
-            glyph.resize(width * height, 0);
-            coverage.resize(width, 0);
-            bitmap.rows(coverage, |y, x, span| {
-                let at = y * width + x;
-                glyph[at..at + span.len()].copy_from_slice(span);
-            });
-            for u in 0..width {
-                column.clear();
-                column.extend((0..height).rev().map(|v| glyph[v * width + u]));
-                target.blend_row(left, top + u as i32, &column, self.text_color);
-            }
-        }
-        Ok(())
-    }
-
     fn layout_bounds(ctx: &FontdueRendererCtx, position: Point) -> Rectangle {
         ctx.layout
             .glyphs()

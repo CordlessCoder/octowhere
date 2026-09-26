@@ -335,7 +335,7 @@ fn draw_opening<D: CoverageTarget<Color = Color>>(
             libm::roundf(BOOT_CENTRE.x as f32 + ink.top_left.y as f32 + height / 2.0) as i32,
             libm::roundf(BOOT_CENTRE.y as f32 - ink.top_left.x as f32 - width / 2.0) as i32,
         );
-        style.draw_turned_on_baseline(BOOT, pen, target)?;
+        style.draw_turned(BOOT, (pen.x as f32, pen.y as f32), target)?;
     }
     Ok(())
 }
