@@ -6,11 +6,38 @@ until the feature set is complete, because profiling an incomplete firmware pric
 ## Next
 
 - Build the 2026-09-26 design, [`design/`](design/README.md), which the owner approved in full
-  (`design/DECISIONS.md`). In order, one piece at a time: the shared pieces (`VIOLET`, the
-  identity's dim purple, several scatter fields on one grid, the hour rail and the battery
-  drawing), then the start-up, the K1 clock with the H2b always-on face, the S1 settings with
-  the D3 screens, and the C1 compass. Each piece is compared against the hand-off's renders in
-  `ui-sim` and measured on the board before it is committed.
+  (`design/DECISIONS.md`). One piece at a time, each compared against the hand-off's renders
+  (`tools/design-compare.py`), reviewed by the owner in `ui-sim`, and measured on the board
+  before it is committed. Built: the shared pieces (`VIOLET`, `DEEP_BLUE`, several scatter
+  fields on one grid), the start-up (S1 self-test, G19 identity, G17 card), the K1 clock and
+  the H2b always-on face. Left, in this order:
+  1. S1 settings overview and D3 screens (`ui/panel.rs`, `sheet.rs`, `second.rs`,
+     `picker.rs`). S1: four broad rows a page (`01 ZONE`, `02 BRIGHTNESS`, `03 TIMEOUT`,
+     `04 ALWAYS ON` / `05 COMPASS`, `06 GNSS`, `07 BATTERY`, `08 DEVICE`), a static sparse
+     purple scatter in the outer arcs, new hit regions and scroll, and the old 420 ms entry
+     cadence mapped onto the rows. D3: a violet slab with black text centred on its ink for
+     offset, zone, brightness (any whole percent 10–100, ten cells with one partly filled),
+     timeout and replay GOOD; neighbours grey; CANCEL, BACK and AUTO centred; the DEVICE
+     layout. The replay chooser's route is built and only its look changes, to the D3
+     stepper (decision 2). Orange stays on the DEMO failure and on CLEAR. Renders:
+     `settings-g5-out/settings-S1-sparse-scatter-page-{1,2}.png`,
+     `family-pass-v3-out/settings-D3-*.png`.
+  2. C1 compass (`ui/compass_screen.rs`). A dim blue block field built inside the functional
+     440 ms entry, then still at rest and through heading updates; it stays blue (decision 3).
+     Calibrating's quieter texture, interference dimmed, NO DATA black and red with no
+     texture. Also C1's top-edge-up and swipe views (decision 1). Renders:
+     `compass-c1-out/`, `family-pass-v1-out/compass-C1-{top-edge-up,swiping}.png`. The
+     `compass-C1-noise.gif` cadence is exploratory, not the entry (hand-off §3.5).
+  3. A slow, thorough `ui-sim` tour that replaces the `tour` scene in
+     `tools/ui-sim/src/scenes.rs` (owner, 2026-09-26). Paced for a viewer who does not know
+     the device: slower swipes and drags, and holds long enough to read each state. In order:
+     the start-up (self-test, identity, card) into the clock; the clock in GNSS, RTC, manual,
+     STOPPED, NO ZONE and NO DATA; the battery normal, low (15% or less), charging and with no
+     reading; the compass heading, calibrating, interference, top edge up and NO DATA; the
+     always-on face's states with its battery; a few settings each with its effect shown
+     (brightness, zone, timeout); then a demo start-up failure entered through DEVICE,
+     REPLAY START-UP and the DEMO part failure, through the fault screen back to the clock.
+     Update whatever mentions `tour`, such as the `ui-sim` header.
 - Shorten settings saves, ahead of other work that touches settings (design response,
   2026-09-24). Settings are in ekv now, and each write transaction starts a new file that
   erases a whole 4 KiB page first, so every save erases. The first saved brightness took
@@ -41,7 +68,14 @@ until the feature set is complete, because profiling an incomplete firmware pric
     point, about 1.7 ms; the clear, 1.6 ms for about 2,000 pixels; and the hatch's and the
     microtext's fills, which the clip rejects one at a time. A 6 × 2 `fill_solid` on the
     framebuffer costs about 1.7 µs even where the cache holds its lines, so small fills are
-    call overhead rather than memory, on every screen. `bench/scatter` times each part
+    call overhead rather than memory, on every screen. Since the multi-field scatter, the
+    step also tracks each mark's kind and tests the glass per point, and its settled median
+    rose from 1.84 to 2.28 ms; testing the glass as a column range per row, dropping its two
+    small allocations a call, and reusing the static lower field's work are the candidates.
+    For the draw, drawing from the step's shown bitset or walking the damage's spans per grid
+    row would replace the per-point `Clip::visible`. The clear could skip undamaged rows or
+    run from the spans. A lean `fill_solid` for narrow rectangles (integer clamp, one row
+    offset, direct stores) would help every screen. `bench/scatter` times each part
     (`scatter-bench`), and at start-up the scatter, its arithmetic and small fills alone.
   - The start-up's fault screen draws a frame in about 25 ms, at most 28. The band and the
     strip are painted once, black with their text knocked out (`chrome::Knockout`). The
@@ -57,17 +91,14 @@ until the feature set is complete, because profiling an incomplete firmware pric
 
 - Lay out the 512 KiB of SRAM deliberately. esp-hal's linker script gives `.data`, `.bss` and
   core 0's stack 341,760 bytes (`0x3FC88000` to `0x3FCDB700`); the stack is whatever the other
-  two leave. The internal heap is a static in `.bss`: 252 KiB from the first commit, cut to
-  240 KiB when moving settings to ekv grew `.bss` and left a 13.9 KiB stack that overflowed
-  silently in the partition table read. The heap holds 17,636 bytes once boot has brought the
-  parts up; its peak while the screens run has not been measured. With that little used, a
-  single 140 KB allocation (a 200 px glyph's raster) still failed, so the largest block free
-  is smaller than the free total suggests. Unused so far: `dram2` (`0x3FCDB700` to `0x3FCED710`, about 72 KiB, which the ROM
-  needs only during boot and `esp_alloc` can take with `#[esp_hal::ram(reclaimed)]`, as the
-  commented line by `heap_allocator!` in `src/main.rs` shows), and the data cache's reclaimed
-  segment above `0x3FCF0000`. Also look at what IRAM holds (15 KiB of `.rwtext`), the two 8 KiB
-  display DMA buffers, the 8 KiB core-1 stack, and a guard or a measured watermark for core 0's
-  stack so an overflow faults instead of hanging.
+  two leave. Since 2026-09-26, 72 KiB of the heap sits in `dram2`, the RAM the ROM needs only
+  during boot, and 168 KiB in `.bss`, which left core 0 about 90 KiB of stack (AGENTS.md,
+  "Memory"). Still open: size the heap from a peak measured across every screen (about 50 KB
+  over the clock and the compass, `bench/clock-draw`; the fault screen's 40 KB glyph raster
+  and the picker were not in that run), the data cache's reclaimed segment above `0x3FCF0000`,
+  what IRAM holds (15 KiB of `.rwtext`), the two 8 KiB display DMA buffers and the 8 KiB
+  core-1 stack. Do not measure core 0's stack by painting it from `_stack_end` up to the stack
+  pointer: that crash-looped the board, probably because esp-rtos keeps data there.
 - Move the CO5300 driver into its own crate under `crates/`, with the QSPI command layer it
   needs, and implement more of the controller reusably (owner, 2026-09-24). Today
   `src/drivers/co5300.rs` covers init, address windows, brightness, TE and pixel streaming.

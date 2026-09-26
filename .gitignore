@@ -11,3 +11,6 @@ a.bin
 
 # The design agent's full backup; context/design holds what the build needs
 /context/octowhere-design-project/
+# Links into assets/, made by the step in context/design/README.md
+/context/design/renderer/fonts/
+__pycache__/
