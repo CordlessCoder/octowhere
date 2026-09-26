@@ -150,7 +150,7 @@ Weigh that cost before adding one.
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 1,104,528 bytes, 7.05% of the 15,663,104-byte app partition that
+The image is currently 1,135,552 bytes, 7.25% of the 15,663,104-byte app partition that
 `partitions.csv` gives it. Measure with `espflash save-image --chip esp32s3 --flash-size 16mb
 --partition-table partitions.csv <elf> <out>`; without those two options it assumes 4 MB of flash
 and the default table. The time zone

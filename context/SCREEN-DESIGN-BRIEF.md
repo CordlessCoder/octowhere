@@ -508,7 +508,7 @@ measured.
   separate region sent to the panel costs about as much as 1,000 more pixels.
 - A new screen redraws in full on every change until its own change tracking is written. The
   design should say which elements change and how often, as the specs' change tables do.
-- The flash image is 1,104,528 bytes, 7.05 % of the app partition. Flash is not a constraint.
+- The flash image is 1,135,552 bytes, 7.25 % of the app partition. Flash is not a constraint.
 
 ## Owner decisions that bind later screens
 
