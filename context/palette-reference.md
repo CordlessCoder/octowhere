@@ -48,19 +48,23 @@ board value except `BLACK`.
 
 | Token | Hex | Board position | Role |
 | --- | --- | --- | --- |
-| `LIME` | `#C0FE04` | R2C2 | accent, ok and live states |
-| `RED` | `#F24723` | R1C3 | faults and unavailable data |
-| `ORANGE` | `#F1710D` | R1C2 | second data series, second map node, idle prompt |
-| `PURPLE` | `#5500E4` | R2C6 | header slab |
-| `BLUE` | `#409DE4` | R2C5 | compass status icon while a heading shows |
-| `GRAY` | `#888E98` | R3C2 | frames and secondary text |
-| `WHITE` | `#D2D3D6` | R3C1 | primary text |
+| `LIME` | `#C0FE04` | R2C2 | the identity and the clock in normal operation |
+| `RED` | `#F24723` | R1C3 | a genuine fault |
+| `ORANGE` | `#F1710D` | R1C2 | attention, degraded operation, or an action that needs care |
+| `PURPLE` | `#5500E4` | R2C6 | brand texture and registration detail, with no status claim |
+| `BLUE` | `#409DE4` | R2C5 | a live, valid reading |
+| `VIOLET` | `#B32BE5` | R1C5 | the choice being edited in settings |
+| `GRAY` | `#888E98` | R3C2 | secondary, inactive or unconfirmed information |
+| `WHITE` | `#D2D3D6` | R3C1 | neutral primary information |
 | `BLACK` | `#000000` | none | background field, knockout text on saturated fills |
+
+The roles are the design's, from
+[`design/docs/OCTOWHERE-COLOR-ROLES.md`](design/docs/OCTOWHERE-COLOR-ROLES.md), which also
+reserves the unused swatches and says which role wins when two apply.
 
 `BLACK` stays pure instead of taking the board's `#1E1F24`. An unlit pixel on this AMOLED is off
 rather than dim, so pure black is a contrast step no near-black reaches. The doctrine's preference
 for a dark neutral field does not survive that, and changing it back would cost contrast for
 nothing.
 
-Red is spent only on faults. The second data series, the second map node and the footer's
-un-selected prompt are all `ORANGE`, because none of them reports a failure.
+Red is spent only on faults.
