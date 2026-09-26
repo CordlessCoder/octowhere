@@ -784,13 +784,22 @@ fontdue_macros::fontdue_font_from_file!(
     chars: " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\u{b0}"
 );
 
+// Only the start-up's BOOT is set in it.
+fontdue_macros::fontdue_font_from_file!(
+    InterferenceBoldFont,
+    "../../../assets/KH Interference TRIAL/OTF/KHInterferenceTRIAL-Bold.otf",
+    scale: 24.0,
+    chars: "BOT"
+);
+
 /// The fonts a `FontdueRenderer` indexes with `font_index`.
 pub const FONTS: &[&dyn FontRepr] =
-    &[&MarathonShapiroFont, &FraktionMonoRegularFont, &FraktionMonoBoldFont];
+    &[&MarathonShapiroFont, &FraktionMonoRegularFont, &FraktionMonoBoldFont, &InterferenceBoldFont];
 /// Indices into [`FONTS`].
 pub const SHAPIRO: usize = 0;
 pub const FRAKTION: usize = 1;
 pub const FRAKTION_BOLD: usize = 2;
+pub const INTERFERENCE_BOLD: usize = 3;
 
 const fn color_from_rgb(r: u8, g: u8, b: u8) -> Color {
     Color::new(
@@ -834,6 +843,16 @@ pub const VIOLET: Color = color_from_hex("#b32be5");
 pub const GRAY: Color = color_from_hex("#888e98");
 pub const WHITE: Color = color_from_hex("#d2d3d6");
 pub const BLACK: Color = color_from_hex("#000000");
+/// The intro cinematic's opening blue, not a board swatch: the start-up's BOOT and the grid
+/// behind it only (owner, 2026-09-26).
+pub const DEEP_BLUE: Color = color_from_hex("#000df6");
+
+/// `color` dimmed toward black, `level` of 255 of the way from it. The designs' dim marks and
+/// fields are tokens seen this way, not colours of their own.
+#[must_use]
+pub fn shade(color: Color, level: u8) -> Color {
+    BLACK.lerp(&color, level)
+}
 
 #[inline]
 pub const fn lerp_u8(a: u8, b: u8, factor: u8) -> u8 {
@@ -1433,9 +1452,34 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
         radius: u8,
         target: &mut D,
     ) -> Result<(), D::Error> {
+        self.draw_ring_on_baseline(text, origin, radius, false, target)
+    }
+
+    /// Draws `text` hollow, its pen at `origin` on the baseline: a ring `width` px wide just
+    /// inside each glyph's edge, so the letters keep the ink box they have filled. The ring is
+    /// the coverage less the coverage shrunk by `width`, and a stroke narrower than twice `width`
+    /// stays solid.
+    pub fn draw_hollow_on_baseline<D: CoverageTarget<Color = C>>(
+        &self,
+        text: &str,
+        origin: Point,
+        width: u8,
+        target: &mut D,
+    ) -> Result<(), D::Error> {
+        self.draw_ring_on_baseline(text, origin, width, true, target)
+    }
+
+    fn draw_ring_on_baseline<D: CoverageTarget<Color = C>>(
+        &self,
+        text: &str,
+        origin: Point,
+        radius: u8,
+        inside: bool,
+        target: &mut D,
+    ) -> Result<(), D::Error> {
         let px = self.font_size as f32;
         let font = self.fonts[self.font_index];
-        // One pixel more than the ring, which the dilation leaves zero.
+        // One pixel more than the ring, which the dilation leaves as it is.
         let r = usize::from(radius) + 1;
         let mut ctx = self.ctx.borrow_mut();
         let FontdueRendererCtx { canvas, coverage, .. } = &mut *ctx;
@@ -1455,16 +1499,55 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
                 let at = (y + r) * width + x + r;
                 glyph[at..at + span.len()].copy_from_slice(span);
             });
+            // Inside, the ring is what growing the space around the glyph takes from it.
             grown.clear();
-            grown.extend_from_slice(&glyph);
+            grown.extend(glyph.iter().map(|&v| if inside { u8::MAX - v } else { v }));
             for pass in 0..usize::from(radius) {
                 dilate(&mut grown, width, pass % 2 == 1, &mut scratch);
             }
-            for (y, (ring, inside)) in grown.chunks_exact_mut(width).zip(glyph.chunks_exact(width)).enumerate() {
-                for (ring, &inside) in ring.iter_mut().zip(inside) {
-                    *ring = ring.saturating_sub(inside);
+            for (y, (ring, glyph)) in grown.chunks_exact_mut(width).zip(glyph.chunks_exact(width)).enumerate() {
+                for (ring, &glyph) in ring.iter_mut().zip(glyph) {
+                    *ring = if inside { glyph.saturating_sub(u8::MAX - *ring) } else { ring.saturating_sub(glyph) };
                 }
                 target.blend_row(corner.x, corner.y + y as i32, ring, self.text_color);
+            }
+        }
+        Ok(())
+    }
+
+    /// Draws `text` turned a quarter clockwise, reading down with the tops of its letters to the
+    /// right. `origin` is where the pen starts on the baseline, which runs down from it.
+    pub fn draw_turned_on_baseline<D: CoverageTarget<Color = C>>(
+        &self,
+        text: &str,
+        origin: Point,
+        target: &mut D,
+    ) -> Result<(), D::Error> {
+        let px = self.font_size as f32;
+        let font = self.fonts[self.font_index];
+        let mut ctx = self.ctx.borrow_mut();
+        let FontdueRendererCtx { canvas, coverage, .. } = &mut *ctx;
+        let (mut glyph, mut column) = (alloc::vec::Vec::new(), alloc::vec::Vec::new());
+        for (index, corner, metrics) in self.glyphs_on_baseline(text, Point::zero()) {
+            let (width, height) = (metrics.width, metrics.height);
+            // Upright (u, v) lands at (origin.x - v, origin.y + u).
+            let left = origin.x - corner.y - height as i32 + 1;
+            let top = origin.y + corner.x;
+            if width == 0 || height == 0 || !target.visible(&Rectangle::new(Point::new(left, top), Size::new(height as u32, width as u32))) {
+                continue;
+            }
+            let (_, bitmap) = font.rasterize_indexed(canvas, index, px);
+            glyph.clear();
+            glyph.resize(width * height, 0);
+            coverage.resize(width, 0);
+            bitmap.rows(coverage, |y, x, span| {
+                let at = y * width + x;
+                glyph[at..at + span.len()].copy_from_slice(span);
+            });
+            for u in 0..width {
+                column.clear();
+                column.extend((0..height).rev().map(|v| glyph[v * width + u]));
+                target.blend_row(left, top + u as i32, &column, self.text_color);
             }
         }
         Ok(())
