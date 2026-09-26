@@ -240,7 +240,7 @@ where
     let target = &mut chrome::Window::new(target, Point::new(offset, state.sheet), visible);
     let peripherals = &state.peripherals;
     match state.screen {
-        Screen::Clock => clock_screen::draw(&peripherals.clock, state.clock_accents, font, target),
+        Screen::Clock => clock_screen::draw(&peripherals.clock, peripherals.battery, state.clock_accents, font, target),
         Screen::Compass => compass_screen::draw(&peripherals.compass, state.compass_accents, font, target),
     }
 }

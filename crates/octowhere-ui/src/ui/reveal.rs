@@ -78,10 +78,15 @@ pub fn revealed_bounds(style: &FontdueRenderer<'static, Color>, text: &str, pen:
     }
     let blocks = block(style, text, pen, 0);
     let last = block(style, text, pen, text.len() - 1);
+    let blocks = Rectangle::with_corners(blocks.top_left, last.bottom_right().unwrap_or(blocks.top_left));
+    // Text that is only spaces has no ink, and an empty box sits at the origin.
+    if ink.is_zero_sized() {
+        return blocks;
+    }
     let top_left = ink.top_left.component_min(blocks.top_left);
     let bottom_right = ink
         .bottom_right()
         .unwrap_or(top_left)
-        .component_max(last.bottom_right().unwrap_or(top_left));
+        .component_max(blocks.bottom_right().unwrap_or(top_left));
     Rectangle::with_corners(top_left, bottom_right)
 }

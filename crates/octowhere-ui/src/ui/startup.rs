@@ -569,7 +569,7 @@ pub(super) fn barcode<D: DrawTarget<Color = Color>>(
 
 /// Stripes at 45°, rising to the right, `width` px of every `pitch` along each row of `area`,
 /// shifted left by `shift`.
-fn hatch<D: DrawTarget<Color = Color>>(
+pub(super) fn hatch<D: DrawTarget<Color = Color>>(
     area: Rectangle,
     pitch: i32,
     width: i32,

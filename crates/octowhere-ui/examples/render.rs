@@ -114,17 +114,27 @@ fn main() {
         for now in [1_000_001, 2_000_000] {
             stage.step(Input {
                 now,
-                sensors: Some(Sensors { clock, zone, ..Sensors::default() }),
+                sensors: Some(Sensors { clock, zone, ..fixture }),
                 ..Input::default()
             });
         }
         frames.push((format!("clock-{name}"), stage));
     }
-    // 200 ms into the clock's entry: the icon half built, the plate landing.
+    let charging = Battery { present: true, percent: 40, millivolts: 3900, charging: true, usb: true };
+    for (name, battery) in [
+        ("charging", Some(charging)),
+        ("battery-low", Some(Battery { percent: 12, charging: false, usb: false, ..charging })),
+        ("battery-unknown", None),
+    ] {
+        let stage = stage_with(Screen::Clock, calibrated, Sensors { battery, ..fixture }, 1_000_000);
+        frames.push((format!("clock-{name}"), stage));
+    }
+    // 200 ms into the clock's entry: the icon building, the first line typing, the battery
+    // hatch past its level.
     let mut entering = stage_at(Screen::Clock, calibrated, 200_000);
     entering.step(Input { now: 200_001, ..Input::default() });
     frames.push(("clock-entering".into(), entering));
-    // 380 ms in: the wordmark typing, OCTO in and a block standing for the W.
+    // 380 ms in: the wordmark holding, its first block standing, before it snaps in.
     let mut marking = stage_at(Screen::Clock, calibrated, 380_000);
     marking.step(Input { now: 380_001, ..Input::default() });
     frames.push(("clock-marking".into(), marking));
@@ -375,7 +385,7 @@ fn sensors() -> Sensors {
             mode: ZoneMode::Automatic,
             zone: octowhere_ui::tz::DATABASE.find("Europe/Dublin").map(|zone| zone.id),
         },
-        battery: Some(Battery { present: true, percent: 87, millivolts: 4020, charging: true, usb: true }),
+        battery: Some(Battery { present: true, percent: 87, millivolts: 4020, charging: false, usb: false }),
         gnss: Gnss { fix: true, in_use: 9, in_view: 14, position: Some((533_498_000, -62_603_000)) },
     }
 }

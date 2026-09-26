@@ -6,7 +6,7 @@ use embedded_graphics::prelude::Point;
 
 use super::{
     always_on,
-    clock::{ClockState, ClockView, ZoneMode, ZoneState},
+    clock::{ClockState, ZoneMode, ZoneState},
     clock_screen,
     compass::CompassView,
     compass_screen::{self, Accents, DialFootprint, Mode},
@@ -99,7 +99,14 @@ const CLOCK_ENTRY: ClockTimes<Micros> = ClockTimes {
     plate: 160_000,
     zone: 240_000,
     mark: 300_000,
+    scatter: 0,
+    battery: 160_000,
 };
+const CLOCK_ICON_BUILD: Micros = 150_000;
+const CLOCK_SCATTER_BLOOM: Micros = 120_000;
+const CLOCK_BATTERY_RISE: Micros = 80_000;
+/// The charging hatch moves up a pixel a frame, at the start-up's 30 frames a second.
+const CLOCK_CRAWL: Micros = 33_333;
 const CLOCK_LABEL_REVEAL: Micros = 120_000;
 const CLOCK_PLATE_REVEAL: Micros = 120_000;
 const CLOCK_ZONE_REVEAL: Micros = 160_000;
@@ -132,7 +139,11 @@ struct ClockTimes<T = Option<Micros>> {
     plate: T,
     zone: T,
     mark: T,
+    scatter: T,
+    battery: T,
 }
+
+const MINUTE: Micros = 60_000_000;
 
 /// When each of the panel's accents starts after it settles open. Cells follow each other by
 /// `PANEL_STAGGER`.
@@ -242,6 +253,8 @@ pub struct Stage {
     top_edge_since: Option<Micros>,
     accents: Accents,
     fading: bool,
+    /// The clock's charging hatch is crawling, which needs a step every frame and nothing else.
+    crawling: bool,
     /// What the compass page showed after the last step, while it filled the panel.
     drawn_compass: Option<(CompassView, Accents)>,
     /// The pixels the last step changed. Boxed so the frame loop's stack never holds it.
@@ -251,7 +264,7 @@ pub struct Stage {
     clock_settled: Option<ClockSettled>,
     clock_accents: clock_screen::Accents,
     /// What the clock page showed after the last step, while it filled the panel.
-    drawn_clock: Option<(ClockView, clock_screen::Accents)>,
+    drawn_clock: Option<clock_screen::Face>,
     /// How far the settings panel has come down over the faces.
     sheet: Sheet,
     route: Option<Route>,
@@ -295,6 +308,9 @@ pub struct Stage {
     entry_from: Micros,
     /// What the always-on face showed after the last step, while it shows.
     drawn_always_on: Option<always_on::View>,
+    /// The battery the always-on face shows, taken again only when it redraws for a minute, and
+    /// the stage's minute when it was, for a face whose time stands still.
+    shown_battery: (Option<Battery>, Micros),
 }
 
 impl Stage {
@@ -322,6 +338,7 @@ impl Stage {
             top_edge_since: None,
             accents: Accents::FULL,
             fading: false,
+            crawling: false,
             drawn_compass: None,
             changed: alloc::boxed::Box::new(Dirty::new()),
             dial_footprint: DialFootprint::default(),
@@ -353,6 +370,7 @@ impl Stage {
             fade: None,
             entry_from: 0,
             drawn_always_on: None,
+            shown_battery: (None, 0),
             peripherals,
         }
     }
@@ -488,6 +506,13 @@ impl Stage {
     /// input.
     #[must_use]
     pub fn is_animating(&self) -> bool {
+        self.is_changing() || self.crawling
+    }
+
+    /// As [`is_animating`](Self::is_animating), but for the charging crawl, which never ends
+    /// while charging.
+    #[must_use]
+    pub fn is_changing(&self) -> bool {
         self.pager.is_moving() || self.sheet.is_moving() || self.grid.snap.is_some() || self.fading || self.fade.is_some()
     }
 
@@ -509,6 +534,7 @@ impl Stage {
         } = input;
         self.changed.clear();
         self.fading = false;
+        self.crawling = false;
         let mut update = Update::default();
         // Set where a change needs the whole panel redrawn. The settled screens work out their
         // own damage instead.
@@ -705,10 +731,21 @@ impl Stage {
             Rest::AlwaysOn | Rest::Off => {}
         }
         if self.rest == Rest::AlwaysOn {
-            let view = always_on::View::of(&self.peripherals.clock);
-            if self.drawn_always_on.as_ref() != Some(&view) {
-                self.drawn_always_on = Some(view);
-                self.changed.make_full();
+            // The battery moves with the minute's redraw rather than waking the panel on its own.
+            // A stopped or unreadable clock has no minute to redraw on, so the stage's clock
+            // marks its minutes instead.
+            let clock = &self.peripherals.clock;
+            let (battery, taken) = self.shown_battery;
+            let minute = now / MINUTE;
+            let held = always_on::View::of(clock, battery);
+            let redraw = self.drawn_always_on.as_ref() != Some(&held);
+            if redraw || (held.is_still() && taken / MINUTE != minute) {
+                self.shown_battery = (self.peripherals.battery, now);
+                let view = always_on::View::of(clock, self.peripherals.battery);
+                if self.drawn_always_on.as_ref() != Some(&view) {
+                    self.drawn_always_on = Some(view);
+                    self.changed.make_full();
+                }
             }
         }
         true
@@ -850,7 +887,8 @@ impl Stage {
         let view = self.pager.view();
         let faces_settled = self.page.is_none() && self.sheet.is_closed() && view.offset == 0 && view.neighbour.is_none();
         let compass = (faces_settled && self.screen == Screen::Compass).then_some((self.peripherals.compass, self.accents));
-        let clock = (faces_settled && self.screen == Screen::Clock).then_some((self.peripherals.clock, self.clock_accents));
+        let clock = (faces_settled && self.screen == Screen::Clock)
+            .then_some((self.peripherals.clock, self.peripherals.battery, self.clock_accents));
         let panel = (self.page.is_none() && self.sheet.is_open())
             .then_some((self.peripherals, self.grid.scroll, self.panel_accents));
         let page = self
@@ -866,7 +904,7 @@ impl Stage {
                 &mut self.changed,
             );
         } else if let (Some(before), Some(after)) = (self.drawn_clock, clock) {
-            clock_screen::damage((&before.0, before.1), (&after.0, after.1), &self.renderer, &mut self.changed);
+            clock_screen::damage(&before, &after, &self.renderer, &mut self.changed);
         } else if let (Some(before), Some(after)) = (self.drawn_panel, panel) {
             self.panel_damage(&before, &after);
         } else if let (Some(before), Some(after)) = (&self.drawn_page, &page) {
@@ -1237,6 +1275,8 @@ impl Stage {
                     plate: start(CLOCK_ENTRY.plate),
                     zone: start(CLOCK_ENTRY.zone),
                     mark: start(CLOCK_ENTRY.mark),
+                    scatter: start(CLOCK_ENTRY.scatter),
+                    battery: start(CLOCK_ENTRY.battery),
                 };
                 if keys.mode == clock_screen::Mode::NoData {
                     // A fault shows at once.
@@ -1298,17 +1338,24 @@ impl Stage {
         }
         let times = &settled.times;
         let retyped = settled.retyped;
+        let icon = 1.0 - libm::powf(1.0 - f32::from(progress(now, times.icon, CLOCK_ICON_BUILD)) / 255.0, 3.0);
+        let charging = self.peripherals.battery.is_some_and(|battery| battery.present && battery.charging)
+            && matches!(self.rest, Rest::Awake | Rest::Dimmed { .. } | Rest::Darkening { .. });
         let entry = Accents {
             ring: progress(now, times.ring, RING_FADE),
-            icon_rows: rows_built(now, times.icon),
+            icon_rows: libm::roundf(5.0 * icon) as u8,
             label: progress(now, times.label, CLOCK_LABEL_REVEAL),
             plate: progress(now, times.plate, CLOCK_PLATE_REVEAL),
             zone: progress(now, times.zone, CLOCK_ZONE_REVEAL),
             mark: progress(now, times.mark, CLOCK_MARK_REVEAL),
+            scatter: progress(now, times.scatter, CLOCK_SCATTER_BLOOM),
+            battery: progress(now, times.battery, CLOCK_BATTERY_RISE),
             time: progress(now, retyped, CLOCK_TIME_REVEAL),
             date: progress(now, retyped.map(|start| start + CLOCK_DATE_DELAY), CLOCK_DATE_REVEAL),
+            crawl: if charging { ((now / CLOCK_CRAWL) % 8) as u8 } else { 0 },
         };
-        self.fading |= entry != Accents::FULL;
+        self.fading |= entry != Accents { crawl: entry.crawl, ..Accents::FULL };
+        self.crawling |= charging;
         let p = swipe_progress(offset);
         let exit = Accents {
             ring: leaving(p, 0.6, 0.4),
@@ -1317,8 +1364,12 @@ impl Stage {
             plate: leaving(p, 0.1, 0.3),
             zone: leaving(p, 0.0, 0.2),
             mark: leaving(p, 0.05, 0.2),
+            // The scatter moves with the page and does not fade.
+            scatter: u8::MAX,
+            battery: leaving(p, 0.1, 0.3),
             time: u8::MAX,
             date: u8::MAX,
+            crawl: u8::MAX,
         };
         entry.min(exit)
     }

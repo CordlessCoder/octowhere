@@ -1,6 +1,8 @@
 //! The clock face: hours on the field, minutes and seconds knocked out of a band across the
-//! circle, a status symbol, the date, and a plate naming the zone.
-//! `context/design/specs/CLOCK-FACE-SPEC.md` is its design.
+//! circle in the state's colour, a status symbol, UTC and the battery in the band beside a
+//! hatched battery column, the date and the zone as two lines of tokens, a 24-hour rail, and two
+//! quiet scatter fields behind. It is K1 of `context/design/`, on the round 4 spec
+//! (`context/design/specs/CLOCK-FACE-ROUND4-SPEC.md`) and the clock face spec before it.
 
 use core::fmt::Write as _;
 
@@ -15,6 +17,9 @@ use super::{
     clock::{ClockState, ClockView, DateTime, ZoneMode, ZoneState},
     icon::{self, Glyph, Tile},
     reveal::{Reveal, draw_revealed, revealed_bounds},
+    scatter::{Field, Look, Scatter},
+    screens::Battery,
+    startup, text,
 };
 use crate::chrome::{
     self, Color, CoverageTarget, FontdueRenderer, OnBackground, RgbColorExt as _, Window, FRAKTION,
@@ -46,21 +51,42 @@ const MINUTES_INK: Rectangle = Rectangle::new(Point::new(62, 209), Size::new(166
 const SECONDS_INK: Rectangle = Rectangle::new(Point::new(260, 276), Size::new(50, 31));
 const LABEL_INK: Rectangle = Rectangle::new(Point::new(260, 211), Size::new(70, 19));
 const NO_DATA_INK: Rectangle = Rectangle::new(Point::new(70, 245), Size::new(163, 24));
-const DATE_INK: Rectangle = Rectangle::new(Point::new(0, 331), Size::new(466, 25));
-const PLATE_INK: Rectangle = Rectangle::new(Point::new(0, 360), Size::new(466, 20));
-const ZONE_INK: Rectangle = Rectangle::new(Point::new(0, 386), Size::new(466, 16));
 const MARK_INK: Rectangle = Rectangle::new(Point::new(363, 0), Size::new(25, 466));
 /// `NO DATA`'s ink starts on the digits' ink column, centred on this row.
 const NO_DATA_LEFT: i32 = 71;
 const NO_DATA_MIDDLE_TWICE: i32 = 515;
-/// Every date row line is centred by ink in these rows.
-const DATE_ROW: Rectangle = Rectangle::new(Point::new(0, 334), Size::new(466, 17));
-const PLATE_TOP: i32 = 360;
-const PLATE_HEIGHT: u32 = 20;
-const PLATE_BASELINE: i32 = 375;
-const PLATE_PADDING: i32 = 6;
-const PLATE_GAP: i32 = 4;
-const ZONE_BASELINE: i32 = 398;
+/// The band's two lines, UTC and the battery, by their caps' tops, and the region either's ink
+/// and reveal blocks can reach.
+const BAND_LINES: [i32; 2] = [238, 256];
+const BAND_LINE_LEFT: i32 = 262;
+const BAND_LINES_INK: Rectangle = Rectangle::new(Point::new(260, 234), Size::new(104, 36));
+/// The battery column at the band's right end: a black window, its edge inset a pixel, and the
+/// hatch inset three, filled from the bottom.
+const WINDOW: Rectangle = Rectangle::new(Point::new(394, 206), Size::new(46, 105));
+const EDGE: Rectangle = Rectangle::new(Point::new(395, 207), Size::new(44, 103));
+const HATCH: Rectangle = Rectangle::new(Point::new(397, 209), Size::new(40, 99));
+const LOW: u8 = 15;
+/// The token lines by their caps' tops, their sizes, and the widest the zone's line may be
+/// before its name moves to a line of its own.
+const LINE_TOPS: [i32; 3] = [340, 368, 386];
+const LINE_SIZES: [u32; 3] = [19, 14, 14];
+const ZONE_LINE_MAX: f32 = 320.0;
+/// The 24-hour rail: a cell an hour, and a hollow marker on the local hour.
+const RAIL_LEFT: i32 = 92;
+const RAIL_PITCH: i32 = 12;
+const RAIL_CELL: Rectangle = Rectangle::new(Point::new(0, 412), Size::new(5, 3));
+const RAIL_MARKER: Rectangle = Rectangle::new(Point::new(-1, 408), Size::new(8, 11));
+const RAIL_HOLE: Rectangle = Rectangle::new(Point::new(1, 410), Size::new(4, 7));
+const RAIL: Rectangle = Rectangle::new(Point::new(91, 408), Size::new(284, 11));
+const RAIL_LEVEL: u8 = 74;
+/// Scatter keeps this far from every element on the field, which the design gives as a halo.
+const HALO: u32 = 2;
+/// The scatter: denser upper right, quieter lower left, clear of the band.
+const UPPER: Field = Field { center: Point::new(304, 139), radius: 137.0, seed: 0x6f63_6b31 };
+const LOWER: Field = Field { center: Point::new(164, 363), radius: 111.0, seed: 0x6f63_6b32 };
+const UPPER_LOOK: Look = Look { facing: -0.60, density: 0.48 };
+const LOWER_LOOK: Look = Look { facing: 2.55, density: 0.28 };
+const SCATTER_LEVEL: u8 = 125;
 const MARK: &str = "OCTOWHERE";
 const MARK_PX: u32 = 26;
 /// The caps' baseline column. A round letter's overshoot reaches just left of it.
@@ -86,10 +112,12 @@ pub fn solid_band() -> Rectangle {
     band().solid()
 }
 
-/// How far each of the face's accents has come in: the ring's fade, 0 to 255; how many rows of
-/// the icon's modules show, 0 to 5; and the band label's, the plate's, the zone name's and the
-/// wordmark's reveals, 0 to 255. Also the reveals of the time, across hours, minutes and
-/// seconds, and of the date line, which run only when a fix or a zone change replaces the time.
+/// How far each of the face's accents has come in, 0 to 255 along each one's own window: the
+/// ring's fade, the band label and lines, the first token line, the zone's lines, the wordmark,
+/// the scatter's bloom and the battery hatch's rise; how many rows of the icon's modules show, 0
+/// to 5. Also the reveals of the time, across hours, minutes and seconds, and of the date line,
+/// which run only when a fix or a zone change replaces the time. The face applies each part's
+/// curve. `crawl` is how far the charging hatch has moved, a pixel a frame.
 /// The time and date are centre content, so a page's entry and exit leave them whole.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Accents {
@@ -99,8 +127,11 @@ pub struct Accents {
     pub plate: u8,
     pub zone: u8,
     pub mark: u8,
+    pub scatter: u8,
+    pub battery: u8,
     pub time: u8,
     pub date: u8,
+    pub crawl: u8,
 }
 
 impl Accents {
@@ -111,8 +142,11 @@ impl Accents {
         plate: u8::MAX,
         zone: u8::MAX,
         mark: u8::MAX,
+        scatter: u8::MAX,
+        battery: u8::MAX,
         time: u8::MAX,
         date: u8::MAX,
+        crawl: 0,
     };
     pub const HIDDEN: Self = Self {
         ring: 0,
@@ -121,11 +155,14 @@ impl Accents {
         plate: 0,
         zone: 0,
         mark: 0,
+        scatter: 0,
+        battery: 0,
         time: u8::MAX,
         date: u8::MAX,
+        crawl: 0,
     };
 
-    /// Each accent at the lesser of the two.
+    /// Each accent at the lesser of the two, and `self`'s crawl.
     #[must_use]
     pub fn min(self, other: Self) -> Self {
         Self {
@@ -135,8 +172,11 @@ impl Accents {
             plate: self.plate.min(other.plate),
             zone: self.zone.min(other.zone),
             mark: self.mark.min(other.mark),
+            scatter: self.scatter.min(other.scatter),
+            battery: self.battery.min(other.battery),
             time: self.time.min(other.time),
             date: self.date.min(other.date),
+            crawl: self.crawl,
         }
     }
 }
@@ -145,6 +185,40 @@ impl Default for Accents {
     fn default() -> Self {
         Self::FULL
     }
+}
+
+// The entry's curves, from an accent's progress.
+
+fn unit(progress: u8) -> f32 {
+    f32::from(progress) / 255.0
+}
+
+fn out_cubic(progress: u8) -> f32 {
+    let u = 1.0 - unit(progress);
+    1.0 - u * u * u
+}
+
+/// Overshoots by up to about a tenth before it settles.
+fn out_back(progress: u8) -> f32 {
+    let u = unit(progress) - 1.0;
+    1.0 + 2.701_58 * u * u * u + 1.701_58 * u * u
+}
+
+fn in_quad(progress: u8) -> f32 {
+    unit(progress) * unit(progress)
+}
+
+fn in_expo(progress: u8) -> f32 {
+    match progress {
+        0 => 0.0,
+        u8::MAX => 1.0,
+        _ => libm::powf(2.0, 10.0 * unit(progress) - 10.0),
+    }
+}
+
+/// A curve's value back as progress for a reveal, 0 to 255.
+fn level(value: f32) -> u8 {
+    libm::roundf(value.clamp(0.0, 1.0) * 255.0) as u8
 }
 
 /// What the face shows, in the order that decides between them.
@@ -187,7 +261,8 @@ impl Mode {
         match self {
             Self::NoData => chrome::RED,
             Self::Stopped => chrome::ORANGE,
-            _ => chrome::WHITE,
+            Self::NoZone => chrome::WHITE,
+            Self::Local { .. } => chrome::LIME,
         }
     }
 
@@ -285,27 +360,87 @@ struct Parts {
     seconds: Option<String<2>>,
     /// Across the hours, minutes and seconds in turn.
     time: Reveal,
-    date: Option<(String<16>, Line, Reveal)>,
-    /// The plate, and how many of its cells show.
-    plate: (Plate, usize),
-    zone: Option<(String<32>, Reveal)>,
+    /// UTC and the battery in the band, with no reading none.
+    band_lines: Option<[(String<16>, Reveal); 2]>,
+    column: Column,
+    lines: heapless::Vec<(Tokens, Reveal), 3>,
+    /// The rail, and the local hour its marker is on if the face knows one.
+    rail: Option<Option<u8>>,
+    /// How far the scatter has bloomed, with no reading none.
+    scatter: Option<u8>,
     mark: Reveal,
 }
 
+/// The battery column's hatch: its colour, how many rows up it reaches, and how far the
+/// charging crawl has moved it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Line {
-    Date,
-    Waiting,
-    Utc,
+struct Column {
+    color: Color,
+    rows: u32,
+    shift: i32,
 }
 
-impl Line {
-    fn style(self, font: &FontdueRenderer<'static, Color>) -> FontdueRenderer<'static, Color> {
-        match self {
-            Self::Date => style(font, chrome::WHITE, 23, FRAKTION),
-            Self::Waiting => style(font, chrome::GRAY, 19, FRAKTION),
-            Self::Utc => style(font, chrome::GRAY, 23, FRAKTION),
+/// A line of runs in one colour and size, Regular or Bold, centred as a group on one baseline.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct Tokens {
+    color: Color,
+    row: usize,
+    runs: heapless::Vec<(String<48>, bool), 6>,
+}
+
+impl Tokens {
+    fn new(color: Color, row: usize, runs: &[(&str, bool)]) -> Self {
+        let runs = runs.iter().map(|&(text, bold)| (String::try_from(text).unwrap_or_default(), bold)).collect();
+        Self { color, row, runs }
+    }
+
+    fn len(&self) -> usize {
+        self.runs.iter().map(|(text, _)| text.len()).sum()
+    }
+
+    fn style(&self, font: &FontdueRenderer<'static, Color>, bold: bool) -> FontdueRenderer<'static, Color> {
+        style(font, self.color, LINE_SIZES[self.row], if bold { FRAKTION_BOLD } else { FRAKTION })
+    }
+
+    fn width(&self, font: &FontdueRenderer<'static, Color>) -> f32 {
+        self.runs.iter().map(|(text, bold)| self.style(font, *bold).advance(text)).sum()
+    }
+
+    /// Each run with its style and pen.
+    fn placed<'t>(
+        &'t self,
+        font: &'t FontdueRenderer<'static, Color>,
+    ) -> impl Iterator<Item = (&'t str, FontdueRenderer<'static, Color>, Point)> + 't {
+        let baseline = LINE_TOPS[self.row] + text::cap(&self.style(font, false));
+        let mut x = CENTER.x as f32 - self.width(font) / 2.0;
+        self.runs.iter().map(move |(text, bold)| {
+            let style = self.style(font, *bold);
+            let pen = Point::new(libm::roundf(x) as i32, baseline);
+            x += style.advance(text);
+            (text.as_str(), style, pen)
+        })
+    }
+
+    fn bounds(&self, font: &FontdueRenderer<'static, Color>) -> Rectangle {
+        self.placed(font)
+            .map(|(text, style, pen)| revealed_bounds(&style, text, pen))
+            .filter(|bounds| !bounds.is_zero_sized())
+            .reduce(|a, b| Rectangle::with_corners(a.top_left.component_min(b.top_left), a.bottom_right().unwrap_or(a.top_left).component_max(b.bottom_right().unwrap_or(b.top_left))))
+            .unwrap_or(Rectangle::zero())
+    }
+
+    fn draw<D: CoverageTarget<Color = Color>>(
+        &self,
+        font: &FontdueRenderer<'static, Color>,
+        reveal: Reveal,
+        target: &mut D,
+    ) -> Result<(), D::Error> {
+        let mut from = 0;
+        for (text, style, pen) in self.placed(font) {
+            draw_revealed(&style, text, pen, reveal.part(from, text.len()), target)?;
+            from += text.len();
         }
+        Ok(())
     }
 }
 
@@ -324,16 +459,10 @@ fn dashes() -> String<2> {
     String::try_from("--").unwrap()
 }
 
+/// The date after the weekday, as `24 SEP 2026`.
 fn date(time: &DateTime) -> String<16> {
     let mut text = String::new();
-    _ = write!(
-        text,
-        "{} {:02} {} {:04}",
-        WEEKDAYS[usize::from(time.weekday())],
-        time.day,
-        MONTHS[usize::from(time.month - 1)],
-        time.year
-    );
+    _ = write!(text, "{:02} {} {:04}", time.day, MONTHS[usize::from(time.month - 1)], time.year);
     text
 }
 
@@ -350,8 +479,37 @@ pub fn shown_time(view: &ClockView) -> Option<i64> {
 /// The time's characters: two each for the hours, minutes and seconds.
 const TIME_CELLS: usize = 6;
 
+/// The battery line and the hatch's colour and fill, 0 to 100, for `battery` under a band of
+/// `band`. Unknown fills the hatch in `GRAY`.
+fn battery(battery: Option<Battery>, band: Color) -> (String<16>, Color, u8, bool) {
+    let mut line = String::new();
+    match battery {
+        Some(battery) if battery.present => {
+            _ = write!(line, "BAT {}%", battery.percent);
+            if battery.charging {
+                _ = line.push_str(" CHG");
+            }
+            let color = match () {
+                () if battery.percent <= LOW => chrome::ORANGE,
+                // A clock fault is not a battery fault.
+                () if band == chrome::RED => chrome::WHITE,
+                () => band,
+            };
+            (line, color, battery.percent.min(100), battery.charging)
+        }
+        Some(battery) if battery.usb => {
+            _ = line.push_str("USB");
+            (line, chrome::GRAY, 100, false)
+        }
+        _ => {
+            _ = line.push_str("BAT --");
+            (line, chrome::GRAY, 100, false)
+        }
+    }
+}
+
 impl Parts {
-    fn of(view: &ClockView, accents: Accents) -> Self {
+    fn of(view: &ClockView, supply: Option<Battery>, accents: Accents, font: &FontdueRenderer<'static, Color>) -> Self {
         let clock = &view.clock();
         let keys = Keys::of(view);
         let mode = keys.mode;
@@ -363,51 +521,135 @@ impl Parts {
                 Some(two(local.time.minute)),
                 Some(two(local.time.second)),
             ),
-            _ => (Some(dashes()), Some(dashes()), None),
+            _ => (Some(dashes()), Some(dashes()), Some(dashes())),
         };
-        let date = match (mode, local) {
-            (_, Some(local)) => Some((date(&local.time), Line::Date)),
-            (Mode::Stopped, _) => Some((String::try_from("WAITING FOR GNSS").unwrap(), Line::Waiting)),
-            (Mode::NoZone, _) => clock.utc_time().map(|utc| {
-                let mut text = String::new();
-                _ = write!(text, "UTC {:02}:{:02}", utc.hour, utc.minute);
-                (text, Line::Utc)
-            }),
+        let band = mode.band();
+        let (battery_line, hatch, fill, charging) = battery(supply, band);
+        let label_reveal = level(out_cubic(accents.label));
+        let band_lines = (mode != Mode::NoData).then(|| {
+            let mut utc = String::<16>::new();
+            match clock.utc_time().filter(|_| mode != Mode::Stopped) {
+                Some(time) => _ = write!(utc, "UTC {:02}:{:02}", time.hour, time.minute),
+                None => _ = utc.push_str("UTC --:--"),
+            }
+            let reveal = |text: &str| Reveal::of(label_reveal, text.len());
+            [(utc.clone(), reveal(&utc)), (battery_line.clone(), reveal(&battery_line))]
+        });
+        let rise = out_back(accents.battery);
+        let column = Column {
+            color: hatch,
+            rows: (libm::roundf(HATCH.size.height as f32 * f32::from(fill) / 100.0 * rise) as u32).min(HATCH.size.height),
+            shift: if charging { i32::from(accents.crawl) } else { 0 },
+        };
+
+        let mut lines = heapless::Vec::new();
+        let tag = keys.plate.tag;
+        let first = level(out_cubic(accents.plate).min(out_cubic(accents.date)));
+        let first = match (mode, local) {
+            (Mode::Local { .. }, Some(local)) => Some(Tokens::new(chrome::LIME, 0, &[
+                (WEEKDAYS[usize::from(local.time.weekday())], true),
+                (" ", false),
+                (&date(&local.time), false),
+                ("  [", false),
+                (tag, true),
+                ("]", false),
+            ])),
+            (Mode::Stopped, _) => Some(Tokens::new(chrome::GRAY, 0, &[("WAITING FOR GNSS", false)])),
+            (Mode::NoZone, _) => Some(Tokens::new(chrome::GRAY, 0, &[("NO FIX YET", false), ("  [", false), (tag, true), ("]", false)])),
             _ => None,
-        };
+        }
+        .map(|tokens| {
+            let reveal = Reveal::of(first, tokens.len());
+            (tokens, reveal)
+        });
+        if let Some(first) = first {
+            _ = lines.push(first);
+        }
+        if !matches!(mode, Mode::NoZone | Mode::NoData)
+            && let ([abbreviation, offset], Some(name)) = (keys.plate.values.as_slice(), keys.zone)
+        {
+            let mut zone = String::<32>::new();
+            _ = write!(zone, "{abbreviation} {offset}");
+            let mut comment = String::<48>::new();
+            _ = comment.push_str("// ");
+            for c in name.chars() {
+                _ = comment.push(c.to_ascii_uppercase());
+            }
+            let reveal = level(out_cubic(accents.zone));
+            let mut whole = zone.clone();
+            _ = whole.push(' ');
+            let one = Tokens::new(chrome::GRAY, 1, &[(&whole, false), (&comment, false)]);
+            if one.width(font) > ZONE_LINE_MAX {
+                for tokens in [Tokens::new(chrome::GRAY, 1, &[(&zone, false)]), Tokens::new(chrome::GRAY, 2, &[(&comment, false)])] {
+                    let r = Reveal::of(reveal, tokens.len());
+                    _ = lines.push((tokens, r));
+                }
+            } else {
+                let r = Reveal::of(reveal, one.len());
+                _ = lines.push((one, r));
+            }
+        }
+
         let ring_color = if mode == Mode::NoData { chrome::RED } else { chrome::GRAY };
+        let ring = (accents.ring > 0).then(|| {
+            let fade = out_back(accents.ring);
+            if fade <= 1.0 {
+                chrome::BLACK.lerp(&ring_color, level(fade))
+            } else {
+                ring_color.lerp(&chrome::WHITE, level(fade - 1.0))
+            }
+        });
         let (glyph, icon_color) = mode.icon();
         let label = mode.label();
-        let cells = keys.plate.values.len() + 1;
-        let zone_name = keys.zone.map(|name| {
-            let mut upper = String::<32>::new();
-            for c in name.chars() {
-                _ = upper.push(c.to_ascii_uppercase());
-            }
-            let reveal = Reveal::of(accents.zone, upper.len());
-            (upper, reveal)
-        });
         Self {
-            ring: (accents.ring > 0).then(|| chrome::BLACK.lerp(&ring_color, accents.ring)),
+            ring,
             icon: (glyph, icon_color, accents.icon_rows),
-            band: mode.band(),
-            label: (label, Reveal::of(accents.label, label.len())),
+            band,
+            label: (label, Reveal::of(label_reveal, label.len())),
             hours,
             minutes,
             seconds,
             time: Reveal::of(accents.time, TIME_CELLS),
-            date: date.map(|(text, line)| {
-                let reveal = Reveal::of(accents.date, text.len());
-                (text, line, reveal)
-            }),
-            plate: (
-                keys.plate,
-                (0..cells).take_while(|&i| i * 255 < usize::from(accents.plate) * cells).count(),
-            ),
-            zone: zone_name,
-            mark: Reveal::of(accents.mark, MARK.len()),
+            band_lines,
+            column,
+            lines,
+            rail: (mode != Mode::NoData && accents.zone > 0).then(|| local.map(|local| local.time.hour)),
+            scatter: (mode != Mode::NoData).then(|| level(in_quad(accents.scatter))),
+            mark: Reveal::of(level(in_expo(accents.mark)), MARK.len()),
         }
     }
+
+    /// The boxes the scatter keeps clear of: every element on the field, grown by the halo.
+    fn clear(&self, font: &FontdueRenderer<'static, Color>) -> heapless::Vec<Rectangle, 8> {
+        let mut clear = heapless::Vec::new();
+        _ = clear.push(HOURS_INK);
+        _ = clear.push(TILE.bounds());
+        _ = clear.push(MarkLayout::of(font).span(0, MARK_ON_FIELD));
+        for (tokens, _) in &self.lines {
+            _ = clear.push(tokens.bounds(font));
+        }
+        if self.rail.is_some() {
+            _ = clear.push(RAIL);
+        }
+        for area in &mut clear {
+            *area = area.offset(HALO as i32);
+        }
+        clear
+    }
+}
+
+fn scatter() -> Scatter {
+    Scatter {
+        origin: Point::new(12, -2),
+        gap: Some((193..=322, 0)),
+        color: chrome::shade(chrome::PURPLE, SCATTER_LEVEL),
+        fields: &[UPPER, LOWER],
+    }
+}
+
+fn looks(bloom: u8) -> [Look; 2] {
+    let k = f32::from(bloom) / 255.0;
+    [Look { density: UPPER_LOOK.density * k, ..UPPER_LOOK }, Look { density: LOWER_LOOK.density * k, ..LOWER_LOOK }]
 }
 
 pub(crate) fn style(
@@ -435,42 +677,14 @@ fn label_style(font: &FontdueRenderer<'static, Color>) -> FontdueRenderer<'stati
     style(font, chrome::BLACK, 16, FRAKTION_BOLD)
 }
 
-fn zone_style(font: &FontdueRenderer<'static, Color>) -> FontdueRenderer<'static, Color> {
-    style(font, chrome::GRAY, 14, FRAKTION)
-}
-
 pub(crate) fn no_data_style(font: &FontdueRenderer<'static, Color>) -> FontdueRenderer<'static, Color> {
     style(font, chrome::BLACK, 28, SHAPIRO)
-}
-
-/// Where `text`'s pen starts for its advance to centre on `x`.
-fn centred_left(style: &FontdueRenderer<'static, Color>, text: &str, x: i32) -> i32 {
-    libm::roundf(x as f32 - style.advance(text) / 2.0) as i32
-}
-
-/// The baseline that centres `text`'s ink in `rows`.
-fn centred_baseline(style: &FontdueRenderer<'static, Color>, text: &str, rows: Rectangle) -> i32 {
-    let ink = style.baseline_bounds(text, Point::zero());
-    rows.top_left.y + (rows.size.height as i32 - ink.size.height as i32) / 2 - ink.top_left.y
-}
-
-fn date_origin(font: &FontdueRenderer<'static, Color>, text: &str, line: Line) -> (FontdueRenderer<'static, Color>, Point) {
-    let style = line.style(font);
-    let origin = Point::new(
-        centred_left(&style, text, CENTER.x),
-        centred_baseline(&style, text, DATE_ROW),
-    );
-    (style, origin)
 }
 
 pub(crate) fn no_data_origin(font: &FontdueRenderer<'static, Color>) -> Point {
     let ink = no_data_style(font).baseline_bounds("NO DATA", Point::zero());
     let top = (NO_DATA_MIDDLE_TWICE - ink.size.height as i32) / 2;
     Point::new(NO_DATA_LEFT - ink.top_left.x, top - ink.top_left.y)
-}
-
-fn zone_pen(font: &FontdueRenderer<'static, Color>, name: &str) -> Point {
-    Point::new(centred_left(&zone_style(font), name, CENTER.x), ZONE_BASELINE)
 }
 
 fn mark_style(font: &FontdueRenderer<'static, Color>, color: Color) -> FontdueRenderer<'static, Color> {
@@ -536,7 +750,7 @@ impl MarkLayout {
     }
 }
 
-/// The wordmark, inverting what is under it: white on the field and black on the band.
+/// The wordmark: its letters on the field in the band's colour, and on the band black.
 fn draw_mark<D: CoverageTarget<Color = Color>>(
     font: &FontdueRenderer<'static, Color>,
     reveal: Reveal,
@@ -548,7 +762,7 @@ fn draw_mark<D: CoverageTarget<Color = Color>>(
     let text = &MARK[..reveal.glyphs()];
     let block = (reveal.cells() > reveal.glyphs()).then(|| layout.cell(reveal.glyphs()));
     for (rows, color, background) in [
-        (0..BAND_ROWS.start, chrome::WHITE, chrome::BLACK),
+        (0..BAND_ROWS.start, band, chrome::BLACK),
         (BAND_ROWS, chrome::BLACK, band),
     ] {
         let clip = Rectangle::new(Point::new(0, rows.start), Size::new(466, rows.len() as u32));
@@ -565,60 +779,9 @@ fn draw_mark<D: CoverageTarget<Color = Color>>(
     Ok(())
 }
 
-/// Each cell of `plate` with its box and its text's pen.
-fn plate_cells<'p>(
-    font: &FontdueRenderer<'static, Color>,
-    plate: &'p Plate,
-) -> impl Iterator<Item = (bool, &'p str, Rectangle)> {
-    let advance = style(font, chrome::WHITE, 14, FRAKTION).advance("0");
-    let texts = core::iter::once((true, plate.tag)).chain(plate.values.iter().map(|value| (false, value.as_str())));
-    let widths = texts.clone().map(move |(_, text)| text.len() as f32 * advance + 2.0 * PLATE_PADDING as f32);
-    let total = widths.clone().sum::<f32>() + (PLATE_GAP * plate.values.len() as i32) as f32;
-    let mut x = libm::roundf(CENTER.x as f32 - total / 2.0) as i32;
-    texts.zip(widths).map(move |((tag, text), width)| {
-        let width = libm::roundf(width) as u32;
-        let cell = Rectangle::new(Point::new(x, PLATE_TOP), Size::new(width, PLATE_HEIGHT));
-        x += width as i32 + PLATE_GAP;
-        (tag, text, cell)
-    })
-}
-
-fn plate_bounds(font: &FontdueRenderer<'static, Color>, plate: &Plate) -> Rectangle {
-    plate_cells(font, plate)
-        .map(|(_, _, cell)| cell)
-        .reduce(|a, b| Rectangle::with_corners(a.top_left, b.bottom_right().unwrap()))
-        .unwrap_or(Rectangle::zero())
-}
-
-fn draw_plate<D: CoverageTarget<Color = Color>>(
-    font: &FontdueRenderer<'static, Color>,
-    plate: &Plate,
-    shown: usize,
-    target: &mut D,
-) -> Result<(), D::Error> {
-    for (tag, text, cell) in plate_cells(font, plate).take(shown) {
-        let pen = Point::new(cell.top_left.x + PLATE_PADDING, PLATE_BASELINE);
-        target.fill_solid(&cell, chrome::GRAY)?;
-        if tag {
-            style(font, chrome::BLACK, 14, FRAKTION_BOLD).draw_on_baseline(
-                text,
-                pen,
-                &mut OnBackground::new(&mut *target, chrome::GRAY),
-            )?;
-        } else {
-            target.fill_solid(&cell.offset(-1), chrome::BLACK)?;
-            style(font, chrome::WHITE, 14, FRAKTION).draw_on_baseline(
-                text,
-                pen,
-                &mut OnBackground::new(&mut *target, chrome::BLACK),
-            )?;
-        }
-    }
-    Ok(())
-}
-
 pub fn draw<D>(
     view: &ClockView,
+    supply: Option<Battery>,
     accents: Accents,
     font: &FontdueRenderer<'static, Color>,
     target: &mut D,
@@ -626,9 +789,9 @@ pub fn draw<D>(
 where
     D: CoverageTarget<Color = Color>,
 {
-    let parts = Parts::of(view, accents);
-    if let Some(color) = parts.ring {
-        super::smooth::perimeter().draw(&mut OnBackground::new(&mut *target, chrome::BLACK), color);
+    let parts = Parts::of(view, supply, accents, font);
+    if let Some(bloom) = parts.scatter {
+        scatter().draw_clear_of(&looks(bloom), &parts.clear(font), target)?;
     }
     if let Some(hours) = parts.hours.as_ref().filter(|_| target.visible(&HOURS_INK)) {
         let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
@@ -659,23 +822,74 @@ where
         if let Some(seconds) = parts.seconds.as_ref().filter(|_| band.visible(&SECONDS_INK)) {
             draw_revealed(&seconds_style(font), seconds, SECONDS, parts.time.part(4, 2), band)?;
         }
+        if let Some(lines) = parts.band_lines.as_ref().filter(|_| band.visible(&BAND_LINES_INK)) {
+            let style = band_line_style(font);
+            for ((text, reveal), top) in lines.iter().zip(BAND_LINES) {
+                draw_revealed(&style, text, band_line_pen(&style, top), *reveal, band)?;
+            }
+        }
+    }
+    if target.visible(&WINDOW) {
+        draw_column(parts.column, target)?;
     }
     if target.visible(&MARK_INK) {
         draw_mark(font, parts.mark, parts.band, target)?;
     }
+    for (tokens, reveal) in &parts.lines {
+        if target.visible(&tokens.bounds(font)) {
+            tokens.draw(font, *reveal, &mut OnBackground::new(&mut *target, chrome::BLACK))?;
+        }
+    }
+    if let Some(hour) = parts.rail.filter(|_| target.visible(&RAIL)) {
+        draw_rail(hour, target)?;
+    }
+    if let Some(color) = parts.ring {
+        super::smooth::perimeter().draw(&mut OnBackground::new(&mut *target, chrome::BLACK), color);
+    }
+    Ok(())
+}
 
-    if let Some((text, line, reveal)) = parts.date.as_ref().filter(|_| target.visible(&DATE_INK)) {
-        let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
-        let (style, origin) = date_origin(font, text, *line);
-        draw_revealed(&style, text, origin, *reveal, field)?;
+fn band_line_style(font: &FontdueRenderer<'static, Color>) -> FontdueRenderer<'static, Color> {
+    style(font, chrome::BLACK, 14, FRAKTION)
+}
+
+fn band_line_pen(style: &FontdueRenderer<'static, Color>, top: i32) -> Point {
+    Point::new(BAND_LINE_LEFT, top + text::cap(style))
+}
+
+fn draw_column<D: CoverageTarget<Color = Color>>(column: Column, target: &mut D) -> Result<(), D::Error> {
+    target.fill_solid(&WINDOW, chrome::BLACK)?;
+    let (left, top) = (EDGE.top_left.x, EDGE.top_left.y);
+    let (right, bottom) = (left + EDGE.size.width as i32 - 1, top + EDGE.size.height as i32 - 1);
+    for edge in [
+        Rectangle::with_corners(Point::new(left, top), Point::new(right, top)),
+        Rectangle::with_corners(Point::new(left, bottom), Point::new(right, bottom)),
+        Rectangle::with_corners(Point::new(left, top), Point::new(left, bottom)),
+        Rectangle::with_corners(Point::new(right, top), Point::new(right, bottom)),
+    ] {
+        target.fill_solid(&edge, column.color)?;
     }
-    if target.visible(&PLATE_INK) {
-        let (plate, shown) = &parts.plate;
-        draw_plate(font, plate, *shown, target)?;
+    let filled = Rectangle::new(
+        HATCH.top_left + Point::new(0, (HATCH.size.height - column.rows) as i32),
+        Size::new(HATCH.size.width, column.rows),
+    );
+    // Stripes move up as the shift grows: along a stripe x + y is constant.
+    startup::hatch(filled, 8, 4, column.shift, column.color, target)
+}
+
+fn moved(area: Rectangle, x: i32) -> Rectangle {
+    Rectangle::new(area.top_left + Point::new(x, 0), area.size)
+}
+
+fn draw_rail<D: CoverageTarget<Color = Color>>(hour: Option<u8>, target: &mut D) -> Result<(), D::Error> {
+    let cell = chrome::shade(chrome::GRAY, RAIL_LEVEL);
+    for h in 0..24 {
+        target.fill_solid(&moved(RAIL_CELL, RAIL_LEFT + RAIL_PITCH * h), cell)?;
     }
-    if let Some((name, reveal)) = parts.zone.as_ref().filter(|_| target.visible(&ZONE_INK)) {
-        let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
-        draw_revealed(&zone_style(font), name, zone_pen(font, name), *reveal, field)?;
+    if let Some(hour) = hour {
+        let x = RAIL_LEFT + RAIL_PITCH * i32::from(hour);
+        target.fill_solid(&moved(RAIL_MARKER, x), chrome::LIME)?;
+        target.fill_solid(&moved(RAIL_HOLE, x), chrome::BLACK)?;
     }
     Ok(())
 }
@@ -702,19 +916,17 @@ fn digit_damage(
     }
 }
 
+/// What the clock face draws from: the clock, the supply and the accents.
+pub type Face = (ClockView, Option<Battery>, Accents);
+
 /// Marks in `damage` every pixel that differs between the face drawn for `before` and for
 /// `after`.
-pub fn damage(
-    before: (&ClockView, Accents),
-    after: (&ClockView, Accents),
-    font: &FontdueRenderer<'static, Color>,
-    damage: &mut chrome::Dirty,
-) {
+pub fn damage(before: &Face, after: &Face, font: &FontdueRenderer<'static, Color>, damage: &mut chrome::Dirty) {
     if before == after {
         return;
     }
-    let old = Parts::of(before.0, before.1);
-    let new = Parts::of(after.0, after.1);
+    let old = Parts::of(&before.0, before.1, before.2, font);
+    let new = Parts::of(&after.0, after.1, after.2, font);
     if old == new {
         return;
     }
@@ -722,8 +934,10 @@ pub fn damage(
         super::smooth::perimeter().damage(damage);
     }
     if old.band != new.band {
-        // The band's colour also shows through the mark and the text on it.
+        // The band's colour also shows through the mark and the text on it, and colours the
+        // mark's letters off it.
         damage.add(BAND);
+        damage.add(MARK_INK);
     }
     let white = digits(font, chrome::WHITE);
     digit_damage(&white, HOURS, (&old.hours, old.time.part(0, 2)), (&new.hours, new.time.part(0, 2)), damage);
@@ -748,25 +962,35 @@ pub fn damage(
     digit_damage(&black, MINUTES, (&old.minutes, old.time.part(2, 2)), (&new.minutes, new.time.part(2, 2)), damage);
     let seconds = seconds_style(font);
     digit_damage(&seconds, SECONDS, (&old.seconds, old.time.part(4, 2)), (&new.seconds, new.time.part(4, 2)), damage);
-    if old.date != new.date {
-        for (text, line, _) in [&old.date, &new.date].into_iter().flatten() {
-            let (style, origin) = date_origin(font, text, *line);
-            damage.add(revealed_bounds(&style, text, origin));
+    if old.band_lines != new.band_lines {
+        let style = band_line_style(font);
+        for lines in [&old.band_lines, &new.band_lines].into_iter().flatten() {
+            for ((text, _), top) in lines.iter().zip(BAND_LINES) {
+                damage.add(revealed_bounds(&style, text, band_line_pen(&style, top)));
+            }
         }
     }
-    if old.plate != new.plate {
-        damage.add(plate_bounds(font, &old.plate.0));
-        damage.add(plate_bounds(font, &new.plate.0));
+    if old.column != new.column {
+        damage.add(if old.column.color == new.column.color { HATCH } else { WINDOW });
     }
     if old.mark != new.mark {
         let from = old.mark.glyphs().min(new.mark.glyphs());
         let to = old.mark.cells().max(new.mark.cells());
         damage.add(MarkLayout::of(font).span(from, to));
     }
-    if old.zone != new.zone {
-        for (name, _) in [&old.zone, &new.zone].into_iter().flatten() {
-            damage.add(revealed_bounds(&zone_style(font), name, zone_pen(font, name)));
+    if old.lines != new.lines {
+        for (tokens, _) in old.lines.iter().chain(&new.lines) {
+            damage.add(tokens.bounds(font));
         }
+    }
+    if old.rail != new.rail {
+        damage.add(RAIL);
+    }
+    let (old_clear, new_clear) = (old.clear(font), new.clear(font));
+    if (old.scatter, &old_clear) != (new.scatter, &new_clear) {
+        let scatter = scatter();
+        let shown = |bloom: Option<u8>, clear: &[Rectangle]| scatter.shown_clear_of(&looks(bloom.unwrap_or(0)), clear);
+        scatter.changed(&shown(old.scatter, &old_clear), &shown(new.scatter, &new_clear), damage);
     }
 }
 
@@ -836,7 +1060,6 @@ mod tests {
         let font = FontdueRenderer::new(chrome::FontdueRendererCtx::new_rc(), 20, chrome::WHITE, chrome::FONTS);
         const DIGITS: &str = "0123456789-";
         const TEXT: &str = "0123456789-+:ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-        const NAMES: &str = "0123456789-+:ABCDEFGHIJKLMNOPQRSTUVWXYZ_/";
         // Each character repeated to the line's longest, since every font here is monospaced.
         let check = |name: &str, region: Rectangle, chars: &str, len: usize, place: &dyn Fn(&str) -> (FontdueRenderer<'static, Color>, Point)| {
             for c in chars.chars() {
@@ -855,22 +1078,33 @@ mod tests {
             .max()
             .unwrap();
         check("label", LABEL_INK, TEXT, longest, &|_| (label_style(&font), LABEL));
-        for line in [Line::Date, Line::Waiting, Line::Utc] {
-            check("date", DATE_INK, TEXT, 16, &|text| date_origin(&font, text, line));
+        let band_line = band_line_style(&font);
+        for top in BAND_LINES {
+            check("band line", BAND_LINES_INK, TEXT, 12, &|_| (band_line.clone(), band_line_pen(&band_line, top)));
         }
-        check("zone", ZONE_INK, NAMES, 32, &|text| (zone_style(&font), zone_pen(&font, text)));
         let no_data = no_data_style(&font).baseline_bounds("NO DATA", no_data_origin(&font));
         assert!(inside(NO_DATA_INK, no_data), "NO DATA at {no_data:?}");
         let mark = MarkLayout::of(&font).span(0, MARK.len());
         assert!(inside(MARK_INK, mark), "the mark at {mark:?}");
-        for c in TEXT.chars() {
-            let value: String<10> = core::iter::repeat_n(c, 10).collect();
-            let plate = Plate { tag: "MANUAL", values: [value.clone(), value].into_iter().collect() };
-            for (tag, text, cell) in plate_cells(&font, &plate) {
-                let size = if tag { FRAKTION_BOLD } else { FRAKTION };
-                let pen = Point::new(cell.top_left.x + PLATE_PADDING, PLATE_BASELINE);
-                let ink = style(&font, chrome::WHITE, 14, size).baseline_bounds(text, pen);
-                assert!(inside(PLATE_INK, cell) && inside(PLATE_INK, ink), "plate {text:?}");
+        // The band lines stop short of the wordmark, and the battery window of the glass.
+        assert!(BAND_LINES_INK.bottom_right().unwrap().x < mark.top_left.x);
+        let corner = WINDOW.bottom_right().unwrap() - CENTER;
+        assert!(corner.x * corner.x + corner.y * corner.y < 226 * 226);
+    }
+
+    #[test]
+    fn the_token_lines_stay_inside_the_glass() {
+        let font = FontdueRenderer::new(chrome::FontdueRendererCtx::new_rc(), 20, chrome::WHITE, chrome::FONTS);
+        let widest = [
+            Tokens::new(chrome::LIME, 0, &[("WED", true), (" ", false), ("30 SEP 2026", false), ("  [", false), ("MANUAL", true), ("]", false)]),
+            Tokens::new(chrome::GRAY, 1, &[("ART -03:00", false)]),
+            Tokens::new(chrome::GRAY, 2, &[("// AMERICA/ARGENTINA/BUENOS_AIRES", false)]),
+        ];
+        for tokens in widest {
+            let bounds = tokens.bounds(&font);
+            for corner in [bounds.top_left, bounds.bottom_right().unwrap(), Point::new(bounds.top_left.x, bounds.bottom_right().unwrap().y)] {
+                let d = corner - CENTER;
+                assert!(d.x * d.x + d.y * d.y < 228 * 228, "{:?} at {bounds:?}", tokens.runs);
             }
         }
     }

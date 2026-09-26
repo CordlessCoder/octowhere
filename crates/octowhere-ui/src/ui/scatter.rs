@@ -71,9 +71,19 @@ impl Scatter {
     ///
     /// Points whose marks the target would not show are skipped before any arithmetic.
     pub fn draw<D: CoverageTarget<Color = Color>>(&self, looks: &[Look], target: &mut D) -> Result<(), D::Error> {
+        self.draw_clear_of(looks, &[], target)
+    }
+
+    /// As [`draw`](Self::draw), leaving out every mark that meets one of `clear`.
+    pub fn draw_clear_of<D: CoverageTarget<Color = Color>>(
+        &self,
+        looks: &[Look],
+        clear: &[Rectangle],
+        target: &mut D,
+    ) -> Result<(), D::Error> {
         let mut result = Ok(());
         let visible = |target: &mut D, area: Rectangle| target.visible(&area);
-        self.each_shown(looks, target, visible, |target, _, corner, hollow| {
+        self.each_shown(looks, clear, target, visible, |target, _, corner, hollow| {
             if result.is_err() {
                 return;
             }
@@ -93,9 +103,15 @@ impl Scatter {
     /// Which points show with `looks`, and which of them are hollow, for [`Scatter::changed`].
     #[must_use]
     pub fn shown(&self, looks: &[Look]) -> Shown {
+        self.shown_clear_of(looks, &[])
+    }
+
+    /// As [`shown`](Self::shown), leaving out every mark that meets one of `clear`.
+    #[must_use]
+    pub fn shown_clear_of(&self, looks: &[Look], clear: &[Rectangle]) -> Shown {
         let words = (self.columns() * self.rows()).cast_unsigned().div_ceil(32) as usize;
         let mut shown = Shown { shown: vec![0; words], hollow: vec![0; words] };
-        self.each_shown(looks, &mut shown, |_, _| true, |shown, point, _, hollow| {
+        self.each_shown(looks, clear, &mut shown, |_, _| true, |shown, point, _, hollow| {
             shown.shown[point / 32] |= 1 << (point % 32);
             if hollow {
                 shown.hollow[point / 32] |= 1 << (point % 32);
@@ -145,6 +161,7 @@ impl Scatter {
     fn each_shown<T: ?Sized>(
         &self,
         looks: &[Look],
+        clear: &[Rectangle],
         state: &mut T,
         wanted: impl Fn(&mut T, Rectangle) -> bool,
         mut mark: impl FnMut(&mut T, usize, Point, bool),
@@ -201,7 +218,8 @@ impl Scatter {
                     continue;
                 }
                 let corner = Point::new(x, top);
-                if !wanted(state, Rectangle::new(corner, Size::new_equal(MARK as u32))) {
+                let cell = Rectangle::new(corner, Size::new_equal(MARK as u32));
+                if clear.iter().any(|keep| !keep.intersection(&cell).is_zero_sized()) || !wanted(state, cell) {
                     continue;
                 }
                 let point = row as usize * columns as usize + column as usize;
@@ -278,7 +296,7 @@ mod tests {
 
     fn each(scatter: &Scatter, looks: &[Look]) -> Vec<(Point, bool)> {
         let mut shown = Vec::new();
-        scatter.each_shown(looks, &mut shown, |_, _| true, |shown, _, corner, hollow| shown.push((corner, hollow)));
+        scatter.each_shown(looks, &[], &mut shown, |_, _| true, |shown, _, corner, hollow| shown.push((corner, hollow)));
         shown
     }
 

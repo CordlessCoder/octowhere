@@ -147,14 +147,15 @@ impl<'a> Driver<'a> {
         }
     }
 
-    /// Steps without input until the pager comes to rest.
+    /// Steps without input until the pager comes to rest, and every change with it, though a
+    /// charging crawl goes on.
     ///
     /// # Panics
     ///
     /// If it has not come to rest after two seconds.
     pub fn settle(&mut self) {
         for _ in 0..120 {
-            if !self.stage.is_animating() {
+            if !self.stage.is_changing() {
                 return;
             }
             self.step(Input::default());

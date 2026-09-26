@@ -620,7 +620,7 @@ fn the_clock_rebuilds_on_a_change_and_shows_a_fault_at_once() {
     driver.wait(500_000);
     driver.step(sensors(clock_at(12, 7, 43), dublin));
     let resync = clock_accents(&driver);
-    assert_eq!((resync.icon_rows, resync.label, resync.plate), (1, 255, 255), "{resync:?}");
+    assert_eq!((resync.icon_rows, resync.label, resync.plate), (0, 255, 255), "{resync:?}");
     driver.wait(500_000);
     driver.step(sensors(ClockState { utc: None, ..clock_at(12, 7, 43) }, dublin));
     assert_eq!(clock_accents(&driver), ClockAccents::FULL);
@@ -1505,6 +1505,36 @@ fn the_always_on_face_shows_after_the_dim_and_redraws_once_a_minute() {
     assert_eq!(redraws, 2);
 }
 
+/// Steps until the step changes something, and returns how long that took.
+fn until_redrawn(driver: &mut Driver, within: Micros) -> Micros {
+    let start = driver.now();
+    while driver.now() < start + within {
+        driver.step(Input::default());
+        if !driver.stage.changed().is_empty() {
+            return driver.now() - start;
+        }
+    }
+    panic!("nothing redrew within {within} µs");
+}
+
+#[test]
+fn the_always_on_face_takes_a_new_battery_reading_with_its_minute() {
+    let mut driver = resting_on(Screen::Clock, Timeout::Seconds15, true);
+    wait_until(&mut driver, 22_000_000, |rest| rest == Rest::AlwaysOn);
+    let dublin = zone("Europe/Dublin", ZoneMode::Automatic);
+    let battery = |percent| Some(Battery { present: true, percent, millivolts: 3800, charging: false, usb: false });
+    // The clock's own minute ends 55 s after 12:08:05.
+    driver.sensors(Sensors { clock: clock_at(12, 8, 5), zone: dublin, battery: battery(50), ..Sensors::default() });
+    assert!(driver.stage.changed().is_empty(), "the battery alone redrew the face");
+    assert!(until_redrawn(&mut driver, 60_000_000) > 50_000_000);
+    // A stopped clock has no minute of its own, so the battery waits for the stage's.
+    driver.sensors(Sensors { clock: ClockState { stopped: true, ..clock_at(12, 9, 0) }, zone: dublin, battery: battery(50), ..Sensors::default() });
+    assert!(!driver.stage.changed().is_empty(), "the change to STOPPED did not redraw");
+    driver.sensors(Sensors { clock: ClockState { stopped: true, ..clock_at(12, 9, 0) }, zone: dublin, battery: battery(40), ..Sensors::default() });
+    assert!(driver.stage.changed().is_empty(), "the battery alone redrew the face");
+    assert!(until_redrawn(&mut driver, 61_000_000) <= 60_000_000);
+}
+
 fn frames_in(duration: Micros) -> Micros {
     duration / script::FRAME
 }
@@ -1535,7 +1565,7 @@ fn a_wake_from_the_panel_lands_on_the_clock_and_drops_the_edit() {
         "the dim is taken from the level that shows"
     );
     let mut updates = driver.stroke(&[Point::new(233, 233)]);
-    while driver.stage.is_animating() {
+    while driver.stage.is_changing() {
         updates.push(driver.step(Input::default()));
     }
     assert_eq!(stored(&updates), None);
