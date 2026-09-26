@@ -12,6 +12,9 @@
 compile_error!("lora-link-tx and lora-link-rx are mutually exclusive");
 extern crate alloc;
 
+#[cfg(feature = "compass-c1-bench")]
+mod compass_c1_bench;
+
 use alloc::{alloc::Allocator, boxed::Box};
 use core::{
     cell::Cell,
@@ -1228,6 +1231,9 @@ async fn async_main(spawner: Spawner) {
 
     // The panel comes up first, so the self-test shows while the parts come up behind it.
     start_display_core!(peripherals, fb_st);
+
+    #[cfg(feature = "compass-c1-bench")]
+    compass_c1_bench::run(&mut fb_st).await;
 
     let stage = Stage::starting(PeripheralState {
         brightness: saved.brightness.unwrap_or(DEFAULT_BRIGHTNESS),

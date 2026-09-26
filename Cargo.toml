@@ -47,6 +47,7 @@ gnss-raw-log = []
 gnss-full-power = []
 fontdue-target-bench = []
 fontdue-target-bench-gcc = ["fontdue-target-bench"]
+compass-c1-bench = []
 lora-link-tx = []
 lora-link-rx = []
 
