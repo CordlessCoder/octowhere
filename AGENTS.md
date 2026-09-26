@@ -61,31 +61,18 @@ initialization or peripheral mappings.
   `render` example. Keep it current when the renderer, the costs or the screens' data change. The compass's earlier specification and the design
   round's questions and answers were removed once the firmware implemented them; git history
   has them.
-- [`context/clock_face_design/CLOCK-FACE-SPEC.md`](context/clock_face_design/CLOCK-FACE-SPEC.md)
-  is the approved design of the clock face, the zone picker and the compass's current layout,
-  with concept images and the renderer that drew them.
-  [`context/compass-animation/COMPASS-ANIMATION-ADDENDUM.md`](context/compass-animation/COMPASS-ANIMATION-ADDENDUM.md)
-  replaces the compass's motion, and
-  [`context/clock-wordmark/CLOCK-WORDMARK-ADDENDUM.md`](context/clock-wordmark/CLOCK-WORDMARK-ADDENDUM.md)
-  adds the wordmark to the clock face. The firmware implements all three.
-- [`context/settings-panel/SETTINGS-PANEL-SPEC.md`](context/settings-panel/SETTINGS-PANEL-SPEC.md)
-  is the approved design of the settings panel and the screens it opens, with the owner's
-  decisions since. The firmware implements it.
-  [`context/settings-panel/IMPLEMENTATION-RESPONSE.md`](context/settings-panel/IMPLEMENTATION-RESPONSE.md)
-  tells the design agent what was built, where the build interpreted the spec, and the UI's
-  state for a next round.
-  [`context/settings-panel/SETTINGS-DESIGN-RESPONSE.md`](context/settings-panel/SETTINGS-DESIGN-RESPONSE.md)
-  is the design's reply, whose two changes are built: a fixed-time settle for pages and the
-  panel, and a save that starts after its confirming frame.
-- [`context/octowhere-round3-display-motion-v5/DISPLAY-AND-MOTION-SPEC.md`](context/octowhere-round3-display-motion-v5/DISPLAY-AND-MOTION-SPEC.md)
-  is the approved round 3 design: the compass's changes of state, a start-up sequence, screen
-  timeout with dimming and an always-on face, pixel shift, and two panel cells. The owner
-  approved all of it, to be built a part at a time. The compass's changes (section 1), the
-  start-up (section 2), the timeout with the always-on face (section 3) and the panel cells
-  (section 5) are built;
-  `SCREEN-DESIGN-BRIEF.md` has where the build interpreted them. The level fades where the
-  spec steps it (owner). Only the start-up's identity, logo card and fault screen run at 30 fps; everything
-  else keeps timings in ms.
+- [`context/design/`](context/design/README.md) is the approved design of every screen, from
+  the design agent's hand-off of 2026-09-26: the S1 self-test, the G19 identity and G17 card,
+  the K1 clock, the C1 compass, the S1 settings overview with the D3 screens it opens, and the
+  H2b always-on face. The owner approved all of it; its `DECISIONS.md` records that and settles
+  what the hand-off left open. Start at `handoffs/IMPLEMENTATION-HANDOFF-CURRENT.md`, which
+  names the render each state is checked against. `specs/` keeps the earlier functional specs
+  with the owner's decisions since (clock face, wordmark, compass animation, settings panel,
+  round 3 display and motion, round 4 clock); the hand-off overrides them where they conflict,
+  and `SCREEN-DESIGN-BRIEF.md` has where the build interpreted them. Only the start-up's
+  identity, logo card and fault screen run at 30 fps; everything else keeps timings in ms. The
+  design agent's full backup is `context/octowhere-design-project/`, ignored by git and kept
+  locally.
 - [`context/HARDWARE-VERIFICATION.md`](context/HARDWARE-VERIFICATION.md) lists open hardware
   questions from static review. They are questions, not confirmed defects.
 - [`context/IMPLEMENTATION.md`](context/IMPLEMENTATION.md) is a finished multi-agent brief kept as
@@ -93,8 +80,6 @@ initialization or peripheral mappings.
 - [`context/LORA-PROTOCOL.md`](context/LORA-PROTOCOL.md) is the agreed design for the location
   mesh: gossip digest, GPS-anchored TDMA, packet layout, crypto and pairing. Nothing in it is
   implemented yet.
-- [`context/marathon-ui-cross-project-handoff.md`](context/marathon-ui-cross-project-handoff.md)
-  is the design doctrine. See "Design language" below.
 - [`context/palette-reference.md`](context/palette-reference.md) records the colour values from the
   reference board and the role each one plays in `chrome.rs`.
 
@@ -405,14 +390,14 @@ renderer.
 ## Design language
 
 The firmware has two faces, the clock and the compass, and the settings panel over them, and all
-follow approved designs: the clock face specification with its wordmark addendum, the compass
-animation addendum, the settings panel specification, and the round 3 display and motion
-specification, all listed above. Change how any of
-them looks or moves only against those documents or a new design round. A new screen starts
+follow the approved design in `context/design/`, listed above. Change how any of them looks or
+moves only against it or a new design round. A new screen starts
 from a design round rather than from a sketch in code.
 
-[`context/marathon-ui-cross-project-handoff.md`](context/marathon-ui-cross-project-handoff.md) is
-the doctrine the screens were designed from. It is project-agnostic and was carried in from an
+[`context/design/docs/marathon-ui-design-language.md`](context/design/docs/marathon-ui-design-language.md)
+is the doctrine the screens were designed from, and
+[`context/design/docs/OCTOWHERE-COLOR-ROLES.md`](context/design/docs/OCTOWHERE-COLOR-ROLES.md)
+says what each colour means here. The doctrine is project-agnostic and was carried in from an
 earlier product, so it describes the visual language and the working method, not this board's
 screens. Read it before changing how anything looks. These rules constrain the code directly:
 

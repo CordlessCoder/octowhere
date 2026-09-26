@@ -1,7 +1,6 @@
 //! The start-up sequence: a self-test that shows each part boot brings up as it answers, then
 //! either the identity and the logo card, which hand over to the clock face, or the fault
-//! screen. Section 2 of `context/octowhere-round3-display-motion-v5/DISPLAY-AND-MOTION-SPEC.md`
-//! is its design.
+//! screen. Section 2 of `context/design/specs/DISPLAY-AND-MOTION-SPEC.md` is its design.
 //!
 //! The self-test runs on the stage's clock in ms, like the faces. The identity, the card and the
 //! fault screen are timed in frames at 30 fps, counted from the clock rather than from frames

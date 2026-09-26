@@ -1,7 +1,7 @@
 //! The screens the settings panel opens: the brightness editor, the timeout screen, the device
 //! page, the clear confirm and the replay chooser, with the zone picker in `picker`. They share a top cap with a hint, a button and a
 //! 96 px icon, and most of them an open field between two rules.
-//! `context/settings-panel/SETTINGS-PANEL-SPEC.md` is their design.
+//! `context/design/specs/SETTINGS-PANEL-SPEC.md` is their design.
 
 use core::fmt::Write as _;
 

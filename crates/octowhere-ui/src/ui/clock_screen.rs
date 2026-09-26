@@ -1,6 +1,6 @@
 //! The clock face: hours on the field, minutes and seconds knocked out of a band across the
 //! circle, a status symbol, the date, and a plate naming the zone.
-//! `context/clock_face_design/CLOCK-FACE-SPEC.md` is its design.
+//! `context/design/specs/CLOCK-FACE-SPEC.md` is its design.
 
 use core::fmt::Write as _;
 

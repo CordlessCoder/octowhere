@@ -1,5 +1,5 @@
 //! The zone picker: an offset chosen by local time, then a zone at that offset.
-//! `context/clock_face_design/CLOCK-FACE-SPEC.md`, "Zone picker", is its design.
+//! `context/design/specs/CLOCK-FACE-SPEC.md`, "Zone picker", is its design.
 
 use alloc::vec::Vec;
 use core::fmt::Write as _;

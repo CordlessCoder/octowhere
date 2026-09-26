@@ -5,6 +5,12 @@ until the feature set is complete, because profiling an incomplete firmware pric
 
 ## Next
 
+- Build the 2026-09-26 design, [`design/`](design/README.md), which the owner approved in full
+  (`design/DECISIONS.md`). In order, one piece at a time: the shared pieces (`VIOLET`, the
+  identity's dim purple, several scatter fields on one grid, the hour rail and the battery
+  drawing), then the start-up, the K1 clock with the H2b always-on face, the S1 settings with
+  the D3 screens, and the C1 compass. Each piece is compared against the hand-off's renders in
+  `ui-sim` and measured on the board before it is committed.
 - Shorten settings saves, ahead of other work that touches settings (design response,
   2026-09-24). Settings are in ekv now, and each write transaction starts a new file that
   erases a whole 4 KiB page first, so every save erases. The first saved brightness took
@@ -16,7 +22,7 @@ until the feature set is complete, because profiling an incomplete firmware pric
   of time, defer the write until the panel is idle, or batch saves. Every tap on ALWAYS ON
   saves, so it pays this each time.
 - Build the rest of the round 3 design,
-  [`octowhere-round3-display-motion-v5/DISPLAY-AND-MOTION-SPEC.md`](octowhere-round3-display-motion-v5/DISPLAY-AND-MOTION-SPEC.md),
+  [`design/specs/DISPLAY-AND-MOTION-SPEC.md`](design/specs/DISPLAY-AND-MOTION-SPEC.md),
   a part at a time (owner, 2026-09-25). Only pixel shift is left; the compass's changes of
   state, the start-up, the timeout with the always-on face, and the panel cells are built.
   - Pixel shift is deferred (owner, 2026-09-25): with the screen timeout in, retention is

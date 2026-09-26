@@ -1,5 +1,5 @@
 //! The settings panel: eight cells in four columns, two columns in view, that scroll sideways.
-//! `context/settings-panel/SETTINGS-PANEL-SPEC.md` is its design, and section 5 of the round 3
+//! `context/design/specs/SETTINGS-PANEL-SPEC.md` is its design, and section 5 of the round 3
 //! spec adds the TIMEOUT and ALWAYS ON column.
 
 use core::fmt::Write as _;

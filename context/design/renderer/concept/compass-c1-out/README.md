@@ -1,0 +1,12 @@
+# OCTOWHERE compass: F2-derived background studies
+
+The foreground comes from the 466×466 firmware captures in `references/firmware-captures/2026-09-25` of the supplied project backup. The study keeps the existing readout, state words, orange interference treatment, icon, magnetic dial and NO DATA fault presentation. The background texture and transient circular registration marks are newly drawn geometry; no frames or pixels from the cinematic are used.
+
+- `compass-C1-noise.gif`: 125 ms timeline steps, with 375 ms blocks → 125 ms dark → 375 ms half-square tiles → 375 ms pixel fragments → 375 ms refreshed blocks → held dim field. The fixed heading and marks stay legible. This illustrates page entry with a heading already available, **not** a perpetual idle loop or a simulated heading update.
+- `compass-C2-circular-entry.gif`: the same field changes with a brief segmented blue arc in the background during entry. The arc disappears before the final hold. It is a registration cue, not a second direction or an accuracy/progress reading.
+- `compass-state-sheet.png`: one settled compass background and quieter treatments for calibration and interference. NO DATA has a black field. State samples are separate illustrations; the GIFs do not demonstrate state changes.
+- `compass_noise.py`: reproducible renderer; put this file in `renderer/concept/` inside the backup and run `PYTHONPATH=. python3 concept/compass_noise.py OUTPUT_DIR` from `renderer/`. Requires Pillow and NumPy, and the existing firmware captures.
+
+The source data in the captures is fixture data: 047° heading, pitch +05°, roll −12°, and calibration 54%. The renderer composites texture behind the captured UI rather than modifying its functional layout or transition rules. During actual heading updates, keep the field held: repeated independent noise on each sensor sample would undermine reading the dial. Preserve instant stale-heading removal, warning timing, and existing calibration behaviour. On hardware, evaluate whether the blue activity is too dense behind cardinal letters; the peak animation is intended to be brief. These are concept renders, not measured device performance.
+
+Reference cues: generated texture family changes and short black recoveries from the intro's ~57–59 s sequence; sparse dark-blue UI and abrupt full-blue changes near 77–79 s; a transient segmented circle inspired by the ~80–82 s sequence. The entry keeps the circular cue blue to avoid implying a red fault or an invented numerical percentage.

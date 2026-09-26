@@ -4,28 +4,34 @@ This brief is for a design agent working on this device's screens. "This round" 
 the rounds stand. The rest covers the hardware, the screens as built, the gestures, what the renderer draws and what that costs, and
 what data and settings exist. Read it with:
 
-- [`marathon-ui-cross-project-handoff.md`](marathon-ui-cross-project-handoff.md), the design
-  doctrine. It was written for an earlier product. Where it disagrees with this brief about this
+- [`design/handoffs/IMPLEMENTATION-HANDOFF-CURRENT.md`](design/handoffs/IMPLEMENTATION-HANDOFF-CURRENT.md):
+  the design agent's hand-off of 2026-09-26, which redesigns every screen. The owner approved
+  all of it ([`design/DECISIONS.md`](design/DECISIONS.md)), and it is being built; until it is,
+  the rest of this brief describes the screens as they were before it.
+- [`design/docs/marathon-ui-design-language.md`](design/docs/marathon-ui-design-language.md), the
+  design doctrine, and [`design/docs/OCTOWHERE-COLOR-ROLES.md`](design/docs/OCTOWHERE-COLOR-ROLES.md).
+  The doctrine was written for an earlier product. Where it disagrees with this brief about this
   device, this brief wins.
-- [`clock_face_design/CLOCK-FACE-SPEC.md`](clock_face_design/CLOCK-FACE-SPEC.md): the clock
+- [`design/specs/CLOCK-FACE-SPEC.md`](design/specs/CLOCK-FACE-SPEC.md): the clock
   face, the compass's layout, the zone picker, the icon system and the motion primitives.
-- [`compass-animation/COMPASS-ANIMATION-ADDENDUM.md`](compass-animation/COMPASS-ANIMATION-ADDENDUM.md):
+- [`design/specs/COMPASS-ANIMATION-ADDENDUM.md`](design/specs/COMPASS-ANIMATION-ADDENDUM.md):
   the compass's motion.
-- [`clock-wordmark/CLOCK-WORDMARK-ADDENDUM.md`](clock-wordmark/CLOCK-WORDMARK-ADDENDUM.md): the
+- [`design/specs/CLOCK-WORDMARK-ADDENDUM.md`](design/specs/CLOCK-WORDMARK-ADDENDUM.md): the
   OCTOWHERE wordmark on the clock face.
-- [`settings-panel/SETTINGS-PANEL-SPEC.md`](settings-panel/SETTINGS-PANEL-SPEC.md): the settings
+- [`design/specs/SETTINGS-PANEL-SPEC.md`](design/specs/SETTINGS-PANEL-SPEC.md): the settings
   panel and its second-level screens.
-- [`settings-panel/IMPLEMENTATION-RESPONSE.md`](settings-panel/IMPLEMENTATION-RESPONSE.md) and
-  [`settings-panel/SETTINGS-DESIGN-RESPONSE.md`](settings-panel/SETTINGS-DESIGN-RESPONSE.md):
+- [`design/specs/IMPLEMENTATION-RESPONSE.md`](design/specs/IMPLEMENTATION-RESPONSE.md) and
+  [`design/specs/SETTINGS-DESIGN-RESPONSE.md`](design/specs/SETTINGS-DESIGN-RESPONSE.md):
   what the build interpreted in the settings round, and the design's reply. The reply's two
   changes are built.
-- [`octowhere-round3-display-motion-v5/DISPLAY-AND-MOTION-SPEC.md`](octowhere-round3-display-motion-v5/DISPLAY-AND-MOTION-SPEC.md):
+- [`design/specs/DISPLAY-AND-MOTION-SPEC.md`](design/specs/DISPLAY-AND-MOTION-SPEC.md):
   round 3, the compass's changes of state, the start-up, screen timeout with the always-on
   face, pixel shift and two panel cells.
 
-Everything those documents specify is implemented and has been approved on the panel, except
+Everything those specs describe is implemented and has been approved on the panel, except
 round 3's pixel shift, which the owner deferred (see "Owner decisions that bind later
-screens"). Treat it as fixed. A new design fits beside it, and changes it only as an explicit, separate proposal.
+screens"). The 2026-09-26 hand-off changes how they look; their behaviour stands where the
+hand-off does not change it.
 Where a spec and this brief disagree about what is built, the spec's own Decisions section and
 the responses are newer, except for round 3: its spec has no decisions section, and the owner's
 later decisions are in this brief's "as built" sections.
@@ -173,7 +179,7 @@ motion task holds the two conditions that would otherwise flicker, before the sc
 
 ### Changes on the settled page
 
-The round 3 spec's section 1 (`octowhere-round3-display-motion-v5/DISPLAY-AND-MOTION-SPEC.md`)
+The round 3 spec's section 1 (`design/specs/DISPLAY-AND-MOTION-SPEC.md`)
 specifies these, and they are built as it says. In short:
 
 - **Slab wipe:** a new slab colour covers it from the top in four steps, 0, 20, 40 and 60 ms
@@ -199,7 +205,7 @@ measured on the device.
 
 ## Start-up as built
 
-Section 2 of `octowhere-round3-display-motion-v5/DISPLAY-AND-MOTION-SPEC.md` is built. The
+Section 2 of `design/specs/DISPLAY-AND-MOTION-SPEC.md` is built. The
 captures `startup-*` and the recordings `startup.gif` and `startup-failed.gif`, also as `.mp4`,
 show it. Where the
 build interpreted the spec:
