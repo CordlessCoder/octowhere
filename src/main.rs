@@ -1175,8 +1175,10 @@ struct Parts {
 
 #[embassy_executor::task]
 async fn async_main(spawner: Spawner) {
-    // esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 72 * 1024);
-    esp_alloc::heap_allocator!(size: 240 * 1024);
+    // A third of the heap lives in the RAM the bootloader frees, which is not static memory, so
+    // core 0's stack gets the rest of DRAM.
+    esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 72 * 1024);
+    esp_alloc::heap_allocator!(size: 168 * 1024);
 
     // PERF: How low do we want to drop the clock speed?
     let mut peripherals =

@@ -351,10 +351,14 @@ errata workaround, are in [`docs/hardware-notes.md`](docs/hardware-notes.md).
 
 ## Memory
 
-- The current internal heap is 240 KiB, allocated by `esp_alloc::heap_allocator!` in `main`.
-  It is a static in `.bss`, and core 0's stack is whatever DRAM `.data` and `.bss` leave,
-  about 26 KiB; an overflow there hangs without a message. `context/BACKLOG.md` has the plan for
-  laying SRAM out deliberately.
+- The internal heap is 240 KiB, from two `esp_alloc::heap_allocator!` calls in `main`: 72 KiB
+  in the RAM the second-stage bootloader frees after boot (`#[esp_hal::ram(reclaimed)]`), and
+  168 KiB as a static in `.bss`. Core 0's stack is whatever DRAM `.data` and `.bss` leave,
+  about 90 KiB; `_stack_end_cpu0` and `_stack_start_cpu0` in the ELF give it exactly. It was
+  about 19 KiB with the whole heap in `.bss`, and the clock face overflowed it. An overflow is
+  caught by esp-hal's stack guard as a panic, or corrupts memory silently. The heap peaked at
+  about 50 KB over the clock and the compass (`bench/clock-draw`). `context/BACKLOG.md` has
+  the plan for laying SRAM out deliberately.
 - PSRAM is registered in the separate `PSRAM_HEAP` static. Framebuffers must be allocated with
   `FB::alloc(&PSRAM_HEAP)` rather than the global allocator.
 - The current RGB565 configuration uses 466 × 466 × 2 = 434,312 bytes per framebuffer, with two
