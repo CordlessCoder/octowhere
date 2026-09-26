@@ -6,8 +6,8 @@ what data and settings exist. Read it with:
 
 - [`design/handoffs/IMPLEMENTATION-HANDOFF-CURRENT.md`](design/handoffs/IMPLEMENTATION-HANDOFF-CURRENT.md):
   the design agent's hand-off of 2026-09-26, which redesigns every screen. The owner approved
-  all of it ([`design/DECISIONS.md`](design/DECISIONS.md)), and it is being built; until it is,
-  the rest of this brief describes the screens as they were before it.
+  all of it ([`design/DECISIONS.md`](design/DECISIONS.md)). The start-up, clock, settings and
+  always-on screens are built; C1 compass remains. The rest of this brief records the build.
 - [`design/docs/marathon-ui-design-language.md`](design/docs/marathon-ui-design-language.md), the
   design doctrine, and [`design/docs/OCTOWHERE-COLOR-ROLES.md`](design/docs/OCTOWHERE-COLOR-ROLES.md).
   The doctrine was written for an earlier product. Where it disagrees with this brief about this
@@ -77,10 +77,11 @@ Geometry a layout must respect:
 - The perimeter ring that reads as the edge is centred on radius 231 with a 2 px stroke.
 - A layout must fit the circle. Text and slabs near the top and bottom need the chord width at
   their row, not 466. Every screen keeps its ink inside radius 226, except the ring, bands, field
-  rules and deliberately cropped content such as the panel's third column.
+  rules and content passing through the edge during a page drag.
 
-The owner judges every design on the physical panel at viewing distance. The smallest text in use
-is 14 px, about 1 mm tall in capitals, and it reads. Touch targets are no smaller than about 10 mm.
+The owner judges every design on the physical panel at viewing distance. The earlier 14 px
+microtext reads there. S1 and D3 add 12 px labels whose legibility has not yet been checked on
+the panel. Touch targets are no smaller than about 10 mm.
 
 ## Screens as built
 
@@ -88,7 +89,7 @@ is 14 px, about 1 mm tall in capitals, and it reads. Touch targets are no smalle
 | --- | --- |
 | Pager | Clock face, compass. A ring of two that wraps |
 | Sheet | Settings panel, over whichever face it was opened from |
-| Second level, under the panel | Zone picker (two steps), brightness editor, device page, clear-settings confirm |
+| Second level, under the panel | Zone picker (two steps), brightness and timeout editors, device page, replay chooser, clear-settings confirm |
 | Before the pager | Start-up: the self-test, then the identity and the logo card, or the fault screen |
 
 - **Start-up:** the 2026-09-26 hand-off's S1 self-test, G19 identity with G17's opening and
@@ -108,13 +109,14 @@ is 14 px, about 1 mm tall in capitals, and it reads. Touch targets are no smalle
   the 66 px outlined icon. It no longer has cover-to-recalibrate, its `COVER SCREEN TO RECAL`
   hint, or the divider above it. The tilt line ends the stack. Calibration restarts from the
   panel's COMPASS cell.
-- **Settings panel:** a registration grid of eight cells in four columns, two in view,
-  scrolling sideways: ZONE, BRIGHTNESS, TIMEOUT, ALWAYS ON, COMPASS, GNSS, BATTERY, DEVICE
-  (round 3 spec section 5). ZONE opens the picker, BRIGHTNESS the editor and TIMEOUT the
+- **Settings panel:** S1's eight indexed rows on two pages, four rows per page. A horizontal
+  drag switches the whole page. Page 1 is ZONE, BRIGHTNESS, TIMEOUT, ALWAYS ON; page 2 is
+  COMPASS, GNSS, BATTERY, DEVICE. ZONE opens the picker, BRIGHTNESS the editor and TIMEOUT the
   timeout screen. A tap on ALWAYS ON toggles and stores it. COMPASS restarts calibration and closes to the compass. GNSS, BATTERY
   and DEVICE open the device page, which ends with the attribution, `CLEAR SETTINGS` and
   `REPLAY START-UP`, which opens a chooser: the identity and logo card again, or a marked
-  demonstration of one part failing (settings spec decisions 11 and 12).
+  demonstration of one part failing. The inner screens use D3's violet active fields and
+  orange failure demonstration; CLEAR keeps its orange two-stage drag.
 - **Brightness:** any whole percentage from 10 to 100, set from the finger's x over the track:
   p = clamp(round(100 (x − 66) / 334), 10, 100), and the controller gets round(255 p / 100). Each
   of the ten track cells is a tenth of full. The cell the level falls in fills from its left as
@@ -123,7 +125,7 @@ is 14 px, about 1 mm tall in capitals, and it reads. Touch targets are no smalle
   GNSS sets it), a zone is listed under every offset it keeps in a year. Rows then show `--:--`.
 
 Captures drawn by the firmware's own code come from `crates/octowhere-ui/examples/render.rs`.
-It draws the faces' stills and `panel-rest`, `panel-middle-always-on`, `panel-end`,
+It draws the faces' stills and `panel-rest`, `panel-always-on`, `panel-end`,
 `panel-scrolling`, `panel-pulling`, `panel-device`, `panel-device-end`, `settings-brightness`,
 `settings-timeout`, `settings-clear`, `picker-offset` and
 `picker-zone`, and the start-up's `startup-selftest-*`, `startup-frame-*` and `startup-fault-*`;
@@ -162,6 +164,26 @@ K1 (`design/renderer/concept/family-pass-v1-out/clock-K1-*`) on the round 4 spec
   out-cubic, where the old face landed a row every 30 ms, so it shows no row on its first frame.
 - **Redraws.** Every part redraws in its own region, as before. A token line that changes also
   redraws the scatter marks its box clears or frees.
+
+## Settings as built
+
+S1 has four rows on each of two pages. Each row keeps its action and live value from the older
+panel; the rules, index, label and smaller icon follow the selected S1 layout. The outer arcs
+use the firmware scatter generator rather than the concept renderer's random points. That
+texture stays still at rest. A changing value damages only its row; a page drag redraws the
+panel. The existing 420 ms entry cadence now reveals the rows on page 1.
+
+D3 puts the offset, zone, brightness, timeout and replay selection on a violet field with black
+text. A simulated replay failure has an orange field and a DEMO label. The device page shows
+version, battery and GNSS first; power and satellite detail follow as it scrolls, then the
+bundled zone-data attribution, REPLAY START-UP and CLEAR SETTINGS. The clear confirmation keeps
+its orange drag. The routes, saves, cancel and cover behavior are unchanged. Host stills are
+`panel-rest`, `panel-end`, `settings-brightness`, `settings-timeout`, `picker-offset`,
+`picker-zone`, `panel-device`, `panel-device-end`, `replay-chooser` and
+`replay-chooser-magnet` from the `render` example. `screen-captures/settings.gif` records the
+settings scene from `ui-sim`. On-target draw times are in
+`docs/logs/display/settings-draw-2026-09-26.md`. Legibility and touch have not yet been checked
+on the physical panel.
 
 ## The compass's states and changes, as built
 
@@ -307,8 +329,8 @@ interpreted them:
 - **Replay.** The spec's Replay section matches what is built, except that the identity's
   line reads `SELF TEST 5/6 OK` after a failed boot, as the fault screen's does, where the spec
   has `SELF TEST 5/6`. Beyond the spec, `REPLAY START-UP` opens a chooser of a good start-up
-  or a demonstration of one part failing (settings spec decision 12). The hand-off's D3 look
-  for it is not built yet.
+  or a demonstration of one part failing (settings spec decision 12). Its chooser uses D3's
+  violet GOOD choice and orange marked demonstration.
 
 ## Timeout and rest as built
 
@@ -342,11 +364,12 @@ show it with a 15 s timeout. Where the build differs from the spec or interprets
   only at those redraws, and once a minute by the stage's own clock while the time stands still
   (STOPPED or NO DATA), so a reading never wakes the panel on its own (owner). Its dim colours
   are `BLUE` and `LIME` dimmed toward black.
-- **The cells** are section 5's. The timeout screen is the replay chooser's stepper with the
-  spec's text. The grid rests at a whole column, so it has three resting places, and a tap on
-  a cropped column scrolls one column, whichever side it is on. The clear warning, which the
-  spec leaves open, reads `ERASES ZONE, LAST FIX ZONE,` `BRIGHTNESS, TIMEOUT` `AND ALWAYS ON`
-  on three lines.
+- **The settings pages** use S1's four rows each, with separate hit regions and two resting
+  positions. A horizontal drag snaps over 160 ms; a flick moves to the other page. The D3
+  picker, brightness, timeout and replay choices use violet slabs with black values. The
+  selected demo failure is orange and says DEMO. The clear warning reads `ERASES ZONE, LAST
+  FIX ZONE,` `BRIGHTNESS, TIMEOUT` `AND ALWAYS ON` on three lines. These screens have host
+  captures but still need owner review and measurement on the board.
 - **Pixel shift** is not built yet, so nothing moves at a wake or on the always-on face's
   minute.
 
@@ -361,9 +384,8 @@ velocity. It sees a second contact but no gesture uses one.
 | A face | A drag at least as sideways as vertical | Turns the page |
 | A face | A downward drag, with the downward movement at least twice the sideways movement | Opens the panel over the face |
 | A face | Any other drag (mostly downward but under two to one, or mostly upward); any tap | Nothing |
-| Panel | A tap on a cell in view | Opens it |
-| Panel | A tap on a cell in the cropped column | Scrolls that column into view |
-| Panel | A drag at least as sideways as vertical | Scrolls the grid, then snaps |
+| Panel | A tap on a row of the visible page | Opens it |
+| Panel | A drag at least as sideways as vertical | Moves between the two pages, then snaps |
 | Panel | An upward drag | Closes the panel |
 | Panel | A downward drag | Nothing |
 | Picker, device page | A vertical drag | Steps the list (picker) or scrolls it (device page) |
@@ -379,8 +401,8 @@ Physics:
 - **Page and sheet:** follow 1:1. A release commits past a quarter of the width or height, or
   faster than 600 px/s. The remainder, or the way back, eases out cubically over 160 ms
   whatever the distance, and the page's entry starts on the frame it lands.
-- **Grid snap:** a cubic ease-out over 160 ms, to the nearest whole column, or one column on in
-  the flick's direction past 600 px/s.
+- **Settings page snap:** a cubic ease-out over 160 ms to one of the two whole pages. A flick
+  past 600 px/s moves in its direction.
 - **Picker list:** one row per 40 px of travel. A release faster than 500 px/s keeps stepping,
   its speed decaying with a 200 ms time constant until it is under 60 px/s or at the list's end.
 
@@ -489,7 +511,7 @@ target that takes antialiased coverage a row at a time and blends it with what i
 - **Motion, all in use:** a colour fade toward black in steps; the icon row build; the cell
   reveal of text; the rule draw-out; the dial sweep. There are also three kinds of sliding
   content: the page swipe (horizontal), the sheet (vertical, a face and the panel), and the
-  panel grid's scroll with its snap. The device page's list scrolls under a fixed edge. There is
+  settings page's travel with its snap. The device page's list scrolls under a fixed edge. There is
   no group alpha and no transparency.
 
 Constraints:
@@ -532,8 +554,8 @@ measured.
   memory, reached through a cache in 64-byte lines, so each row a change touches costs at least
   a line. The ring fade touches every row twice, which is why it costs more than its 8,000
   pixels suggest.
-- The settled panel redraws only a cell whose reading changed. While scrolling it redraws the
-  grid rows and markers. Opening, closing and entry steps redraw in full. Every second-level
+- The settled panel redraws only a visible row whose reading changed. While switching pages
+  it redraws in full. Opening, closing and entry steps redraw in full. Every second-level
   screen redraws in full on any change.
 - Cost grows with the area a change touches and with how many separate places it touches. Each
   separate region sent to the panel costs about as much as 1,000 more pixels.
@@ -575,7 +597,7 @@ Colours come only from these tokens. Each is a swatch from the reference board e
 | `ORANGE` | `#F1710D` | Attention: calibrating, interference, a stopped clock, the clear confirm; the compass's `N` |
 | `PURPLE` | `#5500E4` | The identity's scatter |
 | `BLUE` | `#409DE4` | A live, valid reading's status icon |
-| `VIOLET` | `#B32BE5` | Not yet used; the choice being edited in settings, once the 2026-09-26 design is built |
+| `VIOLET` | `#B32BE5` | The active choice in D3 settings screens |
 | `GRAY` | `#888E98` | Frames, rules, minor marks, captions, secondary text, a mode in force, an unconfirmed value |
 | `WHITE` | `#D2D3D6` | Primary text, major marks, neutral bands and slabs, field rules |
 | `BLACK` | `#000000` | The field; knockout text and symbols on saturated fills |

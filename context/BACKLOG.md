@@ -9,26 +9,18 @@ until the feature set is complete, because profiling an incomplete firmware pric
   (`design/DECISIONS.md`). One piece at a time, each compared against the hand-off's renders
   (`tools/design-compare.py`), reviewed by the owner in `ui-sim`, and measured on the board
   before it is committed. Built: the shared pieces (`VIOLET`, `DEEP_BLUE`, several scatter
-  fields on one grid), the start-up (S1 self-test, G19 identity, G17 card), the K1 clock and
-  the H2b always-on face. Left, in this order:
-  1. S1 settings overview and D3 screens (`ui/panel.rs`, `sheet.rs`, `second.rs`,
-     `picker.rs`). S1: four broad rows a page (`01 ZONE`, `02 BRIGHTNESS`, `03 TIMEOUT`,
-     `04 ALWAYS ON` / `05 COMPASS`, `06 GNSS`, `07 BATTERY`, `08 DEVICE`), a static sparse
-     purple scatter in the outer arcs, new hit regions and scroll, and the old 420 ms entry
-     cadence mapped onto the rows. D3: a violet slab with black text centred on its ink for
-     offset, zone, brightness (any whole percent 10–100, ten cells with one partly filled),
-     timeout and replay GOOD; neighbours grey; CANCEL, BACK and AUTO centred; the DEVICE
-     layout. The replay chooser's route is built and only its look changes, to the D3
-     stepper (decision 2). Orange stays on the DEMO failure and on CLEAR. Renders:
-     `settings-g5-out/settings-S1-sparse-scatter-page-{1,2}.png`,
-     `family-pass-v3-out/settings-D3-*.png`.
-  2. C1 compass (`ui/compass_screen.rs`). A dim blue block field built inside the functional
+  fields on one grid), the start-up (S1 self-test, G19 identity, G17 card), the K1 clock,
+  the H2b always-on face, and S1 settings with D3 inner screens. The new settings screens
+  pass host tests and the firmware build. Their on-target draw times are recorded in
+  `docs/logs/display/settings-draw-2026-09-26.md`; they still need owner review in `ui-sim`
+  and a legibility and touch check on the board. Left, in this order:
+  1. C1 compass (`ui/compass_screen.rs`). A dim blue block field built inside the functional
      440 ms entry, then still at rest and through heading updates; it stays blue (decision 3).
      Calibrating's quieter texture, interference dimmed, NO DATA black and red with no
      texture. Also C1's top-edge-up and swipe views (decision 1). Renders:
      `compass-c1-out/`, `family-pass-v1-out/compass-C1-{top-edge-up,swiping}.png`. The
      `compass-C1-noise.gif` cadence is exploratory, not the entry (hand-off §3.5).
-  3. A slow, thorough `ui-sim` tour that replaces the `tour` scene in
+  2. A slow, thorough `ui-sim` tour that replaces the `tour` scene in
      `tools/ui-sim/src/scenes.rs` (owner, 2026-09-26). Paced for a viewer who does not know
      the device: slower swipes and drags, and holds long enough to read each state. In order:
      the start-up (self-test, identity, card) into the clock; the clock in GNSS, RTC, manual,

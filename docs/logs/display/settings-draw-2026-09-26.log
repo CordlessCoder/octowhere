@@ -1,0 +1,16 @@
+[2026-09-26T13:02:57Z INFO ] Serial port: '/dev/ttyACM0'
+[2026-09-26T13:02:57Z INFO ] Connecting...
+[2026-09-26T13:02:57Z INFO ] Using flash stub
+I (386) esp_image: segment 3: paddr=00127c90 vaddr=3fc8da10 size7.478971 [INFO ] [SETTINGS BENCH] name=s1_page1_full n=120 min_us=28586 median_us=31576 p95_us=32556 max_us=32655 (octowhere octowhere-settings-bench.9GYQ94/src/settings_draw_bench.rs:53)
+9.646049 [INFO ] [SETTINGS BENCH] name=s1_brightness_row n=120 min_us=6619 median_us=6842 p95_us=6859 max_us=7415 (octowhere octowhere-settings-bench.9GYQ94/src/settings_draw_bench.rs:53)
+13.513494 [INFO ] [SETTINGS BENCH] name=s1_page2_full n=120 min_us=28510 median_us=30863 p95_us=32377 max_us=32573 (octowhere octowhere-settings-bench.9GYQ94/src/settings_draw_bench.rs:53)
+15.672151 [INFO ] [SETTINGS BENCH] name=s1_battery_row n=120 min_us=6729 median_us=6938 p95_us=6969 max_us=9017 (octowhere octowhere-settings-bench.9GYQ94/src/settings_draw_bench.rs:53)
+18.847016 [INFO ] [SETTINGS BENCH] name=d3_device_top n=120 min_us=22954 median_us=24426 p95_us=25422 max_us=25441 (octowhere octowhere-settings-bench.9GYQ94/src/settings_draw_bench.rs:53)
+23.006418 [INFO ] [SETTINGS BENCH] name=d3_device_end n=120 min_us=29802 median_us=33706 p95_us=34078 max_us=34103 (octowhere octowhere-settings-bench.9GYQ94/src/settings_draw_bench.rs:53)
+26.382634 [INFO ] [SETTINGS BENCH] name=d3_replay_good n=120 min_us=24056 median_us=26543 p95_us=27501 max_us=27858 (octowhere octowhere-settings-bench.9GYQ94/src/settings_draw_bench.rs:53)
+29.775939 [INFO ] [SETTINGS BENCH] name=d3_replay_failure n=120 min_us=24336 median_us=26729 p95_us=28133 max_us=28264 (octowhere octowhere-settings-bench.9GYQ94/src/settings_draw_bench.rs:53)
+33.313285 [INFO ] [SETTINGS BENCH] name=d3_offset n=120 min_us=24102 median_us=26935 p95_us=28241 max_us=28262 (octowhere octowhere-settings-bench.9GYQ94/src/settings_draw_bench.rs:53)
+36.834301 [INFO ] [SETTINGS BENCH] name=d3_zone n=120 min_us=24823 median_us=27397 p95_us=27782 max_us=28893 (octowhere octowhere-settings-bench.9GYQ94/src/settings_draw_bench.rs:53)
+40.300260 [INFO ] [SETTINGS BENCH] name=d3_brightness n=120 min_us=23852 median_us=26299 p95_us=27315 max_us=27787 (octowhere octowhere-settings-bench.9GYQ94/src/settings_draw_bench.rs:53)
+43.573583 [INFO ] [SETTINGS BENCH] name=d3_timeout n=120 min_us=21926 median_us=24030 p95_us=24704 max_us=24710 (octowhere octowhere-settings-bench.9GYQ94/src/settings_draw_bench.rs:53)
+43.573887 [INFO ] [SETTINGS BENCH] done (octowhere octowhere-settings-bench.9GYQ94/src/settings_draw_bench.rs:130)
