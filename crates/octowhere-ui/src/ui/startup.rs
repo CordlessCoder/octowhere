@@ -18,13 +18,12 @@ use super::{
     clock::ClockView,
     gesture::Micros,
     icon::{self, Glyph, Tile},
-    scatter::{Look, Scatter, Shown},
-    screens,
+    identity, screens,
     smooth,
     text,
 };
 use crate::chrome::{
-    self, Color, CoverageTarget, Dirty, FontdueRenderer, Knockout, OnBackground, Round, Window, FRAKTION, FRAKTION_BOLD,
+    self, Color, CoverageTarget, FontdueRenderer, Knockout, OnBackground, Window, FRAKTION, FRAKTION_BOLD,
     SHAPIRO,
 };
 
@@ -156,11 +155,9 @@ const FAIL_HOLD: Micros = 300_000;
 /// Frames are counted at 30 fps, from the end of the self-test's hold.
 const FRAMES_PER_SECOND: Micros = 30;
 /// The identity's frames, then the card's to the clock's.
-const CARD_FROM: u32 = 58;
-const CLOCK_FROM: u32 = 71;
+const CARD_FROM: u32 = identity::FRAMES;
+const CLOCK_FROM: u32 = CARD_FROM + identity::CARD_FRAMES;
 const FAULT_FRAMES: u32 = 120;
-/// The identity's dark frame, lit by nothing.
-const DARK_FRAME: u32 = 1;
 /// When each part reports in a demonstration, from its start, in cell order.
 const DEMO_REPORTS: [Micros; 6] = [150_000, 250_000, 500_000, 600_000, 750_000, 1_300_000];
 
@@ -198,23 +195,13 @@ pub enum Cell {
     Failed,
 }
 
-/// The logo card's stages.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Card {
-    /// The mark's tile and hatch alone.
-    Tile,
-    Solid,
-    Inverted,
-    Scaled,
-    Impact,
-}
-
 /// What a frame of the sequence draws. Two equal views draw the same pixels.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum View {
     SelfTest([Cell; 6]),
     Identity(u32),
-    Card(Card),
+    /// The card, by its own frame.
+    Card(u32),
     Fault(u32),
 }
 
@@ -286,7 +273,7 @@ impl Startup {
         })
     }
 
-    fn answered(&self) -> usize {
+    pub(super) fn answered(&self) -> usize {
         self.outcomes.iter().flatten().filter(|(outcome, _)| *outcome == Outcome::Answered).count()
     }
 
@@ -332,16 +319,8 @@ impl Startup {
                 Some((Outcome::Answered, at)) => Cell::Answered(((now.saturating_sub(at)) / ROW + 1).min(5) as u8),
                 Some(_) => Cell::Failed,
             })),
-            // The dark frame keeps the frame before it, lit by nothing.
-            Phase::Identity(DARK_FRAME) => View::Identity(0),
             Phase::Identity(frame) if frame < CARD_FROM => View::Identity(frame),
-            Phase::Identity(frame) => View::Card(match frame {
-                ..61 => Card::Tile,
-                61..65 => Card::Solid,
-                65..69 => Card::Inverted,
-                69 => Card::Scaled,
-                _ => Card::Impact,
-            }),
+            Phase::Identity(frame) => View::Card(frame - CARD_FROM),
             Phase::Fault(frame) => View::Fault(frame),
             Phase::Done { .. } => return None,
         })
@@ -351,11 +330,7 @@ impl Startup {
     #[must_use]
     pub fn brightness(&self, now: Micros, level: u8) -> u8 {
         let since = self.began.map_or(0, |began| now.saturating_sub(began));
-        match self.phase(now) {
-            Phase::Identity(DARK_FRAME) => 0,
-            _ if since < RAMP => (u64::from(level) * since / RAMP) as u8,
-            _ => level,
-        }
+        if since < RAMP { (u64::from(level) * since / RAMP) as u8 } else { level }
     }
 
     /// When the sequence next changes on its own, if nothing else arrives first.
@@ -384,8 +359,8 @@ impl Startup {
     }
 }
 
-const CENTER: Point = Point::new(233, 233);
-const GNSS: Glyph = [0b00100, 0b01010, 0b10101, 0b01010, 0b00100];
+pub(super) const CENTER: Point = Point::new(233, 233);
+pub(super) const GNSS: Glyph = [0b00100, 0b01010, 0b10101, 0b01010, 0b00100];
 
 /// Everything the sequence shows that is not its own: the time, and the version.
 pub struct Context<'a> {
@@ -405,46 +380,53 @@ where
 {
     match view {
         View::SelfTest(cells) => {
-            let version = if startup.demo { "DEMO" } else { context.firmware };
-            draw_self_test(&cells, version, font, target)
+            let mut version = heapless::String::<32>::new();
+            let _ = if startup.demo { write!(version, "DEMO, NOT A HARDWARE TEST") } else { write!(version, "VERSION {}", context.firmware) };
+            draw_self_test(&cells, &version, font, target)
         }
-        View::Identity(frame) => draw_identity(frame, startup.answered(), context, font, target),
-        View::Card(card) => draw_card(card, target),
+        View::Identity(frame) => identity::draw_identity(frame, startup.answered(), context, font, target),
+        View::Card(frame) => identity::draw_card(frame, target),
         View::Fault(frame) => draw_fault(frame, startup, context.firmware, font, target),
     }
 }
 
-// The self-test.
+// The self-test: six rows, one a part, each with its index, glyph, name and state.
 
 const TITLE: &str = "SELF TEST";
-const TITLE_TOP: i32 = 92;
-const RULE_ROWS: [i32; 3] = [129, 233, 337];
-const RULE_COLUMNS: [i32; 4] = [59, 175, 291, 407];
-const CELL_SIZE: Size = Size::new(116, 104);
-const COUNTER_TOP: i32 = 353;
-const VERSION_TOP: i32 = 373;
+const TITLE_TOP: i32 = 30;
+const COUNTER_TOP: i32 = 70;
+/// Each row's rule, the top of the row below it.
+const ROW_TOP: i32 = 89;
+const ROW_PITCH: i32 = 45;
+/// The rows run between these columns, the first and last narrower, as the glass is there.
+const WIDE: (i32, i32) = (62, 404);
+const NARROW: (i32, i32) = (82, 384);
+const LAST_RULE: i32 = 359;
+const VERSION_TOP: i32 = 380;
 
-fn cell_corner(index: usize) -> Point {
-    Point::new(
-        RULE_COLUMNS[0] + CELL_SIZE.width as i32 * (index % 3) as i32,
-        RULE_ROWS[0] + CELL_SIZE.height as i32 * (index / 3) as i32,
-    )
+fn row_top(index: usize) -> i32 {
+    ROW_TOP + ROW_PITCH * index as i32
 }
 
-fn cell_tile(index: usize) -> Tile {
-    Tile { corner: cell_corner(index) + Point::new(59, 8), module: 8, padding: 4 }
+fn row_columns(index: usize) -> (i32, i32) {
+    if index == 0 || index == 5 { NARROW } else { WIDE }
 }
 
-/// Everything inside one cell's rules.
+fn row_tile(index: usize) -> Tile {
+    Tile { corner: Point::new(row_columns(index).0 + 38, row_top(index) + 6), module: 5, padding: 4 }
+}
+
+/// Everything in one row below its rule.
 #[must_use]
 pub fn cell_bounds(index: usize) -> Rectangle {
-    Rectangle::new(cell_corner(index) + Point::new(1, 1), CELL_SIZE - Size::new(1, 1))
+    let (left, right) = row_columns(index);
+    Rectangle::with_corners(Point::new(left, row_top(index) + 1), Point::new(right - 1, row_top(index) + ROW_PITCH - 1))
 }
 
-fn counter(cells: &[Cell; 6]) -> heapless::String<4> {
+fn counter(cells: &[Cell; 6]) -> heapless::String<16> {
     let decided = cells.iter().filter(|cell| **cell != Cell::Waiting).count();
     let mut text = heapless::String::new();
-    let _ = write!(text, "{decided}/6");
+    let _ = write!(text, "DECIDED  {decided}/6");
     text
 }
 
@@ -467,7 +449,7 @@ fn centred<D: CoverageTarget<Color = Color>>(
 }
 
 fn counter_style(font: &FontdueRenderer<'static, Color>) -> FontdueRenderer<'static, Color> {
-    small(font, chrome::GRAY, 14, FRAKTION)
+    small(font, chrome::GRAY, 13, FRAKTION)
 }
 
 /// Where the counter's ink can land, whatever it counts.
@@ -491,58 +473,63 @@ fn draw_self_test<D: CoverageTarget<Color = Color>>(
     screens::clear(target)?;
     let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
     smooth::perimeter().draw(field, chrome::GRAY);
-    centred(&small(font, chrome::WHITE, 16, SHAPIRO), TITLE, TITLE_TOP, field)?;
-    let (left, right) = (RULE_COLUMNS[0], RULE_COLUMNS[3]);
-    let (top, bottom) = (RULE_ROWS[0], RULE_ROWS[2]);
-    for y in RULE_ROWS {
-        field.fill_solid(&Rectangle::with_corners(Point::new(left, y), Point::new(right, y)), chrome::GRAY)?;
-    }
-    for x in RULE_COLUMNS {
-        field.fill_solid(&Rectangle::with_corners(Point::new(x, top), Point::new(x, bottom)), chrome::GRAY)?;
-    }
-    let index_style = small(font, chrome::GRAY, 14, FRAKTION);
-    let name_style = small(font, chrome::GRAY, 14, FRAKTION_BOLD);
+    centred(&small(font, chrome::WHITE, 27, SHAPIRO), TITLE, TITLE_TOP, field)?;
+    centred(&counter_style(font), &counter(cells), COUNTER_TOP, field)?;
+    let index_style = small(font, chrome::GRAY, 13, FRAKTION);
     for (i, (part, cell)) in Part::ALL.into_iter().zip(cells).enumerate() {
+        let (left, right) = row_columns(i);
+        let top = row_top(i);
+        field.fill_solid(&Rectangle::with_corners(Point::new(left, top), Point::new(right - 1, top)), chrome::GRAY)?;
         if !field.visible(&cell_bounds(i)) {
             continue;
         }
-        let corner = cell_corner(i);
         let mut index = heapless::String::<2>::new();
         let _ = write!(index, "{:02}", i + 1);
-        let pen = Point::new(corner.x + 9, text::baseline_for_ink_top(&index_style, &index, corner.y + 9));
-        index_style.draw_on_baseline(&index, pen, field)?;
-        let name = part.name();
         let pen = Point::new(
-            text::pen_x_for_ink_left(&name_style, name, corner.x + 9),
-            text::baseline_for_ink_top(&name_style, name, corner.y + 62),
+            text::pen_x_for_ink_left(&index_style, &index, left + 9),
+            text::baseline_for_ink_top(&index_style, &index, top + 14),
         );
-        name_style.draw_on_baseline(name, pen, field)?;
-        let tile = cell_tile(i);
-        let (status, color) = match *cell {
+        index_style.draw_on_baseline(&index, pen, field)?;
+        let tile = row_tile(i);
+        let (status, color, name_color) = match *cell {
             Cell::Waiting => {
                 tile.draw(part.glyph(), chrome::GRAY, 0, field)?;
-                ("--", chrome::GRAY)
+                ("--", chrome::GRAY, chrome::GRAY)
             }
             Cell::Answered(rows) => {
                 tile.draw(part.glyph(), chrome::WHITE, rows, field)?;
-                ("OK", chrome::WHITE)
+                ("OK", chrome::WHITE, chrome::WHITE)
             }
             Cell::Failed => {
                 tile.draw(&icon::NO_DATA, chrome::RED, 5, field)?;
-                ("FAIL", chrome::RED)
+                field.fill_solid(&Rectangle::new(Point::new(left, top + 4), Size::new(4, 36)), chrome::RED)?;
+                ("FAIL", chrome::RED, chrome::RED)
             }
         };
-        small(font, color, 16, FRAKTION).draw_on_baseline(status, corner + Point::new(9, 90), field)?;
+        let name_style = small(font, name_color, 17, FRAKTION_BOLD);
+        let name = part.name();
+        let pen = Point::new(
+            text::pen_x_for_ink_left(&name_style, name, left + 82),
+            text::baseline_for_ink_top(&name_style, name, top + 12),
+        );
+        name_style.draw_on_baseline(name, pen, field)?;
+        let status_style = small(font, color, 16, FRAKTION_BOLD);
+        let pen = Point::new(
+            text::pen_x_for_ink_right(&status_style, status, right - 13),
+            text::baseline_for_ink_middle(&status_style, status, (top + 23) as f32),
+        );
+        status_style.draw_on_baseline(status, pen, field)?;
     }
-    centred(&counter_style(font), &counter(cells), COUNTER_TOP, field)?;
-    centred(&small(font, chrome::GRAY, 14, FRAKTION), version, VERSION_TOP, field)
+    let (left, right) = NARROW;
+    field.fill_solid(&Rectangle::with_corners(Point::new(left, LAST_RULE), Point::new(right - 1, LAST_RULE)), chrome::GRAY)?;
+    centred(&small(font, chrome::GRAY, 13, FRAKTION), version, VERSION_TOP, field)
 }
 
 // Shared by the identity and the fault screen.
 
 /// Fills the set modules of `rows`, `columns` wide with the leftmost the highest bit, as
 /// squares of `module` from `corner`.
-fn modules<D: DrawTarget<Color = Color>>(
+pub(super) fn modules<D: DrawTarget<Color = Color>>(
     rows: &[u8],
     columns: i32,
     corner: Point,
@@ -561,7 +548,7 @@ fn modules<D: DrawTarget<Color = Color>>(
 
 /// Draws the version as bars from `left`, each character's four low bits least first: 2 px
 /// for a one, 1 px for a zero, 2 px apart. Returns the column past the last bar.
-fn barcode<D: DrawTarget<Color = Color>>(
+pub(super) fn barcode<D: DrawTarget<Color = Color>>(
     version: &str,
     left: i32,
     top: i32,
@@ -608,43 +595,8 @@ fn hatch<D: DrawTarget<Color = Color>>(
     Ok(())
 }
 
-// The identity.
-
-const WORD: &str = "OCTOWHERE";
-const WORD_PX: u32 = 40;
-const WORD_SCALE: f32 = 1.8;
-const WORD_LEFT: i32 = 34;
-const WORD_BOTTOM: i32 = 307;
-/// Frames on which the word's reveal starts, and on which it is off.
-const WORD_FROM: u32 = 8;
-const FLICKER: [u32; 2] = [20, 22];
-const IDENTITY_HATCH: Rectangle = Rectangle::new(Point::new(372, 206), Size::new(65, 106));
-const HATCH_FROM: u32 = 6;
-const MICRO_TOP: i32 = 211;
-/// The microtext row's elements type in a frame apart from this one.
-const MICRO_FROM: u32 = 6;
-const BARCODE_LEFT: i32 = 34;
-const MICRO_MARK_LEFT: i32 = 111;
-const DIGITS_LEFT: i32 = 137;
-const MICRO_GNSS_LEFT: i32 = 201;
-const MICRO_TEXT_LEFT: i32 = 227;
-const MICRO_TEXT_TOPS: [i32; 2] = [209, 225];
-const MICRO_MODULE: i32 = 3;
-/// The rows the identity's word, hatch and microtext lie on, which the scatter leaves clear.
-const IDENTITY_BAND: Rectangle = Rectangle::new(Point::new(0, 198), Size::new(466, 120));
-/// The microtext's four pixel digits, which follow the clock.
-const IDENTITY_DIGITS: Rectangle = Rectangle::new(Point::new(DIGITS_LEFT, MICRO_TOP), Size::new(51, 15));
-/// The frame from which the band holds still but for its digits: the microtext and the hatch
-/// are in, the word is typed, and its last flicker is over.
-const IDENTITY_SETTLED: u32 = FLICKER[1] + 1;
-const _: () = assert!(
-    MICRO_FROM + 4 < IDENTITY_SETTLED
-        && HATCH_FROM + 3 < IDENTITY_SETTLED
-        && WORD_FROM + (WORD.len() as u32) < IDENTITY_SETTLED
-);
-
 /// Pixel digits, three modules wide, and a dash for a time the clock cannot vouch for.
-const PIXEL_DIGITS: [[u8; 5]; 10] = [
+pub(super) const PIXEL_DIGITS: [[u8; 5]; 10] = [
     [0b111, 0b101, 0b101, 0b101, 0b111],
     [0b010, 0b110, 0b010, 0b010, 0b111],
     [0b111, 0b001, 0b111, 0b100, 0b111],
@@ -656,10 +608,10 @@ const PIXEL_DIGITS: [[u8; 5]; 10] = [
     [0b111, 0b101, 0b111, 0b101, 0b111],
     [0b111, 0b101, 0b111, 0b001, 0b111],
 ];
-const PIXEL_DASH: [u8; 5] = [0b000, 0b000, 0b111, 0b000, 0b000];
+pub(super) const PIXEL_DASH: [u8; 5] = [0b000, 0b000, 0b111, 0b000, 0b000];
 
 /// The UTC hours and minutes as four digits, while the clock has a time it trusts.
-fn utc_digits(clock: &ClockView) -> Option<[u8; 4]> {
+pub(super) fn utc_digits(clock: &ClockView) -> Option<[u8; 4]> {
     let state = clock.clock();
     let utc = state.utc.filter(|_| !state.stopped)?;
     let minutes = utc.div_euclid(60);
@@ -667,161 +619,13 @@ fn utc_digits(clock: &ClockView) -> Option<[u8; 4]> {
     Some([hours / 10, hours % 10, minutes / 10, minutes % 10])
 }
 
-/// The identity scatter's facing and density on `frame`: at half density on frame 0, filling
-/// to full over frames 2–8, its dense side turning slowly all through.
-fn scatter_on(frame: u32) -> [Look; 1] {
-    let appear = match frame {
-        ..2 => 0.5,
-        2..8 => 0.5 + 0.5 * (frame - 2) as f32 / 6.0,
-        _ => 1.0,
-    };
-    [Look { facing: 0.8 + 0.055 * frame as f32, density: 1.15 * appear }]
-}
-
-fn draw_scatter<D: CoverageTarget<Color = Color>>(frame: u32, target: &mut D) -> Result<(), D::Error> {
-    Scatter::IDENTITY.draw(&scatter_on(frame), target)
-}
-
-/// The identity scatter's points on the last frame [`IdentityMarks::changes`] saw, so each
-/// frame's damage works out only its own, and the digits it saw.
-#[derive(Clone, Debug, Default)]
-pub struct IdentityMarks {
-    scatter: Option<(u32, Shown)>,
-    digits: Option<Option<[u8; 4]>>,
-}
-
-impl IdentityMarks {
-    /// Adds what the identity changes from frame `before` to frame `after`, which may be the
-    /// same: the marks that appear or go, the band until it settles, and the digits if the
-    /// clock moved them.
-    pub fn changes(&mut self, before: u32, after: u32, clock: &ClockView, changed: &mut Dirty) {
-        let digits = Some(utc_digits(clock));
-        if self.digits != digits {
-            changed.add(IDENTITY_DIGITS);
-            self.digits = digits;
-        }
-        if before == after {
-            return;
-        }
-        let shown = |frame| Scatter::IDENTITY.shown(&scatter_on(frame));
-        let earlier = match self.scatter.take() {
-            Some((frame, marks)) if frame == before => marks,
-            _ => shown(before),
-        };
-        let later = shown(after);
-        Scatter::IDENTITY.changed(&earlier, &later, changed);
-        if before.min(after) < IDENTITY_SETTLED {
-            changed.add(IDENTITY_BAND);
-        }
-        self.scatter = Some((after, later));
-    }
-}
-
-fn word_style(font: &FontdueRenderer<'static, Color>) -> FontdueRenderer<'static, Color> {
-    small(font, chrome::LIME, WORD_PX, SHAPIRO)
-}
-
-/// The word's pen, which puts its stretched ink's left edge and bottom where the design has
-/// them.
-fn word_origin(style: &FontdueRenderer<'static, Color>) -> Point {
-    let ink = style.baseline_bounds(WORD, Point::zero());
-    let below = (ink.top_left.y + ink.size.height as i32) as f32 * WORD_SCALE;
-    Point::new(
-        text::pen_x_for_ink_left(style, WORD, WORD_LEFT),
-        WORD_BOTTOM + 1 - libm::roundf(below) as i32,
-    )
-}
-
-/// Draws the first `glyphs` letters of the word, then a block where the next will be if
-/// `block`: one advance wide less a pixel each side, from the baseline to the stretched cap
-/// height.
-fn draw_word<D: CoverageTarget<Color = Color>>(
-    font: &FontdueRenderer<'static, Color>,
-    glyphs: usize,
-    block: bool,
-    target: &mut D,
-) -> Result<(), D::Error> {
-    let style = word_style(font);
-    let pen = word_origin(&style);
-    style.draw_stretched(&WORD[..glyphs], pen, WORD_SCALE, target)?;
-    if block && glyphs < WORD.len() {
-        let cap = libm::roundf(text::cap(&style) as f32 * WORD_SCALE) as i32;
-        let left = pen.x + libm::roundf(style.advance(&WORD[..glyphs]) + 1.0) as i32;
-        let right = pen.x + libm::roundf(style.advance(&WORD[..=glyphs]) - 1.0) as i32;
-        let cell = Rectangle::with_corners(Point::new(left, pen.y - cap), Point::new(right - 1, pen.y - 1));
-        target.fill_solid(&cell, chrome::LIME)?;
-    }
-    Ok(())
-}
-
-fn draw_identity<D: CoverageTarget<Color = Color>>(
-    frame: u32,
-    answered: usize,
-    context: &Context<'_>,
-    font: &FontdueRenderer<'static, Color>,
-    target: &mut D,
-) -> Result<(), D::Error> {
-    screens::clear(target)?;
-    draw_scatter(frame, target)?;
-    let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
-
-    let shown = |element: u32| frame >= MICRO_FROM + element;
-    if shown(0) {
-        barcode(context.firmware, BARCODE_LEFT, MICRO_TOP, 15, chrome::LIME, field)?;
-    }
-    if shown(1) {
-        // At 3 px modules and 1 px strokes, 15 × 15. At 1 px the hatch would be noise.
-        let origin = (MICRO_MARK_LEFT as f32, MICRO_TOP as f32);
-        Mark { origin, module: 3.0, stroke: 1.0 }.draw(true, false, chrome::LIME, field)?;
-    }
-    if shown(2) {
-        let digits = utc_digits(context.clock);
-        for i in 0..4 {
-            let rows = digits.map_or(&PIXEL_DASH, |digits| &PIXEL_DIGITS[usize::from(digits[i])]);
-            // A space between the hours and the minutes.
-            let left = DIGITS_LEFT + 12 * i as i32 + if i >= 2 { 6 } else { 0 };
-            modules(rows, 3, Point::new(left, MICRO_TOP), MICRO_MODULE, chrome::LIME, field)?;
-        }
-    }
-    if shown(3) {
-        modules(&GNSS, 5, Point::new(MICRO_GNSS_LEFT, MICRO_TOP), MICRO_MODULE, chrome::LIME, field)?;
-    }
-    if shown(4) {
-        let style = small(font, chrome::LIME, 14, FRAKTION);
-        let mut version = heapless::String::<32>::new();
-        let _ = write!(version, "VERSION {}", context.firmware);
-        let mut count = heapless::String::<24>::new();
-        let _ = write!(count, "SELF TEST {answered}/6 OK");
-        for (line, top) in [version.as_str(), count.as_str()].into_iter().zip(MICRO_TEXT_TOPS) {
-            let pen = Point::new(
-                text::pen_x_for_ink_left(&style, line, MICRO_TEXT_LEFT),
-                text::baseline_for_ink_top(&style, line, top),
-            );
-            style.draw_on_baseline(line, pen, field)?;
-        }
-    }
-
-    if frame >= HATCH_FROM {
-        let height = IDENTITY_HATCH.size.height;
-        let rows = (height * (frame - HATCH_FROM + 1)).div_ceil(4).min(height);
-        let drawn = Rectangle::new(IDENTITY_HATCH.top_left, Size::new(IDENTITY_HATCH.size.width, rows));
-        hatch(drawn, 10, 5, 2, chrome::LIME, field)?;
-    }
-
-    if frame >= WORD_FROM && !FLICKER.contains(&frame) {
-        let glyphs = ((frame - WORD_FROM) as usize).min(WORD.len());
-        draw_word(font, glyphs, glyphs < WORD.len(), field)?;
-    }
-    Ok(())
-}
-
 // The mark and the logo card.
 
-const PAGE_RADIUS: f32 = 232.0;
+pub(super) const PAGE_RADIUS: f32 = 232.0;
 /// The mark on the card: 42 px modules, the icons' frame rule's 11 px strokes, top-left at 128.
-const CARD_MARK: Mark = Mark { origin: (128.0, 128.0), module: 42.0, stroke: 11.0 };
+pub(super) const CARD_MARK: Mark = Mark { origin: (128.0, 128.0), module: 42.0, stroke: 11.0 };
 /// The card's mark scaled about the centre for the scaled and impact frames.
-const CARD_SCALE: f32 = 1.9;
+pub(super) const CARD_SCALE: f32 = 1.9;
 /// The hatch on the card at 1×: inset 5 px inside the tile's outline, 5 px stripes on a 12 px
 /// pitch, all measured across the stripes. They scale with the mark.
 const HATCH_INSET: f32 = 5.0;
@@ -831,15 +635,15 @@ const HATCH_PITCH: f32 = 12.0;
 /// The OCTOWHERE mark on the icons' 5 × 5 grid: a tile's outline over modules 1–4, a corner
 /// bracket in each corner module, and a line along the outer edge of each middle module.
 #[derive(Clone, Copy, Debug)]
-struct Mark {
+pub(super) struct Mark {
     /// The top-left corner, and the sizes, in continuous pixels.
-    origin: (f32, f32),
-    module: f32,
-    stroke: f32,
+    pub(super) origin: (f32, f32),
+    pub(super) module: f32,
+    pub(super) stroke: f32,
 }
 
 impl Mark {
-    fn scaled(self, scale: f32) -> Self {
+    pub(super) fn scaled(self, scale: f32) -> Self {
         let about = |v: f32, c: i32| c as f32 + (v - c as f32) * scale;
         Self {
             origin: (about(self.origin.0, CENTER.x), about(self.origin.1, CENTER.y)),
@@ -888,7 +692,7 @@ impl Mark {
 
     /// Draws the tile, the rest of the mark if `whole`, and the hatch inside the tile if
     /// `hatched`, scaling the hatch with the mark from its size on the card.
-    fn draw<D: DrawTarget<Color = Color>>(self, whole: bool, hatched: bool, color: Color, target: &mut D) -> Result<(), D::Error> {
+    pub(super) fn draw<D: DrawTarget<Color = Color>>(self, whole: bool, hatched: bool, color: Color, target: &mut D) -> Result<(), D::Error> {
         for span in self.tile() {
             self.fill(span, color, target)?;
         }
@@ -935,29 +739,6 @@ pub fn draw_mark_icon<D: DrawTarget<Color = Color>>(bounds: Rectangle, color: Co
     let stroke = libm::roundf((module + 2.0) / 4.0).max(2.0);
     let origin = (bounds.top_left.x as f32, bounds.top_left.y as f32);
     Mark { origin, module, stroke }.draw(true, true, color, target)
-}
-
-fn draw_card<D: CoverageTarget<Color = Color>>(card: Card, target: &mut D) -> Result<(), D::Error> {
-    screens::clear(target)?;
-    let page = |target: &mut D| smooth::disc_rows(target, 0..466, CENTER, PAGE_RADIUS, chrome::LIME);
-    let scaled = CARD_MARK.scaled(CARD_SCALE);
-    match card {
-        Card::Tile => {
-            page(target)?;
-            CARD_MARK.draw(false, true, chrome::BLACK, target)?;
-        }
-        Card::Solid => {
-            page(target)?;
-            CARD_MARK.draw(true, true, chrome::BLACK, target)?;
-        }
-        Card::Inverted => CARD_MARK.draw(true, true, chrome::LIME, target)?,
-        Card::Scaled => scaled.draw(true, true, chrome::LIME, &mut Round::new(&mut *target, CENTER, PAGE_RADIUS))?,
-        Card::Impact => {
-            page(target)?;
-            scaled.draw(true, true, chrome::BLACK, &mut Round::new(&mut *target, CENTER, PAGE_RADIUS))?;
-        }
-    }
-    Ok(())
 }
 
 // The fault screen.
@@ -1103,7 +884,10 @@ mod tests {
         assert_eq!(startup.phase(from - 1), Phase::SelfTest);
         assert_eq!(startup.phase(from), Phase::Identity(0));
         assert_eq!(startup.phase(from + 33_334), Phase::Identity(1));
-        assert_eq!(startup.phase(from + 2_366_667), Phase::Done { entry: true, after_card: true });
+        // 120 identity frames and 19 of the card.
+        assert_eq!(startup.phase(from + 4_633_333), Phase::Identity(138));
+        assert_eq!(startup.phase(from + 4_633_334), Phase::Done { entry: true, after_card: true });
+        assert_eq!(startup.view(from + 4_000_000), Some(View::Card(0)));
     }
 
     #[test]
@@ -1127,12 +911,11 @@ mod tests {
     }
 
     #[test]
-    fn the_brightness_climbs_then_goes_dark_for_one_frame_of_the_identity() {
+    fn the_brightness_climbs_then_holds() {
         let startup = passed_at([0; 6]);
         assert_eq!([0, 100_000, RAMP].map(|now| startup.brightness(now, 200)), [0, 100, 200]);
         let from = 4 * ROW + PASS_HOLD;
-        assert_eq!(startup.brightness(from + 40_000, 200), 0);
-        assert_eq!(startup.brightness(from + 70_000, 200), 200);
+        assert_eq!(startup.brightness(from + 40_000, 200), 200);
     }
 
     #[test]

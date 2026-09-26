@@ -12,6 +12,7 @@ use super::{
     compass_screen::{self, Accents, DialFootprint, Mode},
     ease::Ease,
     gesture::{Drag, GestureEvent, GestureTracker, Micros},
+    identity,
     pager::Pager,
     panel::{self, Cell},
     picker::Picker,
@@ -268,7 +269,7 @@ pub struct Stage {
     startup: Option<Startup>,
     /// What the sequence showed after the last step.
     startup_view: Option<startup::View>,
-    identity_marks: startup::IdentityMarks,
+    identity_marks: identity::IdentityMarks,
     /// The brightness the sequence last asked for.
     startup_level: Option<u8>,
     /// When the sequence next changes on its own.
@@ -338,7 +339,7 @@ impl Stage {
             drawn_page: None,
             startup: None,
             startup_view: None,
-            identity_marks: startup::IdentityMarks::default(),
+            identity_marks: identity::IdentityMarks::default(),
             startup_level: None,
             startup_due: None,
             swallowed: false,

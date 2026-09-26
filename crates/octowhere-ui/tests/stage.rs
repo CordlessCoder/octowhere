@@ -1253,8 +1253,8 @@ fn replay_on_the_device_page_plays_the_identity_and_the_card_then_the_clock() {
     assert!(driver.stage.starting_up());
     assert!(driver.stage.page().is_none());
     assert_eq!(driver.stage.panel_offset(), 0);
-    // Seventy-one frames at 30 fps, 300 ms of them waited out after the tap.
-    driver.wait(2_000_000);
+    // 139 frames at 30 fps, 300 ms of them waited out after the tap.
+    driver.wait(4_300_000);
     assert!(driver.stage.starting_up());
     driver.wait(100_000);
     assert!(!driver.stage.starting_up());
@@ -1333,7 +1333,7 @@ fn a_demonstrated_failure_runs_the_self_test_and_the_fault_screen_then_the_clock
 fn a_demonstration_leaves_the_boot_record_for_a_good_replay() {
     let mut driver = Driver::starting();
     boot_all(&mut driver, None);
-    driver.wait(2_700_000);
+    driver.wait(5_000_000);
     let replay = |driver: &mut Driver, steps: i32| {
         driver.swipe(Point::new(233, 80), Point::new(233, 420), 250_000);
         driver.settle();
@@ -1351,7 +1351,7 @@ fn a_demonstration_leaves_the_boot_record_for_a_good_replay() {
     assert!(!driver.stage.starting_up());
     // A good replay goes straight to the identity: no self-test, and no fault screen.
     replay(&mut driver, 0);
-    driver.wait(2_200_000);
+    driver.wait(4_500_000);
     assert!(!driver.stage.starting_up());
 }
 

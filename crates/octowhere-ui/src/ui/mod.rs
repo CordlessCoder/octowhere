@@ -9,6 +9,7 @@ pub mod fusion;
 pub mod geometry;
 pub mod gesture;
 pub mod icon;
+pub mod identity;
 pub mod imu;
 pub mod pager;
 pub mod picker;

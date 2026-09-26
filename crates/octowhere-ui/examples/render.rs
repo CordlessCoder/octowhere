@@ -307,9 +307,11 @@ fn startup_frames() -> Vec<(String, Stage)> {
         ("startup-selftest".to_string(), boot(None, 0, 50_000)),
         ("startup-selftest-building".into(), boot(None, 3, 345_000)),
         ("startup-selftest-passed".into(), boot(None, 6, 850_000)),
+        ("startup-selftest-failing".into(), boot(Some(Part::Magnet), 5, 850_000)),
         ("startup-selftest-failed".into(), boot(Some(Part::Magnet), 6, 850_000)),
     ];
-    for n in [0, 6, 9, 13, 17, 20, 40, 57, 58, 61, 65, 69, 70, 71] {
+    // The identity's frames 0–119, then the card's 120–138, then the clock.
+    for n in [0, 3, 6, 12, 13, 20, 24, 30, 38, 42, 45, 51, 53, 56, 66, 77, 119, 120, 123, 129, 133, 137, 138, 139] {
         frames.push((format!("startup-frame-{n:02}"), boot(None, 6, frame(n))));
     }
     // With a failure the hold is 300 ms, from 720 ms.
