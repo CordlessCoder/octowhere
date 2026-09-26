@@ -13,7 +13,7 @@ use std::{
 
 use gif::{DisposalMethod, Encoder, Frame, Repeat};
 
-use crate::{HEIGHT, WIDTH};
+use crate::HEIGHT;
 
 /// GIF delays count centiseconds, and browsers stretch any delay under two of them, so the
 /// window is sampled every 20 ms. An MP4 runs at the same rate.
@@ -58,7 +58,7 @@ impl Recording {
     /// # Panics
     ///
     /// If `path` ends in neither `.gif` nor `.mp4`.
-    pub fn start(path: PathBuf, now: u64, pixels: &[u32], knock_out: Option<&[bool]>) -> Self {
+    pub fn start(path: PathBuf, now: u64, width: usize, pixels: &[u32], knock_out: Option<&[bool]>) -> Self {
         let format = Format::of(&path)
             .unwrap_or_else(|| panic!("{} is neither a .gif nor an .mp4", path.display()));
         let (frames, received) = mpsc::channel();
@@ -70,8 +70,8 @@ impl Recording {
             frames,
             encoder: thread::spawn(move || {
                 let written = match format {
-                    Format::Gif => encode_gif(&path, knock_out, received),
-                    Format::Mp4 => encode_mp4(&path, received),
+                    Format::Gif => encode_gif(&path, width, knock_out, received),
+                    Format::Mp4 => encode_mp4(&path, width, received),
                 };
                 match written {
                     Ok(()) => println!("saved {}", path.display()),
@@ -105,23 +105,24 @@ impl Recording {
 
 fn encode_gif(
     path: &Path,
+    width: usize,
     knock_out: Option<Vec<bool>>,
     frames: Receiver<(Vec<u32>, u16)>,
 ) -> Result<(), Box<dyn Error>> {
     let file = BufWriter::new(File::create(path)?);
-    let mut encoder = Encoder::new(file, WIDTH as u16, HEIGHT as u16, &[])?;
+    let mut encoder = Encoder::new(file, width as u16, HEIGHT as u16, &[])?;
     encoder.set_repeat(Repeat::Infinite)?;
     let mut previous: Option<Vec<u32>> = None;
     for (pixels, samples) in frames {
         // Each frame after the first covers only what changed, over the frame before.
         let (left, top, right, bottom) = match &previous {
-            None => (0, 0, WIDTH, HEIGHT),
-            Some(previous) => changed(previous, &pixels).unwrap_or((0, 0, 1, 1)),
+            None => (0, 0, width, HEIGHT),
+            Some(previous) => changed(width, previous, &pixels).unwrap_or((0, 0, 1, 1)),
         };
         // A knocked-out pixel is transparent in every frame, so one covering an earlier frame
         // still shows nothing.
         let mut rgba: Vec<u8> = (top..bottom)
-            .flat_map(|y| y * WIDTH + left..y * WIDTH + right)
+            .flat_map(|y| y * width + left..y * width + right)
             .flat_map(|index| {
                 let [_, r, g, b] = pixels[index].to_be_bytes();
                 let shown = knock_out.as_ref().is_none_or(|mask| mask[index]);
@@ -145,10 +146,10 @@ fn encode_gif(
 }
 
 /// Streams a raw frame per frame period to `ffmpeg`, which encodes H.264.
-fn encode_mp4(path: &Path, frames: Receiver<(Vec<u32>, u16)>) -> Result<(), Box<dyn Error>> {
+fn encode_mp4(path: &Path, width: usize, frames: Receiver<(Vec<u32>, u16)>) -> Result<(), Box<dyn Error>> {
     let mut ffmpeg = Command::new("ffmpeg")
         .args(["-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24"])
-        .args(["-video_size", &format!("{WIDTH}x{HEIGHT}")])
+        .args(["-video_size", &format!("{width}x{HEIGHT}")])
         .args(["-framerate", &FRAMES_PER_SECOND.to_string(), "-i", "-"])
         .args(["-c:v", "libx264", "-tune", "animation", "-crf", "18"])
         // 4:2:0 with the index at the front is what browsers and players all take.
@@ -179,13 +180,13 @@ fn encode_mp4(path: &Path, frames: Receiver<(Vec<u32>, u16)>) -> Result<(), Box<
 }
 
 /// The bounds of the pixels that differ, as left, top, right and bottom, the last two exclusive.
-fn changed(previous: &[u32], pixels: &[u32]) -> Option<(usize, usize, usize, usize)> {
-    let differs = |y: usize| previous[y * WIDTH..][..WIDTH] != pixels[y * WIDTH..][..WIDTH];
+fn changed(width: usize, previous: &[u32], pixels: &[u32]) -> Option<(usize, usize, usize, usize)> {
+    let differs = |y: usize| previous[y * width..][..width] != pixels[y * width..][..width];
     let top = (0..HEIGHT).find(|&y| differs(y))?;
     let bottom = (0..HEIGHT).rfind(|&y| differs(y))? + 1;
     let column_differs =
-        |x: usize| (top..bottom).any(|y| previous[y * WIDTH + x] != pixels[y * WIDTH + x]);
-    let left = (0..WIDTH).find(|&x| column_differs(x))?;
-    let right = (0..WIDTH).rfind(|&x| column_differs(x))? + 1;
+        |x: usize| (top..bottom).any(|y| previous[y * width + x] != pixels[y * width + x]);
+    let left = (0..width).find(|&x| column_differs(x))?;
+    let right = (0..width).rfind(|&x| column_differs(x))? + 1;
     Some((left, top, right, bottom))
 }

@@ -2,6 +2,8 @@
 //! readings, so a recording comes out the same every run.
 
 use embedded_graphics::prelude::Point;
+
+use crate::caption::say;
 use octowhere_ui::ui::{
     panel::Cell,
     rest::Timeout,
@@ -21,6 +23,8 @@ pub struct Scene {
     pub name: &'static str,
     pub about: &'static str,
     pub run: fn(&mut Driver),
+    /// Whether a recording adds a column for what the scene says with [`say`].
+    pub captioned: bool,
 }
 
 pub const SCENES: &[Scene] = &[
@@ -28,51 +32,61 @@ pub const SCENES: &[Scene] = &[
         name: "startup",
         about: "the self-test as each part answers, the identity, the logo card and the clock",
         run: startup,
+        captioned: false,
     },
     Scene {
         name: "startup-failed",
         about: "the self-test with the magnetometer failing, the fault screen and the clock",
         run: startup_failed,
+        captioned: false,
     },
     Scene {
         name: "clock-entry",
         about: "the clock face building in, then ticking",
         run: clock_entry,
+        captioned: false,
     },
     Scene {
         name: "swipe-to-compass",
         about: "from the clock to the compass, a turn, and back",
         run: swipe_to_compass,
+        captioned: false,
     },
     Scene {
         name: "compass-calibration",
         about: "the compass calibrating, finding its heading, turning, and meeting interference",
         run: compass_calibration,
+        captioned: false,
     },
     Scene {
         name: "compass-states",
         about: "each change between the compass's states",
         run: compass_states,
+        captioned: false,
     },
     Scene {
         name: "settings",
         about: "the settings panel: opening, scrolling, brightness, timeout, always on, the zone picker, and closing",
         run: settings,
+        captioned: false,
     },
     Scene {
         name: "rest-always-on",
         about: "a 15 s timeout: the dim, the always-on face, and a touch back to the clock",
         run: rest_always_on,
+        captioned: false,
     },
     Scene {
         name: "rest-off",
         about: "a 15 s timeout on the compass: the dim, the panel off, and a touch back",
         run: rest_off,
+        captioned: false,
     },
     Scene {
         name: "tour",
         about: "every screen and state, slowly: the start-up, the clock, the battery, the compass, settings, the always-on face and a demonstrated failure",
         run: tour,
+        captioned: true,
     },
 ];
 
@@ -262,8 +276,10 @@ fn dublin_now(driver: &Driver) -> Sensors {
     sensors
 }
 
-/// Steps in Dublin's readings at the driver's time, changed by `change`, and holds them.
-fn show(driver: &mut Driver, change: impl FnOnce(&mut Sensors)) {
+/// Says `caption`, steps in Dublin's readings at the driver's time changed by `change`, and
+/// holds them.
+fn show(driver: &mut Driver, caption: &'static str, change: impl FnOnce(&mut Sensors)) {
+    say(caption);
     let mut sensors = dublin_now(driver);
     change(&mut sensors);
     driver.sensors(sensors);
@@ -313,6 +329,7 @@ fn close_settings(driver: &mut Driver) {
 /// Every screen and state, paced for a viewer who has not seen the device.
 fn tour(driver: &mut Driver) {
     use Outcome::Answered;
+    say("SELF-TEST. EACH PART OF THE BOARD IS TICKED OFF AS IT ANSWERS.");
     boot(driver, [
         (Part::Power, Answered, 150),
         (Part::Clock, Answered, 250),
@@ -322,66 +339,83 @@ fn tour(driver: &mut Driver) {
         (Part::Gnss, Answered, 1_300),
     ]);
     driver.motion(facing(37.0));
+    driver.wait(ms(1_700).saturating_sub(driver.now()));
+    say("EVERY PART ANSWERED, SO THE IDENTITY AND THE LOGO CARD PLAY.");
     while driver.stage.starting_up() {
         driver.wait(ms(100));
     }
-    driver.wait(ms(4_000));
+    say("THE CLOCK FACE. THE BLUE ICON MEANS GNSS SET THE TIME, AND THE ZONE CAME FROM THE POSITION.");
+    driver.wait(ms(5_000));
 
-    // The clock: set by GNSS, running on its own, a zone chosen by hand, stopped, never
-    // placed, and unreadable, then back to GNSS.
-    show(driver, |s| s.clock.set_from_gnss = false);
-    show(driver, |s| {
+    show(driver, "RTC. NO FIX SINCE START-UP, SO THE TIME IS THE BOARD'S OWN CLOCK.", |s| {
+        s.clock.set_from_gnss = false;
+    });
+    show(driver, "MANUAL. A ZONE CHOSEN BY HAND IN SETTINGS, HERE NEW YORK.", |s| {
         s.zone = ZoneState {
             mode: ZoneMode::Manual,
             zone: octowhere_ui::tz::DATABASE.find("America/New_York").map(|zone| zone.id),
         };
     });
-    show(driver, |s| s.clock.stopped = true);
-    show(driver, |s| s.zone = ZoneState::default());
-    show(driver, |s| s.clock.utc = None);
-    show(driver, |_| {});
+    show(driver, "STOPPED. THE CLOCK STOPPED SINCE IT WAS LAST SET, SO ITS TIME IS UNRELIABLE.", |s| {
+        s.clock.stopped = true;
+    });
+    show(driver, "NO ZONE. NO FIX HAS PLACED THE DEVICE YET, SO THE FACE SHOWS UTC.", |s| {
+        s.zone = ZoneState::default();
+    });
+    show(driver, "NO DATA. THE CLOCK COULD NOT BE READ.", |s| s.clock.utc = None);
+    show(driver, "BACK TO A GNSS FIX.", |_| {});
 
-    // The battery: normal, low, charging, and no reading.
     let battery = |percent, charging| Some(Battery { present: true, percent, millivolts: 3_900, charging, usb: charging });
-    show(driver, |s| s.battery = battery(64, false));
-    show(driver, |s| s.battery = battery(12, false));
-    show(driver, |s| s.battery = battery(12, true));
-    show(driver, |s| s.battery = None);
-    show(driver, |_| {});
+    show(driver, "THE BATTERY, RIGHT OF THE MINUTES. HERE 64%, ON BATTERY ALONE.", |s| {
+        s.battery = battery(64, false);
+    });
+    show(driver, "LOW BATTERY, AT 15% OR LESS.", |s| s.battery = battery(12, false));
+    show(driver, "CHARGING. THE LEVEL CRAWLS UPWARD.", |s| s.battery = battery(12, true));
+    show(driver, "NO BATTERY READING.", |s| s.battery = None);
+    show(driver, "BACK ON USB, CHARGING.", |_| {});
 
-    // The compass: a heading and a turn, calibrating, interference, top edge up, NO DATA.
+    say("SWIPE LEFT FOR THE COMPASS.");
     slow_page_left(driver);
-    driver.wait(HOLD);
+    say("THE HEADING. THE DIAL TURNS WITH THE DEVICE OVER A STILL BLUE FIELD.");
+    driver.wait(ms(2_000));
     driver.motion_over(ms(2_000), |t| facing(37.0 + 90.0 * ease(t)));
     driver.wait(HOLD);
+    say("CALIBRATING. TURN THE DEVICE EVERY WAY UNTIL THE COUNT FILLS.");
     driver.motion(calibrating(0));
     driver.wait(ms(1_500));
     driver.motion_over(ms(3_000), |t| calibrating((t * 99.0) as u8));
     driver.wait(ms(1_500));
+    say("CALIBRATED. THE HEADING RETURNS.");
     driver.motion(facing(127.0));
     driver.wait(HOLD);
+    say("INTERFERENCE. A MAGNETIC DISTURBANCE MAKES THE HEADING UNRELIABLE.");
     driver.motion(disturbed(127.0));
     driver.wait(HOLD);
     driver.motion(facing(127.0));
     driver.wait(ms(2_000));
+    say("TOP EDGE UP. HELD NEAR VERTICAL, THE COMPASS HAS NO HEADING TO GIVE.");
     driver.motion(top_edge_up());
     driver.wait(HOLD);
     driver.motion(facing(127.0));
     driver.wait(ms(2_000));
+    say("NO DATA. THE MOTION SENSORS STOPPED ANSWERING.");
     driver.motion(Motion { compass: CompassView::default() });
     driver.wait(HOLD);
+    say("THEY ANSWER AGAIN.");
     driver.motion(facing(127.0));
     driver.wait(HOLD);
+    say("SWIPE RIGHT FOR THE CLOCK.");
     slow_page_right(driver);
     driver.wait(ms(2_000));
 
-    // Settings, each shown doing what it does. Brightness down, which dims as it drags.
+    say("DRAG DOWN FROM EITHER FACE FOR SETTINGS.");
     open_settings(driver);
+    say("BRIGHTNESS. THE PANEL FOLLOWS THE DRAG, AND A TAP KEEPS THE LEVEL.");
     tap_row(driver, Cell::Brightness);
     driver.swipe(Point::new(330, 280), Point::new(150, 280), ms(1_500));
     driver.wait(ms(1_500));
     slow_tap(driver, 233, 378);
-    // A zone by hand, one offset later, which the clock face then shows.
+    say("ZONE. DRAG TO AN OFFSET, TAP FOR ITS ZONES, AND TAP ONE TO SET IT BY HAND.");
     tap_row(driver, Cell::Zone);
     driver.swipe(Point::new(233, 300), Point::new(233, 255), SLOW);
     driver.wait(ms(1_500));
@@ -394,9 +428,10 @@ fn tour(driver: &mut Driver) {
     sensors.zone = zone;
     driver.sensors(sensors);
     driver.wait(ms(1_500));
+    say("THE CLOCK NOW SHOWS AMSTERDAM'S TIME, MARKED MANUAL.");
     close_settings(driver);
     driver.wait(HOLD);
-    // A 15 s timeout, resting on the always-on face.
+    say("TIMEOUT, SET TO 15 SECONDS, AND ALWAYS ON, SWITCHED ON.");
     open_settings(driver);
     tap_row(driver, Cell::Timeout);
     driver.swipe(Point::new(233, 250), Point::new(233, 360), SLOW);
@@ -405,20 +440,22 @@ fn tour(driver: &mut Driver) {
     tap_row(driver, Cell::AlwaysOn);
     close_settings(driver);
 
-    // Waits out the timeout, the dim and the fade, then the always-on face's states.
+    say("AFTER 15 SECONDS UNTOUCHED THE SCREEN DIMS, THEN RESTS ON THE ALWAYS-ON FACE.");
     driver.wait(ms(21_000));
+    say("THE ALWAYS-ON FACE: THE TIME AND THE BATTERY, REDRAWN ONCE A MINUTE.");
     driver.wait(HOLD);
-    show(driver, |s| {
+    show(driver, "ALWAYS ON, STOPPED.", |s| {
         s.zone = zone;
         s.clock.stopped = true;
     });
-    show(driver, |s| s.zone = ZoneState::default());
-    show(driver, |s| s.clock.utc = None);
-    show(driver, |s| s.zone = zone);
+    show(driver, "ALWAYS ON, NO ZONE, IN UTC.", |s| s.zone = ZoneState::default());
+    show(driver, "ALWAYS ON, NO DATA.", |s| s.clock.utc = None);
+    show(driver, "ALWAYS ON, LOCAL TIME AGAIN.", |s| s.zone = zone);
+    say("A TOUCH WAKES THE SCREEN.");
     slow_tap(driver, 233, 300);
     driver.wait(ms(2_000));
 
-    // Automatic zones again, then a demonstrated failure: DEVICE, REPLAY START-UP, a part.
+    say("THE ZONE BACK TO AUTOMATIC, FROM THE GNSS POSITION.");
     open_settings(driver);
     tap_row(driver, Cell::Zone);
     tap(driver, 233, 342);
@@ -427,17 +464,21 @@ fn tour(driver: &mut Driver) {
     driver.wait(ms(1_500));
     close_settings(driver);
     driver.wait(HOLD);
+    say("DEVICE. AT THE END OF ITS PAGE, REPLAY START-UP.");
     open_settings(driver);
     tap_row(driver, Cell::Device);
     driver.swipe(Point::new(233, 440), Point::new(233, 80), ms(1_200));
     driver.wait(ms(2_000));
     slow_tap(driver, 233, 298);
+    say("A REPLAY CAN DEMONSTRATE A PART FAILING. HERE, THE MAGNETOMETER.");
     driver.swipe(Point::new(233, 330), Point::new(233, 330 - 40 * 5 - 10), ms(1_500));
     driver.wait(ms(2_000));
     tap(driver, 233, 258);
+    say("THE SELF-TEST MARKS THE PART FAILED, AND THE FAULT SCREEN NAMES IT. BOTH SAY IT IS A DEMO.");
     while driver.stage.starting_up() {
         driver.wait(ms(100));
     }
+    say("THEN THE CLOCK, AS AFTER ANY START-UP.");
     driver.wait(ms(4_000));
 }
 

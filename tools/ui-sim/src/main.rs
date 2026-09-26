@@ -8,7 +8,8 @@
 //! After `--`, `--play <scene>` loops a scene from `scenes.rs` in the window instead, and
 //! `--record <scene> <out>` records one without a window, to GIF or MP4 by `<out>`'s extension.
 //! Both step it on the firmware's frame period, so a recording is the same every run and shows
-//! none of the host's speed. `--scenes` lists them. MP4 is encoded by `ffmpeg`, which must be on
+//! none of the host's speed. A scene that captions its steps records with a column beside the
+//! panel for them. `--scenes` lists them. MP4 is encoded by `ffmpeg`, which must be on
 //! the path.
 //!
 //! A white disc marks where a finger is down, and fades as a ring for 300 ms after it lifts, so
@@ -67,6 +68,7 @@ use octowhere_ui::{
     },
 };
 
+mod caption;
 mod record;
 mod scenes;
 
@@ -365,25 +367,42 @@ fn main() {
 /// Steps `scene` on the firmware's frame period and records it to `path`.
 fn record(scene: &scenes::Scene, path: PathBuf, masked: bool) {
     let mut panel = Panel::new(masked);
+    let mut column = scene.captioned.then(caption::Column::new);
+    caption::clear();
+    let width = WIDTH + column.as_ref().map_or(0, |_| caption::COLUMN);
+    let frame = |panel: &Panel, column: &mut Option<caption::Column>| match column {
+        Some(column) => {
+            column.follow();
+            column.beside(&panel.pixels)
+        }
+        None => panel.pixels.clone(),
+    };
     let mut recording: Option<record::Recording> = None;
     let mut driver = Driver::new();
     driver.observe(|stage, now| match &mut recording {
         None => {
             panel.draw(stage, true);
             panel.touch(stage, now);
+            // The column shows in every frame.
+            let knock_out = panel.knock_out().map(|mask| {
+                mask.as_chunks::<WIDTH>().0.iter()
+                    .flat_map(|row| row.iter().copied().chain(std::iter::repeat_n(true, width - WIDTH)))
+                    .collect::<Vec<_>>()
+            });
             recording = Some(record::Recording::start(
                 path.clone(),
                 now,
-                &panel.pixels,
-                panel.knock_out(),
+                width,
+                &frame(&panel, &mut column),
+                knock_out.as_deref(),
             ));
         }
         Some(recording) => {
             // Samples due before this step show the step before.
-            recording.sample(now - 1, &panel.pixels);
+            recording.sample(now - 1, &frame(&panel, &mut column));
             panel.draw(stage, false);
             panel.touch(stage, now);
-            recording.sample(now, &panel.pixels);
+            recording.sample(now, &frame(&panel, &mut column));
         }
     });
     (scene.run)(&mut driver);
@@ -484,6 +503,7 @@ fn interact(mut window: Window, masked: bool, extension: &str) {
                             recording = Some(record::Recording::start(
                                 path,
                                 now,
+                                WIDTH,
                                 &panel.pixels,
                                 panel.knock_out(),
                             ));
