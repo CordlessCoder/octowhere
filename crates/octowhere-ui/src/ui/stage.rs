@@ -932,12 +932,11 @@ impl Stage {
             return;
         }
         if before.1 != after.1 {
-            self.changed.add(panel::GRID_ROWS);
-            self.changed.add(panel::MARKERS);
+            self.changed.make_full();
             return;
         }
         for cell in Cell::ALL {
-            if panel::cell_changed(cell, &before.0, &after.0) {
+            if panel::in_view(cell.page(), after.1) && panel::cell_changed(cell, &before.0, &after.0) {
                 self.changed.add(panel::cell_damage(cell, after.1));
             }
         }
@@ -1027,19 +1026,19 @@ impl Stage {
         }
     }
 
-    /// Snaps the grid to the nearest whole column, or a column on in a flick's direction.
+    /// Snaps the grid to a complete page, or follows a flick to the next one.
     fn release_grid(&mut self, drag: &Drag, now: Micros) {
         self.grid.grabbed = None;
         let scroll = self.grid.scroll;
         let velocity = drag.velocity.0;
-        let column = if velocity <= -SNAP_FLICK {
-            scroll.div_euclid(panel::COLUMN) + 1
+        let page = if velocity <= -SNAP_FLICK {
+            scroll.div_euclid(panel::PAGE_WIDTH) + 1
         } else if velocity >= SNAP_FLICK {
-            (scroll + panel::COLUMN - 1).div_euclid(panel::COLUMN) - 1
+            (scroll + panel::PAGE_WIDTH - 1).div_euclid(panel::PAGE_WIDTH) - 1
         } else {
-            (scroll + panel::COLUMN / 2).div_euclid(panel::COLUMN)
+            (scroll + panel::PAGE_WIDTH / 2).div_euclid(panel::PAGE_WIDTH)
         };
-        self.grid.snap_to((column * panel::COLUMN).clamp(0, panel::MAX_SCROLL), now);
+        self.grid.snap_to((page * panel::PAGE_WIDTH).clamp(0, panel::MAX_SCROLL), now);
     }
 
     fn tap_panel(&mut self, point: Point, now: Micros, update: &mut Update) {
@@ -1047,10 +1046,7 @@ impl Stage {
         let Some(cell) = panel::cell_at(point, scroll) else {
             return;
         };
-        if !panel::in_view(cell.column(), scroll) {
-            self.grid.snap_to(panel::scroll_to(cell.column(), scroll), now);
-            return;
-        }
+        if !panel::in_view(cell.page(), scroll) { return; }
         let page = match cell {
             Cell::Zone => Page::Picker(Picker::new(&self.peripherals)),
             Cell::Brightness => Page::Brightness(second::Brightness::new(self.peripherals.brightness)),

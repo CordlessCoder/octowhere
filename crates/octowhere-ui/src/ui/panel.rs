@@ -1,6 +1,4 @@
-//! The settings panel: eight cells in four columns, two columns in view, that scroll sideways.
-//! `context/design/specs/SETTINGS-PANEL-SPEC.md` is its design, and section 5 of the round 3
-//! spec adds the TIMEOUT and ALWAYS ON column.
+//! The S1 settings panel: four indexed rows on each of two sideways-scrolling pages.
 
 use core::fmt::Write as _;
 
@@ -14,35 +12,63 @@ use super::{
     clock_screen,
     icon::{self, Glyph, Tile},
     reveal::{Reveal, draw_revealed, revealed_bounds},
+    scatter::{Field, Look, Scatter},
     screens::PeripheralState,
     text::{self, style},
 };
 use crate::chrome::{
-    self, Color, CoverageTarget, FontdueRenderer, OnBackground, RgbColorExt as _, Round, FRAKTION,
-    FRAKTION_BOLD, SHAPIRO,
+    self, Color, CoverageTarget, FRAKTION, FRAKTION_BOLD, FontdueRenderer, OnBackground,
+    RgbColorExt as _, Round, SHAPIRO, Window,
 };
 
-/// How far a column's left rule is from the next.
-pub const COLUMN: i32 = 146;
-/// The scroll at the end, with the last two columns in view. The grid rests at a whole number
-/// of columns.
-pub const MAX_SCROLL: i32 = 2 * COLUMN;
-/// Column 0's left rule at rest.
-const GRID: i32 = 87;
-const RULES: [i32; 3] = [72, 218, 364];
-const COLUMNS: i32 = 4;
+/// Distance between the two complete pages during a sideways drag.
+pub const PAGE_WIDTH: i32 = 466;
+pub const MAX_SCROLL: i32 = PAGE_WIDTH;
+const RULE_TOP: [i32; 4] = [83, 160, 227, 294];
+const RULE_LEFT: [i32; 4] = [83, 57, 57, 83];
+const RULE_RIGHT: [i32; 4] = [383, 409, 409, 383];
 const CENTER: Point = Point::new(233, 233);
-/// Everything in the grid is cut at the page's circle.
 const CLIP_RADIUS: f32 = 232.0;
-const INSET: i32 = 10;
 const TITLE: &str = "SETTINGS";
-const TITLE_TOP: i32 = 38;
-const MARKERS_TOP: i32 = 386;
+const TITLE_TOP: i32 = 29;
+const MARKERS_TOP: i32 = 387;
 const MARKER: i32 = 8;
-const MARKERS_LEFT: i32 = 208;
-const MARKER_PITCH: i32 = 14;
+const MARKERS_LEFT: i32 = 221;
+const MARKER_PITCH: i32 = 16;
 pub const HINT: &str = "DRAG UP TO CLOSE";
 const HINT_TOP: i32 = 406;
+const SCATTER: Scatter = Scatter {
+    origin: Point::new(24, 10),
+    gap: None,
+    color: chrome::PURPLE,
+    fields: &[
+        Field {
+            center: Point::new(35, 180),
+            radius: 160.0,
+            seed: 0x53_31_4c,
+        },
+        Field {
+            center: Point::new(430, 304),
+            radius: 160.0,
+            seed: 0x53_31_52,
+        },
+    ],
+};
+const SCATTER_LOOKS: [Look; 2] = [
+    Look {
+        facing: 3.0,
+        density: 0.8,
+    },
+    Look {
+        facing: 0.0,
+        density: 0.8,
+    },
+];
+const SCATTER_CLEAR: [Rectangle; 3] = [
+    Rectangle::new(Point::new(77, 82), Size::new(312, 289)),
+    Rectangle::new(Point::new(102, 0), Size::new(262, 83)),
+    Rectangle::new(Point::new(112, 371), Size::new(242, 70)),
+];
 
 pub const ZONE: Glyph = [0b11011, 0b10001, 0b00100, 0b10001, 0b11011];
 pub const BRIGHTNESS: Glyph = [0b00001, 0b00011, 0b00111, 0b01111, 0b11111];
@@ -53,7 +79,7 @@ const GNSS: Glyph = [0b00100, 0b01010, 0b10101, 0b01010, 0b00100];
 const BATTERY: Glyph = [0b01110, 0b11111, 0b10001, 0b11111, 0b11111];
 pub const DEVICE: Glyph = [0b00100, 0b00000, 0b01100, 0b00100, 0b01110];
 
-/// The cells, in index order: down each column, then across.
+/// The cells, in reading order across the two pages.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Cell {
@@ -85,8 +111,8 @@ impl Cell {
     }
 
     #[must_use]
-    pub fn column(self) -> i32 {
-        self.index() as i32 / 2
+    pub fn page(self) -> i32 {
+        self.index() as i32 / 4
     }
 
     fn name(self) -> &'static str {
@@ -102,49 +128,48 @@ impl Cell {
         }
     }
 
-    /// The cell's inside, between its rules.
+    /// The row's tap region on the moving page.
     #[must_use]
     pub fn bounds(self, scroll: i32) -> Rectangle {
-        Rectangle::new(
-            Point::new(left(self.column(), scroll) + 1, RULES[self.index() % 2] + 1),
-            Size::new_equal((COLUMN - 1) as u32),
+        let row = self.index() % 4;
+        Rectangle::with_corners(
+            Point::new(
+                page_left(self.page(), scroll) + RULE_LEFT[row],
+                RULE_TOP[row],
+            ),
+            Point::new(
+                page_left(self.page(), scroll) + RULE_RIGHT[row],
+                if row == 3 { 370 } else { RULE_TOP[row + 1] - 1 },
+            ),
         )
     }
 }
 
-/// Column `column`'s left rule.
+/// The moving page's horizontal origin.
 #[must_use]
-pub fn left(column: i32, scroll: i32) -> i32 {
-    GRID + COLUMN * column - scroll
+pub fn page_left(page: i32, scroll: i32) -> i32 {
+    PAGE_WIDTH * page - scroll
 }
 
-/// Whether all of `column` is in view at `scroll`.
+/// Whether the page is settled and all four rows are touchable.
 #[must_use]
-pub fn in_view(column: i32, scroll: i32) -> bool {
-    left(column, scroll) >= GRID && left(column, scroll) + COLUMN <= GRID + 2 * COLUMN
-}
-
-/// The scroll from `scroll` that brings `column` into view, moving as little as it can.
-#[must_use]
-pub fn scroll_to(column: i32, scroll: i32) -> i32 {
-    if left(column, scroll) < GRID {
-        (column * COLUMN).clamp(0, MAX_SCROLL)
-    } else {
-        ((column - 1) * COLUMN).clamp(scroll, MAX_SCROLL)
-    }
+pub fn in_view(page: i32, scroll: i32) -> bool {
+    page_left(page, scroll) == 0
 }
 
 /// The cell under `point`, if any.
 #[must_use]
 pub fn cell_at(point: Point, scroll: i32) -> Option<Cell> {
-    Cell::ALL.into_iter().find(|cell| cell.bounds(scroll).contains(point))
+    Cell::ALL
+        .into_iter()
+        .find(|cell| cell.bounds(scroll).contains(point))
 }
 
 pub const CELLS: usize = Cell::ALL.len();
 
 /// How far each of the panel's accents has come in: the ring's fade, the title's reveal and the
 /// rules' draw-out, 0 to 255; per cell, how many rows of its icon's modules show, 0 to 5, and
-/// its index's and name's reveals; whether the column markers show; and the hint's reveal. The
+/// its index's and name's reveals; whether the page markers show; and the hint's reveal. The
 /// icons' frames, the values and the tags always show whole.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Accents {
@@ -302,31 +327,36 @@ fn content(cell: Cell, peripherals: &PeripheralState) -> Content {
             &DEVICE
         }
     };
-    Content { glyph, icon, value, value_color, tag }
+    Content {
+        glyph,
+        icon,
+        value,
+        value_color,
+        tag,
+    }
 }
 
 fn index_style(font: &FontdueRenderer<'static, Color>) -> FontdueRenderer<'static, Color> {
-    style(font, chrome::GRAY, 14, FRAKTION)
+    style(font, chrome::GRAY, 12, FRAKTION)
 }
 
 fn name_style(font: &FontdueRenderer<'static, Color>) -> FontdueRenderer<'static, Color> {
-    style(font, chrome::GRAY, 14, FRAKTION_BOLD)
+    style(font, chrome::WHITE, 19, FRAKTION_BOLD)
 }
 
-fn value_style(font: &FontdueRenderer<'static, Color>, color: Color) -> FontdueRenderer<'static, Color> {
-    style(font, color, 16, FRAKTION)
-}
-
-fn tag_style(font: &FontdueRenderer<'static, Color>) -> FontdueRenderer<'static, Color> {
-    style(font, chrome::BLACK, 14, FRAKTION_BOLD)
+fn value_style(
+    font: &FontdueRenderer<'static, Color>,
+    color: Color,
+) -> FontdueRenderer<'static, Color> {
+    style(font, color, 20, FRAKTION_BOLD)
 }
 
 fn title_style(font: &FontdueRenderer<'static, Color>) -> FontdueRenderer<'static, Color> {
-    style(font, chrome::WHITE, 16, SHAPIRO)
+    style(font, chrome::WHITE, 27, SHAPIRO)
 }
 
 pub fn hint_style(font: &FontdueRenderer<'static, Color>) -> FontdueRenderer<'static, Color> {
-    style(font, chrome::GRAY, 14, FRAKTION)
+    style(font, chrome::GRAY, 12, FRAKTION)
 }
 
 fn title_pen(font: &FontdueRenderer<'static, Color>) -> Point {
@@ -352,53 +382,16 @@ fn marker(index: i32) -> Rectangle {
     )
 }
 
-/// All the column markers.
-pub const MARKERS: Rectangle = Rectangle::new(
-    Point::new(MARKERS_LEFT, MARKERS_TOP),
-    Size::new(((COLUMNS - 1) * MARKER_PITCH + MARKER) as u32, MARKER as u32),
-);
-
-/// The rows the grid, its rules and everything in its cells occupy.
-pub const GRID_ROWS: Rectangle = Rectangle::new(
-    Point::new(0, RULES[0]),
-    Size::new(466, (RULES[2] - RULES[0] + 1) as u32),
-);
-
 fn icon_tile(cell: Cell, scroll: i32) -> Tile {
-    let inside = cell.bounds(scroll);
+    let row = cell.index() % 4;
     Tile {
-        corner: Point::new(left(cell.column(), scroll) + 70, inside.top_left.y + 9),
-        module: 10,
-        padding: 8,
+        corner: Point::new(
+            page_left(cell.page(), scroll) + RULE_RIGHT[row] - 47,
+            RULE_TOP[row] + 13,
+        ),
+        module: 7,
+        padding: 4,
     }
-}
-
-/// Where a cell's value line starts and the tag box before it, if any.
-struct ValueLine {
-    tag: Option<(Rectangle, Point)>,
-    pen: Point,
-}
-
-fn value_line(cell: Cell, content: &Content, scroll: i32, font: &FontdueRenderer<'static, Color>) -> ValueLine {
-    let middle = (cell.bounds(scroll).top_left.y + 128) as f32;
-    let mut x = left(cell.column(), scroll) + INSET;
-    let tag = content.tag.map(|tag| {
-        let style = tag_style(font);
-        let width = libm::roundf(style.advance("0") * tag.len() as f32) as i32 + 10;
-        let bounds = Rectangle::new(Point::new(x, middle as i32 - 9), Size::new(width as u32, 18));
-        let pen = Point::new(
-            text::pen_x_for_ink_centre(&style, tag, x as f32 + width as f32 / 2.0),
-            text::baseline_for_ink_middle(&style, tag, middle),
-        );
-        x += width + 6;
-        (bounds, pen)
-    });
-    let style = value_style(font, content.value_color);
-    let pen = Point::new(
-        text::pen_x_for_ink_left(&style, &content.value, x),
-        text::baseline_for_ink_middle(&style, &content.value, middle),
-    );
-    ValueLine { tag, pen }
 }
 
 fn draw_cell<D: CoverageTarget<Color = Color>>(
@@ -409,56 +402,95 @@ fn draw_cell<D: CoverageTarget<Color = Color>>(
     font: &FontdueRenderer<'static, Color>,
     target: &mut D,
 ) -> Result<(), D::Error> {
-    let inside = cell.bounds(scroll);
-    if !target.visible(&inside) {
+    let bounds = cell.bounds(scroll);
+    if !target.visible(&bounds) {
         return Ok(());
     }
     let i = cell.index();
+    let row = i % 4;
+    let x = page_left(cell.page(), scroll) + RULE_LEFT[row];
+    let top = RULE_TOP[row];
     let content = content(cell, peripherals);
     icon_tile(cell, scroll).draw(content.glyph, content.icon, accents.rows[i], target)?;
-    let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
-    let x = left(cell.column(), scroll) + INSET;
     let mut index = String::<2>::new();
     _ = write!(index, "{:02}", i + 1);
     let style = index_style(font);
-    let pen = Point::new(x, inside.top_left.y + 9 + text::cap(&style));
-    draw_revealed(&style, &index, pen, Reveal::of(accents.index[i], 2), field)?;
+    let pen = Point::new(x + 13, text::baseline_for_ink_top(&style, &index, top + 10));
+    draw_revealed(
+        &style,
+        &index,
+        pen,
+        Reveal::of(accents.index[i], 2),
+        &mut OnBackground::new(&mut *target, chrome::BLACK),
+    )?;
     let style = name_style(font);
     let name = cell.name();
-    let pen = Point::new(x, inside.top_left.y + 100 + text::cap(&style));
-    draw_revealed(&style, name, pen, Reveal::of(accents.name[i], name.len()), field)?;
-
-    let line = value_line(cell, &content, scroll, font);
-    if let (Some((bounds, pen)), Some(tag)) = (line.tag, content.tag) {
-        target.fill_solid(&bounds, chrome::GRAY)?;
-        tag_style(font).draw_on_baseline(tag, pen, &mut OnBackground::new(&mut *target, chrome::GRAY))?;
+    let pen = Point::new(x + 45, text::baseline_for_ink_top(&style, name, top + 9));
+    draw_revealed(
+        &style,
+        name,
+        pen,
+        Reveal::of(accents.name[i], name.len()),
+        &mut OnBackground::new(&mut *target, chrome::BLACK),
+    )?;
+    let mut value = String::<24>::new();
+    if let Some(tag) = content.tag {
+        _ = write!(value, "{tag}  ");
     }
-    let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
-    value_style(font, content.value_color).draw_on_baseline(&content.value, line.pen, field)
+    _ = value.push_str(&content.value);
+    let style = value_style(font, content.value_color);
+    let pen = Point::new(x + 45, text::baseline_for_ink_top(&style, &value, top + 38));
+    style.draw_on_baseline(
+        &value,
+        pen,
+        &mut OnBackground::new(&mut *target, chrome::BLACK),
+    )?;
+    let marker = Rectangle::new(Point::new(x, top + 12), Size::new(3, 16));
+    target.fill_solid(
+        &marker,
+        if cell == Cell::Compass && content.icon == chrome::ORANGE {
+            chrome::ORANGE
+        } else {
+            chrome::shade(chrome::BLUE, 30)
+        },
+    )
 }
 
 /// The rules, drawn out from the middle to `progress` of their length.
-fn draw_rules<D: CoverageTarget<Color = Color>>(scroll: i32, progress: u8, target: &mut D) -> Result<(), D::Error> {
+fn draw_rules<D: CoverageTarget<Color = Color>>(
+    scroll: i32,
+    progress: u8,
+    target: &mut D,
+) -> Result<(), D::Error> {
     if progress == 0 {
         return Ok(());
     }
-    let k = f32::from(progress) / 255.0;
-    let (start, end) = (left(0, scroll), left(COLUMNS, scroll));
-    let from = libm::roundf(CENTER.x as f32 - (CENTER.x - start) as f32 * k) as i32;
-    let to = libm::roundf(CENTER.x as f32 + (end - CENTER.x) as f32 * k) as i32;
-    for row in RULES {
-        target.fill_solid(&Rectangle::with_corners(Point::new(from, row), Point::new(to, row)), chrome::GRAY)?;
-    }
-    let half = (RULES[2] - RULES[0]) as f32 * k / 2.0;
-    let (top, bottom) = (
-        libm::roundf(RULES[1] as f32 - half) as i32,
-        libm::roundf(RULES[1] as f32 + half) as i32,
-    );
-    for column in 0..=COLUMNS {
-        let x = left(column, scroll);
-        target.fill_solid(&Rectangle::with_corners(Point::new(x, top), Point::new(x, bottom)), chrome::GRAY)?;
+    for page in 0..=1 {
+        let shift = page_left(page, scroll);
+        for row in 0..4 {
+            let start = shift + RULE_LEFT[row];
+            let end = shift + RULE_RIGHT[row];
+            let width = ((end - start) as i64 * i64::from(progress) / 255) as i32;
+            target.fill_solid(
+                &Rectangle::new(Point::new(start, RULE_TOP[row]), Size::new(width as u32, 1)),
+                chrome::shade(chrome::GRAY, 145),
+            )?;
+        }
+        target.fill_solid(
+            &Rectangle::new(
+                Point::new(shift + 83, 370),
+                Size::new((300 * i32::from(progress) / 255) as u32, 1),
+            ),
+            chrome::shade(chrome::GRAY, 145),
+        )?;
     }
     Ok(())
+}
+
+pub fn draw_scatter<D: CoverageTarget<Color = Color>>(target: &mut D) -> Result<(), D::Error> {
+    let mut scatter = SCATTER.clone();
+    scatter.color = chrome::shade(chrome::PURPLE, 100);
+    scatter.draw_clear_of(&SCATTER_LOOKS, &SCATTER_CLEAR, target)
 }
 
 pub fn draw<D: CoverageTarget<Color = Color>>(
@@ -468,11 +500,17 @@ pub fn draw<D: CoverageTarget<Color = Color>>(
     font: &FontdueRenderer<'static, Color>,
     target: &mut D,
 ) -> Result<(), D::Error> {
+    draw_scatter(target)?;
     {
         let grid = &mut Round::new(&mut *target, CENTER, CLIP_RADIUS);
-        draw_rules(scroll, accents.rules, grid)?;
+        let rows = &mut Window::new(
+            grid,
+            Point::zero(),
+            Rectangle::new(Point::new(0, 83), Size::new(466, 288)),
+        );
+        draw_rules(scroll, accents.rules, rows)?;
         for cell in Cell::ALL {
-            draw_cell(cell, peripherals, scroll, &accents, font, grid)?;
+            draw_cell(cell, peripherals, scroll, &accents, font, rows)?;
         }
     }
     if accents.ring > 0 {
@@ -480,12 +518,33 @@ pub fn draw<D: CoverageTarget<Color = Color>>(
         super::smooth::perimeter().draw(&mut OnBackground::new(&mut *target, chrome::BLACK), ring);
     }
     let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
-    draw_revealed(&title_style(font), TITLE, title_pen(font), Reveal::of(accents.title, TITLE.len()), field)?;
+    draw_revealed(
+        &title_style(font),
+        TITLE,
+        title_pen(font),
+        Reveal::of(accents.title, TITLE.len()),
+        field,
+    )?;
+    let page = ((scroll + PAGE_WIDTH / 2) / PAGE_WIDTH).clamp(0, 1);
+    let subtitle = if page == 0 {
+        "DISPLAY / 01"
+    } else {
+        "DEVICE / 02"
+    };
+    let style = hint_style(font);
+    let pen = Point::new(
+        text::pen_x_for_ink_centre(&style, subtitle, CENTER.x as f32),
+        text::baseline_for_ink_top(&style, subtitle, 64),
+    );
+    style.draw_on_baseline(
+        subtitle,
+        pen,
+        &mut OnBackground::new(&mut *target, chrome::BLACK),
+    )?;
     if accents.markers {
-        let first = (scroll + COLUMN / 2) / COLUMN;
-        for index in 0..COLUMNS {
+        for index in 0..2 {
             let square = marker(index);
-            if (first..first + 2).contains(&index) {
+            if page == index {
                 target.fill_solid(&square, chrome::WHITE)?;
             } else {
                 target.fill_solid(&square, chrome::GRAY)?;
@@ -494,7 +553,13 @@ pub fn draw<D: CoverageTarget<Color = Color>>(
         }
     }
     let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
-    draw_revealed(&hint_style(font), HINT, hint_pen(font), Reveal::of(accents.hint, HINT.len()), field)
+    draw_revealed(
+        &hint_style(font),
+        HINT,
+        hint_pen(font),
+        Reveal::of(accents.hint, HINT.len()),
+        field,
+    )
 }
 
 /// What a cell covers, for damage: its inside, which holds everything it draws.
@@ -523,30 +588,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_first_two_columns_show_at_rest_and_the_last_two_at_the_end() {
-        let shown = |scroll| (0..4).map(|c| in_view(c, scroll)).collect::<heapless::Vec<_, 4>>();
-        assert_eq!(shown(0), [true, true, false, false]);
-        assert_eq!(shown(COLUMN), [false, true, true, false]);
-        assert_eq!(shown(MAX_SCROLL), [false, false, true, true]);
+    fn one_complete_page_is_active_at_each_end() {
+        assert!(in_view(0, 0));
+        assert!(!in_view(1, 0));
+        assert!(!in_view(0, MAX_SCROLL));
+        assert!(in_view(1, MAX_SCROLL));
     }
 
     #[test]
-    fn a_cropped_column_scrolls_into_view_the_short_way() {
-        assert_eq!(scroll_to(2, 0), COLUMN);
-        assert_eq!(scroll_to(3, COLUMN), MAX_SCROLL);
-        assert_eq!(scroll_to(1, MAX_SCROLL), COLUMN);
-        assert_eq!(scroll_to(0, COLUMN), 0);
+    fn each_page_has_four_rows() {
+        assert_eq!(Cell::Zone.page(), 0);
+        assert_eq!(Cell::AlwaysOn.page(), 0);
+        assert_eq!(Cell::Compass.page(), 1);
+        assert_eq!(Cell::Device.page(), 1);
     }
 
     #[test]
     fn cells_are_hit_between_their_rules() {
-        assert_eq!(cell_at(Point::new(150, 150), 0), Some(Cell::Zone));
-        assert_eq!(cell_at(Point::new(150, 300), 0), Some(Cell::Brightness));
-        assert_eq!(cell_at(Point::new(300, 100), 0), Some(Cell::Timeout));
-        assert_eq!(cell_at(Point::new(300, 300), 0), Some(Cell::AlwaysOn));
-        assert_eq!(cell_at(Point::new(400, 100), 0), Some(Cell::Compass));
-        assert_eq!(cell_at(Point::new(300, 100), MAX_SCROLL), Some(Cell::Battery));
-        assert_eq!(cell_at(Point::new(150, 218), 0), None);
+        assert_eq!(cell_at(Point::new(150, 115), 0), Some(Cell::Zone));
+        assert_eq!(cell_at(Point::new(150, 190), 0), Some(Cell::Brightness));
+        assert_eq!(cell_at(Point::new(300, 260), 0), Some(Cell::Timeout));
+        assert_eq!(cell_at(Point::new(300, 330), 0), Some(Cell::AlwaysOn));
+        assert_eq!(
+            cell_at(Point::new(300, 115), MAX_SCROLL),
+            Some(Cell::Compass)
+        );
+        assert_eq!(
+            cell_at(Point::new(300, 260), MAX_SCROLL),
+            Some(Cell::Battery)
+        );
+        assert_eq!(cell_at(Point::new(420, 100), 0), None);
         assert_eq!(cell_at(Point::new(150, 30), 0), None);
     }
 

@@ -288,34 +288,34 @@ fn settings(driver: &mut Driver) {
 /// From the clock face into the settings panel, through brightness and the zone picker, and
 /// back to the face.
 fn settings_walk(driver: &mut Driver) {
-    // Down from the face, then along the grid and back.
+    // Down from the face, across the two settings pages and back.
     driver.swipe(Point::new(233, 70), Point::new(233, 420), ms(300));
     driver.settle();
     driver.wait(ms(900));
-    driver.swipe(Point::new(380, 250), Point::new(200, 250), ms(300));
+    driver.swipe(Point::new(380, 250), Point::new(80, 250), ms(300));
     driver.settle();
     driver.wait(ms(800));
-    driver.swipe(Point::new(200, 250), Point::new(380, 250), ms(300));
+    driver.swipe(Point::new(80, 250), Point::new(380, 250), ms(300));
     driver.settle();
     driver.wait(ms(600));
     // Brightness to 80 %, kept.
-    tap(driver, 150, 300);
+    tap(driver, 150, 190);
     driver.wait(ms(700));
     driver.swipe(Point::new(220, 285), Point::new(333, 285), ms(500));
     driver.wait(ms(600));
     tap(driver, 233, 250);
     driver.wait(ms(700));
     // The timeout to 5 MIN, kept, then ALWAYS ON on.
-    tap(driver, 300, 150);
+    tap(driver, 300, 260);
     driver.wait(ms(700));
     driver.swipe(Point::new(233, 300), Point::new(233, 250), ms(300));
     driver.wait(ms(600));
     tap(driver, 233, 250);
     driver.wait(ms(700));
-    tap(driver, 300, 300);
+    tap(driver, 300, 330);
     driver.wait(ms(700));
     // The zone picker: one offset later, its zones, and back out.
-    tap(driver, 150, 150);
+    tap(driver, 150, 115);
     driver.wait(ms(800));
     driver.swipe(Point::new(233, 300), Point::new(233, 255), ms(300));
     driver.wait(ms(600));

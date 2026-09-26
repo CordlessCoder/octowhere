@@ -797,19 +797,18 @@ fn tap(driver: &mut Driver, x: i32, y: i32) -> Vec<Update> {
     updates
 }
 
-/// Taps `cell` on the open panel, first tapping its column while it is cropped, as a person
-/// would, to scroll it into view.
+/// Taps a row on its page, swiping to that page first.
 fn tap_cell(driver: &mut Driver, cell: panel::Cell) -> Vec<Update> {
-    for _ in 0..3 {
-        let scroll = driver.stage.panel_scroll();
-        if panel::in_view(cell.column(), scroll) {
-            let middle = cell.bounds(scroll).center();
-            return tap(driver, middle.x, middle.y);
+    if !panel::in_view(cell.page(), driver.stage.panel_scroll()) {
+        if cell.page() == 1 {
+            driver.swipe(Point::new(380, 250), Point::new(80, 250), 300_000);
+        } else {
+            driver.swipe(Point::new(80, 250), Point::new(380, 250), 300_000);
         }
-        let x = if panel::left(cell.column(), scroll) > 233 { 420 } else { 60 };
-        tap(driver, x, cell.bounds(scroll).center().y);
+        driver.settle();
     }
-    panic!("{cell:?} never came into view");
+    let middle = cell.bounds(driver.stage.panel_scroll()).center();
+    tap(driver, middle.x, middle.y)
 }
 
 fn stored(updates: &[Update]) -> Option<Store> {
@@ -878,42 +877,40 @@ fn a_cover_on_the_panel_closes_it_to_the_clock() {
 }
 
 #[test]
-fn a_sideways_drag_scrolls_the_grid_and_it_snaps_a_column_at_a_time() {
+fn a_sideways_drag_switches_between_complete_pages() {
     let mut driver = open_panel(Screen::Clock);
-    driver.swipe(Point::new(380, 250), Point::new(260, 250), 400_000);
+    driver.swipe(Point::new(380, 250), Point::new(80, 250), 400_000);
     driver.settle();
-    assert_eq!(driver.stage.panel_scroll(), panel::COLUMN);
+    assert_eq!(driver.stage.panel_scroll(), panel::PAGE_WIDTH);
     assert_eq!(driver.stage.panel_offset(), HEIGHT);
     driver.swipe(Point::new(200, 250), Point::new(260, 250), 400_000);
     driver.settle();
-    assert_eq!(driver.stage.panel_scroll(), panel::COLUMN, "a short drag moved it");
-    driver.swipe(Point::new(260, 250), Point::new(200, 250), 50_000);
-    driver.settle();
-    assert_eq!(driver.stage.panel_scroll(), panel::MAX_SCROLL, "a flick did not carry it on");
+    assert_eq!(driver.stage.panel_scroll(), panel::PAGE_WIDTH, "a short drag moved it");
     driver.swipe(Point::new(260, 250), Point::new(200, 250), 50_000);
     driver.settle();
     assert_eq!(driver.stage.panel_scroll(), panel::MAX_SCROLL, "it went past the end");
     driver.swipe(Point::new(200, 250), Point::new(260, 250), 50_000);
     driver.settle();
-    assert_eq!(driver.stage.panel_scroll(), panel::COLUMN, "a flick back did not go one column");
+    assert_eq!(driver.stage.panel_scroll(), 0, "a flick back did not return to page one");
     driver.swipe(Point::new(100, 250), Point::new(400, 250), 400_000);
     driver.settle();
     assert_eq!(driver.stage.panel_scroll(), 0);
 }
 
 #[test]
-fn a_tap_on_the_cropped_column_scrolls_it_into_view_without_opening_it() {
+fn the_second_page_rows_open_only_after_the_page_settles() {
     let mut driver = open_panel(Screen::Clock);
-    tap(&mut driver, 420, 150);
-    assert_eq!(driver.stage.panel_scroll(), panel::COLUMN);
-    assert!(driver.stage.page().is_none());
-    tap(&mut driver, 420, 300);
+    tap(&mut driver, 300, 115);
+    assert!(driver.stage.page().is_some());
+    driver.cover();
+    driver.settle();
+    let mut driver = open_panel(Screen::Clock);
+    driver.swipe(Point::new(380, 250), Point::new(80, 250), 300_000);
+    driver.settle();
     assert_eq!(driver.stage.panel_scroll(), panel::MAX_SCROLL);
-    tap(&mut driver, 60, 150);
-    assert_eq!(driver.stage.panel_scroll(), panel::COLUMN, "it scrolled further than it needed");
     assert!(driver.stage.page().is_none());
-    tap(&mut driver, 150, 150);
-    assert!(matches!(driver.stage.page(), Some(Page::Timeout(_))));
+    tap(&mut driver, 300, 330);
+    assert!(matches!(driver.stage.page(), Some(Page::Device(_))));
 }
 
 #[test]
@@ -930,7 +927,7 @@ fn the_compass_cell_restarts_calibration_and_closes_to_the_compass() {
 #[test]
 fn the_brightness_editor_shows_each_step_live_and_stores_on_a_tap_on_its_hint() {
     let mut driver = open_panel(Screen::Clock);
-    tap(&mut driver, 150, 300);
+    tap(&mut driver, 150, 190);
     assert!(matches!(driver.stage.page(), Some(Page::Brightness(_))));
     let updates = driver.swipe(Point::new(150, 280), Point::new(420, 280), 300_000);
     let levels: Vec<_> = updates.iter().filter_map(|update| update.brightness).collect();
@@ -945,14 +942,14 @@ fn the_brightness_editor_shows_each_step_live_and_stores_on_a_tap_on_its_hint() 
 #[test]
 fn cancel_or_a_cover_puts_the_brightness_back() {
     let mut driver = open_panel(Screen::Clock);
-    tap(&mut driver, 150, 300);
+    tap(&mut driver, 150, 190);
     driver.swipe(Point::new(150, 280), Point::new(80, 280), 200_000);
     let updates = tap(&mut driver, 120, 120);
     assert_eq!(updates.iter().rev().find_map(|update| update.brightness), Some(120));
     assert!(driver.stage.page().is_none());
     assert_eq!(driver.stage.panel_offset(), HEIGHT);
 
-    tap(&mut driver, 150, 300);
+    tap(&mut driver, 150, 190);
     driver.swipe(Point::new(150, 280), Point::new(80, 280), 200_000);
     let update = driver.cover();
     assert_eq!(update.brightness, Some(120));
@@ -965,7 +962,7 @@ fn cancel_or_a_cover_puts_the_brightness_back() {
 #[test]
 fn clearing_takes_a_drag_all_the_way_to_the_target() {
     let mut driver = open_panel(Screen::Clock);
-    tap(&mut driver, 150, 300);
+    tap(&mut driver, 150, 190);
     driver.swipe(Point::new(150, 280), Point::new(420, 280), 300_000);
     tap(&mut driver, 233, 250);
     tap_cell(&mut driver, panel::Cell::Device);
@@ -973,11 +970,11 @@ fn clearing_takes_a_drag_all_the_way_to_the_target() {
     tap(&mut driver, 233, 342);
     assert!(matches!(driver.stage.page(), Some(Page::Clear(_))));
     // Short of the target, or not starting on the handle, erases nothing.
-    let updates = driver.swipe(Point::new(90, 258), Point::new(250, 258), 300_000);
+    let updates = driver.swipe(Point::new(120, 258), Point::new(250, 258), 300_000);
     assert_eq!(stored(&updates), None);
     let updates = driver.swipe(Point::new(200, 258), Point::new(420, 258), 300_000);
     assert_eq!(stored(&updates), None);
-    let updates = driver.swipe(Point::new(90, 258), Point::new(420, 258), 300_000);
+    let updates = driver.swipe(Point::new(120, 258), Point::new(420, 258), 300_000);
     assert_eq!(stored(&updates), Some(Store::Clear));
     assert!(driver.stage.page().is_none());
     assert_eq!(driver.stage.peripherals().brightness, 120);
@@ -986,7 +983,7 @@ fn clearing_takes_a_drag_all_the_way_to_the_target() {
 #[test]
 fn the_picker_stores_a_zone_by_hand_and_automatic_from_its_first_step() {
     let mut driver = open_panel(Screen::Clock);
-    tap(&mut driver, 150, 150);
+    tap(&mut driver, 150, 115);
     assert!(matches!(driver.stage.page(), Some(Page::Picker(_))));
     // One row up is the next offset, +02:00, and its zones start at the top of the list.
     driver.swipe(Point::new(233, 300), Point::new(233, 255), 300_000);
@@ -1001,8 +998,8 @@ fn the_picker_stores_a_zone_by_hand_and_automatic_from_its_first_step() {
         zone: Some(zone),
     });
 
-    tap(&mut driver, 150, 150);
-    let updates = tap(&mut driver, 233, 390);
+    tap(&mut driver, 150, 115);
+    let updates = tap(&mut driver, 233, 342);
     assert_eq!(stored(&updates), Some(Store::AutomaticZone));
     assert_eq!(driver.stage.peripherals().clock.zone().mode, ZoneMode::Automatic);
 }
@@ -1010,7 +1007,7 @@ fn the_picker_stores_a_zone_by_hand_and_automatic_from_its_first_step() {
 #[test]
 fn a_fling_in_the_picker_keeps_stepping_and_stops() {
     let mut driver = open_panel(Screen::Clock);
-    tap(&mut driver, 150, 150);
+    tap(&mut driver, 150, 115);
     let Some(Page::Picker(before)) = driver.stage.page().cloned() else { panic!() };
     driver.swipe(Point::new(233, 300), Point::new(233, 200), 60_000);
     driver.settle();
@@ -1046,7 +1043,7 @@ fn the_panel_and_its_screens_draw_the_same_in_tiles() {
         stages.push((name, driver.stage));
     }
     let mut driver = open_panel(Screen::Clock);
-    tap(&mut driver, 150, 150);
+    tap(&mut driver, 150, 115);
     tap(&mut driver, 233, 250);
     stages.push(("zones", driver.stage));
     for (name, stage) in stages {
@@ -1231,10 +1228,9 @@ fn a_failure_shows_the_fault_screen_then_the_clock() {
     assert_eq!(driver.stage.screen(), Screen::Clock);
 }
 
-/// Scrolls the open device page past its end, which leaves the clear box on rows 320 to 363
-/// and the replay box on rows 376 to 419.
+/// Scrolls the device page to its action boxes.
 fn scroll_device_to_end(driver: &mut Driver) {
-    driver.swipe(Point::new(233, 400), Point::new(233, 200), 300_000);
+    driver.swipe(Point::new(233, 440), Point::new(233, 80), 300_000);
 }
 
 fn open_device_page() -> Driver<'static> {
@@ -1248,7 +1244,7 @@ fn open_device_page() -> Driver<'static> {
 fn replay_on_the_device_page_plays_the_identity_and_the_card_then_the_clock() {
     let mut driver = open_device_page();
     scroll_device_to_end(&mut driver);
-    tap(&mut driver, 233, 398);
+    tap(&mut driver, 233, 298);
     tap(&mut driver, 233, 258);
     assert!(driver.stage.starting_up());
     assert!(driver.stage.page().is_none());
@@ -1272,7 +1268,7 @@ fn a_replay_after_a_failed_boot_still_shows_the_identity() {
     driver.wait(600_000);
     tap_cell(&mut driver, panel::Cell::Device);
     scroll_device_to_end(&mut driver);
-    tap(&mut driver, 233, 398);
+    tap(&mut driver, 233, 298);
     tap(&mut driver, 233, 258);
     assert!(driver.stage.starting_up());
     driver.wait(1_000_000);
@@ -1287,7 +1283,7 @@ fn replay_damage_redraws_what_changed() {
     for _ in 0..2 {
         buffers.draw(&driver.stage, &Dirty::new_full());
     }
-    tap(&mut driver, 233, 398);
+    tap(&mut driver, 233, 298);
     driver.stroke(&[Point::new(233, 258)]);
     for step in 0..160 {
         let partial = buffers.draw(&driver.stage, driver.stage.changed());
@@ -1301,7 +1297,7 @@ fn replay_damage_redraws_what_changed() {
 fn open_replay_chooser(steps: i32) -> Driver<'static> {
     let mut driver = open_device_page();
     scroll_device_to_end(&mut driver);
-    tap(&mut driver, 233, 398);
+    tap(&mut driver, 233, 298);
     assert!(matches!(driver.stage.page(), Some(Page::Replay(_))));
     if steps > 0 {
         driver.swipe(Point::new(233, 330), Point::new(233, 330 - 40 * steps - 10), 300_000);
@@ -1340,7 +1336,7 @@ fn a_demonstration_leaves_the_boot_record_for_a_good_replay() {
         driver.wait(600_000);
         tap_cell(driver, panel::Cell::Device);
         scroll_device_to_end(driver);
-        tap(driver, 233, 398);
+        tap(driver, 233, 298);
         if steps > 0 {
             driver.swipe(Point::new(233, 330), Point::new(233, 330 - 40 * steps - 10), 300_000);
         }
@@ -1557,7 +1553,7 @@ fn a_wake_from_the_always_on_face_climbs_from_its_level() {
 #[test]
 fn a_wake_from_the_panel_lands_on_the_clock_and_drops_the_edit() {
     let mut driver = open_panel(Screen::Compass);
-    tap(&mut driver, 150, 300);
+    tap(&mut driver, 150, 190);
     driver.swipe(Point::new(150, 280), Point::new(420, 280), 300_000);
     let updates = wait_until(&mut driver, 70_000_000, |rest| rest == Rest::Off);
     assert!(
@@ -1698,7 +1694,7 @@ fn clearing_puts_the_timeout_and_always_on_back() {
     tap_cell(&mut driver, panel::Cell::Device);
     scroll_device_to_end(&mut driver);
     tap(&mut driver, 233, 342);
-    driver.swipe(Point::new(90, 258), Point::new(420, 258), 300_000);
+    driver.swipe(Point::new(120, 258), Point::new(420, 258), 300_000);
     assert_eq!(driver.stage.peripherals().timeout, Timeout::Minute1);
     assert!(!driver.stage.peripherals().always_on);
 }

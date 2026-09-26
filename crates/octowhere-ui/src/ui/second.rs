@@ -1,7 +1,4 @@
-//! The screens the settings panel opens: the brightness editor, the timeout screen, the device
-//! page, the clear confirm and the replay chooser, with the zone picker in `picker`. They share a top cap with a hint, a button and a
-//! 96 px icon, and most of them an open field between two rules.
-//! `context/design/specs/SETTINGS-PANEL-SPEC.md` is their design.
+//! The D3 settings pages, with the zone picker in `picker`.
 
 use core::fmt::Write as _;
 
@@ -24,23 +21,22 @@ use super::{
     text::{self, style},
 };
 use crate::chrome::{
-    self, Color, CoverageTarget, FontdueRenderer, OnBackground, RgbColorExt as _, Window, FRAKTION,
-    FRAKTION_BOLD,
+    self, Color, CoverageTarget, FRAKTION, FRAKTION_BOLD, FontdueRenderer, OnBackground, Window,
 };
 
 const CENTER: Point = Point::new(233, 233);
-const HINT_TOP: i32 = 48;
 /// The top cap: a tap anywhere in it presses the button.
 const TOP_CAP: i32 = 150;
-pub const BUTTON: Rectangle = Rectangle::new(Point::new(72, 104), Size::new(110, 39));
-pub const ICON: Tile = Tile { corner: Point::new(262, 90), module: 16, padding: 8 };
+pub const BUTTON: Rectangle = Rectangle::new(Point::new(83, 96), Size::new(100, 44));
+pub const ICON: Tile = Tile {
+    corner: Point::new(330, 92),
+    module: 6,
+    padding: 3,
+};
 /// The field's rules, and the rows between them where a tap or drag acts on it.
-const FIELD_TOP: i32 = 198;
-const FIELD_BOTTOM: i32 = 318;
-const RULE: i32 = 4;
 const FIELD_TAPS: core::ops::Range<i32> = 186..330;
 /// The column the field's text starts on, as on the clock face.
-pub const TEXT_LEFT: i32 = 62;
+pub const TEXT_LEFT: i32 = 96;
 const ICON_ROW: Micros = 30_000;
 const HINT_REVEAL: Micros = 160_000;
 
@@ -65,7 +61,11 @@ impl defmt::Format for Store {
         match self {
             Self::Brightness(level) => defmt::write!(f, "Brightness({})", level),
             Self::ManualZone(zone) => {
-                defmt::write!(f, "ManualZone({=str})", crate::tz::DATABASE.zone(*zone).name);
+                defmt::write!(
+                    f,
+                    "ManualZone({=str})",
+                    crate::tz::DATABASE.zone(*zone).name
+                );
             }
             Self::AutomaticZone => defmt::write!(f, "AutomaticZone"),
             Self::Timeout(timeout) => defmt::write!(f, "Timeout({=str})", timeout.label()),
@@ -111,7 +111,10 @@ pub struct Accents {
 }
 
 impl Accents {
-    pub const FULL: Self = Self { icon_rows: 5, hint: u8::MAX };
+    pub const FULL: Self = Self {
+        icon_rows: 5,
+        hint: u8::MAX,
+    };
 
     #[must_use]
     pub fn at(opened: Micros, now: Micros) -> Self {
@@ -125,7 +128,12 @@ impl Accents {
 
 impl Page {
     /// Handles a gesture. A cover is the stage's, and never reaches a page.
-    pub fn handle(&mut self, event: &GestureEvent, peripherals: &PeripheralState, effects: &mut Effects) -> Next {
+    pub fn handle(
+        &mut self,
+        event: &GestureEvent,
+        peripherals: &PeripheralState,
+        effects: &mut Effects,
+    ) -> Next {
         match self {
             Self::Brightness(editor) => editor.handle(event, effects),
             Self::Device(page) => page.handle(event, peripherals),
@@ -173,9 +181,9 @@ pub fn hint_style(font: &FontdueRenderer<'static, Color>) -> FontdueRenderer<'st
     style(font, chrome::GRAY, 14, FRAKTION)
 }
 
-/// The ring, the hint, the button and the icon that every second-level screen has.
+/// The common title, page label, action and status icon.
 pub fn draw_cap<D: CoverageTarget<Color = Color>>(
-    hint: &str,
+    section: &str,
     button: &str,
     glyph: &Glyph,
     icon: Color,
@@ -183,29 +191,76 @@ pub fn draw_cap<D: CoverageTarget<Color = Color>>(
     font: &FontdueRenderer<'static, Color>,
     target: &mut D,
 ) -> Result<(), D::Error> {
-    draw_cap_around_icon(hint, button, accents, font, target)?;
+    draw_cap_around_icon(section, button, font, target)?;
     ICON.draw(glyph, icon, accents.icon_rows, target)
 }
 
 /// [`draw_cap`] without its icon, for a screen that draws something else there.
 pub fn draw_cap_around_icon<D: CoverageTarget<Color = Color>>(
-    hint: &str,
+    section: &str,
     button: &str,
+    font: &FontdueRenderer<'static, Color>,
+    target: &mut D,
+) -> Result<(), D::Error> {
+    panel::draw_scatter(target)?;
+    super::smooth::perimeter().draw(
+        &mut OnBackground::new(&mut *target, chrome::BLACK),
+        chrome::GRAY,
+    );
+    let style = style(font, chrome::WHITE, 27, crate::chrome::SHAPIRO);
+    let pen = Point::new(
+        text::pen_x_for_ink_centre(&style, "SETTINGS", CENTER.x as f32),
+        text::baseline_for_ink_top(&style, "SETTINGS", 29),
+    );
+    style.draw_on_baseline(
+        "SETTINGS",
+        pen,
+        &mut OnBackground::new(&mut *target, chrome::BLACK),
+    )?;
+    let style = hint_style(font);
+    let pen = Point::new(
+        text::pen_x_for_ink_centre(&style, section, CENTER.x as f32),
+        text::baseline_for_ink_top(&style, section, 65),
+    );
+    style.draw_on_baseline(
+        section,
+        pen,
+        &mut OnBackground::new(&mut *target, chrome::BLACK),
+    )?;
+    for y in [83, 145] {
+        target.fill_solid(
+            &Rectangle::new(Point::new(83, y), Size::new(300, 1)),
+            chrome::shade(chrome::GRAY, 145),
+        )?;
+    }
+    draw_button(button, BUTTON, false, font, target)
+}
+
+pub fn draw_footer<D: CoverageTarget<Color = Color>>(
+    label: &str,
     accents: Accents,
     font: &FontdueRenderer<'static, Color>,
     target: &mut D,
 ) -> Result<(), D::Error> {
-    super::smooth::perimeter().draw(&mut OnBackground::new(&mut *target, chrome::BLACK), chrome::GRAY);
+    target.fill_solid(
+        &Rectangle::new(Point::new(83, 370), Size::new(300, 1)),
+        chrome::shade(chrome::GRAY, 145),
+    )?;
     let style = hint_style(font);
     let pen = Point::new(
-        text::pen_x_for_ink_centre(&style, hint, CENTER.x as f32),
-        text::baseline_for_ink_top(&style, hint, HINT_TOP),
+        text::pen_x_for_ink_centre(&style, label, CENTER.x as f32),
+        text::baseline_for_ink_top(&style, label, 398),
     );
-    draw_revealed(&style, hint, pen, Reveal::of(accents.hint, hint.len()), &mut OnBackground::new(&mut *target, chrome::BLACK))?;
-    draw_button(button, BUTTON, false, font, target)
+    draw_revealed(
+        &style,
+        label,
+        pen,
+        Reveal::of(accents.hint, label.len()),
+        &mut OnBackground::new(target, chrome::BLACK),
+    )
 }
 
-/// A box with a label: outlined for an action, filled `GRAY` for a mode in force.
+/// A box with a label: outlined for navigation, filled for AUTO.
 pub fn draw_button<D: CoverageTarget<Color = Color>>(
     label: &str,
     bounds: Rectangle,
@@ -213,9 +268,9 @@ pub fn draw_button<D: CoverageTarget<Color = Color>>(
     font: &FontdueRenderer<'static, Color>,
     target: &mut D,
 ) -> Result<(), D::Error> {
-    target.fill_solid(&bounds, chrome::GRAY)?;
+    target.fill_solid(&bounds, if filled { chrome::WHITE } else { chrome::GRAY })?;
     let (inside, color) = if filled {
-        (chrome::GRAY, chrome::BLACK)
+        (chrome::WHITE, chrome::BLACK)
     } else {
         target.fill_solid(&bounds.offset(-2), chrome::BLACK)?;
         (chrome::BLACK, chrome::WHITE)
@@ -229,19 +284,52 @@ pub fn draw_button<D: CoverageTarget<Color = Color>>(
     style.draw_on_baseline(label, pen, &mut OnBackground::new(&mut *target, inside))
 }
 
-/// The open field: white rules on the face's band rows, cut at the page's circle, and the
-/// locators that mark the text column.
+fn draw_action_button<D: CoverageTarget<Color = Color>>(
+    label: &str,
+    bounds: Rectangle,
+    color: Color,
+    font: &FontdueRenderer<'static, Color>,
+    target: &mut D,
+) -> Result<(), D::Error> {
+    target.fill_solid(&bounds, color)?;
+    target.fill_solid(&bounds.offset(-1), chrome::BLACK)?;
+    let style = style(font, color, 16, FRAKTION_BOLD);
+    let middle =
+        bounds.top_left + Point::new(bounds.size.width as i32 / 2, bounds.size.height as i32 / 2);
+    let pen = Point::new(
+        text::pen_x_for_ink_centre(&style, label, middle.x as f32),
+        text::baseline_for_ink_middle(&style, label, middle.y as f32),
+    );
+    style.draw_on_baseline(label, pen, &mut OnBackground::new(target, chrome::BLACK))
+}
+
+/// The former editor field, retained for the orange clear confirmation.
 pub fn draw_field<D: CoverageTarget<Color = Color>>(target: &mut D) -> Result<(), D::Error> {
     let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
-    for rows in [FIELD_TOP..FIELD_TOP + RULE, FIELD_BOTTOM - RULE..FIELD_BOTTOM] {
+    for rows in [198..202, 314..318] {
         super::smooth::disc_rows(field, rows, CENTER, 232.0, chrome::WHITE)?;
     }
     for x in [TEXT_LEFT - 14, 400] {
-        for top in [FIELD_TOP + RULE, FIELD_BOTTOM - 16] {
-            target.fill_solid(&Rectangle::new(Point::new(x, top), Size::new(3, 12)), chrome::WHITE)?;
+        for top in [202, 302] {
+            target.fill_solid(
+                &Rectangle::new(Point::new(x, top), Size::new(3, 12)),
+                chrome::WHITE,
+            )?;
         }
     }
     Ok(())
+}
+
+pub fn draw_slab<D: CoverageTarget<Color = Color>>(
+    top: i32,
+    bottom: i32,
+    color: Color,
+    target: &mut D,
+) -> Result<(), D::Error> {
+    target.fill_solid(
+        &Rectangle::new(Point::new(83, top), Size::new(300, (bottom - top) as u32)),
+        color,
+    )
 }
 
 fn in_top_cap(point: Point) -> bool {
@@ -262,17 +350,19 @@ pub struct Brightness {
 
 const TRACK_LEFT: i32 = 66;
 const TRACK_RIGHT: i32 = 400;
-const TRACK_TOP: i32 = 276;
-const TRACK_HEIGHT: u32 = 24;
+const TRACK_TOP: i32 = 299;
+const TRACK_HEIGHT: u32 = 19;
 const STEPS: i32 = 10;
-const STEP_GAP: i32 = 6;
 /// The lowest level, which keeps the screen readable enough to undo.
 const FLOOR_PERCENT: i32 = 10;
 
 impl Brightness {
     #[must_use]
     pub fn new(level: u8) -> Self {
-        Self { opened: level, level }
+        Self {
+            opened: level,
+            level,
+        }
     }
 
     /// The display's level for `percent` of full.
@@ -296,7 +386,9 @@ impl Brightness {
 
     fn handle(&mut self, event: &GestureEvent, effects: &mut Effects) -> Next {
         match *event {
-            GestureEvent::DragStart(drag) | GestureEvent::DragMove(drag) | GestureEvent::DragEnd(drag)
+            GestureEvent::DragStart(drag)
+            | GestureEvent::DragMove(drag)
+            | GestureEvent::DragEnd(drag)
                 if in_field(drag.start) =>
             {
                 let level = Self::level_of(Self::percent_at(drag.current.x));
@@ -324,49 +416,78 @@ impl Brightness {
         font: &FontdueRenderer<'static, Color>,
         target: &mut D,
     ) -> Result<(), D::Error> {
-        draw_cap("DRAG TO SET BRIGHTNESS", "CANCEL", &panel::BRIGHTNESS, chrome::WHITE, accents, font, target)?;
-        draw_field(target)?;
+        draw_cap(
+            "BRIGHTNESS / 02",
+            "CANCEL",
+            &panel::BRIGHTNESS,
+            chrome::VIOLET,
+            accents,
+            font,
+            target,
+        )?;
+        draw_slab(187, 269, chrome::VIOLET, target)?;
         let percent = panel::percent(self.level);
         let mut level = String::<4>::new();
         _ = write!(level, "{percent}%");
-        let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
-        let big = style(font, chrome::WHITE, 56, FRAKTION_BOLD);
+        let big = style(font, chrome::BLACK, 54, FRAKTION_BOLD);
         let pen = Point::new(
             text::pen_x_for_ink_left(&big, &level, TEXT_LEFT),
-            text::baseline_for_ink_bottom(&big, &level, 262),
+            text::baseline_for_ink_middle(&big, &level, 228.0),
         );
-        big.draw_on_baseline(&level, pen, field)?;
-        // Each cell is a tenth of full; the one the level falls in fills as far as it reaches.
-        let width = (TRACK_RIGHT - TRACK_LEFT - STEP_GAP * (STEPS - 1)) as f32 / STEPS as f32;
+        big.draw_on_baseline(
+            &level,
+            pen,
+            &mut OnBackground::new(&mut *target, chrome::VIOLET),
+        )?;
+        let small = hint_style(font);
+        for (label, x, y) in [
+            ("DRAG TO SET", 91, 157),
+            ("WHOLE PERCENT / 10-100", 88, 273),
+        ] {
+            let pen = Point::new(x, text::baseline_for_ink_top(&small, label, y));
+            small.draw_on_baseline(
+                label,
+                pen,
+                &mut OnBackground::new(&mut *target, chrome::BLACK),
+            )?;
+        }
+        let live = style(font, chrome::BLACK, 14, FRAKTION_BOLD);
+        let pen = Point::new(
+            text::pen_x_for_ink_right(&live, "LIVE", 365),
+            text::baseline_for_ink_top(&live, "LIVE", 239),
+        );
+        live.draw_on_baseline(
+            "LIVE",
+            pen,
+            &mut OnBackground::new(&mut *target, chrome::VIOLET),
+        )?;
+        // Each cell is a tenth of full; the selected cell fills by its remaining percentage.
         for step in 0..STEPS {
-            let left = libm::roundf(TRACK_LEFT as f32 + step as f32 * (width + STEP_GAP as f32)) as i32;
-            let right = libm::roundf(left as f32 + width) as i32;
-            let cell = Rectangle::new(Point::new(left, TRACK_TOP), Size::new((right - left) as u32, TRACK_HEIGHT));
+            let left = 88 + step * 30;
+            let cell = Rectangle::new(Point::new(left, TRACK_TOP), Size::new(24, TRACK_HEIGHT));
             let filled = (i32::from(percent) - 10 * step).clamp(0, 10);
-            if filled < 10 {
-                target.fill_solid(&cell, chrome::GRAY)?;
-                target.fill_solid(&cell.offset(-2), chrome::BLACK)?;
-            }
+            target.fill_solid(&cell, chrome::shade(chrome::GRAY, 100))?;
+            target.fill_solid(&cell.offset(-1), chrome::BLACK)?;
             if filled > 0 {
-                let reach = libm::roundf((right - left) as f32 * filled as f32 / 10.0) as u32;
-                target.fill_solid(&Rectangle::new(cell.top_left, Size::new(reach, TRACK_HEIGHT)), chrome::WHITE)?;
+                let reach = libm::roundf(23.0 * filled as f32 / 10.0) as u32;
+                target.fill_solid(
+                    &Rectangle::new(cell.top_left, Size::new(reach, TRACK_HEIGHT)),
+                    chrome::VIOLET,
+                )?;
             }
         }
-        let small = hint_style(font);
         let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
-        let low = Point::new(text::pen_x_for_ink_left(&small, "10", TRACK_LEFT), text::baseline_for_ink_top(&small, "10", 326));
+        let low = Point::new(
+            text::pen_x_for_ink_left(&small, "10", 88),
+            text::baseline_for_ink_top(&small, "10", 329),
+        );
         small.draw_on_baseline("10", low, field)?;
         let high = Point::new(
-            text::pen_x_for_ink_right(&small, "100", TRACK_RIGHT - 1),
-            text::baseline_for_ink_top(&small, "100", 326),
+            text::pen_x_for_ink_right(&small, "100", 382),
+            text::baseline_for_ink_top(&small, "100", 329),
         );
         small.draw_on_baseline("100", high, field)?;
-        let keep = "TAP TO KEEP";
-        let pen = Point::new(
-            text::pen_x_for_ink_centre(&small, keep, CENTER.x as f32),
-            text::baseline_for_ink_top(&small, keep, 372),
-        );
-        small.draw_on_baseline(keep, pen, field)
+        draw_footer("DRAG TO PREVIEW / TAP TO KEEP", accents, font, target)
     }
 }
 
@@ -379,40 +500,52 @@ pub struct Device {
     grabbed: Option<i32>,
 }
 
-const LIST_TOP: i32 = 196;
-const LIST_BOTTOM: i32 = 440;
-const FIRST_ROW: i32 = 206;
-const ROW_PITCH: i32 = 30;
-const ROW_KEY_LEFT: i32 = TEXT_LEFT + 8;
-const ROW_VALUE_RIGHT: i32 = 466 - TEXT_LEFT - 8;
+const LIST_TOP: i32 = 150;
+const LIST_BOTTOM: i32 = 370;
+const FIRST_ROW: i32 = 161;
+const ROW_PITCH: i32 = 55;
+const ROW_KEY_LEFT: i32 = 89;
+const ROW_VALUE_RIGHT: i32 = 377;
 const ROWS: usize = 5;
 const ATTRIBUTION: usize = 5;
-const LINE_PITCH: i32 = 20;
-const CLEAR_LEFT: i32 = 143;
-const CLEAR_WIDTH: u32 = 180;
-const CLEAR_HEIGHT: u32 = 44;
-/// The replay box sits this far below the clear box, the same size.
+const LINE_PITCH: i32 = 23;
+const CLEAR_LEFT: i32 = 83;
+const CLEAR_WIDTH: u32 = 300;
+const CLEAR_HEIGHT: u32 = 42;
 const REPLAY_GAP: i32 = 12;
-/// Where the list stops scrolling: its last row sits this far down.
-const LIST_END: i32 = 420;
+const LIST_END: i32 = 370;
 
 impl Device {
-    fn attribution_top() -> i32 {
-        FIRST_ROW + ROW_PITCH * ROWS as i32 + 10
+    fn row_top(index: usize) -> i32 {
+        FIRST_ROW + ROW_PITCH * index as i32 + if index >= 3 { 56 } else { 0 }
     }
 
-    fn clear_box(&self) -> Rectangle {
-        let top = Self::attribution_top() + LINE_PITCH * ATTRIBUTION as i32 + 18 - self.scroll;
-        Rectangle::new(Point::new(CLEAR_LEFT, top), Size::new(CLEAR_WIDTH, CLEAR_HEIGHT))
+    fn attribution_top() -> i32 {
+        Self::row_top(ROWS) + 10
     }
 
     fn replay_box(&self) -> Rectangle {
-        let clear = self.clear_box();
-        Rectangle::new(clear.top_left + Point::new(0, CLEAR_HEIGHT as i32 + REPLAY_GAP), clear.size)
+        let top = Self::attribution_top() + LINE_PITCH * ATTRIBUTION as i32 + 5 - self.scroll;
+        Rectangle::new(
+            Point::new(CLEAR_LEFT, top),
+            Size::new(CLEAR_WIDTH, CLEAR_HEIGHT),
+        )
+    }
+
+    fn clear_box(&self) -> Rectangle {
+        let replay = self.replay_box();
+        Rectangle::new(
+            replay.top_left + Point::new(0, CLEAR_HEIGHT as i32 + REPLAY_GAP),
+            replay.size,
+        )
     }
 
     fn max_scroll() -> i32 {
-        let end = Self::attribution_top() + LINE_PITCH * ATTRIBUTION as i32 + 18 + 2 * CLEAR_HEIGHT as i32 + REPLAY_GAP;
+        let end = Self::attribution_top()
+            + LINE_PITCH * ATTRIBUTION as i32
+            + 5
+            + 2 * CLEAR_HEIGHT as i32
+            + REPLAY_GAP;
         (end - LIST_END).max(0)
     }
 
@@ -432,12 +565,14 @@ impl Device {
             }
             GestureEvent::Tap(point) if in_top_cap(point) => return Next::Panel,
             GestureEvent::Tap(point)
-                if (LIST_TOP..=LIST_BOTTOM).contains(&point.y) && self.clear_box().contains(point) =>
+                if (LIST_TOP..=LIST_BOTTOM).contains(&point.y)
+                    && self.clear_box().contains(point) =>
             {
                 return Next::Open(Page::Clear(Clear::default()));
             }
             GestureEvent::Tap(point)
-                if (LIST_TOP..=LIST_BOTTOM).contains(&point.y) && self.replay_box().contains(point) =>
+                if (LIST_TOP..=LIST_BOTTOM).contains(&point.y)
+                    && self.replay_box().contains(point) =>
             {
                 return Next::Open(Page::Replay(ReplayChooser::default()));
             }
@@ -454,20 +589,35 @@ impl Device {
         };
         let battery = match peripherals.battery {
             Some(battery) if battery.present => text(format_args!(
-                "{}%  {}.{:02} V",
-                battery.percent.min(100),
-                battery.millivolts / 1000,
-                battery.millivolts % 1000 / 10
+                "{} {}%",
+                if battery.usb { "USB" } else { "BAT" },
+                battery.percent.min(100)
             )),
             Some(_) => text(format_args!("NONE")),
             None => text(format_args!("--")),
         };
         let power = match peripherals.battery {
             Some(battery) => match (battery.usb, battery.charging) {
-                (true, true) => text(format_args!("USB  CHARGING")),
-                (true, false) => text(format_args!("USB")),
-                (false, true) => text(format_args!("CHARGING")),
-                (false, false) => text(format_args!("BATTERY")),
+                (true, true) => text(format_args!(
+                    "CHG  {}.{:02} V",
+                    battery.millivolts / 1000,
+                    battery.millivolts % 1000 / 10
+                )),
+                (true, false) => text(format_args!(
+                    "USB  {}.{:02} V",
+                    battery.millivolts / 1000,
+                    battery.millivolts % 1000 / 10
+                )),
+                (false, true) => text(format_args!(
+                    "CHG  {}.{:02} V",
+                    battery.millivolts / 1000,
+                    battery.millivolts % 1000 / 10
+                )),
+                (false, false) => text(format_args!(
+                    "BAT  {}.{:02} V",
+                    battery.millivolts / 1000,
+                    battery.millivolts % 1000 / 10
+                )),
             },
             None => text(format_args!("--")),
         };
@@ -475,9 +625,19 @@ impl Device {
         [
             ("VERSION", text(format_args!("{}", peripherals.firmware))),
             ("BATTERY", battery),
+            (
+                "GNSS",
+                text(format_args!(
+                    "{} {}",
+                    if gnss.fix { "FIX" } else { "NO FIX" },
+                    gnss.in_use
+                )),
+            ),
             ("POWER", power),
-            ("GNSS", text(format_args!("{}", if gnss.fix { "FIX" } else { "NO FIX" }))),
-            ("SATELLITES", text(format_args!("{} OF {}", gnss.in_use, gnss.in_view))),
+            (
+                "SATELLITES",
+                text(format_args!("{} OF {}", gnss.in_use, gnss.in_view)),
+            ),
         ]
     }
 
@@ -509,27 +669,32 @@ impl Device {
         target: &mut D,
     ) -> Result<(), D::Error> {
         {
-            let clip = Rectangle::with_corners(Point::new(0, LIST_TOP), Point::new(465, LIST_BOTTOM));
+            let clip =
+                Rectangle::with_corners(Point::new(0, LIST_TOP), Point::new(465, LIST_BOTTOM));
             let list = &mut Window::new(&mut *target, Point::zero(), clip);
             let key_style = style(font, chrome::GRAY, 14, FRAKTION_BOLD);
-            let value_style = style(font, chrome::WHITE, 16, FRAKTION);
-            let rule = chrome::BLACK.lerp(&chrome::GRAY, 128);
-            let mut top = FIRST_ROW - self.scroll;
-            for (key, value) in Self::rows(peripherals) {
+            let rule = chrome::shade(chrome::GRAY, 145);
+            for (i, (key, value)) in Self::rows(peripherals).into_iter().enumerate() {
+                let top = Self::row_top(i) - self.scroll;
                 let field = &mut OnBackground::new(&mut *list, chrome::BLACK);
-                let pen = Point::new(ROW_KEY_LEFT, text::baseline_for_ink_top(&key_style, key, top));
+                let pen = Point::new(
+                    ROW_KEY_LEFT,
+                    text::baseline_for_ink_top(&key_style, key, top),
+                );
                 key_style.draw_on_baseline(key, pen, field)?;
+                let color = if key == "GNSS" && peripherals.gnss.fix {
+                    chrome::BLUE
+                } else {
+                    chrome::WHITE
+                };
+                let value_style = style(font, color, 16, FRAKTION_BOLD);
                 let pen = Point::new(
                     text::pen_x_for_ink_right(&value_style, &value, ROW_VALUE_RIGHT - 1),
-                    text::baseline_for_ink_top(&value_style, &value, top - 1),
+                    text::baseline_for_ink_top(&value_style, &value, top),
                 );
                 value_style.draw_on_baseline(&value, pen, field)?;
-                let line = Rectangle::new(
-                    Point::new(ROW_KEY_LEFT, top + 16),
-                    Size::new((ROW_VALUE_RIGHT - ROW_KEY_LEFT) as u32, 1),
-                );
+                let line = Rectangle::new(Point::new(83, top + 37), Size::new(300, 1));
                 list.fill_solid(&line, rule)?;
-                top += ROW_PITCH;
             }
             let small = hint_style(font);
             let mut top = Self::attribution_top() - self.scroll;
@@ -538,20 +703,43 @@ impl Device {
                     text::pen_x_for_ink_centre(&small, &line, CENTER.x as f32),
                     text::baseline_for_ink_top(&small, &line, top),
                 );
-                small.draw_on_baseline(&line, pen, &mut OnBackground::new(&mut *list, chrome::BLACK))?;
+                small.draw_on_baseline(
+                    &line,
+                    pen,
+                    &mut OnBackground::new(&mut *list, chrome::BLACK),
+                )?;
                 top += LINE_PITCH;
             }
-            draw_button("CLEAR SETTINGS", self.clear_box(), false, font, list)?;
-            draw_button("REPLAY START-UP", self.replay_box(), false, font, list)?;
+            draw_action_button(
+                "REPLAY START-UP",
+                self.replay_box(),
+                chrome::VIOLET,
+                font,
+                list,
+            )?;
+            draw_action_button(
+                "CLEAR SETTINGS",
+                self.clear_box(),
+                chrome::ORANGE,
+                font,
+                list,
+            )?;
         }
-        super::smooth::disc_rows(
-            &mut OnBackground::new(&mut *target, chrome::BLACK),
-            LIST_TOP - 1..LIST_TOP,
-            CENTER,
-            232.0,
-            chrome::GRAY,
+        draw_cap(
+            "DEVICE / 08",
+            "BACK",
+            &panel::DEVICE,
+            chrome::BLUE,
+            accents,
+            font,
+            target,
         )?;
-        draw_cap("DEVICE", "BACK", &panel::DEVICE, chrome::WHITE, accents, font, target)
+        let footer = if self.scroll == Self::max_scroll() {
+            "END OF DEVICE"
+        } else {
+            "DRAG FOR DETAILS"
+        };
+        draw_footer(footer, accents, font, target)
     }
 }
 
@@ -571,17 +759,32 @@ enum Step {
     Choose(usize),
 }
 
+#[derive(Clone, Copy)]
+enum StepperKind {
+    Replay,
+    Timeout,
+}
+
+impl StepperKind {
+    fn footer(self) -> &'static str {
+        match self {
+            Self::Replay => "DRAG TO CHOOSE / TAP TO REPLAY",
+            Self::Timeout => "DRAG TO CHOOSE / TAP TO KEEP",
+        }
+    }
+}
+
 /// Travel per step of the choices, as the zone picker's.
 const CHOICE_TRAVEL: f32 = 40.0;
-const CHOICE_PX: u32 = 56;
-const CHOICE_MIDDLE: f32 = 257.5;
-const CHOICE_NEIGHBOURS: [f32; 2] = [174.0, 341.0];
-const POSITION_TOP: i32 = 381;
-const CHOOSE_TOP: i32 = 401;
+const CHOICE_MIDDLE: f32 = 242.0;
+const CHOICE_NEIGHBOURS: [f32; 2] = [166.0, 307.0];
 
 impl Stepper {
     fn at(index: usize) -> Self {
-        Self { index, grabbed: None }
+        Self {
+            index,
+            grabbed: None,
+        }
     }
 
     fn stepped(from: usize, travel: i32, len: usize) -> usize {
@@ -610,49 +813,118 @@ impl Stepper {
         Step::Stay
     }
 
-    /// Draws the choice, its neighbours, the position and `choose`, the hint under it, from
-    /// `label` of each of `len` choices.
+    /// Draws the active choice, its neighbours and the footer.
     fn draw<D: CoverageTarget<Color = Color>>(
         &self,
         len: usize,
         label: impl Fn(usize) -> &'static str,
-        choose: &str,
+        kind: StepperKind,
+        accents: Accents,
         font: &FontdueRenderer<'static, Color>,
         target: &mut D,
     ) -> Result<(), D::Error> {
-        draw_field(target)?;
-        let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
-        let big = style(font, chrome::WHITE, CHOICE_PX, FRAKTION_BOLD);
-        let chosen = label(self.index);
+        let replay = matches!(kind, StepperKind::Replay);
+        let failure = replay && self.index > 0;
+        let accent = if failure {
+            chrome::ORANGE
+        } else {
+            chrome::VIOLET
+        };
+        draw_slab(207, 277, accent, target)?;
+        let chosen = Self::display_label(self.index, &label, replay);
+        let size = if failure {
+            25
+        } else if replay {
+            36
+        } else {
+            43
+        };
+        let big = style(font, chrome::BLACK, size, FRAKTION_BOLD);
         let pen = Point::new(
-            text::pen_x_for_ink_left(&big, chosen, TEXT_LEFT),
-            text::baseline_for_ink_middle(&big, chosen, CHOICE_MIDDLE),
+            text::pen_x_for_ink_left(&big, &chosen, TEXT_LEFT),
+            text::baseline_for_ink_middle(&big, &chosen, CHOICE_MIDDLE),
         );
-        big.draw_on_baseline(chosen, pen, field)?;
-        let small = style(font, chrome::GRAY, 23, FRAKTION);
-        let neighbours = [self.index.checked_sub(1), Some(self.index + 1).filter(|&next| next < len)];
+        big.draw_on_baseline(&chosen, pen, &mut OnBackground::new(&mut *target, accent))?;
+        if replay && !failure {
+            let note = style(font, chrome::BLACK, 12, FRAKTION_BOLD);
+        let pen = Point::new(
+                text::pen_x_for_ink_right(&note, "SUCCESSFUL BOOT", 370),
+                text::baseline_for_ink_top(&note, "SUCCESSFUL BOOT", 249),
+        );
+            note.draw_on_baseline(
+                "SUCCESSFUL BOOT",
+                pen,
+                &mut OnBackground::new(&mut *target, accent),
+            )?;
+        }
+        let small = style(
+            font,
+            chrome::GRAY,
+            if replay { 20 } else { 23 },
+            FRAKTION_BOLD,
+        );
+        let neighbours = if replay {
+            [
+                Some((self.index + len - 1) % len),
+                Some((self.index + 1) % len),
+            ]
+        } else {
+            [
+                self.index.checked_sub(1),
+                Some(self.index + 1).filter(|&next| next < len),
+            ]
+        };
         for (neighbour, row) in neighbours.into_iter().zip(CHOICE_NEIGHBOURS) {
             if let Some(index) = neighbour {
-                let line = label(index);
-                // Centred on the row by the capitals' ink, so every row sits alike.
+                let line = Self::display_label(index, &label, replay);
                 let pen = Point::new(
-                    text::pen_x_for_ink_left(&small, line, TEXT_LEFT),
+                    text::pen_x_for_ink_left(&small, &line, TEXT_LEFT),
                     text::baseline_for_ink_middle(&small, "G", row),
                 );
-                small.draw_on_baseline(line, pen, field)?;
+                small.draw_on_baseline(
+                    &line,
+                    pen,
+                    &mut OnBackground::new(&mut *target, chrome::BLACK),
+                )?;
             }
+            }
+        let mut position = String::<20>::new();
+        if failure {
+            _ = write!(position, "DEMO / {:02} OF 06", self.index);
+        } else if !replay {
+            _ = write!(position, "{:02} / {:02}", self.index + 1, len);
         }
-        let hint = hint_style(font);
-        let mut position = String::<8>::new();
-        _ = write!(position, "{}/{}", self.index + 1, len);
-        for (line, top) in [(position.as_str(), POSITION_TOP), (choose, CHOOSE_TOP)] {
+        if !position.is_empty() {
+            let color = if failure {
+                chrome::ORANGE
+            } else {
+                chrome::GRAY
+            };
+            let style = style(font, color, 12, FRAKTION);
             let pen = Point::new(
-                text::pen_x_for_ink_centre(&hint, line, CENTER.x as f32),
-                text::baseline_for_ink_top(&hint, line, top),
+                text::pen_x_for_ink_right(&style, &position, 371),
+                text::baseline_for_ink_top(&style, &position, 337),
             );
-            hint.draw_on_baseline(line, pen, field)?;
+            style.draw_on_baseline(
+                &position,
+                pen,
+                &mut OnBackground::new(&mut *target, chrome::BLACK),
+            )?;
         }
-        Ok(())
+        draw_footer(kind.footer(), accents, font, target)
+    }
+
+    fn display_label(
+        index: usize,
+        label: &impl Fn(usize) -> &'static str,
+        replay: bool,
+    ) -> String<24> {
+        let mut text = String::new();
+        if replay && index > 0 {
+            _ = write!(text, "{:02} ", index);
+        }
+        _ = text.push_str(label(index));
+        text
     }
 }
 
@@ -677,15 +949,32 @@ impl ReplayChooser {
         font: &FontdueRenderer<'static, Color>,
         target: &mut D,
     ) -> Result<(), D::Error> {
-        let hint = "DRAG TO CHOOSE START-UP";
+        let choice = Replay::ALL[self.stepper.index];
+        let section = if choice.glyph().is_some() {
+            "FAILURE DEMO / 08"
+        } else {
+            "REPLAY / 08"
+        };
+        let icon_color = if choice.glyph().is_some() {
+            chrome::ORANGE
+        } else {
+            chrome::VIOLET
+        };
         match Replay::ALL[self.stepper.index].glyph() {
-            Some(glyph) => draw_cap(hint, "CANCEL", glyph, chrome::WHITE, accents, font, target)?,
+            Some(glyph) => draw_cap(section, "BACK", glyph, icon_color, accents, font, target)?,
             None => {
-                draw_cap_around_icon(hint, "CANCEL", accents, font, target)?;
-                super::startup::draw_mark_icon(ICON.bounds(), chrome::WHITE, target)?;
+                draw_cap_around_icon(section, "BACK", font, target)?;
+                super::startup::draw_mark_icon(ICON.bounds(), icon_color, target)?;
             }
         }
-        self.stepper.draw(Replay::ALL.len(), |index| Replay::ALL[index].label(), "TAP TO PLAY", font, target)
+        self.stepper.draw(
+            Replay::ALL.len(),
+            |index| Replay::ALL[index].label(),
+            StepperKind::Replay,
+            accents,
+            font,
+            target,
+        )
     }
 }
 
@@ -698,8 +987,13 @@ pub struct TimeoutChooser {
 impl TimeoutChooser {
     #[must_use]
     pub fn new(timeout: Timeout) -> Self {
-        let index = Timeout::ALL.iter().position(|&each| each == timeout).unwrap_or(0);
-        Self { stepper: Stepper::at(index) }
+        let index = Timeout::ALL
+            .iter()
+            .position(|&each| each == timeout)
+            .unwrap_or(0);
+        Self {
+            stepper: Stepper::at(index),
+        }
     }
 
     fn handle(&mut self, event: &GestureEvent, effects: &mut Effects) -> Next {
@@ -719,8 +1013,23 @@ impl TimeoutChooser {
         font: &FontdueRenderer<'static, Color>,
         target: &mut D,
     ) -> Result<(), D::Error> {
-        draw_cap("DRAG TO SET TIMEOUT", "CANCEL", &panel::TIMEOUT, chrome::WHITE, accents, font, target)?;
-        self.stepper.draw(Timeout::ALL.len(), |index| Timeout::ALL[index].label(), "TAP TO KEEP", font, target)
+        draw_cap(
+            "TIMEOUT / 03",
+            "CANCEL",
+            &panel::TIMEOUT,
+            chrome::VIOLET,
+            accents,
+            font,
+            target,
+        )?;
+        self.stepper.draw(
+            Timeout::ALL.len(),
+            |index| Timeout::ALL[index].label(),
+            StepperKind::Timeout,
+            accents,
+            font,
+            target,
+        )
     }
 }
 
@@ -733,15 +1042,22 @@ pub struct Clear {
 
 const HANDLE: i32 = 64;
 const HANDLE_TOP: i32 = 226;
-const RAIL_LEFT: i32 = TEXT_LEFT;
-const RAIL_RIGHT: i32 = 466 - TEXT_LEFT;
+const RAIL_LEFT: i32 = 62;
+const RAIL_RIGHT: i32 = 404;
 const TARGET_LEFT: i32 = RAIL_RIGHT - HANDLE;
 const TRAVEL: i32 = TARGET_LEFT - RAIL_LEFT;
-const WARNING: [&str; 3] = ["ERASES ZONE, LAST FIX ZONE,", "BRIGHTNESS, TIMEOUT", "AND ALWAYS ON"];
+const WARNING: [&str; 3] = [
+    "ERASES ZONE, LAST FIX ZONE,",
+    "BRIGHTNESS, TIMEOUT",
+    "AND ALWAYS ON",
+];
 
 impl Clear {
     fn handle_at(travel: i32) -> Rectangle {
-        Rectangle::new(Point::new(RAIL_LEFT + travel, HANDLE_TOP), Size::new_equal(HANDLE as u32))
+        Rectangle::new(
+            Point::new(RAIL_LEFT + travel, HANDLE_TOP),
+            Size::new_equal(HANDLE as u32),
+        )
     }
 
     fn handle(&mut self, event: &GestureEvent, effects: &mut Effects) -> Next {
@@ -774,11 +1090,22 @@ impl Clear {
         font: &FontdueRenderer<'static, Color>,
         target: &mut D,
     ) -> Result<(), D::Error> {
-        draw_cap("DRAG ACROSS TO CLEAR", "CANCEL", &CLEAR, chrome::ORANGE, accents, font, target)?;
+        draw_cap(
+            "CLEAR / 08",
+            "CANCEL",
+            &CLEAR,
+            chrome::ORANGE,
+            accents,
+            font,
+            target,
+        )?;
         draw_field(target)?;
         let middle = HANDLE_TOP + HANDLE / 2;
         target.fill_solid(
-            &Rectangle::new(Point::new(RAIL_LEFT, middle - 1), Size::new((RAIL_RIGHT - RAIL_LEFT) as u32, 2)),
+            &Rectangle::new(
+                Point::new(RAIL_LEFT, middle - 1),
+                Size::new((RAIL_RIGHT - RAIL_LEFT) as u32, 2),
+            ),
             chrome::GRAY,
         )?;
         let goal = Self::handle_at(TRAVEL);
@@ -795,7 +1122,10 @@ impl Clear {
         }
         target.fill_solid(&handle, chrome::ORANGE)?;
         let arrow = handle.top_left + Point::new(16, HANDLE / 2);
-        target.fill_solid(&Rectangle::new(arrow - Point::new(0, 3), Size::new(26, 6)), chrome::BLACK)?;
+        target.fill_solid(
+            &Rectangle::new(arrow - Point::new(0, 3), Size::new(26, 6)),
+            chrome::BLACK,
+        )?;
         for k in 0..4 {
             let chevron = Rectangle::new(
                 arrow + Point::new(18 + 3 * k, -12 + 3 * k),
@@ -825,13 +1155,22 @@ mod tests {
         assert_eq!(Brightness::level_of(10), 26);
         assert_eq!(Brightness::level_of(47), 120);
         assert_eq!(Brightness::level_of(100), 255);
-        assert_eq!([60, 66, 99, 223, 400, 460].map(Brightness::percent_at), [10, 10, 10, 47, 100, 100]);
+        assert_eq!(
+            [60, 66, 99, 223, 400, 460].map(Brightness::percent_at),
+            [10, 10, 10, 47, 100, 100]
+        );
     }
 
     #[test]
     fn the_device_list_scrolls_to_its_end() {
-        assert_eq!(Device::max_scroll(), 164);
-        let end = Device { scroll: 164, grabbed: None };
-        assert_eq!(end.replay_box().bottom_right().map(|corner| corner.y), Some(LIST_END - 1));
+        let end = Device {
+            scroll: Device::max_scroll(),
+            grabbed: None,
+        };
+        assert_eq!(
+            end.clear_box().bottom_right().map(|corner| corner.y),
+            Some(LIST_END - 1)
+        );
+        assert_eq!(end.replay_box().top_left.y, 274);
     }
 }

@@ -1,5 +1,5 @@
 //! The zone picker: an offset chosen by local time, then a zone at that offset.
-//! `context/design/specs/CLOCK-FACE-SPEC.md`, "Zone picker", is its design.
+//! Its D3 layout is in `context/design/handoffs/IMPLEMENTATION-HANDOFF-CURRENT.md`.
 
 use alloc::vec::Vec;
 use core::fmt::Write as _;
@@ -11,7 +11,7 @@ use embedded_graphics::{
 use heapless::String;
 
 use super::{
-    clock::{DateTime, ZoneId, ZoneMode},
+    clock::{DateTime, ZoneId},
     clock_screen,
     gesture::{GestureEvent, Micros},
     panel,
@@ -24,11 +24,9 @@ use crate::{
     tz::DATABASE,
 };
 
-const CENTER_X: f32 = 233.0;
 const TOP_CAP: i32 = 150;
 const BAND: core::ops::Range<i32> = 186..330;
-const BOTTOM_CAP: i32 = 356;
-const AUTO: Rectangle = Rectangle::new(Point::new(183, 366), Size::new(99, 39));
+const AUTO: Rectangle = Rectangle::new(Point::new(178, 326), Size::new(110, 34));
 /// Travel per step of the list, and the release speed, in pixels per second, past which it
 /// keeps stepping.
 const STEP_TRAVEL: f32 = 40.0;
@@ -39,8 +37,7 @@ const FLING_STOP: f32 = 60.0;
 /// Times a year apart from any zone's last rule change, in January and July, for a clock that
 /// cannot be trusted. A zone is listed under the offset it keeps at each.
 const RULES_ONLY: [i64; 2] = [4_102_444_800, 4_118_083_200];
-const SELECTED_PENS: [i32; 5] = [57, 109, 148, 188, 240];
-const NEIGHBOURS: [f32; 2] = [174.0, 341.0];
+const NEIGHBOURS: [f32; 2] = [164.0, 301.0];
 
 #[derive(Clone, Debug, PartialEq)]
 enum Step {
@@ -224,6 +221,10 @@ impl Picker {
         let unix = time_of(peripherals);
         match &self.step {
             Step::Offset { .. } if point.y < TOP_CAP => Next::Panel,
+            Step::Offset { .. } if AUTO.contains(point) => {
+                effects.store = Some(Store::AutomaticZone);
+                Next::Panel
+            }
             Step::Offset { offsets } if BAND.contains(&point.y) => {
                 let offset = offsets[self.index];
                 let position = peripherals.gnss.position;
@@ -233,10 +234,6 @@ impl Picker {
                 self.step = Step::Zone { offset, zones, nearest: position.is_some() };
                 self.fling = None;
                 Next::Stay
-            }
-            Step::Offset { .. } if point.y >= BOTTOM_CAP => {
-                effects.store = Some(Store::AutomaticZone);
-                Next::Panel
             }
             Step::Zone { offset, .. } if point.y < TOP_CAP => {
                 let offset = *offset;
@@ -314,39 +311,52 @@ impl Picker {
         font: &FontdueRenderer<'static, Color>,
         target: &mut D,
     ) -> Result<(), D::Error> {
-        second::draw_cap("DRAG TO YOUR LOCAL TIME", "CANCEL", &panel::ZONE, chrome::WHITE, accents, font, target)?;
-        second::draw_field(target)?;
+        second::draw_cap("OFFSET / 01", "CANCEL", &panel::ZONE, chrome::VIOLET, accents, font, target)?;
+        second::draw_slab(189, 278, chrome::VIOLET, target)?;
         let unix = time_of(peripherals);
         let offset = offsets[self.index];
-        let big = style(font, chrome::WHITE, 86, FRAKTION_BOLD);
-        let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
-        let time = clock_at(unix, offset);
-        // The pens put the colon in a narrower cell than the digits.
-        for (index, pen) in SELECTED_PENS.into_iter().enumerate() {
-            big.draw_on_baseline(&time[index..index + 1], Point::new(pen, 289), field)?;
+        if let Some(previous) = self.neighbours()[0] {
+            let mut line = String::<16>::new();
+            _ = write!(line, "{}   {}", clock_at(unix, offsets[previous]), signed(offsets[previous]));
+            let small = style(font, chrome::GRAY, 16, FRAKTION);
+            let pen = Point::new(
+                text::pen_x_for_ink_left(&small, &line, TEXT_LEFT),
+                text::baseline_for_ink_middle(&small, &line, NEIGHBOURS[0]),
+            );
+            small.draw_on_baseline(&line, pen, &mut OnBackground::new(&mut *target, chrome::BLACK))?;
         }
-        let label = style(font, chrome::GRAY, 16, FRAKTION_BOLD);
+        let big = style(font, chrome::BLACK, 51, FRAKTION_BOLD);
+        let time = clock_at(unix, offset);
         let pen = Point::new(
-            text::pen_x_for_ink_left(&label, "UTC", 311),
-            text::baseline_for_ink_top(&label, "UTC", 228),
+            text::pen_x_for_ink_left(&big, &time, TEXT_LEFT),
+            text::baseline_for_ink_middle(&big, &time, 233.0),
         );
-        label.draw_on_baseline("UTC", pen, field)?;
-        let value = style(font, chrome::WHITE, 24, FRAKTION_BOLD);
+        big.draw_on_baseline(&time, pen, &mut OnBackground::new(&mut *target, chrome::VIOLET))?;
+        let label = style(font, chrome::BLACK, 11, FRAKTION_BOLD);
+        let pen = Point::new(
+            text::pen_x_for_ink_left(&label, "UTC", 309),
+            text::baseline_for_ink_top(&label, "UTC", 251),
+        );
+        label.draw_on_baseline("UTC", pen, &mut OnBackground::new(&mut *target, chrome::VIOLET))?;
+        let value = style(font, chrome::BLACK, 11, FRAKTION_BOLD);
         let text = signed(offset);
         let pen = Point::new(
-            text::pen_x_for_ink_left(&value, &text, 311),
-            text::baseline_for_ink_bottom(&value, &text, 288),
+            text::pen_x_for_ink_right(&value, &text, 378),
+            text::baseline_for_ink_top(&value, &text, 251),
         );
-        value.draw_on_baseline(&text, pen, field)?;
-        for (neighbour, row) in self.neighbours().into_iter().zip(NEIGHBOURS) {
-            if let Some(index) = neighbour {
-                let mut line = String::<16>::new();
-                _ = write!(line, "{}  {}", clock_at(unix, offsets[index]), signed(offsets[index]));
-                Self::draw_neighbour(&line, row, font, target)?;
-            }
+        value.draw_on_baseline(&text, pen, &mut OnBackground::new(&mut *target, chrome::VIOLET))?;
+        if let Some(next) = self.neighbours()[1] {
+            let mut line = String::<16>::new();
+            _ = write!(line, "{}   {}", clock_at(unix, offsets[next]), signed(offsets[next]));
+            let small = style(font, chrome::GRAY, 17, FRAKTION);
+            let pen = Point::new(
+                text::pen_x_for_ink_left(&small, &line, TEXT_LEFT),
+                text::baseline_for_ink_middle(&small, &line, NEIGHBOURS[1]),
+            );
+            small.draw_on_baseline(&line, pen, &mut OnBackground::new(&mut *target, chrome::BLACK))?;
         }
-        let automatic = peripherals.clock.zone().mode == ZoneMode::Automatic;
-        second::draw_button("AUTO", AUTO, automatic, font, target)
+        second::draw_button("AUTO", AUTO, true, font, target)?;
+        second::draw_footer("DRAG OFFSET / TAP FOR ZONES", accents, font, target)
     }
 
     fn draw_zones<D: CoverageTarget<Color = Color>>(
@@ -360,20 +370,25 @@ impl Picker {
             return Ok(());
         };
         let (offset, nearest) = (*offset, *nearest);
-        let mut hint = String::<24>::new();
-        _ = write!(hint, "{}  {}", signed(offset), if nearest { "NEAREST FIRST" } else { "A-Z" });
-        second::draw_cap(&hint, "BACK", &panel::ZONE, chrome::WHITE, accents, font, target)?;
-        second::draw_field(target)?;
+        second::draw_cap("ZONE / 02", "BACK", &panel::ZONE, chrome::VIOLET, accents, font, target)?;
+        second::draw_slab(188, 278, chrome::VIOLET, target)?;
         let unix = time_of(peripherals);
         let zone = DATABASE.zone(zones[self.index]);
-        let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
-        let big = style(font, chrome::WHITE, 40, FRAKTION_BOLD);
+        let mut context = String::<32>::new();
+        _ = write!(context, "{:02}  {}", self.index + 1, if nearest { "NEAREST FIRST" } else { "A-Z" });
+        let small = style(font, chrome::GRAY, 13, FRAKTION);
+        let pen = Point::new(
+            text::pen_x_for_ink_left(&small, &context, TEXT_LEFT),
+            text::baseline_for_ink_top(&small, &context, 159),
+        );
+        small.draw_on_baseline(&context, pen, &mut OnBackground::new(&mut *target, chrome::BLACK))?;
+        let big = style(font, chrome::BLACK, 37, FRAKTION_BOLD);
         let name = city(zone.name);
         let pen = Point::new(
             text::pen_x_for_ink_left(&big, &name, TEXT_LEFT),
-            text::baseline_for_ink_bottom(&big, &name, 257),
+            text::baseline_for_ink_middle(&big, &name, 220.0),
         );
-        big.draw_on_baseline(&name, pen, field)?;
+        big.draw_on_baseline(&name, pen, &mut OnBackground::new(&mut *target, chrome::VIOLET))?;
         let mut line = String::<48>::new();
         for c in zone.name.chars() {
             _ = line.push(c.to_ascii_uppercase());
@@ -383,25 +398,26 @@ impl Picker {
             .find(|each| each.utc_offset == offset)
             .map_or("", |each| each.abbreviation);
         _ = write!(line, "  {abbreviation}");
-        let small = style(font, chrome::GRAY, 16, FRAKTION_BOLD);
+        let small = style(font, chrome::BLACK, 14, FRAKTION_BOLD);
         let pen = Point::new(
             text::pen_x_for_ink_left(&small, &line, TEXT_LEFT),
-            text::baseline_for_ink_top(&small, &line, 276),
+            text::baseline_for_ink_top(&small, &line, 253),
         );
-        small.draw_on_baseline(&line, pen, field)?;
+        small.draw_on_baseline(&line, pen, &mut OnBackground::new(&mut *target, chrome::VIOLET))?;
         for (neighbour, row) in self.neighbours().into_iter().zip(NEIGHBOURS) {
             if let Some(index) = neighbour {
                 Self::draw_neighbour(&city(DATABASE.zone(zones[index]).name), row, font, target)?;
             }
         }
-        let mut position = String::<12>::new();
-        _ = write!(position, "{}/{}", self.index + 1, zones.len());
+        let mut position = String::<16>::new();
+        _ = write!(position, "{:02} / {:02}", self.index + 1, zones.len());
         let style = second::hint_style(font);
         let pen = Point::new(
-            text::pen_x_for_ink_centre(&style, &position, CENTER_X),
-            text::baseline_for_ink_top(&style, &position, 381),
+            text::pen_x_for_ink_right(&style, &position, 370),
+            text::baseline_for_ink_top(&style, &position, 326),
         );
-        style.draw_on_baseline(&position, pen, &mut OnBackground::new(&mut *target, chrome::BLACK))
+        style.draw_on_baseline(&position, pen, &mut OnBackground::new(&mut *target, chrome::BLACK))?;
+        second::draw_footer("DRAG TO CHOOSE / TAP TO SELECT", accents, font, target)
     }
 }
 
