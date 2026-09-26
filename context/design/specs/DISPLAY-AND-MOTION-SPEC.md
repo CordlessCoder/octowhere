@@ -100,6 +100,10 @@ measured.
 
 ## 2. Start-up
 
+> Identity layout in this section documents Round 3 / G2 and is superseded by the G17 entrance,
+> G18 centered title and G19 matched scatter study named in `../PROJECT-MAP.md`. Retain the
+> functional self-test/failure behavior and other unaffected timing until explicitly revised.
+
 ### When
 
 The sequence starts at the first frame the panel can show after power-on. The panel brightness
