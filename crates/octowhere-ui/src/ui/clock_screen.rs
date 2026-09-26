@@ -363,7 +363,8 @@ struct Parts {
     /// UTC and the battery in the band, with no reading none.
     band_lines: Option<[(String<16>, Reveal); 2]>,
     column: Column,
-    lines: heapless::Vec<(Tokens, Reveal), 3>,
+    /// Each token line, its reveal, and everything it can cover.
+    lines: heapless::Vec<(Tokens, Reveal, Rectangle), 3>,
     /// The rail, and the local hour its marker is on if the face knows one.
     rail: Option<Option<u8>>,
     /// How far the scatter has bloomed, with no reading none.
@@ -381,21 +382,38 @@ struct Column {
 }
 
 /// A line of runs in one colour and size, Regular or Bold, centred as a group on one baseline.
+/// The runs share one string, each ending where its entry says: a frame of the clock holds two
+/// sets of these on core 0's stack.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Tokens {
     color: Color,
     row: usize,
-    runs: heapless::Vec<(String<48>, bool), 6>,
+    text: String<64>,
+    runs: heapless::Vec<(u8, bool), 6>,
 }
 
 impl Tokens {
     fn new(color: Color, row: usize, runs: &[(&str, bool)]) -> Self {
-        let runs = runs.iter().map(|&(text, bold)| (String::try_from(text).unwrap_or_default(), bold)).collect();
-        Self { color, row, runs }
+        let mut tokens = Self { color, row, text: String::new(), runs: heapless::Vec::new() };
+        for &(text, bold) in runs {
+            _ = tokens.text.push_str(text);
+            _ = tokens.runs.push((tokens.text.len() as u8, bold));
+        }
+        tokens
+    }
+
+    /// Each run's text and whether it is Bold.
+    fn each(&self) -> impl Iterator<Item = (&str, bool)> + '_ {
+        let mut start = 0;
+        self.runs.iter().map(move |&(end, bold)| {
+            let text = &self.text[start..usize::from(end)];
+            start = usize::from(end);
+            (text, bold)
+        })
     }
 
     fn len(&self) -> usize {
-        self.runs.iter().map(|(text, _)| text.len()).sum()
+        self.text.len()
     }
 
     fn style(&self, font: &FontdueRenderer<'static, Color>, bold: bool) -> FontdueRenderer<'static, Color> {
@@ -403,7 +421,7 @@ impl Tokens {
     }
 
     fn width(&self, font: &FontdueRenderer<'static, Color>) -> f32 {
-        self.runs.iter().map(|(text, bold)| self.style(font, *bold).advance(text)).sum()
+        self.each().map(|(text, bold)| self.style(font, bold).advance(text)).sum()
     }
 
     /// Each run with its style and pen.
@@ -413,11 +431,11 @@ impl Tokens {
     ) -> impl Iterator<Item = (&'t str, FontdueRenderer<'static, Color>, Point)> + 't {
         let baseline = LINE_TOPS[self.row] + text::cap(&self.style(font, false));
         let mut x = CENTER.x as f32 - self.width(font) / 2.0;
-        self.runs.iter().map(move |(text, bold)| {
-            let style = self.style(font, *bold);
+        self.each().map(move |(text, bold)| {
+            let style = self.style(font, bold);
             let pen = Point::new(libm::roundf(x) as i32, baseline);
             x += style.advance(text);
-            (text.as_str(), style, pen)
+            (text, style, pen)
         })
     }
 
@@ -560,7 +578,8 @@ impl Parts {
         }
         .map(|tokens| {
             let reveal = Reveal::of(first, tokens.len());
-            (tokens, reveal)
+            let bounds = tokens.bounds(font);
+            (tokens, reveal, bounds)
         });
         if let Some(first) = first {
             _ = lines.push(first);
@@ -581,12 +600,12 @@ impl Parts {
             let one = Tokens::new(chrome::GRAY, 1, &[(&whole, false), (&comment, false)]);
             if one.width(font) > ZONE_LINE_MAX {
                 for tokens in [Tokens::new(chrome::GRAY, 1, &[(&zone, false)]), Tokens::new(chrome::GRAY, 2, &[(&comment, false)])] {
-                    let r = Reveal::of(reveal, tokens.len());
-                    _ = lines.push((tokens, r));
+                    let (r, bounds) = (Reveal::of(reveal, tokens.len()), tokens.bounds(font));
+                    _ = lines.push((tokens, r, bounds));
                 }
             } else {
-                let r = Reveal::of(reveal, one.len());
-                _ = lines.push((one, r));
+                let (r, bounds) = (Reveal::of(reveal, one.len()), one.bounds(font));
+                _ = lines.push((one, r, bounds));
             }
         }
 
@@ -624,9 +643,9 @@ impl Parts {
         let mut clear = heapless::Vec::new();
         _ = clear.push(HOURS_INK);
         _ = clear.push(TILE.bounds());
-        _ = clear.push(MarkLayout::of(font).span(0, MARK_ON_FIELD));
-        for (tokens, _) in &self.lines {
-            _ = clear.push(tokens.bounds(font));
+        _ = clear.push(mark_layout(font).span(0, MARK_ON_FIELD));
+        for (_, _, bounds) in &self.lines {
+            _ = clear.push(*bounds);
         }
         if self.rail.is_some() {
             _ = clear.push(RAIL);
@@ -689,6 +708,13 @@ pub(crate) fn no_data_origin(font: &FontdueRenderer<'static, Color>) -> Point {
 
 fn mark_style(font: &FontdueRenderer<'static, Color>, color: Color) -> FontdueRenderer<'static, Color> {
     style(font, color, MARK_PX, SHAPIRO)
+}
+
+/// The wordmark's layout, worked out once: it depends only on the font, and laying it out reads
+/// glyph metrics from flash.
+fn mark_layout(font: &FontdueRenderer<'static, Color>) -> &'static MarkLayout {
+    static LAYOUT: embassy_sync::once_lock::OnceLock<MarkLayout> = embassy_sync::once_lock::OnceLock::new();
+    LAYOUT.get_or_init(|| MarkLayout::of(font))
 }
 
 /// Where the mark sits along the column: the rows each letter's cell spans, and how far either
@@ -757,7 +783,7 @@ fn draw_mark<D: CoverageTarget<Color = Color>>(
     band: Color,
     target: &mut D,
 ) -> Result<(), D::Error> {
-    let layout = MarkLayout::of(font);
+    let layout = mark_layout(font);
     let whole = layout.span(0, reveal.cells());
     let text = &MARK[..reveal.glyphs()];
     let block = (reveal.cells() > reveal.glyphs()).then(|| layout.cell(reveal.glyphs()));
@@ -789,7 +815,7 @@ pub fn draw<D>(
 where
     D: CoverageTarget<Color = Color>,
 {
-    let parts = Parts::of(view, supply, accents, font);
+    let parts = parts(&(*view, supply, accents), font);
     if let Some(bloom) = parts.scatter {
         scatter().draw_clear_of(&looks(bloom), &parts.clear(font), target)?;
     }
@@ -835,8 +861,8 @@ where
     if target.visible(&MARK_INK) {
         draw_mark(font, parts.mark, parts.band, target)?;
     }
-    for (tokens, reveal) in &parts.lines {
-        if target.visible(&tokens.bounds(font)) {
+    for (tokens, reveal, bounds) in &parts.lines {
+        if target.visible(bounds) {
             tokens.draw(font, *reveal, &mut OnBackground::new(&mut *target, chrome::BLACK))?;
         }
     }
@@ -919,14 +945,35 @@ fn digit_damage(
 /// What the clock face draws from: the clock, the supply and the accents.
 pub type Face = (ClockView, Option<Battery>, Accents);
 
+/// The parts for `face`, from the last two worked out if it is one of them: a step works out the
+/// face before and after for its damage, and the draw after it the same face again.
+fn parts(face: &Face, font: &FontdueRenderer<'static, Color>) -> Parts {
+    use embassy_sync::blocking_mutex::{Mutex, raw::CriticalSectionRawMutex};
+    static RECENT: Mutex<CriticalSectionRawMutex, core::cell::RefCell<heapless::Deque<(Face, Parts), 2>>> =
+        Mutex::new(core::cell::RefCell::new(heapless::Deque::new()));
+    let found = RECENT.lock(|recent| recent.borrow().iter().find(|(seen, _)| seen == face).map(|(_, parts)| parts.clone()));
+    if let Some(parts) = found {
+        return parts;
+    }
+    let parts = Parts::of(&face.0, face.1, face.2, font);
+    RECENT.lock(|recent| {
+        let mut recent = recent.borrow_mut();
+        if recent.is_full() {
+            recent.pop_front();
+        }
+        _ = recent.push_back((*face, parts.clone()));
+    });
+    parts
+}
+
 /// Marks in `damage` every pixel that differs between the face drawn for `before` and for
 /// `after`.
 pub fn damage(before: &Face, after: &Face, font: &FontdueRenderer<'static, Color>, damage: &mut chrome::Dirty) {
     if before == after {
         return;
     }
-    let old = Parts::of(&before.0, before.1, before.2, font);
-    let new = Parts::of(&after.0, after.1, after.2, font);
+    let old = parts(before, font);
+    let new = parts(after, font);
     if old == new {
         return;
     }
@@ -976,11 +1023,11 @@ pub fn damage(before: &Face, after: &Face, font: &FontdueRenderer<'static, Color
     if old.mark != new.mark {
         let from = old.mark.glyphs().min(new.mark.glyphs());
         let to = old.mark.cells().max(new.mark.cells());
-        damage.add(MarkLayout::of(font).span(from, to));
+        damage.add(mark_layout(font).span(from, to));
     }
     if old.lines != new.lines {
-        for (tokens, _) in old.lines.iter().chain(&new.lines) {
-            damage.add(tokens.bounds(font));
+        for (_, _, bounds) in old.lines.iter().chain(&new.lines) {
+            damage.add(*bounds);
         }
     }
     if old.rail != new.rail {
@@ -1104,7 +1151,7 @@ mod tests {
             let bounds = tokens.bounds(&font);
             for corner in [bounds.top_left, bounds.bottom_right().unwrap(), Point::new(bounds.top_left.x, bounds.bottom_right().unwrap().y)] {
                 let d = corner - CENTER;
-                assert!(d.x * d.x + d.y * d.y < 228 * 228, "{:?} at {bounds:?}", tokens.runs);
+                assert!(d.x * d.x + d.y * d.y < 228 * 228, "{:?} at {bounds:?}", tokens.text);
             }
         }
     }

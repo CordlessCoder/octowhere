@@ -180,6 +180,10 @@ impl Scatter {
                 continue;
             }
             let top = self.corner(y, 0).y;
+            // A row the target would not show costs no arithmetic at all.
+            if !wanted(state, Rectangle::new(Point::new(0, top), Size::new(DISPLAY_SIZE.width, MARK as u32))) {
+                continue;
+            }
             // Each field's columns whose centres can lie inside; the test on each point settles
             // the ends.
             let (mut from, mut to) = (columns, -1);
@@ -219,7 +223,7 @@ impl Scatter {
                 }
                 let corner = Point::new(x, top);
                 let cell = Rectangle::new(corner, Size::new_equal(MARK as u32));
-                if clear.iter().any(|keep| !keep.intersection(&cell).is_zero_sized()) || !wanted(state, cell) {
+                if !wanted(state, cell) {
                     continue;
                 }
                 let point = row as usize * columns as usize + column as usize;
@@ -244,7 +248,10 @@ impl Scatter {
                     let radial = 0.45 + 0.55 * ((r - 40.0) * (1.0 / 180.0)).clamp(0.0, 1.0);
                     let turn = 0.45 + 0.55 * toward;
                     if number(field.seed, n) < radial * turn * look.density {
-                        mark(state, point, corner, number(field.seed, n + 1) < HOLLOW);
+                        // Checked only for a point that shows, as few do.
+                        if !clear.iter().any(|keep| !keep.intersection(&cell).is_zero_sized()) {
+                            mark(state, point, corner, number(field.seed, n + 1) < HOLLOW);
+                        }
                         break;
                     }
                 }
