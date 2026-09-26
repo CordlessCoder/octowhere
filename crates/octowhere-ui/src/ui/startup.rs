@@ -18,7 +18,7 @@ use super::{
     clock::ClockView,
     gesture::Micros,
     icon::{self, Glyph, Tile},
-    scatter::{Scatter, Shown},
+    scatter::{Look, Scatter, Shown},
     screens,
     smooth,
     text,
@@ -669,18 +669,17 @@ fn utc_digits(clock: &ClockView) -> Option<[u8; 4]> {
 
 /// The identity scatter's facing and density on `frame`: at half density on frame 0, filling
 /// to full over frames 2–8, its dense side turning slowly all through.
-fn scatter_on(frame: u32) -> (f32, f32) {
+fn scatter_on(frame: u32) -> [Look; 1] {
     let appear = match frame {
         ..2 => 0.5,
         2..8 => 0.5 + 0.5 * (frame - 2) as f32 / 6.0,
         _ => 1.0,
     };
-    (0.8 + 0.055 * frame as f32, 1.15 * appear)
+    [Look { facing: 0.8 + 0.055 * frame as f32, density: 1.15 * appear }]
 }
 
 fn draw_scatter<D: CoverageTarget<Color = Color>>(frame: u32, target: &mut D) -> Result<(), D::Error> {
-    let (facing, density) = scatter_on(frame);
-    Scatter::IDENTITY.draw(facing, density, target)
+    Scatter::IDENTITY.draw(&scatter_on(frame), target)
 }
 
 /// The identity scatter's points on the last frame [`IdentityMarks::changes`] saw, so each
@@ -704,10 +703,7 @@ impl IdentityMarks {
         if before == after {
             return;
         }
-        let shown = |frame| {
-            let (facing, density) = scatter_on(frame);
-            Scatter::IDENTITY.shown(facing, density)
-        };
+        let shown = |frame| Scatter::IDENTITY.shown(&scatter_on(frame));
         let earlier = match self.scatter.take() {
             Some((frame, marks)) if frame == before => marks,
             _ => shown(before),

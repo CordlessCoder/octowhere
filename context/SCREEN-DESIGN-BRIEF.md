@@ -233,8 +233,10 @@ build interpreted the spec:
 - **The scatter's generator** is a hash of each point's index, not Python's generator with seed
   4, so the pattern differs from the renders. Its density and the turn of its dense side match
   the renders to within a few per cent on every frame. The scatter is its own module
-  (`ui::scatter`), with its circle, grid origin, the band it stops short of, its colour and its
-  seed as parameters, so another screen can use it. The owner wants it on more pages later.
+  (`ui::scatter`), with its grid origin, the band it stops short of and its colour as
+  parameters, and one or more fields on that grid, each a circle and a seed with its own
+  facing and density. Where fields overlap, the first to show a point gives its mark. A mark
+  shows only if it lies wholly inside the glass. The owner wants it on more pages later.
   A frame redraws only the marks that appear or go, 20 to 45 of about 700 once its density
   stops rising, and working out which costs about 1.8 ms a frame.
 - **The mark** is the spec's (since v4): rectangles and a stripe test, drawn at any size from
@@ -494,7 +496,8 @@ measured.
 
 - Colour tokens only. `RED` is only for a fault.
 - `BLUE` marks a live, valid reading on a status icon. `GRAY` as an icon colour marks a value that
-  is valid but unconfirmed. `LIME` and `PURPLE` are unused.
+  is valid but unconfirmed.
+- Each colour's meaning is in [`design/docs/OCTOWHERE-COLOR-ROLES.md`](design/docs/OCTOWHERE-COLOR-ROLES.md).
 - Every icon is outlined. The bands and slabs carry the colour where a state must be loud.
 - Filled means reading, outlined means editing. A mode in force is filled `GRAY`.
 - Elements that come and go keep their space, so nothing else moves between states.
@@ -518,11 +521,12 @@ Colours come only from these tokens. Each is a swatch from the reference board e
 
 | Token | Hex | Role |
 | --- | --- | --- |
-| `LIME` | `#C0FE04` | Unused |
+| `LIME` | `#C0FE04` | The identity and its card |
 | `RED` | `#F24723` | Faults only |
 | `ORANGE` | `#F1710D` | Attention: calibrating, interference, a stopped clock, the clear confirm; the compass's `N` |
-| `PURPLE` | `#5500E4` | Unused |
+| `PURPLE` | `#5500E4` | The identity's scatter |
 | `BLUE` | `#409DE4` | A live, valid reading's status icon |
+| `VIOLET` | `#B32BE5` | Not yet used; the choice being edited in settings, once the 2026-09-26 design is built |
 | `GRAY` | `#888E98` | Frames, rules, minor marks, captions, secondary text, a mode in force, an unconfirmed value |
 | `WHITE` | `#D2D3D6` | Primary text, major marks, neutral bands and slabs, field rules |
 | `BLACK` | `#000000` | The field; knockout text and symbols on saturated fills |
@@ -536,7 +540,6 @@ A new colour is allowed if it comes from the reference board. Its unused swatche
 | `#01E67C` | green |
 | `#81EBB1` | pale green |
 | `#E8337C` | deep pink |
-| `#B32BE5` | violet |
 | `#31333B` | dark neutral |
 | `#1E1F24` | near-black neutral |
 
