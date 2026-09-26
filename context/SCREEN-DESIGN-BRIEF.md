@@ -510,12 +510,12 @@ that changed redraw. Measured on the device, per frame:
 | Frame | Draw |
 | --- | ---: |
 | Either face at rest | nothing drawn |
-| Clock, a second ticks, or a step of the charging crawl | about 3.6 ms |
-| Clock, a token line typing in | 6.5–8.8 ms |
+| Clock, a second ticks | about 1.9 ms |
+| Clock, a token line typing in | about 7 ms, at most 18 ms |
 | Compass, tilt changes by a degree | 1.7 ms |
 | Compass, a step of the dial sweep | 7–12 ms |
 | Compass, heading changes by a degree | about 13 ms |
-| Clock drawn in full | about 28 ms, at most 36 ms |
+| Clock drawn in full | about 20 ms, at most 25 ms |
 | Compass drawn in full | 13–23 ms |
 | Start-up identity, a frame of its opening grid | about 15 ms, at most 19 ms |
 | Start-up identity, a frame while its title and marks build | about 23 ms, at most 31 ms |
@@ -523,7 +523,7 @@ that changed redraw. Measured on the device, per frame:
 | Start-up card, a frame | about 12 ms, at most 22 ms |
 | Start-up fault screen, a frame | about 25 ms, at most 28 ms |
 
-Of a full clock draw, the scatter is about 5.7 ms and the wordmark 0.2 ms. The new clock face's minute change and its entry's other steps were not measured on their own. The screens of the settings round are not
+Of a full clock draw, the clear is about 7 ms, the scatter 3.3 ms and the band 3.4 ms. The new clock face's minute change, its entry's other steps and the charging crawl were not measured on their own; the board had no battery reading. The screens of the settings round are not
 measured.
 
 - A full redraw happens during a page swipe or sheet travel. A fade of the perimeter ring
