@@ -46,7 +46,13 @@ fn main() {
     };
     let mut frames: Vec<(String, Stage)> = Screen::ALL
         .iter()
-        .map(|&screen| (format!("{screen:?}").to_lowercase(), stage(screen, calibrated)))
+        .map(|&screen| {
+            let name = match screen {
+                Screen::Clock => "clock",
+                Screen::Compass => "compass-heading",
+            };
+            (name.into(), stage(screen, calibrated))
+        })
         .collect();
     for (name, compass) in [
         ("no-data", CompassView::default()),

@@ -60,11 +60,13 @@ const COMPASS_ENTRY: CompassTimes<Micros> = CompassTimes {
     icon: 95_000,
     caption: 120_000,
     dial: 190_000,
+    texture: 0,
 };
 const RING_FADE: Micros = 110_000;
 const ICON_ROW: Micros = 30_000;
 const CAPTION_REVEAL: Micros = 120_000;
 const DIAL_SWEEP: Micros = 170_000;
+const COMPASS_TEXTURE_SETTLE: Micros = 400_000;
 /// A heading back from TOP EDGE UP within this shows the dial at once, so tilting through
 /// vertical does not replay anything.
 const TOP_EDGE_GRACE: Micros = 750_000;
@@ -85,6 +87,7 @@ struct CompassTimes<T = Option<Micros>> {
     icon: T,
     caption: T,
     dial: T,
+    texture: T,
 }
 
 /// Dragging the compass or the clock this fraction of the panel's width takes its accents out
@@ -1178,6 +1181,7 @@ impl Stage {
                     icon: start(COMPASS_ENTRY.icon),
                     caption: start(COMPASS_ENTRY.caption),
                     dial: start(COMPASS_ENTRY.dial),
+                    texture: start(COMPASS_ENTRY.texture),
                 };
                 if mode == Mode::NoData {
                     // A fault shows at once.
@@ -1197,6 +1201,9 @@ impl Stage {
                 (times.ring, times.icon, times.caption) = (None, None, None);
                 *change = None;
             } else {
+                if *shown == Mode::NoData {
+                    times.texture = Some(now);
+                }
                 // Back from TOP EDGE UP within the grace, the dial and icon show at once.
                 let quick = *shown == Mode::TopEdgeUp
                     && mode.heading().is_some()
@@ -1233,6 +1240,7 @@ impl Stage {
             icon_rows: rows_built(now, times.icon),
             caption: progress(now, times.caption, CAPTION_REVEAL),
             dial: progress(now, times.dial, DIAL_SWEEP),
+            texture: texture_step(now, times.texture),
             change: running,
         };
         self.fading |= entry != Accents::FULL;
@@ -1243,6 +1251,7 @@ impl Stage {
             icon_rows: rows_leaving(p, 0.3, 0.5),
             caption: leaving(p, 0.2, 0.3),
             dial: leaving(p, 0.2, 0.4),
+            texture: 5,
             change: compass_screen::Change::NONE,
         };
         entry.min(exit)
@@ -1413,6 +1422,20 @@ impl Stage {
             target,
         )
         .expect("drawing a screen failed")
+    }
+}
+
+fn texture_step(now: Micros, start: Option<Micros>) -> u8 {
+    let Some(start) = start else {
+        return 5;
+    };
+    match now.saturating_sub(start) {
+        0 => 0,
+        1..80_000 => 1,
+        80_000..120_000 => 2,
+        120_000..220_000 => 3,
+        220_000..COMPASS_TEXTURE_SETTLE => 4,
+        _ => 5,
     }
 }
 

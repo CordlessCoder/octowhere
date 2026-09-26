@@ -88,8 +88,14 @@ fn the_compass_accents_build_after_the_page_settles() {
     let mut driver = Driver::on(Screen::Compass);
     driver.motion(heading(470));
     assert_eq!(accents(&driver).ring, 0);
+    assert_eq!(accents(&driver).texture, 0);
     assert!(driver.stage.is_animating());
-    driver.wait(150_000);
+    driver.wait(40_000);
+    assert_eq!(accents(&driver).texture, 1);
+    driver.wait(60_000);
+    assert_eq!(accents(&driver).texture, 2);
+    driver.wait(50_000);
+    assert_eq!(accents(&driver).texture, 3);
     let early = accents(&driver);
     assert_eq!(early.ring, 255);
     assert!(early.icon_rows > 0 && early.icon_rows < 5, "{early:?}");
@@ -108,7 +114,7 @@ fn a_swipe_off_the_compass_takes_its_accents_reversibly() {
     let part = accents(&driver);
     assert!(part.caption < 255 && part.ring == 255, "{part:?}");
     driver.touch(Some(Point::new(200, 233)));
-    assert_eq!(accents(&driver), Accents::HIDDEN);
+    assert_eq!(accents(&driver), Accents { texture: 5, ..Accents::HIDDEN });
     driver.touch(Some(Point::new(399, 233)));
     driver.touch(None);
     driver.touch(None);

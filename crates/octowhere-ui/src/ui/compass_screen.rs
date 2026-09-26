@@ -45,6 +45,133 @@ const READOUT: Point = Point::new(143, SLAB.top_left.y + 79);
 const SUFFIX: Point = Point::new(298, SLAB.top_left.y + 43);
 const TILT_BASELINE: i32 = 327;
 const LETTER_RADIUS: f32 = 172.0;
+const TEXTURE_CLEAR: Rectangle = Rectangle::new(Point::new(126, 153), Size::new(214, 194));
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TextureKind {
+    Blocks,
+    Tiles,
+    DimBlocks,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Texture {
+    kind: TextureKind,
+    phase: u8,
+}
+
+impl Texture {
+    fn of(mode: Mode, phase: u8) -> Option<Self> {
+        if phase == 0 || mode == Mode::NoData {
+            return None;
+        }
+        let kind = match mode {
+            Mode::Calibrating(_) | Mode::TopEdgeUp => TextureKind::Tiles,
+            Mode::Interference(_) => TextureKind::DimBlocks,
+            Mode::Heading(_) => TextureKind::Blocks,
+            Mode::NoData => return None,
+        };
+        Some(Self { kind, phase })
+    }
+
+    fn draw<D: CoverageTarget<Color = Color>>(self, target: &mut D) -> Result<(), D::Error> {
+        if self.phase == 2 {
+            return Ok(());
+        }
+        if self.phase == 3 || self.phase == 5 && self.kind == TextureKind::Tiles {
+            return self.draw_tiles(target);
+        }
+        let (count, seed) = match self.phase {
+            1 => (42, 0x2d49_1801),
+            4 => (130, 0x2d49_1803),
+            _ => (170, 0x2d49_1804),
+        };
+        for index in 0..count {
+            let n = texture_hash(seed ^ index);
+            let x = 12 + (n % 438) as i32;
+            let y = 12 + ((n >> 10) % 438) as i32;
+            let (width, height) = if self.phase == 4 {
+                (2 + ((n >> 20) % 9) as i32, 2 + ((n >> 24) % 4) as i32)
+            } else {
+                ([14, 26, 40, 64][((n >> 20) & 3) as usize], [2, 4, 7, 11][((n >> 24) & 3) as usize])
+            };
+            let area = Rectangle::new(Point::new(x, y), Size::new(width as u32, height as u32));
+            if !texture_place(area) || !target.visible(&area) {
+                continue;
+            }
+            let level = match self.kind {
+                TextureKind::Blocks => [36, 52, 70, 88][((n >> 28) & 3) as usize],
+                TextureKind::Tiles => [25, 34, 43, 52][((n >> 28) & 3) as usize],
+                TextureKind::DimBlocks => [14, 20, 26, 32][((n >> 28) & 3) as usize],
+            };
+            let color = chrome::BLACK.lerp(&chrome::BLUE, level);
+            target.fill_solid(&area, color)?;
+            if height >= 7 {
+                let stripe = Rectangle::new(Point::new(x, y + 3), Size::new(width as u32, 1));
+                target.fill_solid(&stripe, chrome::BLACK.lerp(&chrome::BLUE, level.saturating_add(15)))?;
+            }
+        }
+        Ok(())
+    }
+
+    fn draw_tiles<D: CoverageTarget<Color = Color>>(self, target: &mut D) -> Result<(), D::Error> {
+        for row in 0..21 {
+            for column in 0..21 {
+                let x = 14 + column * 21;
+                let y = 14 + row * 21;
+                let area = Rectangle::new(Point::new(x, y), Size::new_equal(18));
+                if !texture_place(area) || !target.visible(&area) {
+                    continue;
+                }
+                let n = texture_hash(0x2d49_1805 ^ (row * 21 + column) as u32);
+                let dx = x - CENTER.x;
+                let dy = y - CENTER.y;
+                let chance = if dx * dx + dy * dy > 144 * 144 { 44 } else { 16 };
+                if n % 100 >= chance {
+                    continue;
+                }
+                let base = if self.kind == TextureKind::Tiles { 20 } else { 36 };
+                let level = base + ((n >> 28) & 3) as u8 * 10;
+                let color = chrome::BLACK.lerp(&chrome::BLUE, level);
+                let rising = n & (1 << 19) != 0;
+                for step in 0..4 {
+                    let left = if rising { x + step * 4 } else { x };
+                    target.fill_solid(
+                        &Rectangle::new(Point::new(left, y + step * 4), Size::new((18 - step * 4) as u32, 4)),
+                        color,
+                    )?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn texture_hash(mut n: u32) -> u32 {
+    n ^= n >> 16;
+    n = n.wrapping_mul(0x7feb_352d);
+    n ^= n >> 15;
+    n = n.wrapping_mul(0x846c_a68b);
+    n ^ (n >> 16)
+}
+
+fn texture_place(area: Rectangle) -> bool {
+    if !area.intersection(&TEXTURE_CLEAR).is_zero_sized()
+        || !area.intersection(&ICON.bounds()).is_zero_sized()
+    {
+        return false;
+    }
+    let Some(end) = area.bottom_right() else {
+        return false;
+    };
+    [area.top_left, Point::new(end.x, area.top_left.y), Point::new(area.top_left.x, end.y), end]
+        .into_iter()
+        .all(|p| {
+            let dx = p.x - CENTER.x;
+            let dy = p.y - CENTER.y;
+            dx * dx + dy * dy <= 228 * 228
+        })
+}
 
 /// What the screen shows, in the order that decides between them.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -128,6 +255,8 @@ pub struct Accents {
     pub icon_rows: u8,
     pub caption: u8,
     pub dial: u8,
+    /// The C1 field's entry step, 0 to 5. A settled field holds at 5.
+    pub texture: u8,
     pub change: Change,
 }
 
@@ -137,6 +266,7 @@ impl Accents {
         icon_rows: 5,
         caption: u8::MAX,
         dial: u8::MAX,
+        texture: 5,
         change: Change::NONE,
     };
     pub const HIDDEN: Self = Self {
@@ -144,6 +274,7 @@ impl Accents {
         icon_rows: 0,
         caption: 0,
         dial: 0,
+        texture: 0,
         change: Change::NONE,
     };
 
@@ -155,6 +286,7 @@ impl Accents {
             icon_rows: self.icon_rows.min(other.icon_rows),
             caption: self.caption.min(other.caption),
             dial: self.dial.min(other.dial),
+            texture: self.texture.min(other.texture),
             change: self.change,
         }
     }
@@ -296,6 +428,7 @@ fn centred<D: CoverageTarget<Color = Color>>(
 /// What each part of the screen shows. Two frames that agree on a part draw it identically.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Parts {
+    texture: Option<Texture>,
     ring: Option<Color>,
     /// The heading the dial turns to, and how many of its bearings the sweep has passed.
     dial: Option<(u16, u8)>,
@@ -386,6 +519,7 @@ impl Parts {
                 .filter(|(_, reveal)| reveal.cells() > 0)
         };
         Self {
+            texture: Texture::of(mode, accents.texture),
             ring: (accents.ring > 0).then(|| chrome::BLACK.lerp(&ring_color, accents.ring)),
             dial: mode.heading().filter(|_| marks > 0).map(|heading| (heading, marks)),
             icon: (mode.icon(), mode.icon_color(), accents.icon_rows),
@@ -447,14 +581,15 @@ where
     D: CoverageTarget<Color = Color>,
 {
     let parts = Parts::of(view, accents);
+    if let Some(texture) = parts.texture {
+        texture.draw(target)?;
+    }
     {
-        // The dial lands on the cleared field, and its parts do not overlap.
-        let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
         if let Some(color) = parts.ring {
-            super::smooth::perimeter().draw(field, color);
+            super::smooth::perimeter().draw(target, color);
         }
         if let Some((heading, marks)) = parts.dial {
-            draw_dial(heading, marks, font, field)?;
+            draw_dial(heading, marks, font, target)?;
         }
     }
     let (glyph, color, rows) = parts.icon;
@@ -503,6 +638,9 @@ pub fn damage(
     let (old, new) = (Parts::of(before.0, before.1), Parts::of(after.0, after.1));
     if old == new {
         return;
+    }
+    if old.texture != new.texture {
+        damage.add(chrome::DISPLAY_BBOX);
     }
     if old.ring != new.ring {
         super::smooth::perimeter().damage(damage);
@@ -816,6 +954,24 @@ mod tests {
     fn headings_truncate() {
         assert_eq!(degrees(3599), 359);
         assert_eq!(degrees(0), 0);
+    }
+
+    #[test]
+    fn c1_field_is_fixed_for_values_and_clear_for_a_fault() {
+        let full = Accents::FULL.texture;
+        assert_eq!(Texture::of(Mode::Heading(0), full), Texture::of(Mode::Heading(359), full));
+        assert_eq!(Texture::of(Mode::Interference(0), full), Texture::of(Mode::Interference(359), full));
+        assert_eq!(Texture::of(Mode::Calibrating(0), full), Texture::of(Mode::TopEdgeUp, full));
+        assert_eq!(Texture::of(Mode::NoData, full), None);
+        assert_eq!(Texture::of(Mode::Heading(47), Accents::HIDDEN.texture), None);
+    }
+
+    #[test]
+    fn c1_field_keeps_the_readout_and_status_on_black() {
+        assert!(!texture_place(SLAB));
+        assert!(!texture_place(ICON.bounds()));
+        assert!(!texture_place(STATUS_BAND));
+        assert!(texture_place(Rectangle::new(Point::new(190, 30), Size::new(20, 4))));
     }
 
     fn renderer() -> FontdueRenderer<'static, Color> {
