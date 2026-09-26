@@ -20,7 +20,7 @@ use embedded_graphics::{
 use super::{
     clock::ClockView,
     scatter::{Field, Look, Scatter, Shown},
-    screens, smooth,
+    screens,
     startup::{self, Context, Mark, CARD_MARK, CARD_SCALE, CENTER, PAGE_RADIUS},
     text,
 };
@@ -498,12 +498,12 @@ impl<T: DrawTarget> DrawTarget for Stripes<'_, T> {
 }
 
 pub fn draw_card<D: CoverageTarget<Color = Color>>(frame: u32, target: &mut D) -> Result<(), D::Error> {
-    screens::clear(target)?;
-    let page = |target: &mut D| smooth::disc_rows(target, 0..466, CENTER, PAGE_RADIUS, chrome::LIME);
+    // The lime frames clear to the page's colour rather than painting it over black.
+    let page = matches!(frame, 0..9 | 17);
+    screens::clear_to(target, if page { chrome::LIME } else { chrome::BLACK })?;
     let scaled = CARD_MARK.scaled(CARD_SCALE);
     match frame {
         0..3 => {
-            page(target)?;
             let stripes = &mut Stripes(&mut *target);
             CARD_MARK.draw(true, false, chrome::BLACK, stripes)?;
             let (outer, inner) = TILE_FRAME;
@@ -513,16 +513,10 @@ pub fn draw_card<D: CoverageTarget<Color = Color>>(frame: u32, target: &mut D) -
                 stripes.fill_solid(&Rectangle::with_corners(Point::new(x0, y0), Point::new(x1 - 1, y1 - 1)), chrome::BLACK)?;
             }
         }
-        3..9 => {
-            page(target)?;
-            CARD_MARK.draw(true, true, chrome::BLACK, target)?;
-        }
+        3..9 => CARD_MARK.draw(true, true, chrome::BLACK, target)?,
         9..13 => CARD_MARK.draw(true, true, chrome::LIME, target)?,
         13..17 => scaled.draw(true, true, chrome::LIME, &mut Round::new(&mut *target, CENTER, PAGE_RADIUS))?,
-        17 => {
-            page(target)?;
-            scaled.draw(true, true, chrome::BLACK, &mut Round::new(&mut *target, CENTER, PAGE_RADIUS))?;
-        }
+        17 => scaled.draw(true, true, chrome::BLACK, &mut Round::new(&mut *target, CENTER, PAGE_RADIUS))?,
         _ => {}
     }
     Ok(())

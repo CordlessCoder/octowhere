@@ -707,24 +707,25 @@ impl Mark {
             let from = |o: f32| libm::roundf(o + inset) as i32;
             let to = |o: f32| libm::roundf(o + 5.0 * self.module - inset) as i32;
             let (pitch, stripe) = (HATCH_PITCH * scale, HATCH_STRIPE * scale);
+            // Lit where the distance across the stripes, from the panel's centre, falls in the
+            // first `stripe` of each `pitch`. Along a row that distance grows by 1/√2 a pixel,
+            // so each stripe's run is worked out from where it starts and ends.
+            let root2 = core::f32::consts::SQRT_2;
             for y in from(self.origin.1)..to(self.origin.1) {
-                let (mut x, end) = (from(self.origin.0), to(self.origin.0));
-                // Lit where the distance across the stripes, from the panel's centre, falls in
-                // the first `stripe` of each `pitch`.
-                let lit = |x: i32| {
-                    let across = ((x - CENTER.x) + (y - CENTER.y) + 1) as f32 / core::f32::consts::SQRT_2;
-                    across - libm::floorf(across / pitch) * pitch < stripe
-                };
-                while x < end {
-                    let on = lit(x);
-                    let start = x;
-                    while x < end && lit(x) == on {
-                        x += 1;
+                let (start, end) = (from(self.origin.0), to(self.origin.0));
+                let k = (y - CENTER.x - CENTER.y + 1) as f32;
+                let mut n = libm::floorf((start as f32 + k) / root2 / pitch);
+                loop {
+                    let first = (libm::ceilf(n * pitch * root2 - k) as i32).max(start);
+                    let last = (libm::ceilf((n * pitch + stripe) * root2 - k) as i32).min(end);
+                    if first >= end {
+                        break;
                     }
-                    if on {
-                        let run = Rectangle::new(Point::new(start, y), Size::new((x - start) as u32, 1));
+                    if last > first {
+                        let run = Rectangle::new(Point::new(first, y), Size::new((last - first) as u32, 1));
                         target.fill_solid(&run, color)?;
                     }
+                    n += 1.0;
                 }
             }
         }
@@ -967,6 +968,49 @@ mod tests {
         for c in Part::ALL.into_iter().flat_map(|part| part.name().chars()) {
             let metrics = font.metrics(c, (NAME_PX / 2) as f32);
             assert!(metrics.width * metrics.height * 4 < 40_000, "{c}");
+        }
+    }
+
+    /// Records which pixels a drawing sets.
+    struct Lit(alloc::collections::BTreeSet<(i32, i32)>);
+
+    impl embedded_graphics::geometry::OriginDimensions for Lit {
+        fn size(&self) -> Size {
+            Size::new(466, 466)
+        }
+    }
+
+    impl DrawTarget for Lit {
+        type Color = Color;
+        type Error = core::convert::Infallible;
+        fn draw_iter<I: IntoIterator<Item = embedded_graphics::Pixel<Color>>>(&mut self, pixels: I) -> Result<(), Self::Error> {
+            self.0.extend(pixels.into_iter().map(|embedded_graphics::Pixel(point, _)| (point.x, point.y)));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn the_hatch_lights_the_pixels_the_stripe_test_does() {
+        for mark in [CARD_MARK, CARD_MARK.scaled(CARD_SCALE), Mark { origin: (100.0, 50.0), module: 13.0, stroke: 4.0 }] {
+            let mut drawn = Lit(alloc::collections::BTreeSet::new());
+            mark.draw(false, true, chrome::LIME, &mut drawn).unwrap();
+            let mut tile = Lit(alloc::collections::BTreeSet::new());
+            mark.draw(false, false, chrome::LIME, &mut tile).unwrap();
+            let scale = mark.module / CARD_MARK.module;
+            let inset = mark.module + mark.stroke + HATCH_INSET * scale;
+            let (pitch, stripe) = (HATCH_PITCH * scale, HATCH_STRIPE * scale);
+            let span = |o: f32| libm::roundf(o + inset) as i32..libm::roundf(o + 5.0 * mark.module - inset) as i32;
+            let mut expected = tile.0.clone();
+            for y in span(mark.origin.1) {
+                for x in span(mark.origin.0) {
+                    let across = ((x - CENTER.x) + (y - CENTER.y) + 1) as f32 / core::f32::consts::SQRT_2;
+                    if across - libm::floorf(across / pitch) * pitch < stripe {
+                        expected.insert((x, y));
+                    }
+                }
+            }
+            let differ = drawn.0.symmetric_difference(&expected).count();
+            assert!(differ <= expected.len() / 1000, "{differ} of {} differ", expected.len());
         }
     }
 
