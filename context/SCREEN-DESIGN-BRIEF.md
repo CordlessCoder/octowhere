@@ -140,7 +140,8 @@ always-on face's `always-on-local`, `always-on-stopped`, `always-on-no-zone` and
 `always-on-no-data`, which `context/screen-captures/` keeps. `tools/ui-sim` records scenes as
 GIF or MP4 at 20 ms per frame, with the finger marked: `--record compass-states`, `--record
 startup`, `--record startup-failed`, `--record settings`, `--record rest-always-on`, `--record
-rest-off` and `--record tour`; `--scenes` lists the rest. The simulator shows the display's
+rest-off` and `--record tour`, which walks every screen and state slowly for a viewer new to
+the device, in about three and a half minutes; `--scenes` lists the rest. The simulator shows the display's
 level by scaling colours against the stored level. The captures' fixture is 13:07:42 on Thu 24 Sep 2026 in Europe/Dublin, and heading 047°,
 pitch +05, roll −12, calibration 54 %. None of it is a reading.
 

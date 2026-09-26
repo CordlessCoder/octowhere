@@ -16,17 +16,7 @@ until the feature set is complete, because profiling an incomplete firmware pric
   and a legibility and touch check on the board. C1 passes host tests and a firmware build.
   The owner approved its `ui-sim` preview, and its on-target draw times are in
   `docs/logs/display/compass-c1-draw-2026-09-26.md`. C1 still needs a physical-panel
-  legibility and touch check. Left:
-  1. A slow, thorough `ui-sim` tour that replaces the `tour` scene in
-     `tools/ui-sim/src/scenes.rs` (owner, 2026-09-26). Paced for a viewer who does not know
-     the device: slower swipes and drags, and holds long enough to read each state. In order:
-     the start-up (self-test, identity, card) into the clock; the clock in GNSS, RTC, manual,
-     STOPPED, NO ZONE and NO DATA; the battery normal, low (15% or less), charging and with no
-     reading; the compass heading, calibrating, interference, top edge up and NO DATA; the
-     always-on face's states with its battery; a few settings each with its effect shown
-     (brightness, zone, timeout); then a demo start-up failure entered through DEVICE,
-     REPLAY START-UP and the DEMO part failure, through the fault screen back to the clock.
-     Update whatever mentions `tour`, such as the `ui-sim` header.
+  legibility and touch check.
 - Shorten settings saves, ahead of other work that touches settings (design response,
   2026-09-24). Settings are in ekv now, and each write transaction starts a new file that
   erases a whole 4 KiB page first, so every save erases. The first saved brightness took

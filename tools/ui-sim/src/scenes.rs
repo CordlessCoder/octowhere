@@ -3,6 +3,7 @@
 
 use embedded_graphics::prelude::Point;
 use octowhere_ui::ui::{
+    panel::Cell,
     rest::Timeout,
     screens::PeripheralState,
     stage::Stage,
@@ -10,6 +11,7 @@ use octowhere_ui::ui::{
     compass::CompassView,
     gesture::Micros,
     screens::{Battery, Gnss, Screen},
+    second::Store,
     script::Driver,
     stage::{Motion, Sensors},
     startup::{Outcome, Part},
@@ -69,7 +71,7 @@ pub const SCENES: &[Scene] = &[
     },
     Scene {
         name: "tour",
-        about: "the clock finding a fix, the compass calibration walk, back, and the settings panel",
+        about: "every screen and state, slowly: the start-up, the clock, the battery, the compass, settings, the always-on face and a demonstrated failure",
         run: tour,
     },
 ];
@@ -248,29 +250,195 @@ fn compass_states(driver: &mut Driver) {
     driver.wait(ms(1_200));
 }
 
-fn tour(driver: &mut Driver) {
-    // Before a fix: the clock's own time, unconfirmed, and no zone, so the face shows UTC.
-    let mut before = dublin();
-    before.clock.set_from_gnss = false;
-    before.clock.utc = before.clock.utc.map(|utc| utc - 3);
-    before.zone = ZoneState::default();
-    driver.stage.show(Screen::Clock);
-    driver.run_clock();
-    driver.sensors(before);
-    driver.motion(calibrating(0));
-    driver.wait(ms(3_000));
+/// How long the tour holds a state for a viewer to read it.
+const HOLD: Micros = ms(3_500);
+/// How long the tour's swipes and drags take.
+const SLOW: Micros = ms(700);
 
-    // The fix confirms the time where the clock has run to, and places the device in Dublin.
-    let mut fix = dublin();
-    fix.clock.utc = driver.stage.peripherals().clock.clock().utc;
-    driver.sensors(fix);
-    driver.wait(ms(1_800));
+/// Dublin's readings at the driver's time, as the clock started by `boot` has run to.
+fn dublin_now(driver: &Driver) -> Sensors {
+    let mut sensors = dublin();
+    sensors.clock.utc = sensors.clock.utc.map(|utc| utc + (driver.now() / 1_000_000) as i64);
+    sensors
+}
 
-    page_left(driver);
-    compass_walk(driver);
-    page_right(driver);
+/// Steps in Dublin's readings at the driver's time, changed by `change`, and holds them.
+fn show(driver: &mut Driver, change: impl FnOnce(&mut Sensors)) {
+    let mut sensors = dublin_now(driver);
+    change(&mut sensors);
+    driver.sensors(sensors);
+    driver.wait(HOLD);
+}
+
+fn slow_page_left(driver: &mut Driver) {
+    driver.swipe(Point::new(420, 233), Point::new(60, 233), SLOW);
+    driver.settle();
+}
+
+fn slow_page_right(driver: &mut Driver) {
+    driver.swipe(Point::new(60, 233), Point::new(420, 233), SLOW);
+    driver.settle();
+}
+
+/// A tap, and a pause to see what it did.
+fn slow_tap(driver: &mut Driver, x: i32, y: i32) {
+    tap(driver, x, y);
     driver.wait(ms(1_500));
-    settings_walk(driver);
+}
+
+/// Taps a row of the settings panel, turning to its page first.
+fn tap_row(driver: &mut Driver, cell: Cell) {
+    if !octowhere_ui::ui::panel::in_view(cell.page(), driver.stage.panel_scroll()) {
+        let (from, to) = if cell.page() == 1 { (380, 80) } else { (80, 380) };
+        driver.swipe(Point::new(from, 250), Point::new(to, 250), SLOW);
+        driver.settle();
+        driver.wait(ms(1_200));
+    }
+    let middle = cell.bounds(driver.stage.panel_scroll()).center();
+    slow_tap(driver, middle.x, middle.y);
+}
+
+fn open_settings(driver: &mut Driver) {
+    driver.swipe(Point::new(233, 70), Point::new(233, 420), SLOW);
+    driver.settle();
+    driver.wait(ms(2_000));
+}
+
+fn close_settings(driver: &mut Driver) {
+    driver.swipe(Point::new(233, 420), Point::new(233, 80), SLOW);
+    driver.settle();
+    driver.wait(ms(2_000));
+}
+
+/// Every screen and state, paced for a viewer who has not seen the device.
+fn tour(driver: &mut Driver) {
+    use Outcome::Answered;
+    boot(driver, [
+        (Part::Power, Answered, 150),
+        (Part::Clock, Answered, 250),
+        (Part::Touch, Answered, 500),
+        (Part::Motion, Answered, 600),
+        (Part::Magnet, Answered, 750),
+        (Part::Gnss, Answered, 1_300),
+    ]);
+    driver.motion(facing(37.0));
+    while driver.stage.starting_up() {
+        driver.wait(ms(100));
+    }
+    driver.wait(ms(4_000));
+
+    // The clock: set by GNSS, running on its own, a zone chosen by hand, stopped, never
+    // placed, and unreadable, then back to GNSS.
+    show(driver, |s| s.clock.set_from_gnss = false);
+    show(driver, |s| {
+        s.zone = ZoneState {
+            mode: ZoneMode::Manual,
+            zone: octowhere_ui::tz::DATABASE.find("America/New_York").map(|zone| zone.id),
+        };
+    });
+    show(driver, |s| s.clock.stopped = true);
+    show(driver, |s| s.zone = ZoneState::default());
+    show(driver, |s| s.clock.utc = None);
+    show(driver, |_| {});
+
+    // The battery: normal, low, charging, and no reading.
+    let battery = |percent, charging| Some(Battery { present: true, percent, millivolts: 3_900, charging, usb: charging });
+    show(driver, |s| s.battery = battery(64, false));
+    show(driver, |s| s.battery = battery(12, false));
+    show(driver, |s| s.battery = battery(12, true));
+    show(driver, |s| s.battery = None);
+    show(driver, |_| {});
+
+    // The compass: a heading and a turn, calibrating, interference, top edge up, NO DATA.
+    slow_page_left(driver);
+    driver.wait(HOLD);
+    driver.motion_over(ms(2_000), |t| facing(37.0 + 90.0 * ease(t)));
+    driver.wait(HOLD);
+    driver.motion(calibrating(0));
+    driver.wait(ms(1_500));
+    driver.motion_over(ms(3_000), |t| calibrating((t * 99.0) as u8));
+    driver.wait(ms(1_500));
+    driver.motion(facing(127.0));
+    driver.wait(HOLD);
+    driver.motion(disturbed(127.0));
+    driver.wait(HOLD);
+    driver.motion(facing(127.0));
+    driver.wait(ms(2_000));
+    driver.motion(top_edge_up());
+    driver.wait(HOLD);
+    driver.motion(facing(127.0));
+    driver.wait(ms(2_000));
+    driver.motion(Motion { compass: CompassView::default() });
+    driver.wait(HOLD);
+    driver.motion(facing(127.0));
+    driver.wait(HOLD);
+    slow_page_right(driver);
+    driver.wait(ms(2_000));
+
+    // Settings, each shown doing what it does. Brightness down, which dims as it drags.
+    open_settings(driver);
+    tap_row(driver, Cell::Brightness);
+    driver.swipe(Point::new(330, 280), Point::new(150, 280), ms(1_500));
+    driver.wait(ms(1_500));
+    slow_tap(driver, 233, 378);
+    // A zone by hand, one offset later, which the clock face then shows.
+    tap_row(driver, Cell::Zone);
+    driver.swipe(Point::new(233, 300), Point::new(233, 255), SLOW);
+    driver.wait(ms(1_500));
+    slow_tap(driver, 233, 250);
+    // The sensor task carries the stored zone from then on, as the firmware's does.
+    let stored = driver.stroke(&[Point::new(233, 250)]).iter().find_map(|update| update.store);
+    let Some(Store::ManualZone(zone)) = stored else { panic!("no zone was stored: {stored:?}") };
+    let zone = ZoneState { mode: ZoneMode::Manual, zone: Some(zone) };
+    let mut sensors = dublin_now(driver);
+    sensors.zone = zone;
+    driver.sensors(sensors);
+    driver.wait(ms(1_500));
+    close_settings(driver);
+    driver.wait(HOLD);
+    // A 15 s timeout, resting on the always-on face.
+    open_settings(driver);
+    tap_row(driver, Cell::Timeout);
+    driver.swipe(Point::new(233, 250), Point::new(233, 360), SLOW);
+    driver.wait(ms(1_500));
+    slow_tap(driver, 233, 258);
+    tap_row(driver, Cell::AlwaysOn);
+    close_settings(driver);
+
+    // Waits out the timeout, the dim and the fade, then the always-on face's states.
+    driver.wait(ms(21_000));
+    driver.wait(HOLD);
+    show(driver, |s| {
+        s.zone = zone;
+        s.clock.stopped = true;
+    });
+    show(driver, |s| s.zone = ZoneState::default());
+    show(driver, |s| s.clock.utc = None);
+    show(driver, |s| s.zone = zone);
+    slow_tap(driver, 233, 300);
+    driver.wait(ms(2_000));
+
+    // Automatic zones again, then a demonstrated failure: DEVICE, REPLAY START-UP, a part.
+    open_settings(driver);
+    tap_row(driver, Cell::Zone);
+    tap(driver, 233, 342);
+    let sensors = dublin_now(driver);
+    driver.sensors(sensors);
+    driver.wait(ms(1_500));
+    close_settings(driver);
+    driver.wait(HOLD);
+    open_settings(driver);
+    tap_row(driver, Cell::Device);
+    driver.swipe(Point::new(233, 440), Point::new(233, 80), ms(1_200));
+    driver.wait(ms(2_000));
+    slow_tap(driver, 233, 298);
+    driver.swipe(Point::new(233, 330), Point::new(233, 330 - 40 * 5 - 10), ms(1_500));
+    driver.wait(ms(2_000));
+    tap(driver, 233, 258);
+    while driver.stage.starting_up() {
+        driver.wait(ms(100));
+    }
+    driver.wait(ms(4_000));
 }
 
 fn tap(driver: &mut Driver, x: i32, y: i32) {
