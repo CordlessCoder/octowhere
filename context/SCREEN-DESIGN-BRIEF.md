@@ -91,8 +91,9 @@ is 14 px, about 1 mm tall in capitals, and it reads. Touch targets are no smalle
 | Second level, under the panel | Zone picker (two steps), brightness editor, device page, clear-settings confirm |
 | Before the pager | Start-up: the self-test, then the identity and the logo card, or the fault screen |
 
-- **Start-up:** as section 2 of the round 3 spec describes. "Start-up as built" below has
-  where the build interpreted it.
+- **Start-up:** the 2026-09-26 hand-off's S1 self-test, G19 identity with G17's opening and
+  marks, and G17's card, with round 3's section 2 for the behaviour they keep. "Start-up as
+  built" below has where the build interpreted them.
 - **Timeout, dimming and the always-on face:** as section 3 of the round 3 spec describes,
   except that the level fades rather than steps (owner). "Timeout and rest as built" below
   has the details.
@@ -125,7 +126,7 @@ It draws the faces' stills and `panel-rest`, `panel-middle-always-on`, `panel-en
 `examples/outline.rs` draws the outline samples, which `context/screen-captures/` keeps as
 `outline-shapiro-40`, `outline-fraktion-bold-136` and `outline-fraktion-16`;
 `context/screen-captures/` keeps `startup-selftest`, `startup-selftest-failed`,
-`startup-identity` (frame 40), `startup-card` and `startup-fault`. It also draws the
+`startup-identity` (frame 77), `startup-card` (its frame 3) and `startup-fault`. It also draws the
 always-on face's `always-on-local`, `always-on-stopped`, `always-on-no-zone` and
 `always-on-no-data`, which `context/screen-captures/` keeps. `tools/ui-sim` records scenes as
 GIF or MP4 at 20 ms per frame, with the finger marked: `--record compass-states`, `--record
@@ -205,10 +206,12 @@ measured on the device.
 
 ## Start-up as built
 
-Section 2 of `design/specs/DISPLAY-AND-MOTION-SPEC.md` is built. The
-captures `startup-*` and the recordings `startup.gif` and `startup-failed.gif`, also as `.mp4`,
-show it. Where the
-build interpreted the spec:
+The self-test, identity and card follow the 2026-09-26 hand-off
+(`design/handoffs/IMPLEMENTATION-HANDOFF-CURRENT.md` §3.1–3.2), whose frame timings come from
+its `renderer/concept/startup_s1_g17.py`. The fault screen and the behaviour around all of it
+are section 2 of `design/specs/DISPLAY-AND-MOTION-SPEC.md`. The captures `startup-*` and the
+recordings `startup.gif` and `startup-failed.gif`, also as `.mp4`, show it. Where the build
+interpreted them:
 
 - **Boot order.** The firmware loads its settings, starts the panel, and draws the self-test
   while the parts come up behind it. The panel comes on dark and climbs to the stored level over
@@ -224,27 +227,40 @@ build interpreted the spec:
   controller leaves the device without touch.
 - **Deadlines.** POWER 200 ms, CLOCK 200 ms, TOUCH 600 ms (its start-up waits 220 ms),
   MOTION 500 ms, MAGNET 500 ms, GNSS 1.5 s.
-- **The reason line** reads `NO REPLY BY DEADLINE` for a part that ran out of time or did not
-  answer on the bus. A part that answered wrongly, such as a wrong chip ID, reads
-  `REPLY NOT AS EXPECTED`, since the spec's line would not be true of it. With several failures
-  it is the first failure's.
-- **The UTC digits** show dashes (`000 000 111 000 000`) when the clock has no time or its
-  oscillator stopped, since a time it cannot vouch for is not data.
-- **The scatter's generator** is a hash of each point's index, not Python's generator with seed
-  4, so the pattern differs from the renders. Its density and the turn of its dense side match
-  the renders to within a few per cent on every frame. The scatter is its own module
+- **A demonstration's self-test** reads `DEMO, NOT A HARDWARE TEST` where a boot's reads its
+  version.
+- **Colours.** The design's dim marks are tokens dimmed toward black (`chrome::shade`): the
+  outlined title and unlit ticks are `LIME` at 34 %, the partly lit ticks 58 %, the opening's
+  block rows 96, 82, 91 and 100 %, the registration marks `GRAY` at 32 % and their hairlines
+  25 %, and the scatter `PURPLE` at 27 %. BOOT and the dim blocks behind the opening are
+  `DEEP_BLUE`, `#000DF6`, the intro cinematic's blue, at full, 55 % and 10–18 % (owner).
+- **BOOT** is set in KH Interference Bold at 38 px, turned a quarter clockwise, as the design
+  has it (owner). Only its three letters are embedded.
+- **The opening's backdrop** of 185 dim blocks comes from a fixed sequence of the firmware's
+  own, not Python's generator, so the blocks sit elsewhere at the same density.
+- **The title's outline** is 2 px inside each glyph's edge, where the design's is 1.55 px. A
+  glyph types in by its outline's shade rising over 55 ms, which at 30 fps is one frame at part
+  shade. Its partly lit frames show 2 px slices of the filled word.
+- **The registration marks' centres** are 2 × 2 squares, where the design has a 4 px diamond.
+- **The small logo** draws the mark's 15 × 15 rows at 1.3 px modules rounded to whole pixels,
+  so its strokes are one or two pixels wide.
+- **The scatter** uses the firmware's generator, not the design's Python surrogate, with the
+  design's two fields, facings, densities and turns. The scatter is its own module
   (`ui::scatter`), with its grid origin, the band it stops short of and its colour as
   parameters, and one or more fields on that grid, each a circle and a seed with its own
   facing and density. Where fields overlap, the first to show a point gives its mark. A mark
   shows only if it lies wholly inside the glass. The owner wants it on more pages later.
-  A frame redraws only the marks that appear or go, 20 to 45 of about 700 once its density
-  stops rising, and working out which costs about 1.8 ms a frame.
-- **The mark** is the spec's (since v4): rectangles and a stripe test, drawn at any size from
-  one description.
-  In the microtext row it has no hatch, as the spec's text and its 15 × 15 rows say; the row
-  preview in `marks-hatched.png` shows one. The replay chooser shows it as `GOOD`'s icon.
-- **The stretched text** (the word at 1.8× and the running line at 1.3×) is drawn by the glyph
-  renderer with a vertical scale, not stored as bitmaps.
+- **Redraws.** Every identity frame before frame 67, when the small logo settles, redraws in
+  full. From then on a frame redraws only the scatter marks its turns move and the UTC digits
+  when the minute changes.
+- **The card's lime page** runs to the glass's edge, where the design's stops at radius 232,
+  since the frame clears straight to lime rather than painting a disc over black.
+- **The UTC digits** show dashes (`000 000 111 000 000`) when the clock has no time or its
+  oscillator stopped, since a time it cannot vouch for is not data.
+- **The mark** is rectangles and a stripe test, drawn at any size from one description. In the
+  microtext row it has no hatch. The replay chooser shows it as `GOOD`'s icon.
+- **The running line** on the fault screen is stretched to 1.3× by the glyph renderer, not
+  stored as a bitmap.
 - **The giant name** is rasterized at 100 px and drawn with each pixel as a 2 × 2 block. At
   200 px its largest glyph needs a 140 KB raster, and that allocation failed on the device.
   The edges show 2 px antialiasing steps.
@@ -259,12 +275,12 @@ build interpreted the spec:
   describes. After the fault screen it runs its entry with the time whole.
 - **Timing.** The identity, the card and the fault screen hold 30 fps on the device. Their
   frames are counted by the clock, so a slow frame is skipped rather than stretching the
-  sequence.
+  sequence. The identity runs 120 frames and the card 19, 4.6 s together.
 - **Replay.** The spec's Replay section matches what is built, except that the identity's
   line reads `SELF TEST 5/6 OK` after a failed boot, as the fault screen's does, where the spec
   has `SELF TEST 5/6`. Beyond the spec, `REPLAY START-UP` opens a chooser of a good start-up
-  or a demonstration of one part failing (settings spec decision 12), which the design has not
-  seen.
+  or a demonstration of one part failing (settings spec decision 12). The hand-off's D3 look
+  for it is not built yet.
 
 ## Timeout and rest as built
 
@@ -470,8 +486,10 @@ that changed redraw. Measured on the device, per frame:
 | Compass, heading changes by a degree | about 13 ms |
 | Clock drawn in full | 17.5–22.6 ms |
 | Compass drawn in full | 13–23 ms |
-| Start-up identity, a frame while its word and hatch type in | 4.3–16.4 ms |
-| Start-up identity, a frame once they settle (the scatter turns) | 3.9–5.9 ms |
+| Start-up identity, a frame of its opening grid | about 15 ms, at most 19 ms |
+| Start-up identity, a frame while its title and marks build | about 23 ms, at most 31 ms |
+| Start-up identity, once settled | nothing but the scatter's turns and the digits |
+| Start-up card, a frame | about 12 ms, at most 22 ms |
 | Start-up fault screen, a frame | about 25 ms, at most 28 ms |
 
 The wordmark is about 0.3 ms of a full clock draw. The screens of the settings round are not

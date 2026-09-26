@@ -20,3 +20,8 @@ Recorded 2026-09-26. These override the hand-off where they differ.
    minute to redraw on, and its battery must still update every minute.
 6. **The backup stays out of git.** `context/octowhere-design-project/` is ignored; this folder
    holds what the build needs. The older design folders in `context/` are removed.
+7. **BOOT is set in KH Interference Bold**, as the design has it, embedded from the copy
+   already under `assets/` (owner, 2026-09-26).
+8. **The start-up's blue is `#000DF6`**, the colour of the intro cinematic's opening, added as
+   a token of its own for the BOOT word and the grid behind it. It is an exception to board
+   colours only (owner, 2026-09-26).

@@ -352,7 +352,7 @@ fn startup(driver: &mut Driver) {
         (Part::Magnet, Answered, 750),
         (Part::Gnss, Answered, 1_300),
     ]);
-    driver.wait(ms(3_600));
+    driver.wait(ms(5_900));
 }
 
 fn startup_failed(driver: &mut Driver) {

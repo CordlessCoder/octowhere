@@ -218,8 +218,9 @@ from an optional timer in `octowhere_ui::part_timing` (`clock-draw-bench`); and
 `bench/fault-draw`, which plays the start-up's fault demonstration for each part in turn and
 logs each fault frame's draw per part, and at start-up times the knocked-out row write and
 outlined text alone (`fault-draw-bench`); and `bench/scatter`, which replays the start-up
-and logs each identity frame's draw per part, its damage and the step, and at start-up times
-the scatter, its arithmetic's primitives and small fills alone (`scatter-bench`).
+and logs each identity and card frame's draw, the identity's per part, its damage and the step,
+and at start-up times the scatter, its arithmetic's primitives and small fills alone
+(`scatter-bench`).
 
 ## Concurrency
 
