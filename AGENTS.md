@@ -45,7 +45,8 @@ initialization or peripheral mappings.
   which the picker ranks zones by.
 - `crates/` also holds the local `lc76g`, `sx127x-lora` and `sx127x-common` crates.
 - `host-tests/` is the std test harness for the board-side modules.
-- `tools/ui-sim/` runs the stage in a desktop window. `tools/` also holds the bench scripts.
+- `tools/ui-sim/` runs the stage in a desktop window. `tools/design-compare.py` puts screens
+  beside the design's renders. `tools/` also holds the bench scripts.
 - `docs/` holds hardware reference: the topology notes, the datasheet pack, and captured GNSS,
   LoRa and compass traces under `docs/logs/`.
 - `context/` holds the agent-facing documents below. This file stays at the root.
@@ -66,13 +67,17 @@ initialization or peripheral mappings.
   the K1 clock, the C1 compass, the S1 settings overview with the D3 screens it opens, and the
   H2b always-on face. The owner approved all of it; its `DECISIONS.md` records that and settles
   what the hand-off left open. Start at `handoffs/IMPLEMENTATION-HANDOFF-CURRENT.md`, which
-  names the render each state is checked against. `specs/` keeps the earlier functional specs
+  names the render each state is checked against. Its README says how to run the concept renderers from the
+  fonts under `assets/`. `specs/` keeps the earlier functional specs
   with the owner's decisions since (clock face, wordmark, compass animation, settings panel,
   round 3 display and motion, round 4 clock); the hand-off overrides them where they conflict,
   and `SCREEN-DESIGN-BRIEF.md` has where the build interpreted them. Only the start-up's
   identity, logo card and fault screen run at 30 fps; everything else keeps timings in ms. The
   design agent's full backup is `context/octowhere-design-project/`, ignored by git and kept
   locally.
+- [`context/WORKING-NOTES.md`](context/WORKING-NOTES.md) is how the work is done here: how
+  the owner reviews, the board's rules and pitfalls, measuring draws, driving `ui-sim`
+  without a display, and what is settled. Read it before using the board.
 - [`context/HARDWARE-VERIFICATION.md`](context/HARDWARE-VERIFICATION.md) lists open hardware
   questions from static review. They are questions, not confirmed defects.
 - [`context/IMPLEMENTATION.md`](context/IMPLEMENTATION.md) is a finished multi-agent brief kept as
