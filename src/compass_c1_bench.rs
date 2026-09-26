@@ -75,6 +75,16 @@ fn on(view: CompassView, elapsed: u64) -> Driver<'static> {
     driver
 }
 
+async fn prime(stage: &Stage, swap: &mut SwapThread<'static, SwapState<&'static EspHeap>>) {
+    for _ in 0..2 {
+        let frame = swap.get();
+        stage.draw(&mut *frame.fb);
+        frame.dirty.make_full();
+        frame.drawn = true;
+        swap.swap().await;
+    }
+}
+
 pub async fn run(swap: &mut SwapThread<'static, SwapState<&'static EspHeap>>) -> ! {
     Timer::after(Duration::from_secs(3)).await;
 
@@ -110,6 +120,7 @@ pub async fn run(swap: &mut SwapThread<'static, SwapState<&'static EspHeap>>) ->
     measure("swiping", &driver.stage, None, swap).await;
 
     let mut driver = on(heading, 500_000);
+    prime(&driver.stage, swap).await;
     driver.motion(Motion { compass: CompassView { heading_decidegrees: Some(480), ..heading } });
     let mut dirty = Dirty::new();
     dirty.clone_from(driver.stage.changed());
