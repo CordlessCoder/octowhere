@@ -97,9 +97,13 @@ is 14 px, about 1 mm tall in capitals, and it reads. Touch targets are no smalle
 - **Timeout, dimming and the always-on face:** as section 3 of the round 3 spec describes,
   except that the level fades rather than steps (owner). "Timeout and rest as built" below
   has the details.
-- **Clock face:** as the clock face spec and the wordmark addendum describe. A time that a fix
-  or zone change replaces types in again by cell reveal: the hours, minutes and seconds over
-  180 ms, and the date line over 160 ms from 120 ms. A tick never animates the digits.
+- **Clock face:** the hand-off's K1, on the round 4 spec: the band `LIME` while the time is
+  local, `ORANGE` stopped, `WHITE` without a zone and `RED` without data, with UTC and the
+  battery in it beside a hatched battery column; the date and zone as token lines; a 24-hour
+  rail with a lime marker on a known local hour; and two dim `PURPLE` scatter fields. "Clock
+  face as built" below has where the build interpreted it. A time that a fix or zone change
+  replaces types in again by cell reveal: the hours, minutes and seconds over 180 ms, and the
+  first token line over 160 ms from 120 ms. A tick never animates the digits.
 - **Compass:** as the clock face spec's compass section and the animation addendum describe, with
   the 66 px outlined icon. It no longer has cover-to-recalibrate, its `COVER SCREEN TO RECAL`
   hint, or the divider above it. The tilt line ends the stack. Calibration restarts from the
@@ -134,6 +138,30 @@ startup`, `--record startup-failed`, `--record settings`, `--record rest-always-
 rest-off` and `--record tour`; `--scenes` lists the rest. The simulator shows the display's
 level by scaling colours against the stored level. The captures' fixture is 13:07:42 on Thu 24 Sep 2026 in Europe/Dublin, and heading 047°,
 pitch +05, roll −12, calibration 54 %. None of it is a reading.
+
+## Clock face as built
+
+K1 (`design/renderer/concept/family-pass-v1-out/clock-K1-*`) on the round 4 spec
+(`design/specs/CLOCK-FACE-ROUND4-SPEC.md`). The captures `clock*`, `clock-charging`,
+`clock-battery-low` and `clock-battery-unknown` show it. Where the build interpreted them:
+
+- **The halo.** The scatter leaves out every mark within 2 px of an element's box (the hours,
+  the icon, the wordmark's letters off the band, each token line and the rail), where the
+  design grows each element's ink by 2 px in black. Marks the design lets sit between letters
+  do not show. The elements then draw on known black, and a changed hour moves no mark.
+- **The scatter** is the firmware's generator with K1's two fields, facings and densities, in
+  `PURPLE` dimmed to 49 %, clear of the band's rows by about 4 px. NO DATA has none.
+- **The seconds** show `--` while the time is withheld, as K1 has them.
+- **The battery line** reads `BAT 87%`, `BAT 87% CHG` while charging, `USB` with USB and no
+  battery, and `BAT --` while unknown. With no battery the hatch shows as unknown, `GRAY` at
+  full height.
+- **The charging crawl** moves the hatch up a pixel every 33 ms, the start-up's frame, while
+  the face shows, dimmed or not (owner). It redraws the hatch alone.
+- **The rail** appears with the zone's line in the entry. Its cells are `GRAY` dimmed to 29 %.
+- **The entry** follows the round 4 spec's windows and curves: the icon's rows over 150 ms by
+  out-cubic, where the old face landed a row every 30 ms, so it shows no row on its first frame.
+- **Redraws.** Every part redraws in its own region, as before. A token line that changes also
+  redraws the scatter marks its box clears or frees.
 
 ## The compass's states and changes, as built
 
@@ -305,10 +333,15 @@ show it with a 15 s timeout. Where the build differs from the spec or interprets
   above the level itself. The always-on face is at 26 (10 %), or the set level if lower. With
   the brightness editor open, the dim is taken from the level being previewed. A wake from the
   panel discards the preview and fades up to the stored level.
-- **The always-on face** redraws in full when its minute, date or state changes, and at no
-  other time. It draws each digit at its own pen, so the regular weight sits where the clock
-  face's bold digits do. In NO ZONE it shows dashes, as the spec's table has it, not the clock
-  face's UTC line.
+- **The always-on face** is the hand-off's H2b: regular-weight digits, dim blue blocks where
+  the rules were, a 24-hour rail and the battery in every state. With local time the blocks are
+  H2's, which step sideways with the minute; NO ZONE and STOPPED take the quieter bars their
+  renders have. NO ZONE shows UTC with a subdued blue marker on its hour, STOPPED
+  dashes and no marker, and NO DATA red dashes, the word and `CLOCK`. It redraws in full when
+  its minute, date or state changes, and at no other time. The battery it shows is taken again
+  only at those redraws, and once a minute by the stage's own clock while the time stands still
+  (STOPPED or NO DATA), so a reading never wakes the panel on its own (owner). Its dim colours
+  are `BLUE` and `LIME` dimmed toward black.
 - **The cells** are section 5's. The timeout screen is the replay chooser's stepper with the
   spec's text. The grid rests at a whole column, so it has three resting places, and a tap on
   a cropped column scrolls one column, whichever side it is on. The clear warning, which the
