@@ -7,7 +7,7 @@ what data and settings exist. Read it with:
 - [`design/handoffs/IMPLEMENTATION-HANDOFF-CURRENT.md`](design/handoffs/IMPLEMENTATION-HANDOFF-CURRENT.md):
   the design agent's hand-off of 2026-09-26, which redesigns every screen. The owner approved
   all of it ([`design/DECISIONS.md`](design/DECISIONS.md)). The start-up, clock, settings and
-  always-on screens are built; C1 compass remains. The rest of this brief records the build.
+  always-on screens and C1 compass are built. The rest of this brief records the build.
 - [`design/docs/marathon-ui-design-language.md`](design/docs/marathon-ui-design-language.md), the
   design doctrine, and [`design/docs/OCTOWHERE-COLOR-ROLES.md`](design/docs/OCTOWHERE-COLOR-ROLES.md).
   The doctrine was written for an earlier product. Where it disagrees with this brief about this
@@ -105,8 +105,11 @@ the panel. Touch targets are no smaller than about 10 mm.
   face as built" below has where the build interpreted it. A time that a fix or zone change
   replaces types in again by cell reveal: the hours, minutes and seconds over 180 ms, and the
   first token line over 160 ms from 120 ms. A tick never animates the digits.
-- **Compass:** as the clock face spec's compass section and the animation addendum describe, with
-  the 66 px outlined icon. It no longer has cover-to-recalibrate, its `COVER SCREEN TO RECAL`
+- **Compass:** C1 adds a fixed dim blue field after a five-step build within the 440 ms entry.
+  Heading holds low horizontal blocks through turns; calibration and TOP EDGE UP use sparse
+  stepped tiles; interference dims the blocks; NO DATA has none. The dial, five states and
+  state transitions remain as the compass spec and animation addendum describe, with the 66 px
+  outlined icon. It no longer has cover-to-recalibrate, its `COVER SCREEN TO RECAL`
   hint, or the divider above it. The tilt line ends the stack. Calibration restarts from the
   panel's COMPASS cell.
 - **Settings panel:** S1's eight indexed rows on two pages, four rows per page. A horizontal
@@ -497,7 +500,8 @@ target that takes antialiased coverage a row at a time and blends it with what i
 
   A halo costs the ring plus the plain text. Stretched, doubled and rotated text have no outline
   yet.
-- **Solid rectangles:** exact, and the cheapest thing to draw.
+- **Solid rectangles:** exact, and the cheapest thing to draw. C1 builds its fixed blue field
+  from these; it does not store a texture image.
 - **The 5 × 5 icon system:** outlined, at any module size. The frame is a quarter of the module
   (at least 2 px), black inside, and the modules are in the state colour. In use: 96 px (clock
   and second-level screens), 66 px (compass and panel cells). The glyphs are in the specs'
@@ -517,11 +521,10 @@ target that takes antialiased coverage a row at a time and blends it with what i
 Constraints:
 
 - **Draw order is the layering.** A later draw covers an earlier one.
-- **An antialiased edge must know its background to look right.** Every screen draws on a known
-  flat colour: text on `BLACK`, knockout text on its band or slab colour. Anything over an image,
-  a pattern or another shape's edge is possible but slower, and a deliberate choice.
+- **An antialiased edge must know its background to look right.** Text uses `BLACK` or its
+  band or slab colour. The compass dial blends over C1's field instead of assuming black.
 - **Symbols are built in code** from rectangles and polygons on integer geometry, never bitmaps.
-- **No images, photographs or textures.**
+- **No bitmap images or photographs.**
 
 ## What drawing costs
 
@@ -534,19 +537,23 @@ that changed redraw. Measured on the device, per frame:
 | Either face at rest | nothing drawn |
 | Clock, a second ticks | about 1.9 ms |
 | Clock, a token line typing in | about 7 ms, at most 18 ms |
-| Compass, tilt changes by a degree | 1.7 ms |
-| Compass, a step of the dial sweep | 7–12 ms |
-| Compass, heading changes by a degree | about 13 ms |
+| Compass, tilt changes by a degree, before C1 | 1.7 ms |
+| Compass, a step of the dial sweep, before C1 | 7–12 ms |
+| Compass, heading changes by a degree, before C1 | about 13 ms |
 | Clock drawn in full | about 20 ms, at most 25 ms |
-| Compass drawn in full | 13–23 ms |
+| Compass drawn in full, before C1 | 13–23 ms |
+| C1 compass heading, full | 22.857 ms median |
+| C1 compass heading, one-degree redraw | 11.151 ms median |
 | Start-up identity, a frame of its opening grid | about 15 ms, at most 19 ms |
 | Start-up identity, a frame while its title and marks build | about 23 ms, at most 31 ms |
 | Start-up identity, once settled | nothing but the scatter's turns and the digits |
 | Start-up card, a frame | about 12 ms, at most 22 ms |
 | Start-up fault screen, a frame | about 25 ms, at most 28 ms |
 
-Of a full clock draw, the clear is about 7 ms, the scatter 3.3 ms and the band 3.4 ms. The new clock face's minute change, its entry's other steps and the charging crawl were not measured on their own; the board had no battery reading. The screens of the settings round are not
-measured.
+Of a full clock draw, the clear is about 7 ms, the scatter 3.3 ms and the band 3.4 ms. The new clock face's minute change, its entry's other steps and the charging crawl were not measured on their own; the board had no battery reading. Settings draws are recorded in
+[`docs/logs/display/settings-draw-2026-09-26.md`](../docs/logs/display/settings-draw-2026-09-26.md).
+C1's settled states, entry points and a swipe frame were measured in
+[`docs/logs/display/compass-c1-draw-2026-09-26.md`](../docs/logs/display/compass-c1-draw-2026-09-26.md).
 
 - A full redraw happens during a page swipe or sheet travel. A fade of the perimeter ring
   redraws the ring, and recolouring the clock's band redraws the band's rows.
@@ -566,8 +573,8 @@ measured.
 ## Owner decisions that bind later screens
 
 - Colour tokens only. `RED` is only for a fault.
-- `BLUE` marks a live, valid reading on a status icon. `GRAY` as an icon colour marks a value that
-  is valid but unconfirmed.
+- `BLUE` marks a live, valid reading on a status icon. C1's dim field is the approved exception;
+  it carries no status. `GRAY` as an icon colour marks a value that is valid but unconfirmed.
 - Each colour's meaning is in [`design/docs/OCTOWHERE-COLOR-ROLES.md`](design/docs/OCTOWHERE-COLOR-ROLES.md).
 - Every icon is outlined. The bands and slabs carry the colour where a state must be loud.
 - Filled means reading, outlined means editing. A mode in force is filled `GRAY`.

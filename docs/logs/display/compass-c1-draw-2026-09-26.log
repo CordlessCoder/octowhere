@@ -1,0 +1,16 @@
+[2026-09-26T13:43:10Z INFO ] Serial port: '/dev/ttyACM0'
+[2026-09-26T13:43:10Z INFO ] Connecting...
+[2026-09-26T13:43:11Z INFO ] Using flash stub
+I (387) esp_image: segment 3: paddr=00128f64 vaddr=3fc8dc40 size6.633871 [INFO ] [COMPASS C1 BENCH] name=heading n=120 pixels=217156 phase=5 min_us=20239 median_us=22857 p95_us=24344 max_us=24355 (octowhere octowhere-compass-c1-bench.D4ukb3/src/compass_c1_bench.rs:47)
+9.902558 [INFO ] [COMPASS C1 BENCH] name=interference n=120 pixels=217156 phase=5 min_us=21544 median_us=25444 p95_us=26278 max_us=26346 (octowhere octowhere-compass-c1-bench.D4ukb3/src/compass_c1_bench.rs:47)
+13.080506 [INFO ] [COMPASS C1 BENCH] name=calibrating n=120 pixels=217156 phase=5 min_us=19487 median_us=19902 p95_us=22199 max_us=22231 (octowhere octowhere-compass-c1-bench.D4ukb3/src/compass_c1_bench.rs:47)
+16.060687 [INFO ] [COMPASS C1 BENCH] name=top_edge n=120 pixels=217156 phase=5 min_us=17709 median_us=20267 p95_us=21619 max_us=21644 (octowhere octowhere-compass-c1-bench.D4ukb3/src/compass_c1_bench.rs:47)
+18.419422 [INFO ] [COMPASS C1 BENCH] name=no_data n=120 pixels=217156 phase=5 min_us=13618 median_us=17137 p95_us=17663 max_us=17824 (octowhere octowhere-compass-c1-bench.D4ukb3/src/compass_c1_bench.rs:47)
+21.046281 [INFO ] [COMPASS C1 BENCH] name=entry_blocks n=120 pixels=217156 phase=1 min_us=14591 median_us=18316 p95_us=18878 max_us=18947 (octowhere octowhere-compass-c1-bench.D4ukb3/src/compass_c1_bench.rs:47)
+23.601743 [INFO ] [COMPASS C1 BENCH] name=entry_dark n=120 pixels=217156 phase=2 min_us=14171 median_us=17785 p95_us=18224 max_us=18242 (octowhere octowhere-compass-c1-bench.D4ukb3/src/compass_c1_bench.rs:47)
+26.576428 [INFO ] [COMPASS C1 BENCH] name=entry_tiles n=120 pixels=217156 phase=3 min_us=17854 median_us=20493 p95_us=21768 max_us=21778 (octowhere octowhere-compass-c1-bench.D4ukb3/src/compass_c1_bench.rs:47)
+29.756992 [INFO ] [COMPASS C1 BENCH] name=entry_pixels n=120 pixels=217156 phase=4 min_us=18680 median_us=20827 p95_us=22153 max_us=22180 (octowhere octowhere-compass-c1-bench.D4ukb3/src/compass_c1_bench.rs:47)
+32.936959 [INFO ] [COMPASS C1 BENCH] name=entry_settled n=120 pixels=217156 phase=5 min_us=20378 median_us=22974 p95_us=24411 max_us=24424 (octowhere octowhere-compass-c1-bench.D4ukb3/src/compass_c1_bench.rs:47)
+35.788284 [INFO ] [COMPASS C1 BENCH] name=swiping n=120 pixels=217156 phase=5 min_us=17169 median_us=20407 p95_us=21521 max_us=21535 (octowhere octowhere-compass-c1-bench.D4ukb3/src/compass_c1_bench.rs:47)
+38.027197 [INFO ] [COMPASS C1 BENCH] name=heading_one_degree n=120 pixels=20624 phase=5 min_us=10824 median_us=11151 p95_us=11206 max_us=11349 (octowhere octowhere-compass-c1-bench.D4ukb3/src/compass_c1_bench.rs:47)
+38.027470 [INFO ] [COMPASS C1 BENCH] done (octowhere octowhere-compass-c1-bench.D4ukb3/src/compass_c1_bench.rs:130)

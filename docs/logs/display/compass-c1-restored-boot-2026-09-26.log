@@ -1,0 +1,8 @@
+[2026-09-26T13:44:55Z INFO ] Serial port: '/dev/ttyACM0'
+[2026-09-26T13:44:55Z INFO ] Connecting...
+[2026-09-26T13:44:55Z INFO ] Using flash stub
+I (387) esp_image: segment 3: paddr=00128b64 vaddr=3fc8dd70 size2.057876 [INFO ] [BOOT] Gnss Answered in 395ms (octowhere octowhere/src/main.rs:1153)
+2.058277 [INFO ] [BOOT] answered: power=true clock=true touch=true motion=true magnet=true gnss=true (octowhere octowhere/src/main.rs:1408)
+2.066627 [INFO ] [LORA] init_ok (octowhere octowhere/src/main.rs:1569)
+2.066820 [INFO ] [TOUCH] OK resolution=466x466 firmware=0x1000001 checksum=0x693275ee (octowhere octowhere/src/main.rs:1435)
+2.067313 [INFO ] [MEM] internal_used=18816 psram_used=868736 (octowhere octowhere/src/main.rs:1470)

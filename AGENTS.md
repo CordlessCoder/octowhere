@@ -196,7 +196,9 @@ of the text (`compass-draw-bench`); and `bench/compass-draw-rows`, the same benc
 rewritten draw path, with pixel checks of the precomputed ring and the turned ticks, the clear
 variants and the text split (`compass-draw-bench`); and `bench/compass-states`, the implemented
 compass design's full draw in each state, entering, and early and halfway through a swipe
-(`compass-state-bench`); and `bench/font-scale`, the same draw with a warm and a cold glyph
+(`compass-state-bench`); and `bench/compass-c1`, which measures C1's full states and entry
+steps, a swipe and one-degree redraw with core 1 flushing (`compass-c1-bench`); and
+`bench/font-scale`, the same draw with a warm and a cold glyph
 cache, and `tools/font-scale-sweep.sh`, which reruns it at each fontdue `scale`;
 `bench/glyph-cache`, which counted the removed glyph cache's contents on the host
 (`examples/glyph_cache.rs`) and the heap on the board (`glyph-cache-bench`); and
