@@ -664,6 +664,16 @@ impl Device {
         font: &FontdueRenderer<'static, Color>,
         target: &mut D,
     ) -> Result<(), D::Error> {
+        // The cap draws the scatter, which the list lies over.
+        draw_cap(
+            "DEVICE / 08",
+            "BACK",
+            &panel::DEVICE,
+            chrome::BLUE,
+            accents,
+            font,
+            target,
+        )?;
         {
             let clip =
                 Rectangle::with_corners(Point::new(0, LIST_TOP), Point::new(465, LIST_BOTTOM));
@@ -721,15 +731,6 @@ impl Device {
                 list,
             )?;
         }
-        draw_cap(
-            "DEVICE / 08",
-            "BACK",
-            &panel::DEVICE,
-            chrome::BLUE,
-            accents,
-            font,
-            target,
-        )?;
         let footer = if self.scroll == Self::max_scroll() {
             "END OF DEVICE"
         } else {
