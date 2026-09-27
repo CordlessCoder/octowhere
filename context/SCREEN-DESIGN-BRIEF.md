@@ -321,9 +321,10 @@ interpreted them:
 - **The mark** is rectangles and a stripe test, drawn at any size from one description. In the
   microtext row it has no hatch. The replay chooser shows it as `GOOD`'s icon.
 - **The ticker** on the fault screen follows the 2026-09-27 update: one line, 4 px a frame,
-  turning every 12 frames between the failed parts' names in `FAULT_BLUE` and `FAULT_FAULT_` in
+  turning every 36 frames (1.2 s, owner; the update asked for 12) between the failed parts' names in `FAULT_BLUE` and `FAULT_FAULT_` in
   `FAULT_YELLOW`, both moving while hidden. With more than one failure the count and the first
-  two failures sit above the band, with `+N` for the rest, in place of the hatch.
+  two failures sit above the band, with `+N` for the rest, in place of the hatch. The hatch's
+  stripes and gaps are 6 px and still (owner).
 - **The exit.** After its 120 frames the fault screen's last frame breaks up and lifts away over
   18 frames, as the update specifies, then the clock runs its entry. A touch skips it.
 - **The giant name** is rasterized at 100 px and drawn with each pixel as a 2 × 2 block. At

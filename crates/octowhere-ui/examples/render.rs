@@ -325,9 +325,9 @@ fn startup_frames() -> Vec<(String, Stage)> {
     for n in [0, 3, 6, 12, 13, 20, 24, 30, 38, 42, 45, 51, 53, 56, 66, 77, 119, 120, 123, 129, 133, 137, 138, 139] {
         frames.push((format!("startup-frame-{n:02}"), boot(&[], 6, frame(n))));
     }
-    // With a failure the hold is 300 ms, from 720 ms. The ticker turns every 12 frames, and the
+    // With a failure the hold is 300 ms, from 720 ms. The ticker turns every 36 frames, and the
     // exit runs over frames 120–137.
-    for n in [0, 3, 15, 30, 119, 120, 121, 122, 125, 128, 131, 134, 137] {
+    for n in [0, 3, 40, 30, 119, 120, 121, 122, 125, 128, 131, 134, 137] {
         frames.push((format!("startup-fault-{n:03}"), boot(&[Part::Magnet], 6, frame(n) + 100_000)));
     }
     frames.push(("startup-fault-two".into(), boot(&[Part::Magnet, Part::Gnss], 6, frame(3) + 100_000)));

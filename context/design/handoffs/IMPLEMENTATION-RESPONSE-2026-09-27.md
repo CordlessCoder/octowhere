@@ -66,6 +66,8 @@ frame, and all 18 showed in each run.
   75 % and back over 10 s, only while the screen is awake; it holds while dimmed. A step
   redraws only the marks that change, about five a second. The screens settings opens keep a
   still scatter at full density.
+- **The fault ticker turns every 36 frames** (1.2 s) instead of 12, and the fault screen's
+  hatch has 6 px stripes and gaps and no longer crawls.
 - **Scatter entry and exit.** The settings overview now blooms its scatter in over 120 ms once
   the panel settles, as the clock face does. Both screens thin their scatter over the first
   half of a swipe or close, the bloom reversed, where before it moved away at full density.

@@ -768,9 +768,10 @@ const NAME_SPEED: i32 = 1;
 const TICKER_PX: u32 = 34;
 const TICKER_TOP: i32 = 242;
 const TICKER_SPEED: i32 = 4;
-const TICKER_TURN: u32 = 12;
+const TICKER_TURN: u32 = 36;
 const FAULT_HATCH: Rectangle = Rectangle::new(Point::new(290, 164), Size::new(29, 27));
-const FAULT_HATCH_SPEED: i32 = 2;
+/// The hatch's stripes and gaps along a row. It stands still.
+const FAULT_HATCH_STRIPE: i32 = 6;
 const MICRO_LEFT: i32 = 162;
 /// The micro lines' ink tops above the band: the count and the first failure beside the hatch,
 /// or with more than one failure, the count and the first two, with how many more at `MORE_LEFT`
@@ -888,7 +889,7 @@ fn draw_fault<D: CoverageTarget<Color = Color>>(
         at_ink(&regular, &more, MORE_LEFT, SUMMARY_TOPS[2], field)?;
     }
     if failures == 1 {
-        hatch(FAULT_HATCH, 8, 4, FAULT_HATCH_SPEED * frame, chrome::BLACK, field)?;
+        hatch(FAULT_HATCH, 2 * FAULT_HATCH_STRIPE, FAULT_HATCH_STRIPE, 0, chrome::BLACK, field)?;
     }
     let reason = if startup.demo { "DEMO, NOT A FAULT" } else { outcome.reason() };
     at_ink(&regular, reason, MICRO_LEFT, REASON_TOP, field)?;
