@@ -148,7 +148,7 @@ impl<'a> Driver<'a> {
     }
 
     /// Steps without input until the pager comes to rest, and every change with it, though a
-    /// charging crawl goes on.
+    /// charging gauge goes on moving.
     ///
     /// # Panics
     ///

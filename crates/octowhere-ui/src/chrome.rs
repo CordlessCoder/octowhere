@@ -846,6 +846,11 @@ pub const BLACK: Color = color_from_hex("#000000");
 /// The intro cinematic's opening blue, not a board swatch: the start-up's BOOT and the grid
 /// behind it only (owner, 2026-09-26).
 pub const DEEP_BLUE: Color = color_from_hex("#000df6");
+/// The fault screen's ticker inks, on its red screen only (owner, 2026-09-27): the failed
+/// parts' names in the cinematic's fault blue, not a board swatch, and the fault in the board's
+/// yellow.
+pub const FAULT_BLUE: Color = color_from_hex("#001dff");
+pub const FAULT_YELLOW: Color = color_from_hex("#ecdb0b");
 
 /// `color` dimmed toward black, `level` of 255 of the way from it. The designs' dim marks and
 /// fields are tokens seen this way, not colours of their own.

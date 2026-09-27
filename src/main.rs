@@ -1231,7 +1231,10 @@ async fn async_main(spawner: Spawner) {
 
     let stage = Stage::starting(PeripheralState {
         brightness: saved.brightness.unwrap_or(DEFAULT_BRIGHTNESS),
+        #[cfg(not(feature = "charge-fault-bench"))]
         timeout: saved.timeout.unwrap_or_default(),
+        #[cfg(feature = "charge-fault-bench")]
+        timeout: octowhere::ui::rest::Timeout::Never,
         always_on: saved.always_on.unwrap_or(false),
         firmware: env!("CARGO_PKG_VERSION"),
         ..PeripheralState::default()
@@ -1611,6 +1614,8 @@ async fn frame_loop(
     // freezes while it runs: core 1 has flushed a frame once the swap after the one that
     // handed it over completes.
     let mut pending_write: Option<(settings::Write, u8)> = None;
+    #[cfg(feature = "charge-fault-bench")]
+    let (bench_start, mut bench_round) = (Instant::now(), 0u64);
     loop {
         if touch.is_none() {
             touch = touch_slot.take();
@@ -1687,6 +1692,16 @@ async fn frame_loop(
             if touch_ready {
                 last_touch_poll = Instant::now();
             }
+            #[cfg(feature = "charge-fault-bench")]
+            let bench_charging = {
+                let secs = bench_start.elapsed().as_secs();
+                if secs >= 5 && (secs - 5) / 30 >= bench_round && !stage.starting_up() {
+                    bench_round = (secs - 5) / 30 + 1;
+                    info!("[BENCH] demo {}", bench_round);
+                    stage.bench_demo(octowhere::ui::startup::Part::Magnet, Instant::now().as_micros());
+                }
+                (secs / 4) % 2 == 1
+            };
             let update = stage.step(StageInput {
                 now: Instant::now().as_micros(),
                 touch: touch_ready.then(|| match &touch_data {
@@ -1706,7 +1721,16 @@ async fn frame_loop(
                     Sensors {
                         clock: state.clock,
                         zone: state.zone,
+                        #[cfg(not(feature = "charge-fault-bench"))]
                         battery: state.battery,
+                        #[cfg(feature = "charge-fault-bench")]
+                        battery: Some(octowhere::ui::screens::Battery {
+                            present: true,
+                            percent: 87,
+                            millivolts: 4_000,
+                            charging: bench_charging,
+                            usb: bench_charging,
+                        }),
                         gnss: Gnss {
                             fix: state.gnss.fix.is_some(),
                             in_use: signal.satellites_used.get(),
@@ -1757,10 +1781,25 @@ async fn frame_loop(
                 repaint.make_full();
                 *drawn = true;
             }
+            #[cfg(feature = "charge-fault-bench")]
+            let (draw_start, repaint_px) =
+                (Instant::now(), if repaint.is_full() { 466 * 466 } else { repaint.pixels() });
             if repaint.is_full() {
                 stage.draw(fb);
             } else if !repaint.is_empty() {
                 stage.draw(&mut chrome::Clip::new(fb, &repaint));
+            }
+            #[cfg(feature = "charge-fault-bench")]
+            if repaint_px > 0 {
+                info!(
+                    "[BENCH] view={} t={} full={} repaint={} changed={} draw={}",
+                    stage.bench_view(),
+                    bench_start.elapsed().as_millis(),
+                    repaint.is_full(),
+                    repaint_px,
+                    if changed.is_full() { 466 * 466 } else { changed.pixels() },
+                    draw_start.elapsed().as_micros(),
+                );
             }
             // The panel already shows the step before, so only this step's pixels change on it.
             dirty.clone_from(changed);

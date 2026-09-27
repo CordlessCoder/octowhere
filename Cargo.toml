@@ -49,6 +49,10 @@ fontdue-target-bench = []
 fontdue-target-bench-gcc = ["fontdue-target-bench"]
 lora-link-tx = []
 lora-link-rx = []
+# Replays a demonstrated magnetometer failure every 30 s, keeps the clock face on between them with
+# the battery at 87% and charging switched every 4 s, and logs every draw's time and area with
+# the start-up frame it drew.
+charge-fault-bench = []
 
 [patch.crates-io]
 tca9554 = { git = "https://github.com/CordlessCoder/tca9554-rs", rev = "dd76e69" }

@@ -1140,7 +1140,7 @@ fn boot_all(driver: &mut Driver, failing: Option<Part>) {
 
 /// Redrawing only what each step marked leaves both buffers and the panel as a full redraw
 /// would, from the first self-test frame through the identity, the card and the clock's entry,
-/// and through a failure's fault screen.
+/// and through a failure's fault screen and its exit.
 #[test]
 fn start_up_damage_redraws_what_changed() {
     for failing in [None, Some(Part::Magnet)] {
@@ -1162,7 +1162,7 @@ fn start_up_damage_redraws_what_changed() {
             driver.boot(part, outcome);
             check(&driver, part.name());
         }
-        for step in 0..300 {
+        for step in 0..340 {
             // A new minute every few steps, some between the identity's frames.
             if step % 7 == 3 {
                 let clock = clock_at(12, (8 + step / 7) as u8, 0);
@@ -1226,8 +1226,8 @@ fn after_the_card_the_clock_runs_its_entry_and_types_its_time_in() {
 fn a_failure_shows_the_fault_screen_then_the_clock() {
     let mut driver = Driver::starting();
     boot_all(&mut driver, Some(Part::Gnss));
-    // The hold, then 120 frames at 30 fps.
-    driver.wait(4_200_000);
+    // The hold, then 120 frames at 30 fps and the 18 of the exit.
+    driver.wait(4_800_000);
     assert!(driver.stage.starting_up());
     driver.wait(200_000);
     assert!(!driver.stage.starting_up());
@@ -1267,7 +1267,7 @@ fn replay_on_the_device_page_plays_the_identity_and_the_card_then_the_clock() {
 fn a_replay_after_a_failed_boot_still_shows_the_identity() {
     let mut driver = Driver::starting();
     boot_all(&mut driver, Some(Part::Magnet));
-    driver.wait(4_800_000);
+    driver.wait(5_400_000);
     assert!(!driver.stage.starting_up());
     driver.swipe(Point::new(233, 80), Point::new(233, 420), 250_000);
     driver.settle();
@@ -1323,8 +1323,8 @@ fn a_demonstrated_failure_runs_the_self_test_and_the_fault_screen_then_the_clock
     let mut driver = open_replay_chooser(5);
     tap(&mut driver, 233, 258);
     assert!(driver.stage.starting_up());
-    // The self-test to the last report at 1.3 s, its last glyph and its 300 ms hold, then 4 s.
-    driver.wait(5_300_000);
+    // The self-test to the last report at 1.3 s, its last glyph and its 300 ms hold, then 4.6 s.
+    driver.wait(5_900_000);
     assert!(driver.stage.starting_up());
     driver.wait(400_000);
     assert!(!driver.stage.starting_up());
@@ -1349,7 +1349,7 @@ fn a_demonstration_leaves_the_boot_record_for_a_good_replay() {
         tap(driver, 233, 258);
     };
     replay(&mut driver, 1);
-    driver.wait(6_000_000);
+    driver.wait(6_600_000);
     assert!(!driver.stage.starting_up());
     // A good replay goes straight to the identity: no self-test, and no fault screen.
     replay(&mut driver, 0);

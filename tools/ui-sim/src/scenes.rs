@@ -266,8 +266,10 @@ fn compass_states(driver: &mut Driver) {
 
 /// How long the tour holds a state for a viewer to read it.
 const HOLD: Micros = ms(3_500);
-/// How long the tour's swipes and drags take.
+/// How long the tour's drags take.
 const SLOW: Micros = ms(700);
+/// How long the tour's page and panel swipes take.
+const SWIPE: Micros = ms(280);
 
 /// Dublin's readings at the driver's time, as the clock started by `boot` has run to.
 fn dublin_now(driver: &Driver) -> Sensors {
@@ -287,12 +289,12 @@ fn show(driver: &mut Driver, caption: &'static str, change: impl FnOnce(&mut Sen
 }
 
 fn slow_page_left(driver: &mut Driver) {
-    driver.swipe(Point::new(420, 233), Point::new(60, 233), SLOW);
+    driver.swipe(Point::new(420, 233), Point::new(60, 233), SWIPE);
     driver.settle();
 }
 
 fn slow_page_right(driver: &mut Driver) {
-    driver.swipe(Point::new(60, 233), Point::new(420, 233), SLOW);
+    driver.swipe(Point::new(60, 233), Point::new(420, 233), SWIPE);
     driver.settle();
 }
 
@@ -306,7 +308,7 @@ fn slow_tap(driver: &mut Driver, x: i32, y: i32) {
 fn tap_row(driver: &mut Driver, cell: Cell) {
     if !octowhere_ui::ui::panel::in_view(cell.page(), driver.stage.panel_scroll()) {
         let (from, to) = if cell.page() == 1 { (380, 80) } else { (80, 380) };
-        driver.swipe(Point::new(from, 250), Point::new(to, 250), SLOW);
+        driver.swipe(Point::new(from, 250), Point::new(to, 250), SWIPE);
         driver.settle();
         driver.wait(ms(1_200));
     }
@@ -315,13 +317,13 @@ fn tap_row(driver: &mut Driver, cell: Cell) {
 }
 
 fn open_settings(driver: &mut Driver) {
-    driver.swipe(Point::new(233, 70), Point::new(233, 420), SLOW);
+    driver.swipe(Point::new(233, 70), Point::new(233, 420), SWIPE);
     driver.settle();
     driver.wait(ms(2_000));
 }
 
 fn close_settings(driver: &mut Driver) {
-    driver.swipe(Point::new(233, 420), Point::new(233, 80), SLOW);
+    driver.swipe(Point::new(233, 420), Point::new(233, 80), SWIPE);
     driver.settle();
     driver.wait(ms(2_000));
 }
@@ -370,7 +372,7 @@ fn tour(driver: &mut Driver) {
         s.battery = battery(64, false);
     });
     show(driver, "LOW BATTERY, AT 15% OR LESS.", |s| s.battery = battery(12, false));
-    show(driver, "CHARGING. THE LEVEL CRAWLS UPWARD.", |s| s.battery = battery(12, true));
+    show(driver, "CHARGING. THE HATCH FLICKERS BETWEEN ITS STRIPES AND ITS GAPS.", |s| s.battery = battery(12, true));
     show(driver, "NO BATTERY READING.", |s| s.battery = None);
     show(driver, "BACK ON USB, CHARGING.", |_| {});
 

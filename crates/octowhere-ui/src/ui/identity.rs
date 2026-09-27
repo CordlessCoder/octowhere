@@ -262,17 +262,27 @@ pub fn draw_identity<D: CoverageTarget<Color = Color>>(
     }
     let logo = lit(frame, LOGO_FROM);
     if matches!(logo, Lit::On | Lit::Partial) {
-        let at = |i: i32| (i * LOGO_MODULE + 5) / 10;
-        for (j, bits) in MARK_ROWS.iter().enumerate() {
-            let j = j as i32;
-            for i in (0..15).filter(|i| bits & (1 << (14 - i)) != 0) {
-                if logo == Lit::Partial && ![0, 7, 14].contains(&i) {
-                    continue;
+        // Each pixel takes the area of it the lit modules cover, in tenths of a pixel each way,
+        // so the 1.3 px modules keep their proportions instead of rounding to 1 or 2 px.
+        let overlap = |module: i32, pixel: i32| (((module + 1) * LOGO_MODULE).min(pixel * 10 + 10) - (module * LOGO_MODULE).max(pixel * 10)).max(0);
+        let lit = |i: i32, j: i32| {
+            MARK_ROWS[j as usize] & (1 << (14 - i)) != 0 && (logo == Lit::On || [0, 7, 14].contains(&i))
+        };
+        let side = (15 * LOGO_MODULE + 9) / 10;
+        let mut coverage = [0u8; 20];
+        for y in 0..side {
+            for (x, cover) in (0..side).zip(&mut coverage) {
+                let mut area = 0;
+                for j in (y * 10 / LOGO_MODULE)..=((y * 10 + 9) / LOGO_MODULE).min(14) {
+                    for i in (x * 10 / LOGO_MODULE)..=((x * 10 + 9) / LOGO_MODULE).min(14) {
+                        if lit(i, j) {
+                            area += overlap(i, x) * overlap(j, y);
+                        }
+                    }
                 }
-                let corner = LOGO_CORNER + Point::new(at(i), at(j));
-                let size = Size::new((at(i + 1) - at(i)) as u32, (at(j + 1) - at(j)) as u32);
-                field.fill_solid(&Rectangle::new(corner, size), chrome::LIME)?;
+                *cover = (area * 255 / 100).min(255) as u8;
             }
+            field.blend_row(LOGO_CORNER.x, LOGO_CORNER.y + y, &coverage[..side as usize], chrome::LIME);
         }
     }
     Ok(())

@@ -126,7 +126,7 @@ fn main() {
         }
         frames.push((format!("clock-{name}"), stage));
     }
-    let charging = Battery { present: true, percent: 40, millivolts: 3900, charging: true, usb: true };
+    let charging = Battery { present: true, percent: 87, millivolts: 3900, charging: true, usb: true };
     for (name, battery) in [
         ("charging", Some(charging)),
         ("battery-low", Some(Battery { percent: 12, charging: false, usb: false, ..charging })),
@@ -300,13 +300,13 @@ fn settings_frames() -> Vec<(String, Stage)> {
 }
 
 /// The start-up sequence: the self-test as parts answer, the identity and the card by frame, and
-/// the fault screen. Every part reports a tenth of a second after the last.
+/// the fault screen and its exit. Every part reports a tenth of a second after the last.
 fn startup_frames() -> Vec<(String, Stage)> {
-    let boot = |failing: Option<Part>, parts: usize, now: u64| {
+    let boot = |failing: &[Part], parts: usize, now: u64| {
         let mut stage = Stage::starting(PeripheralState { firmware: "0.1.0", ..PeripheralState::default() });
         stage.step(Input { now: 1, sensors: Some(sensors()), ..Input::default() });
         for (i, part) in Part::ALL.into_iter().take(parts).enumerate() {
-            let outcome = if failing == Some(part) { Outcome::NoReply } else { Outcome::Answered };
+            let outcome = if failing.contains(&part) { Outcome::NoReply } else { Outcome::Answered };
             stage.step(Input { now: 100_000 * (i as u64 + 1), boot: Some(Report { part, outcome }), ..Input::default() });
         }
         stage.step(Input { now, ..Input::default() });
@@ -315,20 +315,23 @@ fn startup_frames() -> Vec<(String, Stage)> {
     // The last glyph lands at 720 ms, and the hold ends 200 ms later.
     let frame = |n: u64| 920_000 + (n * 1_000_000).div_ceil(30);
     let mut frames = vec![
-        ("startup-selftest".to_string(), boot(None, 0, 50_000)),
-        ("startup-selftest-building".into(), boot(None, 3, 345_000)),
-        ("startup-selftest-passed".into(), boot(None, 6, 850_000)),
-        ("startup-selftest-failing".into(), boot(Some(Part::Magnet), 5, 850_000)),
-        ("startup-selftest-failed".into(), boot(Some(Part::Magnet), 6, 850_000)),
+        ("startup-selftest".to_string(), boot(&[], 0, 50_000)),
+        ("startup-selftest-building".into(), boot(&[], 3, 345_000)),
+        ("startup-selftest-passed".into(), boot(&[], 6, 850_000)),
+        ("startup-selftest-failing".into(), boot(&[Part::Magnet], 5, 850_000)),
+        ("startup-selftest-failed".into(), boot(&[Part::Magnet], 6, 850_000)),
     ];
     // The identity's frames 0–119, then the card's 120–138, then the clock.
     for n in [0, 3, 6, 12, 13, 20, 24, 30, 38, 42, 45, 51, 53, 56, 66, 77, 119, 120, 123, 129, 133, 137, 138, 139] {
-        frames.push((format!("startup-frame-{n:02}"), boot(None, 6, frame(n))));
+        frames.push((format!("startup-frame-{n:02}"), boot(&[], 6, frame(n))));
     }
-    // With a failure the hold is 300 ms, from 720 ms.
-    for n in [0, 30] {
-        frames.push((format!("startup-fault-{n:02}"), boot(Some(Part::Magnet), 6, frame(n) + 100_000)));
+    // With a failure the hold is 300 ms, from 720 ms. The ticker turns every 12 frames, and the
+    // exit runs over frames 120–137.
+    for n in [0, 3, 15, 30, 119, 120, 121, 122, 125, 128, 131, 134, 137] {
+        frames.push((format!("startup-fault-{n:03}"), boot(&[Part::Magnet], 6, frame(n) + 100_000)));
     }
+    frames.push(("startup-fault-two".into(), boot(&[Part::Magnet, Part::Gnss], 6, frame(3) + 100_000)));
+    frames.push(("startup-fault-four".into(), boot(&[Part::Clock, Part::Touch, Part::Magnet, Part::Gnss], 6, frame(3) + 100_000)));
     frames
 }
 

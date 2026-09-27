@@ -162,8 +162,8 @@ K1 (`design/renderer/concept/family-pass-v1-out/clock-K1-*`) on the round 4 spec
 - **The battery line** reads `BAT 87%`, `BAT 87% CHG` while charging, `USB` with USB and no
   battery, and `BAT --` while unknown. With no battery the hatch shows as unknown, `GRAY` at
   full height.
-- **The charging crawl** moves the hatch up a pixel every 33 ms, the start-up's frame, while
-  the face shows, dimmed or not (owner). It redraws the hatch alone.
+- **The charging flip** swaps the hatch's 6 px stripes and gaps every 250 ms while the face
+  shows, dimmed or not (owner). It redraws the hatch alone.
 - **The rail** appears with the zone's line in the entry. Its cells are `GRAY` dimmed to 29 %.
 - **The entry** follows the round 4 spec's windows and curves: the icon's rows over 150 ms by
   out-cubic, where the old face landed a row every 30 ms, so it shows no row on its first frame.
@@ -552,7 +552,7 @@ that changed redraw. Measured on the device, per frame:
 | Start-up card, a frame | about 12 ms, at most 22 ms |
 | Start-up fault screen, a frame | about 25 ms, at most 28 ms |
 
-Of a full clock draw, the clear is about 7 ms, the scatter 3.3 ms and the band 3.4 ms. The new clock face's minute change, its entry's other steps and the charging crawl were not measured on their own; the board had no battery reading. Settings draws are recorded in
+Of a full clock draw, the clear is about 7 ms, the scatter 3.3 ms and the band 3.4 ms. The new clock face's minute change, its entry's other steps and the charging flip were not measured on their own; the board had no battery reading. Settings draws are recorded in
 [`docs/logs/display/settings-draw-2026-09-26.md`](../docs/logs/display/settings-draw-2026-09-26.md).
 C1's settled states, entry points and a swipe frame were measured in
 [`docs/logs/display/compass-c1-draw-2026-09-26.md`](../docs/logs/display/compass-c1-draw-2026-09-26.md).
