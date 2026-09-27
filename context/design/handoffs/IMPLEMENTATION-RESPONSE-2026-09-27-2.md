@@ -8,6 +8,8 @@ changes to the start-up fault screen since. Captures are in `context/screen-capt
 
 - **The ticker turns every 36 frames** (1.2 s) rather than every 12. It still moves 4 px a
   frame by absolute frame, so a colour comes back further along rather than where it left.
+- **The ticker's repeats run on without a gap**, `MAGNET_MAGNET_…` and `FAULT_FAULT_…`,
+  dropping the scripts' two spaces between repeats.
 - **The hatch beside the count stands still**, with 6 px stripes and gaps where it had 4 px
   stripes in an 8 px pitch crawling 2 px a frame. It still shows only with a single failure.
 - **The text keeps moving through the exit.** The update's surface froze the last fault frame

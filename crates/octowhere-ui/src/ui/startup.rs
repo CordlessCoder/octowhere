@@ -845,19 +845,16 @@ fn draw_fault<D: CoverageTarget<Color = Color>>(
     {
         // Two lines take turns, both moving all the while: the failed parts' names in blue and
         // the fault in yellow.
-        let mut line = heapless::String::<80>::new();
+        let mut line = heapless::String::<40>::new();
         let color = if (frame as u32 / TICKER_TURN).is_multiple_of(2) {
-            for _ in 0..2 {
-                for (part, _) in startup.failed() {
-                    let _ = write!(line, "{}_", part.name());
-                }
+            for (part, _) in startup.failed() {
+                let _ = write!(line, "{}_", part.name());
             }
             chrome::FAULT_BLUE
         } else {
-            let _ = line.push_str("FAULT_FAULT_");
+            let _ = line.push_str("FAULT_");
             chrome::FAULT_YELLOW
         };
-        let _ = line.push_str("  ");
         let mut strip = Knockout::new(&mut *target, STRIP_ROWS, 0..0, chrome::BLACK);
         let style = small(font, color, TICKER_PX, SHAPIRO);
         let baseline = text::baseline_for_ink_top(&style, &line, TICKER_TOP);
