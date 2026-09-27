@@ -563,6 +563,7 @@ that changed redraw. Measured on the device, per frame:
 | Start-up fault screen, a frame | 24.1 ms median, at most 26.6 ms |
 | Start-up fault screen's exit, a frame | 28.2 ms median, at most 30.1 ms |
 | Clock's charging gauge, a redraw of the fill alone | 2.5 ms median, at most 5.8 ms |
+| Clock's breathing scatter, a step's redraw | 0.93 ms median, about five a second |
 
 Of a full clock draw, the clear is about 7 ms, the scatter 3.3 ms and the band 3.4 ms. The new clock face's minute change and its entry's other steps were not measured on their own. The gauge and the fault screen were measured with a synthetic 87 % battery on `bench/charge-fault-draw`. Settings draws are recorded in
 [`docs/logs/display/settings-draw-2026-09-26.md`](../docs/logs/display/settings-draw-2026-09-26.md).

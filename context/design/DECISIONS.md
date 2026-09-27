@@ -12,6 +12,10 @@ Recorded 2026-09-26. These override the hand-off where they differ.
 3. **Compass background stays blue.** The C1 field breaks the colour table's "blue means a valid
    reading" in letter only: its brightness and density are low enough that it reads as
    unimportant. It stays blue, including while calibrating.
+4a. **The resting scatter breathes** (owner, 2026-09-27), departing from the hand-off's static
+   texture: on the clock face and the settings overview its density falls to 75 % and back
+   over 10 s, only while the screen is awake. Settings blooms its scatter in as the clock does,
+   and both thin theirs as the page leaves.
 4. **Charging stripes may move every frame.** The clock's charging crawl moves 1 px a frame while
    charging. The implementation update of 2026-09-27 replaced it with bands on a 2.4 s loop, and the owner added a 4 s rest between passes so the animation is less distracting. The screen still dims and may go to the always-on face while charging, so it is not
    a cost to avoid.
