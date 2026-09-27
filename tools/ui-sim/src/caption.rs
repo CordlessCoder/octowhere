@@ -21,6 +21,17 @@ const LINE: i32 = 22;
 
 thread_local! {
     static SAID: Cell<Option<&'static str>> = const { Cell::new(None) };
+    static SPEED: Cell<u64> = const { Cell::new(1) };
+}
+
+/// Plays the scene `speed` times as fast in a recording from the next step on, with a
+/// fast-forward mark in the column while it is above 1.
+pub fn fast_forward(speed: u64) {
+    SPEED.set(speed.max(1));
+}
+
+pub fn speed() -> u64 {
+    SPEED.get()
 }
 
 /// Shows `text` in the column from the next step on.
@@ -31,24 +42,28 @@ pub fn say(text: &'static str) {
 /// Empties the column, as a recording starts.
 pub fn clear() {
     SAID.set(None);
+    SPEED.set(1);
 }
 
 pub struct Column {
-    shown: Option<&'static str>,
+    shown: (Option<&'static str>, u64),
     pixels: Vec<u32>,
 }
 
 impl Column {
     pub fn new() -> Self {
-        Self { shown: None, pixels: vec![OFF_PANEL; COLUMN * HEIGHT] }
+        Self { shown: (None, 1), pixels: vec![OFF_PANEL; COLUMN * HEIGHT] }
     }
 
     /// Redraws the column if the scene has said something new since.
     pub fn follow(&mut self) {
-        let said = SAID.get();
-        if said != self.shown {
-            self.shown = said;
-            self.pixels = render(said.unwrap_or(""));
+        let shown = (SAID.get(), SPEED.get());
+        if shown != self.shown {
+            self.shown = shown;
+            self.pixels = render(shown.0.unwrap_or(""));
+            if shown.1 > 1 {
+                fast_forward_mark(&mut self.pixels);
+            }
         }
     }
 
@@ -94,4 +109,19 @@ fn render(text: &str) -> Vec<u32> {
         }
     }
     pixels
+}
+
+/// Two white triangles pointing right, centred above the caption.
+fn fast_forward_mark(pixels: &mut [u32]) {
+    const HALF: i32 = 14;
+    let (left, top) = (COLUMN as i32 / 2 - HALF, HEIGHT as i32 / 2 - 90);
+    for triangle in 0..2 {
+        // Each widens from a point at its top to its full depth at its middle row and back.
+        for y in 0..2 * HALF {
+            for x in 0..HALF - (y - HALF).abs() {
+                let (x, y) = (left + triangle * HALF + x, top + y);
+                pixels[y as usize * COLUMN + x as usize] = 0x00d2_d3d6;
+            }
+        }
+    }
 }

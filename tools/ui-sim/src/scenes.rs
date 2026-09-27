@@ -504,8 +504,17 @@ fn tour(driver: &mut Driver) {
     tap_row(driver, Cell::AlwaysOn);
     close_settings(driver);
 
-    say("AFTER 15 SECONDS UNTOUCHED THE SCREEN DIMS, THEN RESTS ON THE ALWAYS-ON FACE.");
-    driver.wait(ms(21_000));
+    // The idle seconds and the dim's hold play at three times speed; the fade to the always-on
+    // face does not.
+    say("15 SECONDS UNTOUCHED, AT THREE TIMES SPEED.");
+    crate::caption::fast_forward(3);
+    // Closing settings already waited two of them.
+    driver.wait(ms(12_500));
+    say("THE SCREEN DIMS FOR 5 SECONDS, AT THREE TIMES SPEED.");
+    driver.wait(ms(4_700));
+    crate::caption::fast_forward(1);
+    say("THEN IT RESTS ON THE ALWAYS-ON FACE.");
+    driver.wait(ms(3_800));
     say("THE ALWAYS-ON FACE: THE TIME AND THE BATTERY, REDRAWN ONCE A MINUTE.");
     driver.wait(HOLD);
     show(driver, "ALWAYS ON, STOPPED.", |s| {

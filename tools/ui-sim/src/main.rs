@@ -378,8 +378,14 @@ fn record(scene: &scenes::Scene, path: PathBuf, masked: bool) {
         None => panel.pixels.clone(),
     };
     let mut recording: Option<record::Recording> = None;
+    // The recording's own clock, which runs behind the stage's while the scene fast-forwards.
+    let (mut played, mut last) = (0, 0);
     let mut driver = Driver::new();
-    driver.observe(|stage, now| match &mut recording {
+    driver.observe(|stage, now| {
+        played += (now - last) / caption::speed();
+        last = now;
+        let now = played;
+        match &mut recording {
         None => {
             panel.draw(stage, true);
             panel.touch(stage, now);
@@ -404,6 +410,7 @@ fn record(scene: &scenes::Scene, path: PathBuf, masked: bool) {
             panel.touch(stage, now);
             recording.sample(now, &frame(&panel, &mut column));
         }
+        }
     });
     (scene.run)(&mut driver);
     drop(driver);
@@ -425,11 +432,14 @@ fn play(window: &mut Window, scene: &scenes::Scene, masked: bool) {
     loop {
         let mut panel = Panel::new(masked);
         let start = Instant::now();
+        let (mut played, mut last) = (0, 0);
         let mut driver = Driver::new();
         driver.observe(|stage, now| {
             panel.draw(stage, now == script::FRAME);
-            panel.touch(stage, now);
-            let due = start + Duration::from_micros(now);
+            played += (now - last) / caption::speed();
+            last = now;
+            panel.touch(stage, played);
+            let due = start + Duration::from_micros(played);
             thread::sleep(due.saturating_duration_since(Instant::now()));
             show(window, &panel.pixels);
         });
