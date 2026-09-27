@@ -63,7 +63,7 @@ fn a_cover_on_the_clock_changes_nothing() {
     let mut driver = Driver::on(Screen::Clock);
     driver.wait(500_000);
     driver.cover();
-    assert!(!driver.stage.is_animating());
+    assert!(!driver.stage.is_changing());
     assert_eq!(driver.stage.screen(), Screen::Clock);
 }
 
@@ -73,7 +73,7 @@ fn a_tap_on_the_compass_does_nothing() {
     let updates = driver.stroke(&[COMPASS_CENTER + Point::new(30, -40)]);
     assert!(updates.iter().all(|update| !update.recalibrate));
     driver.stroke(&[Point::new(233, 73)]);
-    assert!(!driver.stage.is_animating());
+    assert!(!driver.stage.is_changing());
     assert_eq!(driver.stage.screen(), Screen::Compass);
 }
 
@@ -102,7 +102,7 @@ fn the_compass_accents_build_after_the_page_settles() {
     assert_eq!(early.dial, 0);
     driver.wait(300_000);
     assert_eq!(accents(&driver), Accents::FULL);
-    assert!(!driver.stage.is_animating());
+    assert!(!driver.stage.is_changing());
 }
 
 #[test]
@@ -523,10 +523,33 @@ fn sensors(clock: ClockState, zone: ZoneState) -> Input {
     }
 }
 
+/// The clock's accents, with the scatter's breath, which never settles, taken as full.
 fn clock_accents(driver: &Driver) -> ClockAccents {
     let mut fb = FB::boxed();
     driver.stage.draw(&mut *fb);
-    driver.stage.clock_accents()
+    ClockAccents { breath: u8::MAX, ..driver.stage.clock_accents() }
+}
+
+/// The panel's accents, with the scatter's breath taken as full.
+fn panel_accents(driver: &Driver) -> PanelAccents {
+    PanelAccents { breath: u8::MAX, ..driver.stage.panel_accents() }
+}
+
+#[test]
+fn the_resting_scatter_breathes_only_while_awake_and_redraws_only_its_marks() {
+    let dublin = zone("Europe/Dublin", ZoneMode::Automatic);
+    let mut driver = Driver::on(Screen::Clock);
+    driver.step(sensors(clock_at(12, 7, 42), dublin));
+    driver.wait(1_000_000);
+    assert!(driver.stage.is_animating() && !driver.stage.is_changing());
+    let mut breaths = std::collections::BTreeSet::new();
+    for _ in 0..300 {
+        driver.step(Input::default());
+        breaths.insert(driver.stage.clock_accents().breath);
+        let changed = driver.stage.changed();
+        assert!(!changed.is_full(), "a breath redrew the whole face");
+    }
+    assert!(breaths.len() > 10, "{breaths:?}");
 }
 
 /// Readings that walk the clock through ticks, rollovers and every state.
@@ -601,7 +624,7 @@ fn the_clock_accents_build_after_the_page_settles_and_leave_with_the_offset() {
     assert_eq!(early.zone, 0);
     driver.wait(400_000);
     assert_eq!(clock_accents(&driver), ClockAccents::FULL);
-    assert!(!driver.stage.is_animating());
+    assert!(!driver.stage.is_changing());
 
     driver.touch(Some(Point::new(400, 233)));
     driver.touch(Some(Point::new(380, 233)));
@@ -658,7 +681,7 @@ fn interference_rebuilds_the_icon_and_leaves_the_dial() {
         assert!(driver.stage.is_animating());
         driver.wait(200_000);
         assert_eq!(accents(&driver), Accents::FULL);
-        assert!(!driver.stage.is_animating());
+        assert!(!driver.stage.is_changing());
     }
 }
 
@@ -826,7 +849,7 @@ fn a_downward_drag_on_either_face_opens_the_panel() {
     for screen in Screen::ALL {
         let driver = open_panel(screen);
         assert_eq!(driver.stage.panel_offset(), HEIGHT, "from {screen:?}");
-        assert_eq!(driver.stage.panel_accents(), PanelAccents::FULL);
+        assert_eq!(panel_accents(&driver), PanelAccents::FULL);
     }
 }
 
@@ -849,7 +872,7 @@ fn the_panel_arrives_with_its_accents_hidden_and_builds_them_once_open() {
     for y in [80, 150, 250] {
         driver.touch(Some(Point::new(233, y)));
     }
-    assert_eq!(driver.stage.panel_accents(), PanelAccents::HIDDEN);
+    assert_eq!(panel_accents(&driver), PanelAccents::HIDDEN);
     for _ in 0..3 {
         driver.touch(None);
     }
@@ -857,10 +880,10 @@ fn the_panel_arrives_with_its_accents_hidden_and_builds_them_once_open() {
         driver.wait(0);
     }
     driver.wait(100_000);
-    let early = driver.stage.panel_accents();
+    let early = panel_accents(&driver);
     assert!(early.ring > 0 && early.hint == 0 && early.rows[5] == 0, "{early:?}");
     driver.wait(400_000);
-    assert_eq!(driver.stage.panel_accents(), PanelAccents::FULL);
+    assert_eq!(panel_accents(&driver), PanelAccents::FULL);
 }
 
 #[test]
@@ -1019,7 +1042,7 @@ fn a_fling_in_the_picker_keeps_stepping_and_stops() {
     driver.settle();
     let Some(Page::Picker(after)) = driver.stage.page().cloned() else { panic!() };
     assert_ne!(before, after);
-    assert!(!driver.stage.is_animating());
+    assert!(!driver.stage.is_changing());
 }
 
 /// The panel and every screen it opens, drawn clipped to tiles, must match drawing whole.
@@ -1201,7 +1224,7 @@ fn a_touch_during_the_identity_goes_to_the_settled_clock_and_is_not_a_swipe() {
     assert!(driver.stage.starting_up());
     driver.touch(Some(Point::new(400, 233)));
     assert!(!driver.stage.starting_up());
-    assert_eq!(driver.stage.clock_accents(), ClockAccents::FULL);
+    assert_eq!(clock_accents(&driver), ClockAccents::FULL);
     for x in [340, 280, 220, 160] {
         driver.touch(Some(Point::new(x, 233)));
     }
@@ -1429,7 +1452,7 @@ fn the_screen_dims_at_the_timeout_and_a_touch_only_restores_it() {
     assert!(levels.len() > 5 && levels.is_sorted(), "{levels:?}");
     assert_eq!(levels.last(), Some(&120));
     assert_eq!(driver.stage.rest(), Rest::Awake);
-    assert!(!driver.stage.is_animating(), "the touch that lifted the dim turned the page");
+    assert!(!driver.stage.is_changing(), "the touch that lifted the dim turned the page");
     assert_eq!(driver.stage.screen(), Screen::Clock);
 }
 
@@ -1479,7 +1502,7 @@ fn a_wake_from_off_runs_the_entry_and_the_climb_once_the_panel_is_on() {
         updates.push(driver.step(Input::default()));
         assert_eq!(accents(&driver), Accents::HIDDEN, "the entry started on a dark panel");
     }
-    while driver.stage.is_animating() {
+    while driver.stage.is_changing() {
         updates.push(driver.step(Input::default()));
     }
     let levels: Vec<_> = updates.iter().filter_map(|update| update.brightness).collect();
@@ -1547,7 +1570,7 @@ fn a_wake_from_the_always_on_face_climbs_from_its_level() {
     wait_until(&mut driver, 22_000_000, |rest| rest == Rest::AlwaysOn);
     let mut updates = driver.stroke(&[Point::new(233, 233)]);
     assert_eq!(updates[0].display_on, None);
-    while driver.stage.is_animating() {
+    while driver.stage.is_changing() {
         updates.push(driver.step(Input::default()));
     }
     let levels: Vec<_> = updates.iter().filter_map(|update| update.brightness).collect();

@@ -202,7 +202,7 @@ pub fn draw_cap_around_icon<D: CoverageTarget<Color = Color>>(
     font: &FontdueRenderer<'static, Color>,
     target: &mut D,
 ) -> Result<(), D::Error> {
-    panel::draw_scatter(target)?;
+    panel::draw_scatter(&panel::Accents::FULL, target)?;
     super::smooth::perimeter().draw(
         &mut OnBackground::new(&mut *target, chrome::BLACK),
         chrome::GRAY,

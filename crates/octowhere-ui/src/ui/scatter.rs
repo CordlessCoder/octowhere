@@ -47,6 +47,19 @@ pub struct Look {
     pub density: f32,
 }
 
+/// The resting screens' scatter breathes: its density falls to `1 - BREATH_DEPTH` of full and
+/// back over `BREATH_PERIOD` (owner).
+const BREATH_PERIOD: u64 = 10_000_000;
+const BREATH_DEPTH: f32 = 0.25;
+
+/// How full the breathing scatter is at `now`, in µs, from 0 to 255.
+#[must_use]
+pub fn breath(now: u64) -> u8 {
+    let turn = (now % BREATH_PERIOD) as f32 / BREATH_PERIOD as f32;
+    let fall = BREATH_DEPTH * (1.0 - libm::cosf(core::f32::consts::TAU * turn)) / 2.0;
+    libm::roundf((1.0 - fall) * 255.0) as u8
+}
+
 /// The grid's pitch, and the side of the hollow mark: 6 × 6 with a 2 × 2 hole. The solid mark
 /// is 4 × 4, inset 1 px.
 pub const PITCH: i32 = 8;

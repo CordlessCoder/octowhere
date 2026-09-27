@@ -18,6 +18,7 @@ use super::{
     picker::Picker,
     rest::{self, Fade, Rest, Timeout},
     charging::Charge,
+    scatter,
     screens::{self, Battery, Gnss, PeripheralState, Screen, DEFAULT_BRIGHTNESS},
     second::{self, Effects, Next, Page},
     sheet::Sheet,
@@ -108,6 +109,7 @@ const CLOCK_ENTRY: ClockTimes<Micros> = ClockTimes {
 };
 const CLOCK_ICON_BUILD: Micros = 150_000;
 const CLOCK_SCATTER_BLOOM: Micros = 120_000;
+const PANEL_SCATTER_BLOOM: Micros = 120_000;
 const CLOCK_BATTERY_RISE: Micros = 80_000;
 const CLOCK_LABEL_REVEAL: Micros = 120_000;
 const CLOCK_PLATE_REVEAL: Micros = 120_000;
@@ -259,6 +261,10 @@ pub struct Stage {
     /// asks for, and never ends while charging.
     gauge_moving: bool,
     charge: Charge,
+    /// The resting screens' scatter breath, held while the screen is not awake, and whether a
+    /// resting screen shows it, which needs steps that nothing else asks for.
+    breath: u8,
+    breathing: bool,
     /// What the compass page showed after the last step, while it filled the panel.
     drawn_compass: Option<(CompassView, Accents)>,
     /// The pixels the last step changed. Boxed so the frame loop's stack never holds it.
@@ -344,6 +350,8 @@ impl Stage {
             fading: false,
             gauge_moving: false,
             charge: Charge::default(),
+            breath: u8::MAX,
+            breathing: false,
             drawn_compass: None,
             changed: alloc::boxed::Box::new(Dirty::new()),
             dial_footprint: DialFootprint::default(),
@@ -511,7 +519,7 @@ impl Stage {
     /// input.
     #[must_use]
     pub fn is_animating(&self) -> bool {
-        self.is_changing() || self.gauge_moving
+        self.is_changing() || self.gauge_moving || self.breathing
     }
 
     /// As [`is_animating`](Self::is_animating), but for the charging gauge, which never stops
@@ -540,6 +548,10 @@ impl Stage {
         self.changed.clear();
         self.fading = false;
         self.gauge_moving = false;
+        self.breathing = false;
+        if self.rest == Rest::Awake {
+            self.breath = scatter::breath(now);
+        }
         let mut update = Update::default();
         // Set where a change needs the whole panel redrawn. The settled screens work out their
         // own damage instead.
@@ -933,9 +945,12 @@ impl Stage {
         before: &(PeripheralState, i32, panel::Accents),
         after: &(PeripheralState, i32, panel::Accents),
     ) {
-        if before.2 != after.2 {
+        if (panel::Accents { breath: after.2.breath, ..before.2 }) != after.2 {
             self.changed.make_full();
             return;
+        }
+        if before.2.breath != after.2.breath {
+            panel::scatter_damage(&before.2, &after.2, &mut self.changed);
         }
         if before.1 != after.1 {
             self.changed.make_full();
@@ -1143,11 +1158,14 @@ impl Stage {
                     name: core::array::from_fn(|i| progress(now, cell(PANEL_NAME, i), PANEL_NAME_REVEAL)),
                     markers: now >= settled + PANEL_MARKERS,
                     hint: progress(now, at(PANEL_HINT), PANEL_HINT_REVEAL),
+                    scatter: progress(now, at(0), PANEL_SCATTER_BLOOM),
+                    breath: self.breath,
                 }
             }
             None => panel::Accents::HIDDEN,
         };
-        self.fading |= self.panel_settled.is_some() && entry != panel::Accents::FULL;
+        self.fading |= self.panel_settled.is_some() && entry != panel::Accents { breath: entry.breath, ..panel::Accents::FULL };
+        self.breathing |= self.panel_settled.is_some() && self.rest == Rest::Awake;
         // Going up, the accents follow the panel's offset, so reversing a drag restores them.
         let p = swipe_progress(self.sheet.height() - self.sheet.offset());
         let exit = panel::Accents {
@@ -1159,6 +1177,8 @@ impl Stage {
             name: [leaving(p, 0.1, 0.3); panel::CELLS],
             markers: p <= 0.1,
             hint: leaving(p, 0.0, 0.2),
+            scatter: leaving(p, 0.0, 0.5),
+            breath: u8::MAX,
         };
         entry.min(exit)
     }
@@ -1362,8 +1382,11 @@ impl Stage {
             date: progress(now, retyped.map(|start| start + CLOCK_DATE_DELAY), CLOCK_DATE_REVEAL),
             bands: if exposed > 0 { self.charge.phase(now) } else { 0 },
             exposed,
+            breath: self.breath,
         };
-        self.fading |= entry != Accents { bands: entry.bands, exposed: entry.exposed, ..Accents::FULL };
+        self.fading |=
+            entry != Accents { bands: entry.bands, exposed: entry.exposed, breath: entry.breath, ..Accents::FULL };
+        self.breathing |= self.rest == Rest::Awake;
         self.gauge_moving |= lit && self.charge.is_moving(now);
         let p = swipe_progress(offset);
         let exit = Accents {
@@ -1373,13 +1396,14 @@ impl Stage {
             plate: leaving(p, 0.1, 0.3),
             zone: leaving(p, 0.0, 0.2),
             mark: leaving(p, 0.05, 0.2),
-            // The scatter moves with the page and does not fade.
-            scatter: u8::MAX,
+            // The scatter thins as it moves with the page, the entry's bloom reversed.
+            scatter: leaving(p, 0.0, 0.5),
             battery: leaving(p, 0.1, 0.3),
             time: u8::MAX,
             date: u8::MAX,
             bands: u8::MAX,
             exposed: u8::MAX,
+            breath: u8::MAX,
         };
         entry.min(exit)
     }
