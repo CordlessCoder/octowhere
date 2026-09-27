@@ -44,12 +44,12 @@ const SCATTER: Scatter = Scatter {
     fields: &[
         Field {
             center: Point::new(35, 180),
-            radius: 160.0,
+            radius: 220.0,
             seed: 0x53_31_4c,
         },
         Field {
             center: Point::new(430, 304),
-            radius: 160.0,
+            radius: 220.0,
             seed: 0x53_31_52,
         },
     ],
@@ -64,8 +64,9 @@ const SCATTER_LOOKS: [Look; 2] = [
         density: 0.8,
     },
 ];
-const SCATTER_CLEAR: [Rectangle; 3] = [
-    Rectangle::new(Point::new(77, 82), Size::new(312, 289)),
+/// The title and the hint stay clear. The cells do not: they are drawn over the scatter, which
+/// shows through them as they scroll, so a clear edge there would show.
+const SCATTER_CLEAR: [Rectangle; 2] = [
     Rectangle::new(Point::new(102, 0), Size::new(262, 83)),
     Rectangle::new(Point::new(112, 371), Size::new(242, 70)),
 ];

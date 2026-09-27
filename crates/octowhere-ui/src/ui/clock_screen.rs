@@ -88,8 +88,8 @@ const RAIL_LEVEL: u8 = 74;
 /// Scatter keeps this far from every element on the field, which the design gives as a halo.
 const HALO: u32 = 2;
 /// The scatter: denser upper right, quieter lower left, clear of the band.
-const UPPER: Field = Field { center: Point::new(304, 139), radius: 137.0, seed: 0x6f63_6b31 };
-const LOWER: Field = Field { center: Point::new(164, 363), radius: 111.0, seed: 0x6f63_6b32 };
+const UPPER: Field = Field { center: Point::new(304, 139), radius: 220.0, seed: 0x6f63_6b31 };
+const LOWER: Field = Field { center: Point::new(164, 363), radius: 178.0, seed: 0x6f63_6b32 };
 const UPPER_LOOK: Look = Look { facing: -0.60, density: 0.48 };
 const LOWER_LOOK: Look = Look { facing: 2.55, density: 0.28 };
 const SCATTER_LEVEL: u8 = 125;
@@ -375,8 +375,9 @@ struct Parts {
     column: Column,
     /// Each token line, its reveal, and everything it can cover.
     lines: heapless::Vec<(Tokens, Reveal, Rectangle), 3>,
-    /// The rail, and the local hour its marker is on if the face knows one.
-    rail: Option<Option<u8>>,
+    /// The rail: the local hour its marker is on if the face knows one, and how many cells
+    /// each side of the middle show, 0 to 12, as it opens from the middle.
+    rail: Option<(Option<u8>, u8)>,
     /// How far the scatter has bloomed, with no reading none.
     scatter: Option<u8>,
     mark: Reveal,
@@ -646,7 +647,9 @@ impl Parts {
             band_lines,
             column,
             lines,
-            rail: (mode != Mode::NoData && accents.zone > 0).then(|| local.map(|local| local.time.hour)),
+            rail: (mode != Mode::NoData && accents.zone > 0).then(|| {
+                (local.map(|local| local.time.hour), libm::ceilf(12.0 * out_cubic(accents.zone)).min(12.0) as u8)
+            }),
             scatter: (mode != Mode::NoData).then(|| level(in_quad(accents.scatter) * unit(accents.breath))),
             mark: Reveal::of(level(in_expo(accents.mark)), MARK.len()),
         }
@@ -880,8 +883,8 @@ where
             tokens.draw(font, *reveal, &mut OnBackground::new(&mut *target, chrome::BLACK))?;
         }
     }
-    if let Some(hour) = parts.rail.filter(|_| target.visible(&RAIL)) {
-        draw_rail(hour, target)?;
+    if let Some((hour, open)) = parts.rail.filter(|_| target.visible(&RAIL)) {
+        draw_rail(hour, open, target)?;
     }
     Ok(())
 }
@@ -929,12 +932,14 @@ fn moved(area: Rectangle, x: i32) -> Rectangle {
     Rectangle::new(area.top_left + Point::new(x, 0), area.size)
 }
 
-fn draw_rail<D: CoverageTarget<Color = Color>>(hour: Option<u8>, target: &mut D) -> Result<(), D::Error> {
+/// Draws the rail's middle `open` cells each side, and the marker once its cell shows.
+fn draw_rail<D: CoverageTarget<Color = Color>>(hour: Option<u8>, open: u8, target: &mut D) -> Result<(), D::Error> {
     let cell = chrome::shade(chrome::GRAY, RAIL_LEVEL);
-    for h in 0..24 {
+    let shown = 12 - i32::from(open)..12 + i32::from(open);
+    for h in shown.clone() {
         target.fill_solid(&moved(RAIL_CELL, RAIL_LEFT + RAIL_PITCH * h), cell)?;
     }
-    if let Some(hour) = hour {
+    if let Some(hour) = hour.filter(|&hour| shown.contains(&i32::from(hour))) {
         let x = RAIL_LEFT + RAIL_PITCH * i32::from(hour);
         target.fill_solid(&moved(RAIL_MARKER, x), chrome::LIME)?;
         target.fill_solid(&moved(RAIL_HOLE, x), chrome::BLACK)?;

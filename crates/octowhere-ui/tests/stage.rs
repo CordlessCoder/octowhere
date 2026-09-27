@@ -113,7 +113,7 @@ fn a_swipe_off_the_compass_takes_its_accents_reversibly() {
     let part = accents(&driver);
     assert!(part.caption < 255 && part.icon_rows > 0, "{part:?}");
     driver.touch(Some(Point::new(200, 233)));
-    assert_eq!(accents(&driver), Accents { texture: 5, ..Accents::HIDDEN });
+    assert_eq!(accents(&driver), Accents { texture: 5, field: 102, ..Accents::HIDDEN });
     driver.touch(Some(Point::new(399, 233)));
     driver.touch(None);
     driver.touch(None);

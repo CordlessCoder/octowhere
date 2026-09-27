@@ -1255,6 +1255,7 @@ impl Stage {
             caption: progress(now, times.caption, CAPTION_REVEAL),
             dial: progress(now, times.dial, DIAL_SWEEP),
             texture: texture_step(now, times.texture),
+            field: u8::MAX,
             change: running,
         };
         self.fading |= entry != Accents::FULL;
@@ -1265,6 +1266,8 @@ impl Stage {
             caption: leaving(p, 0.2, 0.3),
             dial: leaving(p, 0.2, 0.4),
             texture: 5,
+            // The field recedes to 40 % as the page leaves, rather than going.
+            field: (255 - (255 - u16::from(leaving(p, 0.0, 0.5))) * 3 / 5) as u8,
             change: compass_screen::Change::NONE,
         };
         entry.min(exit)

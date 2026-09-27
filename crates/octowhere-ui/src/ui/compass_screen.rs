@@ -58,10 +58,12 @@ enum TextureKind {
 struct Texture {
     kind: TextureKind,
     phase: u8,
+    /// How bright the field's blocks are, 255 at full.
+    level: u8,
 }
 
 impl Texture {
-    fn of(mode: Mode, phase: u8) -> Option<Self> {
+    fn of(mode: Mode, phase: u8, level: u8) -> Option<Self> {
         if phase == 0 || mode == Mode::NoData {
             return None;
         }
@@ -71,7 +73,7 @@ impl Texture {
             Mode::Heading(_) => TextureKind::Blocks,
             Mode::NoData => return None,
         };
-        Some(Self { kind, phase })
+        Some(Self { kind, phase, level })
     }
 
     fn draw<D: CoverageTarget<Color = Color>>(self, target: &mut D) -> Result<(), D::Error> {
@@ -104,14 +106,18 @@ impl Texture {
                 TextureKind::Tiles => [25, 34, 43, 52][((n >> 28) & 3) as usize],
                 TextureKind::DimBlocks => [14, 20, 26, 32][((n >> 28) & 3) as usize],
             };
-            let color = chrome::BLACK.lerp(&chrome::BLUE, level);
+            let color = chrome::BLACK.lerp(&chrome::BLUE, self.dimmed(level));
             target.fill_solid(&area, color)?;
             if height >= 7 {
                 let stripe = Rectangle::new(Point::new(x, y + 3), Size::new(width as u32, 1));
-                target.fill_solid(&stripe, chrome::BLACK.lerp(&chrome::BLUE, level.saturating_add(15)))?;
+                target.fill_solid(&stripe, chrome::BLACK.lerp(&chrome::BLUE, self.dimmed(level.saturating_add(15))))?;
             }
         }
         Ok(())
+    }
+
+    fn dimmed(self, level: u8) -> u8 {
+        (u16::from(level) * u16::from(self.level) / 255) as u8
     }
 
     fn draw_tiles<D: CoverageTarget<Color = Color>>(self, target: &mut D) -> Result<(), D::Error> {
@@ -132,7 +138,7 @@ impl Texture {
                 }
                 let base = if self.kind == TextureKind::Tiles { 20 } else { 36 };
                 let level = base + ((n >> 28) & 3) as u8 * 10;
-                let color = chrome::BLACK.lerp(&chrome::BLUE, level);
+                let color = chrome::BLACK.lerp(&chrome::BLUE, self.dimmed(level));
                 let rising = n & (1 << 19) != 0;
                 for step in 0..4 {
                     let left = if rising { x + step * 4 } else { x };
@@ -256,6 +262,8 @@ pub struct Accents {
     pub dial: u8,
     /// The C1 field's entry step, 0 to 5. A settled field holds at 5.
     pub texture: u8,
+    /// The field's brightness, 255 at full, which falls as the page leaves.
+    pub field: u8,
     pub change: Change,
 }
 
@@ -265,6 +273,7 @@ impl Accents {
         caption: u8::MAX,
         dial: u8::MAX,
         texture: 5,
+        field: u8::MAX,
         change: Change::NONE,
     };
     pub const HIDDEN: Self = Self {
@@ -272,6 +281,7 @@ impl Accents {
         caption: 0,
         dial: 0,
         texture: 0,
+        field: u8::MAX,
         change: Change::NONE,
     };
 
@@ -283,6 +293,7 @@ impl Accents {
             caption: self.caption.min(other.caption),
             dial: self.dial.min(other.dial),
             texture: self.texture.min(other.texture),
+            field: self.field.min(other.field),
             change: self.change,
         }
     }
@@ -513,7 +524,7 @@ impl Parts {
                 .filter(|(_, reveal)| reveal.cells() > 0)
         };
         Self {
-            texture: Texture::of(mode, accents.texture),
+            texture: Texture::of(mode, accents.texture, accents.field),
             dial: mode.heading().filter(|_| marks > 0).map(|heading| (heading, marks)),
             icon: (mode.icon(), mode.icon_color(), accents.icon_rows),
             caption: (caption, caption_color, Reveal::of(accents.caption, caption.len())),
@@ -946,11 +957,11 @@ mod tests {
     #[test]
     fn c1_field_is_fixed_for_values_and_clear_for_a_fault() {
         let full = Accents::FULL.texture;
-        assert_eq!(Texture::of(Mode::Heading(0), full), Texture::of(Mode::Heading(359), full));
-        assert_eq!(Texture::of(Mode::Interference(0), full), Texture::of(Mode::Interference(359), full));
-        assert_eq!(Texture::of(Mode::Calibrating(0), full), Texture::of(Mode::TopEdgeUp, full));
-        assert_eq!(Texture::of(Mode::NoData, full), None);
-        assert_eq!(Texture::of(Mode::Heading(47), Accents::HIDDEN.texture), None);
+        assert_eq!(Texture::of(Mode::Heading(0), full, 255), Texture::of(Mode::Heading(359), full, 255));
+        assert_eq!(Texture::of(Mode::Interference(0), full, 255), Texture::of(Mode::Interference(359), full, 255));
+        assert_eq!(Texture::of(Mode::Calibrating(0), full, 255), Texture::of(Mode::TopEdgeUp, full, 255));
+        assert_eq!(Texture::of(Mode::NoData, full, 255), None);
+        assert_eq!(Texture::of(Mode::Heading(47), Accents::HIDDEN.texture, 255), None);
     }
 
     #[test]
