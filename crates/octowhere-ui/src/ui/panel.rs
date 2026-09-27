@@ -181,6 +181,9 @@ pub struct Accents {
     pub name: [u8; CELLS],
     pub markers: bool,
     pub hint: u8,
+    /// The scatter's bloom, and its breath, each 255 at full.
+    pub scatter: u8,
+    pub breath: u8,
 }
 
 impl Accents {
@@ -193,6 +196,8 @@ impl Accents {
         name: [u8::MAX; CELLS],
         markers: true,
         hint: u8::MAX,
+        scatter: u8::MAX,
+        breath: u8::MAX,
     };
     pub const HIDDEN: Self = Self {
         ring: 0,
@@ -203,6 +208,8 @@ impl Accents {
         name: [0; CELLS],
         markers: false,
         hint: 0,
+        scatter: 0,
+        breath: u8::MAX,
     };
 
     /// Each accent at the lesser of the two.
@@ -218,6 +225,8 @@ impl Accents {
             name: each(self.name, other.name),
             markers: self.markers && other.markers,
             hint: self.hint.min(other.hint),
+            scatter: self.scatter.min(other.scatter),
+            breath: self.breath.min(other.breath),
         }
     }
 }
@@ -487,10 +496,27 @@ fn draw_rules<D: CoverageTarget<Color = Color>>(
     Ok(())
 }
 
-pub fn draw_scatter<D: CoverageTarget<Color = Color>>(target: &mut D) -> Result<(), D::Error> {
-    let mut scatter = SCATTER.clone();
-    scatter.color = chrome::shade(chrome::PURPLE, 100);
-    scatter.draw_clear_of(&SCATTER_LOOKS, &SCATTER_CLEAR, target)
+fn scatter() -> Scatter {
+    Scatter { color: chrome::shade(chrome::PURPLE, 100), ..SCATTER }
+}
+
+/// The scatter's looks at its bloom and breath: the bloom eases in, as the clock face's does.
+fn scatter_looks(accents: &Accents) -> [Look; 2] {
+    let bloom = f32::from(accents.scatter) / 255.0;
+    let k = bloom * bloom * f32::from(accents.breath) / 255.0;
+    SCATTER_LOOKS.map(|look| Look { density: look.density * k, ..look })
+}
+
+/// The scatter the panel and the screens it opens share, at `accents`' bloom and breath.
+pub fn draw_scatter<D: CoverageTarget<Color = Color>>(accents: &Accents, target: &mut D) -> Result<(), D::Error> {
+    scatter().draw_clear_of(&scatter_looks(accents), &SCATTER_CLEAR, target)
+}
+
+/// Marks the scatter's marks that differ between `before` and `after`.
+pub fn scatter_damage(before: &Accents, after: &Accents, damage: &mut chrome::Dirty) {
+    let scatter = scatter();
+    let shown = |accents| scatter.shown_clear_of(&scatter_looks(accents), &SCATTER_CLEAR);
+    scatter.changed(&shown(before), &shown(after), damage);
 }
 
 pub fn draw<D: CoverageTarget<Color = Color>>(
@@ -500,7 +526,7 @@ pub fn draw<D: CoverageTarget<Color = Color>>(
     font: &FontdueRenderer<'static, Color>,
     target: &mut D,
 ) -> Result<(), D::Error> {
-    draw_scatter(target)?;
+    draw_scatter(&accents, target)?;
     {
         let grid = &mut Round::new(&mut *target, CENTER, CLIP_RADIUS);
         let rows = &mut Window::new(

@@ -120,7 +120,7 @@ pub fn solid_band() -> Rectangle {
 
 /// How far each of the face's accents has come in, 0 to 255 along each one's own window: the
 /// ring's fade, the band label and lines, the first token line, the zone's lines, the wordmark,
-/// the scatter's bloom and the battery fill's rise; how many rows of the icon's modules show, 0
+/// the scatter's bloom, its breath and the battery fill's rise; how many rows of the icon's modules show, 0
 /// to 5. Also the reveals of the time, across hours, minutes and seconds, and of the date line,
 /// which run only when a fix or a zone change replaces the time. The face applies each part's
 /// curve. `bands` is the charging bands' phase in their loop, and `exposed` how far they show
@@ -135,6 +135,7 @@ pub struct Accents {
     pub zone: u8,
     pub mark: u8,
     pub scatter: u8,
+    pub breath: u8,
     pub battery: u8,
     pub time: u8,
     pub date: u8,
@@ -151,6 +152,7 @@ impl Accents {
         zone: u8::MAX,
         mark: u8::MAX,
         scatter: u8::MAX,
+        breath: u8::MAX,
         battery: u8::MAX,
         time: u8::MAX,
         date: u8::MAX,
@@ -165,6 +167,7 @@ impl Accents {
         zone: 0,
         mark: 0,
         scatter: 0,
+        breath: u8::MAX,
         battery: 0,
         time: u8::MAX,
         date: u8::MAX,
@@ -183,6 +186,7 @@ impl Accents {
             zone: self.zone.min(other.zone),
             mark: self.mark.min(other.mark),
             scatter: self.scatter.min(other.scatter),
+            breath: self.breath.min(other.breath),
             battery: self.battery.min(other.battery),
             time: self.time.min(other.time),
             date: self.date.min(other.date),
@@ -658,7 +662,7 @@ impl Parts {
             column,
             lines,
             rail: (mode != Mode::NoData && accents.zone > 0).then(|| local.map(|local| local.time.hour)),
-            scatter: (mode != Mode::NoData).then(|| level(in_quad(accents.scatter))),
+            scatter: (mode != Mode::NoData).then(|| level(in_quad(accents.scatter) * unit(accents.breath))),
             mark: Reveal::of(level(in_expo(accents.mark)), MARK.len()),
         }
     }
