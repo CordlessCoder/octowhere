@@ -34,7 +34,7 @@ look is in [`design/`](design/README.md).
   on the original machine and handed it back by message; reflash master after it returns.
 - Never burn eFuses.
 - It has no battery fitted. The PMIC reports none present, so the clock shows no battery reading,
-  and the charging crawl has never run on the board. Its draw is unmeasured.
+  and a charging gauge shows only with a synthetic battery, as `bench/charge-fault-draw` gives.
 - From a shell without a TTY, `cargo run --release` flashes but its monitor fails ("Failed to
   initialize input reader"). Flash with
   `espflash flash --partition-table partitions.csv --port <by-id> <elf>`, then capture with

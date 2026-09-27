@@ -100,7 +100,7 @@ the panel. Touch targets are no smaller than about 10 mm.
   has the details.
 - **Clock face:** the hand-off's K1, on the round 4 spec: the band `LIME` while the time is
   local, `ORANGE` stopped, `WHITE` without a zone and `RED` without data, with UTC and the
-  battery in it beside a hatched battery column; the date and zone as token lines; a 24-hour
+  battery in it beside a battery gauge; the date and zone as token lines; a 24-hour
   rail with a lime marker on a known local hour; and two dim `PURPLE` scatter fields. "Clock
   face as built" below has where the build interpreted it. A time that a fix or zone change
   replaces types in again by cell reveal: the hours, minutes and seconds over 180 ms, and the
@@ -160,10 +160,16 @@ K1 (`design/renderer/concept/family-pass-v1-out/clock-K1-*`) on the round 4 spec
   `PURPLE` dimmed to 49 %, clear of the band's rows by about 4 px. NO DATA has none.
 - **The seconds** show `--` while the time is withheld, as K1 has them.
 - **The battery line** reads `BAT 87%`, `BAT 87% CHG` while charging, `USB` with USB and no
-  battery, and `BAT --` while unknown. With no battery the hatch shows as unknown, `GRAY` at
-  full height.
-- **The charging crawl** moves the hatch up a pixel every 33 ms, the start-up's frame, while
-  the face shows, dimmed or not (owner). It redraws the hatch alone.
+  battery, and `BAT --` while unknown. With no known level the gauge is `GRAY` with two dashes
+  and no fill.
+- **The gauge** follows the implementation update of 2026-09-27
+  (`context/octowhere-implementation-update-2026-09-27/`): a solid fill, split while charging
+  into uneven full-width bands that gather and regroup on a 2.4 s loop (`ui/charging.rs`,
+  which matches the update's `render_fill.py` at every height and phase). A change of the
+  charging flag between two readings of a known level wipes a solid layer down off the bands
+  or back up over them, in 450 ms, or 180 ms below 35 %. The loop runs while the face shows,
+  dimmed or not, and redraws the fill alone. NO DATA holds the bands still, as the update's
+  renders do.
 - **The rail** appears with the zone's line in the entry. Its cells are `GRAY` dimmed to 29 %.
 - **The entry** follows the round 4 spec's windows and curves: the icon's rows over 150 ms by
   out-cubic, where the old face landed a row every 30 ms, so it shows no row on its first frame.
@@ -314,8 +320,12 @@ interpreted them:
   oscillator stopped, since a time it cannot vouch for is not data.
 - **The mark** is rectangles and a stripe test, drawn at any size from one description. In the
   microtext row it has no hatch. The replay chooser shows it as `GOOD`'s icon.
-- **The running line** on the fault screen is stretched to 1.3× by the glyph renderer, not
-  stored as a bitmap.
+- **The ticker** on the fault screen follows the 2026-09-27 update: one line, 4 px a frame,
+  turning every 12 frames between the failed parts' names in `FAULT_BLUE` and `FAULT_FAULT_` in
+  `FAULT_YELLOW`, both moving while hidden. With more than one failure the count and the first
+  two failures sit above the band, with `+N` for the rest, in place of the hatch.
+- **The exit.** After its 120 frames the fault screen's last frame breaks up and lifts away over
+  18 frames, as the update specifies, then the clock runs its entry. A touch skips it.
 - **The giant name** is rasterized at 100 px and drawn with each pixel as a 2 × 2 block. At
   200 px its largest glyph needs a 140 KB raster, and that allocation failed on the device.
   The edges show 2 px antialiasing steps.
@@ -550,9 +560,11 @@ that changed redraw. Measured on the device, per frame:
 | Start-up identity, a frame while its title and marks build | about 23 ms, at most 31 ms |
 | Start-up identity, once settled | nothing but the scatter's turns and the digits |
 | Start-up card, a frame | about 12 ms, at most 22 ms |
-| Start-up fault screen, a frame | about 25 ms, at most 28 ms |
+| Start-up fault screen, a frame | 24.1 ms median, at most 26.6 ms |
+| Start-up fault screen's exit, a frame | 28.2 ms median, at most 30.1 ms |
+| Clock's charging gauge, a redraw of the fill alone | 2.5 ms median, at most 5.8 ms |
 
-Of a full clock draw, the clear is about 7 ms, the scatter 3.3 ms and the band 3.4 ms. The new clock face's minute change, its entry's other steps and the charging crawl were not measured on their own; the board had no battery reading. Settings draws are recorded in
+Of a full clock draw, the clear is about 7 ms, the scatter 3.3 ms and the band 3.4 ms. The new clock face's minute change and its entry's other steps were not measured on their own. The gauge and the fault screen were measured with a synthetic 87 % battery on `bench/charge-fault-draw`. Settings draws are recorded in
 [`docs/logs/display/settings-draw-2026-09-26.md`](../docs/logs/display/settings-draw-2026-09-26.md).
 C1's settled states, entry points and a swipe frame were measured in
 [`docs/logs/display/compass-c1-draw-2026-09-26.md`](../docs/logs/display/compass-c1-draw-2026-09-26.md).

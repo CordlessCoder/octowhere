@@ -57,6 +57,8 @@ board value except `BLACK`.
 | `GRAY` | `#888E98` | R3C2 | secondary, inactive or unconfirmed information |
 | `WHITE` | `#D2D3D6` | R3C1 | neutral primary information |
 | `BLACK` | `#000000` | none | background field, knockout text on saturated fills |
+| `FAULT_BLUE` | `#001DFF` | none | the fault screen's ticker, the failed parts' names (2026-09-27 update) |
+| `FAULT_YELLOW` | `#ECDB0B` | R2C1 | the fault screen's ticker, the fault word (2026-09-27 update) |
 
 The roles are the design's, from
 [`design/docs/OCTOWHERE-COLOR-ROLES.md`](design/docs/OCTOWHERE-COLOR-ROLES.md), which also

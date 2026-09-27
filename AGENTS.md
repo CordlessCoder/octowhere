@@ -227,7 +227,10 @@ logs each fault frame's draw per part, and at start-up times the knocked-out row
 outlined text alone (`fault-draw-bench`); and `bench/scatter`, which replays the start-up
 and logs each identity and card frame's draw, the identity's per part, its damage and the step,
 and at start-up times the scatter, its arithmetic's primitives and small fills alone
-(`scatter-bench`).
+(`scatter-bench`); and `bench/charge-fault-draw`, which replays a demonstrated failure every
+30 s and switches a synthetic 87 % battery's charging every 4 s on the clock face, and logs every
+draw with the start-up frame it drew (`charge-fault-bench`, summarised by
+`tools/charge-fault-summary.py`).
 
 ## Concurrency
 
