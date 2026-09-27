@@ -220,6 +220,14 @@ fn top_edge_up() -> Motion {
     }
 }
 
+/// Facing `degrees` with the top edge raised `pitch` degrees above level. The heading goes
+/// above 78°, where the compass loses it 11.5° from vertical.
+fn raised(degrees: f32, pitch: f32) -> Motion {
+    let mut motion = if pitch > 78.0 { top_edge_up() } else { facing(degrees) };
+    motion.compass.pitch_deg = pitch.round() as i8;
+    motion
+}
+
 fn disturbed(degrees: f32) -> Motion {
     let mut motion = facing(degrees);
     motion.compass.disturbed = true;
@@ -286,6 +294,20 @@ fn show(driver: &mut Driver, caption: &'static str, change: impl FnOnce(&mut Sen
     change(&mut sensors);
     driver.sensors(sensors);
     driver.wait(HOLD);
+}
+
+/// Steps the battery from `from` to `to` percent a percent at a time. The tour moves every
+/// continuous reading this way rather than jumping it.
+fn drain(driver: &mut Driver, from: u8, to: u8, charging: bool) {
+    let step = if to < from { -1 } else { 1 };
+    let mut percent = i16::from(from);
+    while percent != i16::from(to) {
+        percent += step;
+        let mut sensors = dublin_now(driver);
+        sensors.battery = Some(Battery { present: true, percent: percent as u8, millivolts: 3_900, charging, usb: charging });
+        driver.sensors(sensors);
+        driver.wait(ms(40));
+    }
 }
 
 fn slow_page_left(driver: &mut Driver) {
@@ -366,17 +388,25 @@ fn tour(driver: &mut Driver) {
     });
     show(driver, "NO DATA. THE CLOCK COULD NOT BE READ.", |s| s.clock.utc = None);
     show(driver, "BACK TO A GNSS FIX.", |_| {});
+    // Keeps the minute's timeout from dimming the screen before the swipe to the compass.
+    say("A TAP ON THE CLOCK FACE DOES NOTHING BUT KEEP THE SCREEN AWAKE.");
+    slow_tap(driver, 233, 400);
 
     let battery = |percent, charging| Some(Battery { present: true, percent, millivolts: 3_900, charging, usb: charging });
-    show(driver, "THE BATTERY, RIGHT OF THE MINUTES. HERE 64%, ON BATTERY ALONE: A SOLID FILL.", |s| {
-        s.battery = battery(64, false);
+    show(driver, "THE BATTERY, RIGHT OF THE MINUTES. OFF USB, THE FILL GOES SOLID.", |s| {
+        s.battery = battery(87, false);
     });
+    say("ON BATTERY ALONE, THE FILL FALLS WITH THE CHARGE, HERE TO 64%.");
+    drain(driver, 87, 64, false);
+    driver.wait(HOLD);
     show(driver, "PLUGGED IN. THE FILL DRAINS AWAY TO UNEVEN BANDS, WHICH GATHER AND REGROUP, THEN REST FOR FOUR SECONDS.", |s| {
         s.battery = battery(64, true);
     });
     driver.wait(ms(2_500));
     show(driver, "UNPLUGGED. THE FILL RISES BACK OVER THE BANDS.", |s| s.battery = battery(64, false));
-    show(driver, "LOW BATTERY, AT 15% OR LESS.", |s| s.battery = battery(12, false));
+    say("LOW BATTERY, AT 15% OR LESS.");
+    drain(driver, 64, 12, false);
+    driver.wait(HOLD);
     show(driver, "LOW AND CHARGING: FEWER BANDS, AND A SHORTER WIPE.", |s| s.battery = battery(12, true));
     show(driver, "NO BATTERY READING. NO FILL, ONLY DASHES.", |s| s.battery = None);
     show(driver, "BACK ON USB, CHARGING.", |_| {});
@@ -401,9 +431,9 @@ fn tour(driver: &mut Driver) {
     driver.motion(facing(127.0));
     driver.wait(ms(2_000));
     say("TOP EDGE UP. HELD NEAR VERTICAL, THE COMPASS HAS NO HEADING TO GIVE.");
-    driver.motion(top_edge_up());
+    driver.motion_over(ms(1_500), |t| raised(127.0, 84.0 * ease(t)));
     driver.wait(HOLD);
-    driver.motion(facing(127.0));
+    driver.motion_over(ms(1_500), |t| raised(127.0, 84.0 * (1.0 - ease(t))));
     driver.wait(ms(2_000));
     say("NO DATA. THE MOTION SENSORS STOPPED ANSWERING.");
     driver.motion(Motion { compass: CompassView::default() });

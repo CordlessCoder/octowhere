@@ -95,6 +95,13 @@ look is in [`design/`](design/README.md).
 - Drive it with a PEP 723 script using `python-xlib`'s `xtest.fake_input`. Keys are in
   `tools/ui-sim/src/main.rs`'s header. Recording a scene (`--record`) needs no display at all
   and is usually the better route.
+- In the tour, a continuous reading moves to its next value smoothly rather than jumping
+  (owner): the battery a percent at a time (`drain`), the heading and pitch over
+  `motion_over`. Only a reading appearing or going, such as no battery reading, may cut.
+- The tour runs on the default one-minute timeout until it sets 15 s. A stretch of more than a
+  minute with no touch dims the screen, and the next swipe only wakes it, which throws every
+  later step off. Check a lengthened stretch still reaches its swipe; the tap on the clock face
+  before the battery exists for this.
 - To measure spacing, render with the `render` example and scan rows of the PNG with Pillow for
   lit pixels. That is how the owner's even-spacing requests were met.
 
