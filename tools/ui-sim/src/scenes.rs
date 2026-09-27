@@ -266,8 +266,10 @@ fn compass_states(driver: &mut Driver) {
 
 /// How long the tour holds a state for a viewer to read it.
 const HOLD: Micros = ms(3_500);
-/// How long the tour's swipes and drags take.
+/// How long the tour's drags take.
 const SLOW: Micros = ms(700);
+/// How long the tour's page and panel swipes take.
+const SWIPE: Micros = ms(280);
 
 /// Dublin's readings at the driver's time, as the clock started by `boot` has run to.
 fn dublin_now(driver: &Driver) -> Sensors {
@@ -287,12 +289,12 @@ fn show(driver: &mut Driver, caption: &'static str, change: impl FnOnce(&mut Sen
 }
 
 fn slow_page_left(driver: &mut Driver) {
-    driver.swipe(Point::new(420, 233), Point::new(60, 233), SLOW);
+    driver.swipe(Point::new(420, 233), Point::new(60, 233), SWIPE);
     driver.settle();
 }
 
 fn slow_page_right(driver: &mut Driver) {
-    driver.swipe(Point::new(60, 233), Point::new(420, 233), SLOW);
+    driver.swipe(Point::new(60, 233), Point::new(420, 233), SWIPE);
     driver.settle();
 }
 
@@ -306,7 +308,7 @@ fn slow_tap(driver: &mut Driver, x: i32, y: i32) {
 fn tap_row(driver: &mut Driver, cell: Cell) {
     if !octowhere_ui::ui::panel::in_view(cell.page(), driver.stage.panel_scroll()) {
         let (from, to) = if cell.page() == 1 { (380, 80) } else { (80, 380) };
-        driver.swipe(Point::new(from, 250), Point::new(to, 250), SLOW);
+        driver.swipe(Point::new(from, 250), Point::new(to, 250), SWIPE);
         driver.settle();
         driver.wait(ms(1_200));
     }
@@ -315,13 +317,13 @@ fn tap_row(driver: &mut Driver, cell: Cell) {
 }
 
 fn open_settings(driver: &mut Driver) {
-    driver.swipe(Point::new(233, 70), Point::new(233, 420), SLOW);
+    driver.swipe(Point::new(233, 70), Point::new(233, 420), SWIPE);
     driver.settle();
     driver.wait(ms(2_000));
 }
 
 fn close_settings(driver: &mut Driver) {
-    driver.swipe(Point::new(233, 420), Point::new(233, 80), SLOW);
+    driver.swipe(Point::new(233, 420), Point::new(233, 80), SWIPE);
     driver.settle();
     driver.wait(ms(2_000));
 }
@@ -366,12 +368,17 @@ fn tour(driver: &mut Driver) {
     show(driver, "BACK TO A GNSS FIX.", |_| {});
 
     let battery = |percent, charging| Some(Battery { present: true, percent, millivolts: 3_900, charging, usb: charging });
-    show(driver, "THE BATTERY, RIGHT OF THE MINUTES. HERE 64%, ON BATTERY ALONE.", |s| {
+    show(driver, "THE BATTERY, RIGHT OF THE MINUTES. HERE 64%, ON BATTERY ALONE: A SOLID FILL.", |s| {
         s.battery = battery(64, false);
     });
+    show(driver, "PLUGGED IN. THE FILL DRAINS AWAY TO UNEVEN BANDS, WHICH GATHER AND REGROUP EVERY 2.4 SECONDS.", |s| {
+        s.battery = battery(64, true);
+    });
+    driver.wait(ms(2_500));
+    show(driver, "UNPLUGGED. THE FILL RISES BACK OVER THE BANDS.", |s| s.battery = battery(64, false));
     show(driver, "LOW BATTERY, AT 15% OR LESS.", |s| s.battery = battery(12, false));
-    show(driver, "CHARGING. THE LEVEL CRAWLS UPWARD.", |s| s.battery = battery(12, true));
-    show(driver, "NO BATTERY READING.", |s| s.battery = None);
+    show(driver, "LOW AND CHARGING: FEWER BANDS, AND A SHORTER WIPE.", |s| s.battery = battery(12, true));
+    show(driver, "NO BATTERY READING. NO FILL, ONLY DASHES.", |s| s.battery = None);
     show(driver, "BACK ON USB, CHARGING.", |_| {});
 
     say("SWIPE LEFT FOR THE COMPASS.");
@@ -475,6 +482,11 @@ fn tour(driver: &mut Driver) {
     driver.wait(ms(2_000));
     tap(driver, 233, 258);
     say("THE SELF-TEST MARKS THE PART FAILED, AND THE FAULT SCREEN NAMES IT. BOTH SAY IT IS A DEMO.");
+    // The last report at 1.3 s, its glyph and the 300 ms hold, then the fault screen's 4 s.
+    driver.wait(ms(3_000));
+    say("THE TICKER TURNS BETWEEN THE FAILED PART IN BLUE AND FAULT IN YELLOW.");
+    driver.wait(ms(2_700));
+    say("AFTER FOUR SECONDS THE FAULT SCREEN BREAKS UP AND LIFTS AWAY.");
     while driver.stage.starting_up() {
         driver.wait(ms(100));
     }
