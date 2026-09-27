@@ -158,6 +158,8 @@ const FRAMES_PER_SECOND: Micros = 30;
 const CARD_FROM: u32 = identity::FRAMES;
 const CLOCK_FROM: u32 = CARD_FROM + identity::CARD_FRAMES;
 const FAULT_FRAMES: u32 = 120;
+/// The damaged exit that follows the fault screen's hold, unless a touch skips it.
+const EXIT_FRAMES: u32 = 18;
 /// When each part reports in a demonstration, from its start, in cell order.
 const DEMO_REPORTS: [Micros; 6] = [150_000, 250_000, 500_000, 600_000, 750_000, 1_300_000];
 
@@ -180,6 +182,7 @@ pub enum Phase {
     SelfTest,
     /// The identity and then the card, by frame.
     Identity(u32),
+    /// The fault screen, by frame, then its exit.
     Fault(u32),
     /// Over. The clock face shows next: settled if a touch skipped the identity, otherwise
     /// running its entry, and typing its time in after the card.
@@ -303,7 +306,7 @@ impl Startup {
         match (failed, self.skipped) {
             (true, true) => Phase::Done { entry: true, after_card: false },
             (false, true) => Phase::Done { entry: false, after_card: false },
-            (true, false) if frame >= FAULT_FRAMES => Phase::Done { entry: true, after_card: false },
+            (true, false) if frame >= FAULT_FRAMES + EXIT_FRAMES => Phase::Done { entry: true, after_card: false },
             (true, false) => Phase::Fault(frame),
             (false, false) if frame >= CLOCK_FROM => Phase::Done { entry: true, after_card: true },
             (false, false) => Phase::Identity(frame),
@@ -386,7 +389,8 @@ where
         }
         View::Identity(frame) => identity::draw_identity(frame, startup.answered(), context, font, target),
         View::Card(frame) => identity::draw_card(frame, target),
-        View::Fault(frame) => draw_fault(frame, startup, context.firmware, font, target),
+        View::Fault(frame) if frame < FAULT_FRAMES => draw_fault(frame, startup, context.firmware, font, true, target),
+        View::Fault(frame) => draw_exit(frame - FAULT_FRAMES, startup, context.firmware, font, target),
     }
 }
 
@@ -753,21 +757,27 @@ const PART_MODULE: i32 = 9;
 const BAND_ROWS: core::ops::Range<i32> = 198..318;
 const STRIP_ROWS: core::ops::Range<i32> = 234..282;
 const NAME_PX: u32 = 200;
-/// The running line and the giant name are centred on this row's middle.
-const LINE_MIDDLE: f32 = 258.0;
-/// How far right of centred the giant name's ink starts, and how fast both move left, in px a
+/// The giant name is centred on this row's middle.
+const NAME_MIDDLE: f32 = 258.0;
+/// How far right of centred the giant name's ink starts, and how fast it moves left, in px a
 /// frame.
 const NAME_START: i32 = 60;
 const NAME_SPEED: i32 = 1;
-const LINE_PX: u32 = 32;
-const LINE_SCALE: f32 = 1.3;
-const LINE_SPEED: i32 = 4;
-/// Where the running line's first repeat starts its ink on the first frame.
-const LINE_START: i32 = 231;
+/// The ticker's size and ink top, how fast it moves left in px a frame, and how many frames
+/// each of its two lines shows before the other.
+const TICKER_PX: u32 = 34;
+const TICKER_TOP: i32 = 242;
+const TICKER_SPEED: i32 = 4;
+const TICKER_TURN: u32 = 12;
 const FAULT_HATCH: Rectangle = Rectangle::new(Point::new(290, 164), Size::new(29, 27));
 const FAULT_HATCH_SPEED: i32 = 2;
 const MICRO_LEFT: i32 = 162;
+/// The micro lines' ink tops above the band: the count and the first failure beside the hatch,
+/// or with more than one failure, the count and the first two, with how many more at `MORE_LEFT`
+/// on the last line.
 const ABOVE_TOPS: [i32; 2] = [164, 178];
+const SUMMARY_TOPS: [i32; 3] = [162, 175, 188];
+const MORE_LEFT: i32 = 298;
 const REASON_TOP: i32 = 328;
 const FAULT_BARCODE_TOP: i32 = 345;
 const FAULT_VERSION_GAP: i32 = 8;
@@ -784,11 +794,14 @@ fn at_ink<D: CoverageTarget<Color = Color>>(
     style.draw_on_baseline(text, pen, target)
 }
 
+/// Draws the fault screen's `frame`, over its red field already painted outside the band unless
+/// `field` asks for it.
 fn draw_fault<D: CoverageTarget<Color = Color>>(
     frame: u32,
     startup: &Startup,
     version: &str,
     font: &FontdueRenderer<'static, Color>,
+    field: bool,
     target: &mut D,
 ) -> Result<(), D::Error> {
     let Some((first, outcome)) = startup.failed().next() else {
@@ -797,7 +810,7 @@ fn draw_fault<D: CoverageTarget<Color = Color>>(
     let frame = frame as i32;
     // The field, band and strip run to the glass's edge, and the corners past it are never seen.
     // The band paints its own rows, black with the text knocked out of it.
-    for rows in [0..BAND_ROWS.start, BAND_ROWS.end..466] {
+    for rows in [0..BAND_ROWS.start, BAND_ROWS.end..466].into_iter().filter(|_| field) {
         let area = Rectangle::new(Point::new(0, rows.start), Size::new(466, rows.len() as u32));
         screens::clear_to(&mut Window::new(&mut *target, Point::zero(), area), chrome::RED)?;
     }
@@ -823,27 +836,34 @@ fn draw_fault<D: CoverageTarget<Color = Color>>(
         let x = (CENTER.x + NAME_START - NAME_SPEED * frame) as f32;
         let pen = Point::new(
             libm::roundf(x - ink.size.width as f32) as i32 - 2 * ink.top_left.x,
-            libm::roundf(LINE_MIDDLE - ink.size.height as f32) as i32 - 2 * ink.top_left.y,
+            libm::roundf(NAME_MIDDLE - ink.size.height as f32) as i32 - 2 * ink.top_left.y,
         );
         style.draw_doubled_on_baseline(name, pen, &mut band)?;
         band.finish();
     }
     {
+        // Two lines take turns, both moving all the while: the failed parts' names in blue and
+        // the fault in yellow.
+        let mut line = heapless::String::<80>::new();
+        let color = if (frame as u32 / TICKER_TURN).is_multiple_of(2) {
+            for _ in 0..2 {
+                for (part, _) in startup.failed() {
+                    let _ = write!(line, "{}_", part.name());
+                }
+            }
+            chrome::FAULT_BLUE
+        } else {
+            let _ = line.push_str("FAULT_FAULT_");
+            chrome::FAULT_YELLOW
+        };
+        let _ = line.push_str("  ");
         let mut strip = Knockout::new(&mut *target, STRIP_ROWS, 0..0, chrome::BLACK);
-        let style = small(font, chrome::WHITE, LINE_PX, SHAPIRO);
-        let mut line = heapless::String::<64>::new();
-        for (part, _) in startup.failed() {
-            let _ = write!(line, "{} FAIL_", part.name());
-        }
-        let ink = style.baseline_bounds(&line, Point::zero());
-        let middle = (ink.top_left.y as f32 + ink.size.height as f32 / 2.0) * LINE_SCALE;
-        let baseline = libm::roundf(LINE_MIDDLE - middle) as i32;
-        let period = style.advance(&line);
-        let start = (LINE_START - ink.top_left.x - LINE_SPEED * frame) as f32;
-        // The repeat whose pen is at or just left of the panel's edge, then each after it.
-        let mut pen = start - libm::ceilf(start / period) * period;
-        while pen < 466.0 {
-            style.draw_stretched(&line, Point::new(libm::roundf(pen) as i32, baseline), LINE_SCALE, &mut strip)?;
+        let style = small(font, color, TICKER_PX, SHAPIRO);
+        let baseline = text::baseline_for_ink_top(&style, &line, TICKER_TOP);
+        let period = libm::roundf(style.advance(&line)) as i32;
+        let mut pen = (-TICKER_SPEED * frame).rem_euclid(period) - period;
+        while pen < 466 {
+            style.draw_stretched(&line, Point::new(pen, baseline), 1.0, &mut strip)?;
             pen += period;
         }
         strip.finish();
@@ -854,15 +874,219 @@ fn draw_fault<D: CoverageTarget<Color = Color>>(
     let regular = small(font, chrome::BLACK, 12, FRAKTION);
     let mut count = heapless::String::<24>::new();
     let _ = write!(count, "SELF TEST {}/6 OK", startup.answered());
-    at_ink(&bold, &count, MICRO_LEFT, ABOVE_TOPS[0], field)?;
-    let mut failure = heapless::String::<24>::new();
-    let _ = write!(failure, "{:02} {} FAIL", first.index() + 1, first.name());
-    at_ink(&regular, &failure, MICRO_LEFT, ABOVE_TOPS[1], field)?;
-    hatch(FAULT_HATCH, 8, 4, FAULT_HATCH_SPEED * frame, chrome::BLACK, field)?;
+    let failures = startup.failed().count();
+    let tops: &[i32] = if failures > 1 { &SUMMARY_TOPS } else { &ABOVE_TOPS };
+    at_ink(&bold, &count, MICRO_LEFT, tops[0], field)?;
+    for ((part, _), &top) in startup.failed().zip(&tops[1..]) {
+        let mut failure = heapless::String::<24>::new();
+        let _ = write!(failure, "{:02} {} FAIL", part.index() + 1, part.name());
+        at_ink(&regular, &failure, MICRO_LEFT, top, field)?;
+    }
+    if failures > 2 {
+        let mut more = heapless::String::<4>::new();
+        let _ = write!(more, "+{}", failures - 2);
+        at_ink(&regular, &more, MORE_LEFT, SUMMARY_TOPS[2], field)?;
+    }
+    if failures == 1 {
+        hatch(FAULT_HATCH, 8, 4, FAULT_HATCH_SPEED * frame, chrome::BLACK, field)?;
+    }
     let reason = if startup.demo { "DEMO, NOT A FAULT" } else { outcome.reason() };
     at_ink(&regular, reason, MICRO_LEFT, REASON_TOP, field)?;
     let end = barcode(version, MICRO_LEFT, FAULT_BARCODE_TOP, 12, chrome::BLACK, field)?;
     at_ink(&bold, version, end + FAULT_VERSION_GAP, FAULT_BARCODE_TOP, field)
+}
+
+// The fault screen's exit: its last frame as one red surface that runs past the glass, most of
+// which drops out in two frames before what is left lifts away.
+
+/// The exit's first two frames drop the surface below these rows; the second also drops all of
+/// it above `CAP_END` but `FRAGMENTS`.
+const DROPS: [i32; 2] = [408, 338];
+const CAP_END: i32 = 171;
+/// Blocks bitten out of the dropped edge: their columns, and how far above the edge they reach.
+const BITES: [(core::ops::Range<i32>, i32); 4] = [(0..64, 8), (104..160, 20), (224..288, 36), (352..416, 24)];
+const FRAGMENTS: [Rectangle; 3] = [
+    Rectangle::new(Point::new(40, 92), Size::new(57, 67)),
+    Rectangle::new(Point::new(176, 102), Size::new(105, 55)),
+    Rectangle::new(Point::new(344, 100), Size::new(71, 59)),
+];
+/// The glass's radius, which the surface is clipped to.
+const GLASS: i32 = 233;
+/// How far what is left lifts by the exit's end, easing in from its third frame.
+const LIFT: f32 = 340.0;
+
+/// The surface's columns that are left in its row `y`, `exit` frames into the exit.
+fn left_of(exit: u32, y: i32) -> heapless::Vec<core::ops::Range<i32>, 8> {
+    let mut spans = heapless::Vec::new();
+    if exit == 0 {
+        _ = spans.push(0..466);
+        return spans;
+    }
+    let edge = DROPS[(exit as usize - 1).min(1)];
+    let top = if exit == 1 { 0 } else { CAP_END };
+    let mut push = |span: core::ops::Range<i32>| match spans.last_mut() {
+        Some(last) if last.end == span.start => last.end = span.end,
+        _ if span.is_empty() => {}
+        _ => _ = spans.push(span),
+    };
+    if (top..edge).contains(&y) {
+        let mut x = 0;
+        for (columns, rise) in BITES {
+            push(x..columns.start);
+            if y < edge - rise {
+                push(columns.clone());
+            }
+            x = columns.end;
+        }
+        push(x..466);
+    }
+    if exit >= 2 {
+        for fragment in FRAGMENTS.iter().filter(|fragment| fragment.rows().contains(&y)) {
+            push(fragment.columns());
+        }
+    }
+    spans
+}
+
+/// The columns of row `y` on the glass, for rows on the panel.
+fn glass(y: i32) -> core::ops::Range<i32> {
+    /// Each row's first column on the glass: the pixel centres within `GLASS` of the middle.
+    const LEFT: [u16; 466] = {
+        let mut left = [0; 466];
+        let mut y = 0;
+        while y < 466 {
+            // Twice the half-width, squared, from the row's middle.
+            let across = 4 * GLASS * GLASS - (2 * y + 1 - 466) * (2 * y + 1 - 466);
+            let root = across.cast_unsigned().isqrt();
+            let ceiling = (root + (root * root != across.cast_unsigned()) as u32) as i32;
+            left[y as usize] = ((466 - ceiling) / 2) as u16;
+            y += 1;
+        }
+        left
+    };
+    let left = i32::from(LEFT[y as usize]);
+    left..466 - left
+}
+
+fn lift(exit: u32) -> i32 {
+    let u = (exit.saturating_sub(2) as f32 / 15.0).min(1.0);
+    libm::roundf(LIFT * u * u) as i32
+}
+
+/// The surface, `exit` frames into the exit: what is drawn at a row lands `lift` rows higher,
+/// on the columns left of it, and nowhere else.
+struct Damaged<'a, T> {
+    parent: &'a mut T,
+    exit: u32,
+    lift: i32,
+}
+
+impl<T: CoverageTarget<Color = Color>> Damaged<'_, T> {
+    /// Calls `f` with each part of `columns` left in the surface's row `y`, and the parent's row
+    /// it lands on.
+    fn each(&mut self, y: i32, columns: core::ops::Range<i32>, mut f: impl FnMut(&mut T, core::ops::Range<i32>, i32)) {
+        let row = y - self.lift;
+        if !(0..466).contains(&row) {
+            return;
+        }
+        // Only the glass shows the surface.
+        let glass = glass(row);
+        for span in left_of(self.exit, y) {
+            let (start, end) = (span.start.max(columns.start).max(glass.start), span.end.min(columns.end).min(glass.end));
+            if start < end {
+                f(self.parent, start..end, row);
+            }
+        }
+    }
+}
+
+impl<T: CoverageTarget<Color = Color>> embedded_graphics::geometry::Dimensions for Damaged<'_, T> {
+    fn bounding_box(&self) -> Rectangle {
+        Rectangle::new(Point::zero(), Size::new(466, 466))
+    }
+}
+
+impl<T: CoverageTarget<Color = Color>> DrawTarget for Damaged<'_, T> {
+    type Color = Color;
+    type Error = T::Error;
+
+    fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = embedded_graphics::Pixel<Color>>,
+    {
+        for embedded_graphics::Pixel(point, color) in pixels {
+            self.each(point.y, point.x..point.x + 1, |parent, _, row| {
+                _ = parent.fill_solid(&Rectangle::new(Point::new(point.x, row), Size::new(1, 1)), color);
+            });
+        }
+        Ok(())
+    }
+
+    fn fill_solid(&mut self, area: &Rectangle, color: Color) -> Result<(), Self::Error> {
+        for y in area.rows() {
+            self.each(y, area.columns(), |parent, span, row| {
+                _ = parent.fill_solid(&Rectangle::new(Point::new(span.start, row), Size::new(span.len() as u32, 1)), color);
+            });
+        }
+        Ok(())
+    }
+}
+
+impl<T: CoverageTarget<Color = Color>> CoverageTarget for Damaged<'_, T> {
+    fn blend_row(&mut self, x: i32, y: i32, coverage: &[u8], color: Color) {
+        self.each(y, x..x + coverage.len() as i32, |parent, span, row| {
+            parent.blend_row(span.start, row, &coverage[(span.start - x) as usize..(span.end - x) as usize], color);
+        });
+    }
+
+    fn blend_row_over(&mut self, x: i32, y: i32, coverage: &[u8], color: Color, background: Color) {
+        self.each(y, x..x + coverage.len() as i32, |parent, span, row| {
+            let coverage = &coverage[(span.start - x) as usize..(span.end - x) as usize];
+            parent.blend_row_over(span.start, row, coverage, color, background);
+        });
+    }
+
+    fn paint_row(&mut self, x: i32, y: i32, coverage: &[u8], color: Color, background: Color) {
+        self.each(y, x..x + coverage.len() as i32, |parent, span, row| {
+            let coverage = &coverage[(span.start - x) as usize..(span.end - x) as usize];
+            parent.paint_row(span.start, row, coverage, color, background);
+        });
+    }
+}
+
+/// The exit, `exit` frames in: the fault screen's last frame on a surface that is red past the
+/// glass, less what has dropped out, lifted.
+fn draw_exit<D: CoverageTarget<Color = Color>>(
+    exit: u32,
+    startup: &Startup,
+    version: &str,
+    font: &FontdueRenderer<'static, Color>,
+    target: &mut D,
+) -> Result<(), D::Error> {
+    // Each pixel once: black where the surface has gone, and its red field where it is left,
+    // but on the band, which paints its own rows.
+    let lift = lift(exit);
+    for row in 0..466 {
+        let y = row + lift;
+        let on_glass = glass(row);
+        let mut x = on_glass.start;
+        let spans = if (0..466).contains(&y) { left_of(exit, y) } else { heapless::Vec::new() };
+        for span in spans.iter().map(|span| span.start.max(on_glass.start)..span.end.min(on_glass.end)) {
+            if span.is_empty() {
+                continue;
+            }
+            let at = |columns: core::ops::Range<i32>| Rectangle::new(Point::new(columns.start, row), Size::new(columns.len() as u32, 1));
+            target.fill_solid(&at(x..span.start.max(x)), chrome::BLACK)?;
+            if !BAND_ROWS.contains(&y) {
+                target.fill_solid(&at(span.clone()), chrome::RED)?;
+            }
+            x = span.end;
+        }
+        if x < on_glass.end {
+            target.fill_solid(&Rectangle::new(Point::new(x, row), Size::new((on_glass.end - x) as u32, 1)), chrome::BLACK)?;
+        }
+    }
+    draw_fault(FAULT_FRAMES - 1, startup, version, font, false, &mut Damaged { parent: target, exit, lift })
 }
 
 #[cfg(test)]
@@ -899,7 +1123,8 @@ mod tests {
         assert_eq!(startup.phase(from - 1), Phase::SelfTest);
         assert_eq!(startup.phase(from), Phase::Fault(0));
         assert_eq!(startup.phase(from + 3_999_999), Phase::Fault(119));
-        assert_eq!(startup.phase(from + 4_000_000), Phase::Done { entry: true, after_card: false });
+        assert_eq!(startup.phase(from + 4_599_999), Phase::Fault(137));
+        assert_eq!(startup.phase(from + 4_600_000), Phase::Done { entry: true, after_card: false });
     }
 
     #[test]

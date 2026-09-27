@@ -17,6 +17,7 @@ use super::{
     panel::{self, Cell},
     picker::Picker,
     rest::{self, Fade, Rest, Timeout},
+    charging::Charge,
     screens::{self, Battery, Gnss, PeripheralState, Screen, DEFAULT_BRIGHTNESS},
     second::{self, Effects, Next, Page},
     sheet::Sheet,
@@ -108,8 +109,6 @@ const CLOCK_ENTRY: ClockTimes<Micros> = ClockTimes {
 const CLOCK_ICON_BUILD: Micros = 150_000;
 const CLOCK_SCATTER_BLOOM: Micros = 120_000;
 const CLOCK_BATTERY_RISE: Micros = 80_000;
-/// The charging hatch moves up a pixel a frame, at the start-up's 30 frames a second.
-const CLOCK_CRAWL: Micros = 33_333;
 const CLOCK_LABEL_REVEAL: Micros = 120_000;
 const CLOCK_PLATE_REVEAL: Micros = 120_000;
 const CLOCK_ZONE_REVEAL: Micros = 160_000;
@@ -256,8 +255,10 @@ pub struct Stage {
     top_edge_since: Option<Micros>,
     accents: Accents,
     fading: bool,
-    /// The clock's charging hatch is crawling, which needs a step every frame and nothing else.
-    crawling: bool,
+    /// The clock's battery gauge is moving for charging, which needs steps that nothing else
+    /// asks for, and never ends while charging.
+    gauge_moving: bool,
+    charge: Charge,
     /// What the compass page showed after the last step, while it filled the panel.
     drawn_compass: Option<(CompassView, Accents)>,
     /// The pixels the last step changed. Boxed so the frame loop's stack never holds it.
@@ -341,7 +342,8 @@ impl Stage {
             top_edge_since: None,
             accents: Accents::FULL,
             fading: false,
-            crawling: false,
+            gauge_moving: false,
+            charge: Charge::default(),
             drawn_compass: None,
             changed: alloc::boxed::Box::new(Dirty::new()),
             dial_footprint: DialFootprint::default(),
@@ -509,10 +511,10 @@ impl Stage {
     /// input.
     #[must_use]
     pub fn is_animating(&self) -> bool {
-        self.is_changing() || self.crawling
+        self.is_changing() || self.gauge_moving
     }
 
-    /// As [`is_animating`](Self::is_animating), but for the charging crawl, which never ends
+    /// As [`is_animating`](Self::is_animating), but for the charging gauge, which never stops
     /// while charging.
     #[must_use]
     pub fn is_changing(&self) -> bool {
@@ -537,7 +539,7 @@ impl Stage {
         } = input;
         self.changed.clear();
         self.fading = false;
-        self.crawling = false;
+        self.gauge_moving = false;
         let mut update = Update::default();
         // Set where a change needs the whole panel redrawn. The settled screens work out their
         // own damage instead.
@@ -550,6 +552,7 @@ impl Stage {
         if let Some(sensors) = sensors {
             self.peripherals.clock = self.peripherals.clock.read(sensors.clock, sensors.zone);
             self.peripherals.battery = sensors.battery;
+            self.charge.read(sensors.battery, now);
             self.peripherals.gnss = sensors.gnss;
             full |= self.screen == Screen::Clock;
         }
@@ -1344,8 +1347,8 @@ impl Stage {
         let times = &settled.times;
         let retyped = settled.retyped;
         let icon = 1.0 - libm::powf(1.0 - f32::from(progress(now, times.icon, CLOCK_ICON_BUILD)) / 255.0, 3.0);
-        let charging = self.peripherals.battery.is_some_and(|battery| battery.present && battery.charging)
-            && matches!(self.rest, Rest::Awake | Rest::Dimmed { .. } | Rest::Darkening { .. });
+        let exposed = libm::roundf(self.charge.exposed(now) * 255.0) as u8;
+        let lit = matches!(self.rest, Rest::Awake | Rest::Dimmed { .. } | Rest::Darkening { .. });
         let entry = Accents {
             ring: progress(now, times.ring, RING_FADE),
             icon_rows: libm::roundf(5.0 * icon) as u8,
@@ -1357,10 +1360,11 @@ impl Stage {
             battery: progress(now, times.battery, CLOCK_BATTERY_RISE),
             time: progress(now, retyped, CLOCK_TIME_REVEAL),
             date: progress(now, retyped.map(|start| start + CLOCK_DATE_DELAY), CLOCK_DATE_REVEAL),
-            crawl: if charging { ((now / CLOCK_CRAWL) % 8) as u8 } else { 0 },
+            bands: if exposed > 0 { self.charge.phase(now) } else { 0 },
+            exposed,
         };
-        self.fading |= entry != Accents { crawl: entry.crawl, ..Accents::FULL };
-        self.crawling |= charging;
+        self.fading |= entry != Accents { bands: entry.bands, exposed: entry.exposed, ..Accents::FULL };
+        self.gauge_moving |= lit && self.charge.is_moving(now);
         let p = swipe_progress(offset);
         let exit = Accents {
             ring: leaving(p, 0.6, 0.4),
@@ -1374,7 +1378,8 @@ impl Stage {
             battery: leaving(p, 0.1, 0.3),
             time: u8::MAX,
             date: u8::MAX,
-            crawl: u8::MAX,
+            bands: u8::MAX,
+            exposed: u8::MAX,
         };
         entry.min(exit)
     }

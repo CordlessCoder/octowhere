@@ -1,6 +1,6 @@
 //! The clock face: hours on the field, minutes and seconds knocked out of a band across the
 //! circle in the state's colour, a status symbol, UTC and the battery in the band beside a
-//! hatched battery column, the date and the zone as two lines of tokens, a 24-hour rail, and two
+//! battery gauge, the date and the zone as two lines of tokens, a 24-hour rail, and two
 //! quiet scatter fields behind. It is K1 of `context/design/`, on the round 4 spec
 //! (`context/design/specs/CLOCK-FACE-ROUND4-SPEC.md`) and the clock face spec before it.
 
@@ -14,12 +14,13 @@ use embedded_graphics::{
 use heapless::String;
 
 use super::{
+    charging,
     clock::{ClockState, ClockView, DateTime, ZoneMode, ZoneState},
     icon::{self, Glyph, Tile},
     reveal::{Reveal, draw_revealed, revealed_bounds},
     scatter::{Field, Look, Scatter},
     screens::Battery,
-    startup, text,
+    text,
 };
 use crate::chrome::{
     self, Color, CoverageTarget, FontdueRenderer, OnBackground, RgbColorExt as _, Window, FRAKTION,
@@ -60,11 +61,16 @@ const NO_DATA_MIDDLE_TWICE: i32 = 515;
 const BAND_LINES: [i32; 2] = [238, 256];
 const BAND_LINE_LEFT: i32 = 262;
 const BAND_LINES_INK: Rectangle = Rectangle::new(Point::new(260, 234), Size::new(104, 36));
-/// The battery column at the band's right end: a black window, its edge inset a pixel, and the
-/// hatch inset three, filled from the bottom.
+/// The battery gauge at the band's right end: a black window, its edge inset a pixel, and the
+/// fill inset three, from the bottom.
 const WINDOW: Rectangle = Rectangle::new(Point::new(394, 206), Size::new(46, 105));
 const EDGE: Rectangle = Rectangle::new(Point::new(395, 207), Size::new(44, 103));
-const HATCH: Rectangle = Rectangle::new(Point::new(397, 209), Size::new(40, 99));
+const FILL: Rectangle = Rectangle::new(Point::new(397, 209), Size::new(40, 99));
+/// The two dashes of an unknown level.
+const UNKNOWN_DASHES: [Rectangle; 2] = [
+    Rectangle::new(Point::new(402, 255), Size::new(11, 3)),
+    Rectangle::new(Point::new(422, 255), Size::new(11, 3)),
+];
 const LOW: u8 = 15;
 /// The token lines by their caps' tops, their sizes, and the widest the zone's line may be
 /// before its name moves to a line of its own.
@@ -114,10 +120,11 @@ pub fn solid_band() -> Rectangle {
 
 /// How far each of the face's accents has come in, 0 to 255 along each one's own window: the
 /// ring's fade, the band label and lines, the first token line, the zone's lines, the wordmark,
-/// the scatter's bloom and the battery hatch's rise; how many rows of the icon's modules show, 0
+/// the scatter's bloom and the battery fill's rise; how many rows of the icon's modules show, 0
 /// to 5. Also the reveals of the time, across hours, minutes and seconds, and of the date line,
 /// which run only when a fix or a zone change replaces the time. The face applies each part's
-/// curve. `crawl` is how far the charging hatch has moved, a pixel a frame.
+/// curve. `bands` is the charging bands' phase in their loop, and `exposed` how far they show
+/// through the solid fill, from 0, covered, to 255.
 /// The time and date are centre content, so a page's entry and exit leave them whole.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Accents {
@@ -131,7 +138,8 @@ pub struct Accents {
     pub battery: u8,
     pub time: u8,
     pub date: u8,
-    pub crawl: u8,
+    pub bands: u8,
+    pub exposed: u8,
 }
 
 impl Accents {
@@ -146,7 +154,8 @@ impl Accents {
         battery: u8::MAX,
         time: u8::MAX,
         date: u8::MAX,
-        crawl: 0,
+        bands: 0,
+        exposed: 0,
     };
     pub const HIDDEN: Self = Self {
         ring: 0,
@@ -159,10 +168,11 @@ impl Accents {
         battery: 0,
         time: u8::MAX,
         date: u8::MAX,
-        crawl: 0,
+        bands: 0,
+        exposed: 0,
     };
 
-    /// Each accent at the lesser of the two, and `self`'s crawl.
+    /// Each accent at the lesser of the two, and `self`'s charging bands.
     #[must_use]
     pub fn min(self, other: Self) -> Self {
         Self {
@@ -176,7 +186,8 @@ impl Accents {
             battery: self.battery.min(other.battery),
             time: self.time.min(other.time),
             date: self.date.min(other.date),
-            crawl: self.crawl,
+            bands: self.bands,
+            exposed: self.exposed,
         }
     }
 }
@@ -372,13 +383,16 @@ struct Parts {
     mark: Reveal,
 }
 
-/// The battery column's hatch: its colour, how many rows up it reaches, and how far the
-/// charging crawl has moved it.
+/// The battery gauge: its colour, how many rows up its fill reaches, the charging bands' phase,
+/// and how many rows of the fill, from its top, show the bands rather than solid. With no level
+/// it shows dashes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Column {
     color: Color,
     rows: u32,
-    shift: i32,
+    phase: u8,
+    exposed: u32,
+    dashes: bool,
 }
 
 /// A line of runs in one colour and size, Regular or Bold, centred as a group on one baseline.
@@ -497,9 +511,9 @@ pub fn shown_time(view: &ClockView) -> Option<i64> {
 /// The time's characters: two each for the hours, minutes and seconds.
 const TIME_CELLS: usize = 6;
 
-/// The battery line and the hatch's colour and fill, 0 to 100, for `battery` under a band of
-/// `band`. Unknown fills the hatch in `GRAY`.
-fn battery(battery: Option<Battery>, band: Color) -> (String<16>, Color, u8, bool) {
+/// The battery line, and the gauge's colour and level, 0 to 100, for `battery` under a band of
+/// `band`. With no level, the gauge is `GRAY`.
+fn battery(battery: Option<Battery>, band: Color) -> (String<16>, Color, Option<u8>) {
     let mut line = String::new();
     match battery {
         Some(battery) if battery.present => {
@@ -513,15 +527,15 @@ fn battery(battery: Option<Battery>, band: Color) -> (String<16>, Color, u8, boo
                 () if band == chrome::RED => chrome::WHITE,
                 () => band,
             };
-            (line, color, battery.percent.min(100), battery.charging)
+            (line, color, Some(battery.percent.min(100)))
         }
         Some(battery) if battery.usb => {
             _ = line.push_str("USB");
-            (line, chrome::GRAY, 100, false)
+            (line, chrome::GRAY, None)
         }
         _ => {
             _ = line.push_str("BAT --");
-            (line, chrome::GRAY, 100, false)
+            (line, chrome::GRAY, None)
         }
     }
 }
@@ -542,7 +556,7 @@ impl Parts {
             _ => (Some(dashes()), Some(dashes()), Some(dashes())),
         };
         let band = mode.band();
-        let (battery_line, hatch, fill, charging) = battery(supply, band);
+        let (battery_line, gauge, charge) = battery(supply, band);
         let label_reveal = level(out_cubic(accents.label));
         let band_lines = (mode != Mode::NoData).then(|| {
             let mut utc = String::<16>::new();
@@ -554,10 +568,21 @@ impl Parts {
             [(utc.clone(), reveal(&utc)), (battery_line.clone(), reveal(&battery_line))]
         });
         let rise = out_back(accents.battery);
+        let rows = charge.map_or(0, |level| {
+            (libm::roundf(FILL.size.height as f32 * f32::from(level) / 100.0 * rise) as u32).min(FILL.size.height)
+        });
+        let exposed = libm::roundf(rows as f32 * f32::from(accents.exposed) / 255.0) as u32;
         let column = Column {
-            color: hatch,
-            rows: (libm::roundf(HATCH.size.height as f32 * f32::from(fill) / 100.0 * rise) as u32).min(HATCH.size.height),
-            shift: if charging { i32::from(accents.crawl) } else { 0 },
+            color: gauge,
+            rows,
+            // A clock fault keeps its bands still, and covered bands have no phase to show.
+            phase: match () {
+                () if exposed == 0 => 0,
+                () if mode == Mode::NoData => charging::ASSEMBLED_PHASE,
+                () => accents.bands,
+            },
+            exposed,
+            dashes: charge.is_none(),
         };
 
         let mut lines = heapless::Vec::new();
@@ -895,12 +920,23 @@ fn draw_column<D: CoverageTarget<Color = Color>>(column: Column, target: &mut D)
     ] {
         target.fill_solid(&edge, column.color)?;
     }
-    let filled = Rectangle::new(
-        HATCH.top_left + Point::new(0, (HATCH.size.height - column.rows) as i32),
-        Size::new(HATCH.size.width, column.rows),
-    );
-    // Stripes move up as the shift grows: along a stripe x + y is constant.
-    startup::hatch(filled, 8, 4, column.shift, column.color, target)
+    if column.dashes {
+        for dash in UNKNOWN_DASHES {
+            target.fill_solid(&dash, column.color)?;
+        }
+    }
+    let top = FILL.top_left.y + (FILL.size.height - column.rows) as i32;
+    let rows = |from: u32, count: u32| {
+        Rectangle::new(Point::new(FILL.top_left.x, top + from as i32), Size::new(FILL.size.width, count))
+    };
+    // The bands lie over a solid layer whose top edge is `exposed` rows down the fill.
+    target.fill_solid(&rows(column.exposed, column.rows - column.exposed), column.color)?;
+    if column.exposed > 0 {
+        for (from, count) in charging::bands(column.rows, column.phase) {
+            target.fill_solid(&rows(from, count.min(column.exposed.saturating_sub(from))), column.color)?;
+        }
+    }
+    Ok(())
 }
 
 fn moved(area: Rectangle, x: i32) -> Rectangle {
@@ -1018,7 +1054,7 @@ pub fn damage(before: &Face, after: &Face, font: &FontdueRenderer<'static, Color
         }
     }
     if old.column != new.column {
-        damage.add(if old.column.color == new.column.color { HATCH } else { WINDOW });
+        damage.add(if (old.column.color, old.column.dashes) == (new.column.color, new.column.dashes) { FILL } else { WINDOW });
     }
     if old.mark != new.mark {
         let from = old.mark.glyphs().min(new.mark.glyphs());
