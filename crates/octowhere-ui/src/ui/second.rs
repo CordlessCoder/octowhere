@@ -203,10 +203,6 @@ pub fn draw_cap_around_icon<D: CoverageTarget<Color = Color>>(
     target: &mut D,
 ) -> Result<(), D::Error> {
     panel::draw_scatter(&panel::Accents::FULL, target)?;
-    super::smooth::perimeter().draw(
-        &mut OnBackground::new(&mut *target, chrome::BLACK),
-        chrome::GRAY,
-    );
     let style = style(font, chrome::WHITE, 27, crate::chrome::SHAPIRO);
     let pen = Point::new(
         text::pen_x_for_ink_centre(&style, "SETTINGS", CENTER.x as f32),

@@ -27,6 +27,10 @@ pub struct Driver<'a> {
     sensors: Option<(Sensors, Micros)>,
     clock_runs: bool,
     observer: Option<Observer<'a>>,
+    /// The last motion reading stepped in, and what a hand does to it at a time, for scenes
+    /// whose device is held rather than lying still.
+    motion: Option<Motion>,
+    hand: Option<fn(Motion, Micros) -> Motion>,
 }
 
 impl<'a> Driver<'a> {
@@ -37,6 +41,8 @@ impl<'a> Driver<'a> {
             sensors: None,
             clock_runs: false,
             observer: None,
+            motion: None,
+            hand: None,
         }
     }
 
@@ -62,6 +68,12 @@ impl<'a> Driver<'a> {
         self.clock_runs = true;
     }
 
+    /// From now on, steps the last motion reading in again every step, as `hand` moves it at
+    /// that time, and passes each new reading through `hand` too.
+    pub fn hold(&mut self, hand: fn(Motion, Micros) -> Motion) {
+        self.hand = Some(hand);
+    }
+
     pub fn now(&self) -> Micros {
         self.now
     }
@@ -70,6 +82,12 @@ impl<'a> Driver<'a> {
     pub fn step(&mut self, input: Input) -> Update {
         self.now += FRAME;
         let mut input = Input { now: self.now, ..input };
+        if let Some(motion) = input.motion {
+            self.motion = Some(motion);
+        }
+        if let (Some(hand), Some(motion)) = (self.hand, self.motion) {
+            input.motion = Some(hand(motion, self.now));
+        }
         if let Some(sensors) = input.sensors {
             self.sensors = Some((sensors, self.now));
         } else if let Some((sensors, since)) = self.sensors {

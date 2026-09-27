@@ -74,9 +74,9 @@ Geometry a layout must respect:
 - The panel's centre is the pixel corner at (233, 233). Pixel (x, y) covers x..x+1 and y..y+1, so
   pixels 232 and 233 straddle the centre on each axis. Anything drawn symmetric about the centre
   should be symmetric about that corner.
-- The perimeter ring that reads as the edge is centred on radius 231 with a 2 px stroke.
+- No screen draws a perimeter ring (owner, 2026-09-27): the glass's own edge is the edge.
 - A layout must fit the circle. Text and slabs near the top and bottom need the chord width at
-  their row, not 466. Every screen keeps its ink inside radius 226, except the ring, bands, field
+  their row, not 466. Every screen keeps its ink inside radius 226, except bands, field
   rules and content passing through the edge during a page drag.
 
 The owner judges every design on the physical panel at viewing distance. The earlier 14 px
@@ -126,6 +126,9 @@ the panel. Touch targets are no smaller than about 10 mm.
   far as the level reaches.
 - **Zone picker:** without a trusted date (the clock reads 1 Jan 2000 after a power loss until
   GNSS sets it), a zone is listed under every offset it keeps in a year. Rows then show `--:--`.
+  The zone list's order, `NEAREST FIRST` or `A-Z`, shares the count's line below the slab
+  (`NEAREST FIRST  03 / 23`). Above the slab, where D3 put it, it met the zone before the
+  selected one.
 
 Captures drawn by the firmware's own code come from `crates/octowhere-ui/examples/render.rs`.
 It draws the faces' stills and `panel-rest`, `panel-always-on`, `panel-end`,
@@ -210,13 +213,13 @@ The captures `compass-calibrating`, `compass-heading`, `compass-interference`,
 
 Listed in precedence order: the first whose condition holds is shown.
 
-| State | Condition | Ring | Dial | Icon | Caption | State line | Slab | Readout | Tilt line |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| NO DATA | the motion sensors have not yet given an orientation | `RED` | none | no-data glyph, `RED` | `COMPASS`, `GRAY` | none | `RED` | `NO DATA` | none |
-| INTERFERENCE | a heading, and the field is disturbed | `GRAY` | turned to the heading | interference glyph, `ORANGE` | `MAGNETIC`, `GRAY` | `INTERFERENCE`, Mono Bold 24 px `ORANGE` | `ORANGE` | degrees | shown |
-| HEADING | a heading | `GRAY` | turned to the heading | arrow, `BLUE` | `MAGNETIC`, `GRAY` | none | `WHITE` | degrees | shown |
-| CALIBRATING | no heading, calibration under 100 % | `GRAY` | none | open loop, `ORANGE` | `CALIBRATION`, `ORANGE` | `TURN ALL WAYS`, Mono Regular 19 px `GRAY` | `ORANGE` | percent | shown |
-| TOP EDGE UP | no heading, calibrated | `GRAY` | none | top bar, `WHITE` | `MAGNETIC`, `GRAY` | `TOP EDGE UP`, Mono Regular 20 px `GRAY` | `WHITE` | `---` | shown |
+| State | Condition | Dial | Icon | Caption | State line | Slab | Readout | Tilt line |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| NO DATA | the motion sensors have not yet given an orientation | none | no-data glyph, `RED` | `COMPASS`, `GRAY` | none | `RED` | `NO DATA` | none |
+| INTERFERENCE | a heading, and the field is disturbed | turned to the heading | interference glyph, `ORANGE` | `MAGNETIC`, `GRAY` | `INTERFERENCE`, Mono Bold 24 px `ORANGE` | `ORANGE` | degrees | shown |
+| HEADING | a heading | turned to the heading | arrow, `BLUE` | `MAGNETIC`, `GRAY` | none | `WHITE` | degrees | shown |
+| CALIBRATING | no heading, calibration under 100 % | none | open loop, `ORANGE` | `CALIBRATION`, `ORANGE` | `TURN ALL WAYS`, Mono Regular 19 px `GRAY` | `ORANGE` | percent | shown |
+| TOP EDGE UP | no heading, calibrated | none | top bar, `WHITE` | `MAGNETIC`, `GRAY` | `TOP EDGE UP`, Mono Regular 20 px `GRAY` | `WHITE` | `---` | shown |
 
 The slab, icon and caption never move or resize. The state line's space is kept when it is
 empty.
@@ -251,7 +254,7 @@ specifies these, and they are built as it says. In short:
 - **State line:** a line that goes untypes right to left over 60 ms, and a new one types in over
   the next 120 ms, or over the first 120 ms if there was none. A changed caption retypes over
   120 ms.
-- **Cuts:** a change into NO DATA is a single frame. On leaving NO DATA, the ring, slab, readout
+- **Cuts:** a change into NO DATA is a single frame. On leaving NO DATA, the slab, readout
   and tilt take their new state in the first frame. The dial and readout go in the first frame
   when the heading goes, so no stale bearing shows.
 - The dial sweeps as before when a heading arrives. Back from TOP EDGE UP within 750 ms, the
@@ -572,12 +575,10 @@ Of a full clock draw, the clear is about 7 ms, the scatter 3.3 ms and the band 3
 C1's settled states, entry points and a swipe frame were measured in
 [`docs/logs/display/compass-c1-draw-2026-09-26.md`](../docs/logs/display/compass-c1-draw-2026-09-26.md).
 
-- A full redraw happens during a page swipe or sheet travel. A fade of the perimeter ring
-  redraws the ring, and recolouring the clock's band redraws the band's rows.
+- A full redraw happens during a page swipe or sheet travel. Recolouring the clock's band redraws the band's rows.
 - A sparse change costs more per pixel than a compact one. The framebuffers are in external
   memory, reached through a cache in 64-byte lines, so each row a change touches costs at least
-  a line. The ring fade touches every row twice, which is why it costs more than its 8,000
-  pixels suggest.
+  a line.
 - The settled panel redraws only a visible row whose reading changed. While switching pages
   it redraws in full. Opening, closing and entry steps redraw in full. Every second-level
   screen redraws in full on any change.
@@ -607,8 +608,8 @@ C1's settled states, entry points and a swipe frame were measured in
   cover gesture.
 - Settings live on the panel. A new setting is a new cell or lives under an existing one.
 - Pixel shift is deferred, since the timeout makes burn-in unlikely. When it is built, the
-  whole picture moves, the perimeter ring and bands included, so layouts will keep a margin
-  between the ring and the glass's edge. The margin is not settled yet.
+  whole picture moves, the bands included, so layouts will keep a margin
+  inside the glass's edge. The margin is not settled yet.
 
 ## Colour
 

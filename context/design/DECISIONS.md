@@ -12,6 +12,9 @@ Recorded 2026-09-26. These override the hand-off where they differ.
 3. **Compass background stays blue.** The C1 field breaks the colour table's "blue means a valid
    reading" in letter only: its brightness and density are low enough that it reads as
    unimportant. It stays blue, including while calibrating.
+4b. **No perimeter ring** (owner, 2026-09-27). Every screen drew a gray ring at radius 231;
+   during a swipe the moving page's ring was cut off by the glass's circle. It is removed from
+   every screen, including NO DATA's red ring on the clock and the compass.
 4a. **The resting scatter breathes** (owner, 2026-09-27), departing from the hand-off's static
    texture: on the clock face and the settings overview its density falls to 75 % and back
    over 10 s, only while the screen is awake. Settings blooms its scatter in as the clock does,

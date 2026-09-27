@@ -58,13 +58,11 @@ pub enum Touch {
 /// When each of the compass's accents starts after the page settles, and how long each takes.
 /// The icon's modules land a row per `ICON_ROW`.
 const COMPASS_ENTRY: CompassTimes<Micros> = CompassTimes {
-    ring: 0,
     icon: 95_000,
     caption: 120_000,
     dial: 190_000,
     texture: 0,
 };
-const RING_FADE: Micros = 110_000;
 const ICON_ROW: Micros = 30_000;
 const CAPTION_REVEAL: Micros = 120_000;
 const DIAL_SWEEP: Micros = 170_000;
@@ -85,7 +83,6 @@ struct CompassSettled {
 /// When each of the compass's accents started, or starts. `None` shows it whole at once.
 #[derive(Clone, Copy, Debug, Default)]
 struct CompassTimes<T = Option<Micros>> {
-    ring: T,
     icon: T,
     caption: T,
     dial: T,
@@ -98,7 +95,6 @@ const SWIPE_FADE: f32 = 0.35;
 /// When each of the clock face's accents starts after the page settles. The icon's modules land
 /// a row per step, and the reveals run over their durations.
 const CLOCK_ENTRY: ClockTimes<Micros> = ClockTimes {
-    ring: 0,
     icon: 60_000,
     label: 100_000,
     plate: 160_000,
@@ -137,7 +133,6 @@ struct ClockSettled {
 /// When each of the clock face's accents started, or starts. `None` shows it whole at once.
 #[derive(Clone, Copy, Debug, Default)]
 struct ClockTimes<T = Option<Micros>> {
-    ring: T,
     icon: T,
     label: T,
     plate: T,
@@ -1150,7 +1145,6 @@ impl Stage {
                 let at = |delay: Micros| Some(settled + delay);
                 let cell = |start: Micros, i: usize| Some(settled + start + PANEL_STAGGER * i as Micros);
                 panel::Accents {
-                    ring: progress(now, at(0), RING_FADE),
                     title: progress(now, at(0), PANEL_TITLE_REVEAL),
                     rules: progress(now, at(PANEL_RULES), PANEL_RULES_DRAW),
                     rows: core::array::from_fn(|i| rows_built(now, cell(PANEL_ICON, i))),
@@ -1169,7 +1163,6 @@ impl Stage {
         // Going up, the accents follow the panel's offset, so reversing a drag restores them.
         let p = swipe_progress(self.sheet.height() - self.sheet.offset());
         let exit = panel::Accents {
-            ring: leaving(p, 0.6, 0.4),
             title: leaving(p, 0.5, 0.3),
             rules: leaving(p, 0.4, 0.4),
             rows: [rows_leaving(p, 0.3, 0.4); panel::CELLS],
@@ -1200,7 +1193,6 @@ impl Stage {
                 let from = now.max(self.entry_from);
                 let start = |delay: Micros| Some(from + delay);
                 let mut times = CompassTimes {
-                    ring: start(COMPASS_ENTRY.ring),
                     icon: start(COMPASS_ENTRY.icon),
                     caption: start(COMPASS_ENTRY.caption),
                     dial: start(COMPASS_ENTRY.dial),
@@ -1208,7 +1200,7 @@ impl Stage {
                 };
                 if mode == Mode::NoData {
                     // A fault shows at once.
-                    (times.ring, times.icon, times.caption) = (None, None, None);
+                    (times.icon, times.caption) = (None, None);
                 }
                 self.compass_settled.insert(CompassSettled {
                     times,
@@ -1221,7 +1213,7 @@ impl Stage {
         if !shown.same_state(mode) {
             let from_now = |start: Option<Micros>| Some(start.map_or(now, |start| start.max(now)));
             if mode == Mode::NoData {
-                (times.ring, times.icon, times.caption) = (None, None, None);
+                (times.icon, times.caption) = (None, None);
                 *change = None;
             } else {
                 if *shown == Mode::NoData {
@@ -1259,7 +1251,6 @@ impl Stage {
             *change = None;
         }
         let entry = Accents {
-            ring: progress(now, times.ring, RING_FADE),
             icon_rows: rows_built(now, times.icon),
             caption: progress(now, times.caption, CAPTION_REVEAL),
             dial: progress(now, times.dial, DIAL_SWEEP),
@@ -1270,7 +1261,6 @@ impl Stage {
         // Going out, the accents follow the page's offset, so reversing a drag restores them.
         let p = swipe_progress(offset);
         let exit = Accents {
-            ring: leaving(p, 0.6, 0.4),
             icon_rows: rows_leaving(p, 0.3, 0.5),
             caption: leaving(p, 0.2, 0.3),
             dial: leaving(p, 0.2, 0.4),
@@ -1297,7 +1287,6 @@ impl Stage {
                 let from = now.max(self.entry_from);
                 let start = |delay: Micros| Some(from + delay);
                 let mut times = ClockTimes {
-                    ring: start(CLOCK_ENTRY.ring),
                     icon: start(CLOCK_ENTRY.icon),
                     label: start(CLOCK_ENTRY.label),
                     plate: start(CLOCK_ENTRY.plate),
@@ -1308,7 +1297,7 @@ impl Stage {
                 };
                 if keys.mode == clock_screen::Mode::NoData {
                     // A fault shows at once.
-                    (times.ring, times.icon, times.label) = (None, None, None);
+                    (times.icon, times.label) = (None, None);
                 }
                 self.clock_settled.insert(ClockSettled {
                     times,
@@ -1370,7 +1359,6 @@ impl Stage {
         let exposed = libm::roundf(self.charge.exposed(now) * 255.0) as u8;
         let lit = matches!(self.rest, Rest::Awake | Rest::Dimmed { .. } | Rest::Darkening { .. });
         let entry = Accents {
-            ring: progress(now, times.ring, RING_FADE),
             icon_rows: libm::roundf(5.0 * icon) as u8,
             label: progress(now, times.label, CLOCK_LABEL_REVEAL),
             plate: progress(now, times.plate, CLOCK_PLATE_REVEAL),
@@ -1390,7 +1378,6 @@ impl Stage {
         self.gauge_moving |= lit && self.charge.is_moving(now);
         let p = swipe_progress(offset);
         let exit = Accents {
-            ring: leaving(p, 0.6, 0.4),
             icon_rows: rows_leaving(p, 0.3, 0.5),
             label: leaving(p, 0.2, 0.3),
             plate: leaving(p, 0.1, 0.3),

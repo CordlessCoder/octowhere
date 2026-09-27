@@ -19,7 +19,6 @@ use super::{
     gesture::Micros,
     icon::{self, Glyph, Tile},
     identity, screens,
-    smooth,
     text,
 };
 use crate::chrome::{
@@ -476,7 +475,6 @@ fn draw_self_test<D: CoverageTarget<Color = Color>>(
 ) -> Result<(), D::Error> {
     screens::clear(target)?;
     let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
-    smooth::perimeter().draw(field, chrome::GRAY);
     centred(&small(font, chrome::WHITE, 27, SHAPIRO), TITLE, TITLE_TOP, field)?;
     centred(&counter_style(font), &counter(cells), COUNTER_TOP, field)?;
     let index_style = small(font, chrome::GRAY, 13, FRAKTION);

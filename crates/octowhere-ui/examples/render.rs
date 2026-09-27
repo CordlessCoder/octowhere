@@ -296,6 +296,13 @@ fn settings_frames() -> Vec<(String, Stage)> {
     tap(&mut zone, 150, 115);
     tap(&mut zone, 233, 250);
     frames.push(("picker-zone".into(), zone.stage));
+    // Two zones down the list, with one above the selected one.
+    let mut scrolled = open();
+    tap(&mut scrolled, 150, 115);
+    tap(&mut scrolled, 233, 250);
+    scrolled.swipe(Point::new(233, 300), Point::new(233, 215), 400_000);
+    scrolled.settle();
+    frames.push(("picker-zone-scrolled".into(), scrolled.stage));
     frames
 }
 

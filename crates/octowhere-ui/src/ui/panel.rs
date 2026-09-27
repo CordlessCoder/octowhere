@@ -18,7 +18,7 @@ use super::{
 };
 use crate::chrome::{
     self, Color, CoverageTarget, FRAKTION, FRAKTION_BOLD, FontdueRenderer, OnBackground,
-    RgbColorExt as _, Round, SHAPIRO, Window,
+    Round, SHAPIRO, Window,
 };
 
 /// Distance between the two complete pages during a sideways drag.
@@ -167,13 +167,12 @@ pub fn cell_at(point: Point, scroll: i32) -> Option<Cell> {
 
 pub const CELLS: usize = Cell::ALL.len();
 
-/// How far each of the panel's accents has come in: the ring's fade, the title's reveal and the
+/// How far each of the panel's accents has come in: the title's reveal and the
 /// rules' draw-out, 0 to 255; per cell, how many rows of its icon's modules show, 0 to 5, and
 /// its index's and name's reveals; whether the page markers show; and the hint's reveal. The
 /// icons' frames, the values and the tags always show whole.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Accents {
-    pub ring: u8,
     pub title: u8,
     pub rules: u8,
     pub rows: [u8; CELLS],
@@ -188,7 +187,6 @@ pub struct Accents {
 
 impl Accents {
     pub const FULL: Self = Self {
-        ring: u8::MAX,
         title: u8::MAX,
         rules: u8::MAX,
         rows: [5; CELLS],
@@ -200,7 +198,6 @@ impl Accents {
         breath: u8::MAX,
     };
     pub const HIDDEN: Self = Self {
-        ring: 0,
         title: 0,
         rules: 0,
         rows: [0; CELLS],
@@ -217,7 +214,6 @@ impl Accents {
     pub fn min(self, other: Self) -> Self {
         let each = |a: [u8; CELLS], b: [u8; CELLS]| core::array::from_fn(|i| a[i].min(b[i]));
         Self {
-            ring: self.ring.min(other.ring),
             title: self.title.min(other.title),
             rules: self.rules.min(other.rules),
             rows: each(self.rows, other.rows),
@@ -538,10 +534,6 @@ pub fn draw<D: CoverageTarget<Color = Color>>(
         for cell in Cell::ALL {
             draw_cell(cell, peripherals, scroll, &accents, font, rows)?;
         }
-    }
-    if accents.ring > 0 {
-        let ring = chrome::BLACK.lerp(&chrome::GRAY, accents.ring);
-        super::smooth::perimeter().draw(&mut OnBackground::new(&mut *target, chrome::BLACK), ring);
     }
     let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
     draw_revealed(

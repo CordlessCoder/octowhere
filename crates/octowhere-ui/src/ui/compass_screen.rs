@@ -246,12 +246,11 @@ pub fn degrees(decidegrees: u16) -> u16 {
     decidegrees / 10 % 360
 }
 
-/// How far each of the screen's accents has come in: the ring's fade, how many rows of the
-/// icon's modules show (0 to 5), and the caption's reveal and the dial's sweep, each 0 to 255.
+/// How far each of the screen's accents has come in: how many rows of the icon's modules show
+/// (0 to 5), and the caption's reveal and the dial's sweep, each 0 to 255.
 /// The stage animates these, and the change of state running.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Accents {
-    pub ring: u8,
     pub icon_rows: u8,
     pub caption: u8,
     pub dial: u8,
@@ -262,7 +261,6 @@ pub struct Accents {
 
 impl Accents {
     pub const FULL: Self = Self {
-        ring: u8::MAX,
         icon_rows: 5,
         caption: u8::MAX,
         dial: u8::MAX,
@@ -270,7 +268,6 @@ impl Accents {
         change: Change::NONE,
     };
     pub const HIDDEN: Self = Self {
-        ring: 0,
         icon_rows: 0,
         caption: 0,
         dial: 0,
@@ -282,7 +279,6 @@ impl Accents {
     #[must_use]
     pub fn min(self, other: Self) -> Self {
         Self {
-            ring: self.ring.min(other.ring),
             icon_rows: self.icon_rows.min(other.icon_rows),
             caption: self.caption.min(other.caption),
             dial: self.dial.min(other.dial),
@@ -429,7 +425,6 @@ fn centred<D: CoverageTarget<Color = Color>>(
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Parts {
     texture: Option<Texture>,
-    ring: Option<Color>,
     /// The heading the dial turns to, and how many of its bearings the sweep has passed.
     dial: Option<(u16, u8)>,
     /// The glyph, its colour, and how many rows of its modules show.
@@ -486,7 +481,6 @@ enum Readout {
 impl Parts {
     fn of(view: &CompassView, accents: Accents) -> Self {
         let mode = Mode::of(view);
-        let ring_color = if mode == Mode::NoData { chrome::RED } else { chrome::GRAY };
         let readout = match mode {
             Mode::NoData => Readout::NoData,
             Mode::TopEdgeUp => Readout::Dashes,
@@ -520,7 +514,6 @@ impl Parts {
         };
         Self {
             texture: Texture::of(mode, accents.texture),
-            ring: (accents.ring > 0).then(|| chrome::BLACK.lerp(&ring_color, accents.ring)),
             dial: mode.heading().filter(|_| marks > 0).map(|heading| (heading, marks)),
             icon: (mode.icon(), mode.icon_color(), accents.icon_rows),
             caption: (caption, caption_color, Reveal::of(accents.caption, caption.len())),
@@ -585,9 +578,6 @@ where
         texture.draw(target)?;
     }
     {
-        if let Some(color) = parts.ring {
-            super::smooth::perimeter().draw(target, color);
-        }
         if let Some((heading, marks)) = parts.dial {
             draw_dial(heading, marks, font, target)?;
         }
@@ -641,9 +631,6 @@ pub fn damage(
     }
     if old.texture != new.texture {
         damage.add(chrome::DISPLAY_BBOX);
-    }
-    if old.ring != new.ring {
-        super::smooth::perimeter().damage(damage);
     }
     if old.dial != new.dial {
         // The old place first: the last step worked it out as its new one.

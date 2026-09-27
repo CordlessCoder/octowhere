@@ -87,7 +87,7 @@ fn accents(driver: &Driver) -> Accents {
 fn the_compass_accents_build_after_the_page_settles() {
     let mut driver = Driver::on(Screen::Compass);
     driver.motion(heading(470));
-    assert_eq!(accents(&driver).ring, 0);
+    assert_eq!(accents(&driver).icon_rows, 0);
     assert_eq!(accents(&driver).texture, 0);
     assert!(driver.stage.is_animating());
     driver.wait(40_000);
@@ -97,7 +97,6 @@ fn the_compass_accents_build_after_the_page_settles() {
     driver.wait(50_000);
     assert_eq!(accents(&driver).texture, 3);
     let early = accents(&driver);
-    assert_eq!(early.ring, 255);
     assert!(early.icon_rows > 0 && early.icon_rows < 5, "{early:?}");
     assert_eq!(early.dial, 0);
     driver.wait(300_000);
@@ -112,7 +111,7 @@ fn a_swipe_off_the_compass_takes_its_accents_reversibly() {
     driver.touch(Some(Point::new(360, 233)));
     driver.touch(Some(Point::new(340, 233)));
     let part = accents(&driver);
-    assert!(part.caption < 255 && part.ring == 255, "{part:?}");
+    assert!(part.caption < 255 && part.icon_rows > 0, "{part:?}");
     driver.touch(Some(Point::new(200, 233)));
     assert_eq!(accents(&driver), Accents { texture: 5, ..Accents::HIDDEN });
     driver.touch(Some(Point::new(399, 233)));
@@ -139,11 +138,11 @@ fn the_compass_accents_stay_hidden_while_it_slides_in() {
         if driver.stage.screen() == Screen::Compass {
             break;
         }
-        assert_eq!(driver.stage.accents().ring, 255, "an unsettled compass changed its accents");
+        assert_eq!(driver.stage.accents().caption, 255, "an unsettled compass changed its accents");
         driver.step(Input::default());
     }
     assert_eq!(driver.stage.screen(), Screen::Compass);
-    assert_eq!(accents(&driver).ring, 0, "the entry began before the page settled");
+    assert_eq!(accents(&driver).caption, 0, "the entry began before the page settled");
 }
 
 #[test]
@@ -629,7 +628,7 @@ fn the_clock_accents_build_after_the_page_settles_and_leave_with_the_offset() {
     driver.touch(Some(Point::new(400, 233)));
     driver.touch(Some(Point::new(380, 233)));
     let part = clock_accents(&driver);
-    assert!(part.zone < 255 && part.ring == 255, "{part:?}");
+    assert!(part.zone < 255 && part.icon_rows == 5, "{part:?}");
     driver.touch(Some(Point::new(200, 233)));
     assert_eq!(clock_accents(&driver).icon_rows, 0);
     driver.touch(Some(Point::new(399, 233)));
@@ -676,7 +675,7 @@ fn interference_rebuilds_the_icon_and_leaves_the_dial() {
     for motion in [disturbed, heading(470)] {
         driver.motion(motion);
         let changing = accents(&driver);
-        assert_eq!((changing.ring, changing.dial, changing.caption), (255, 255, 255), "{changing:?}");
+        assert_eq!((changing.dial, changing.caption), (255, 255), "{changing:?}");
         assert!(changing.icon_rows < 5 && !changing.change.done(), "{changing:?}");
         assert!(driver.stage.is_animating());
         driver.wait(200_000);
@@ -710,11 +709,11 @@ fn a_fault_on_the_compass_shows_at_once() {
     let mut driver = Driver::on(Screen::Compass);
     driver.motion(Motion::default());
     let entering = accents(&driver);
-    assert_eq!((entering.ring, entering.icon_rows, entering.caption), (255, 5, 255));
+    assert_eq!((entering.icon_rows, entering.caption), (5, 255));
     let mut driver = settled_on_compass();
     driver.motion(Motion::default());
     let fault = accents(&driver);
-    assert_eq!((fault.ring, fault.icon_rows, fault.caption), (255, 5, 255));
+    assert_eq!((fault.icon_rows, fault.caption), (5, 255));
 }
 
 #[test]
@@ -881,7 +880,7 @@ fn the_panel_arrives_with_its_accents_hidden_and_builds_them_once_open() {
     }
     driver.wait(100_000);
     let early = panel_accents(&driver);
-    assert!(early.ring > 0 && early.hint == 0 && early.rows[5] == 0, "{early:?}");
+    assert!(early.title > 0 && early.hint == 0 && early.rows[5] == 0, "{early:?}");
     driver.wait(400_000);
     assert_eq!(panel_accents(&driver), PanelAccents::FULL);
 }
@@ -1242,7 +1241,7 @@ fn after_the_card_the_clock_runs_its_entry_and_types_its_time_in() {
         driver.step(Input::default());
     }
     let accents = driver.stage.clock_accents();
-    assert!(accents.time < u8::MAX && accents.ring < u8::MAX, "{accents:?}");
+    assert!(accents.time < u8::MAX && accents.icon_rows < 5, "{accents:?}");
 }
 
 #[test]

@@ -374,14 +374,6 @@ impl Picker {
         second::draw_slab(188, 278, chrome::VIOLET, target)?;
         let unix = time_of(peripherals);
         let zone = DATABASE.zone(zones[self.index]);
-        let mut context = String::<32>::new();
-        _ = write!(context, "{:02}  {}", self.index + 1, if nearest { "NEAREST FIRST" } else { "A-Z" });
-        let small = style(font, chrome::GRAY, 13, FRAKTION);
-        let pen = Point::new(
-            text::pen_x_for_ink_left(&small, &context, TEXT_LEFT),
-            text::baseline_for_ink_top(&small, &context, 159),
-        );
-        small.draw_on_baseline(&context, pen, &mut OnBackground::new(&mut *target, chrome::BLACK))?;
         let big = style(font, chrome::BLACK, 37, FRAKTION_BOLD);
         let name = city(zone.name);
         let pen = Point::new(
@@ -409,8 +401,10 @@ impl Picker {
                 Self::draw_neighbour(&city(DATABASE.zone(zones[index]).name), row, font, target)?;
             }
         }
-        let mut position = String::<16>::new();
-        _ = write!(position, "{:02} / {:02}", self.index + 1, zones.len());
+        // The order shares the count's line: above the slab it would meet the zone before.
+        let mut position = String::<32>::new();
+        let order = if nearest { "NEAREST FIRST" } else { "A-Z" };
+        _ = write!(position, "{order}  {:02} / {:02}", self.index + 1, zones.len());
         let style = second::hint_style(font);
         let pen = Point::new(
             text::pen_x_for_ink_right(&style, &position, 370),

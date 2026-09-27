@@ -138,10 +138,35 @@ fn ease(t: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// A turn by hand: quick at first, a little past the mark, then settling back onto it.
+fn swing(t: f32) -> f32 {
+    const DAMPING: f32 = 6.0;
+    const FREQUENCY: f32 = 7.0;
+    let decay = (-DAMPING * t).exp();
+    1.0 - decay * ((FREQUENCY * t).cos() + DAMPING / FREQUENCY * (FREQUENCY * t).sin())
+}
+
+/// A device held in the hand: a slow drift of pitch and roll about the reading, and of the
+/// heading by a degree or so, at unrelated periods so it never visibly repeats.
+fn hand(mut motion: Motion, now: Micros) -> Motion {
+    let wave = |period: f32, phase: f32| (std::f32::consts::TAU * now as f32 / (period * 1e6) + phase).sin();
+    let compass = &mut motion.compass;
+    if compass.live {
+        compass.pitch_deg = compass.pitch_deg.saturating_add((3.0 + 2.5 * wave(3.7, 0.0)).round() as i8);
+        compass.roll_deg = compass.roll_deg.saturating_add((-2.0 + 3.5 * wave(5.3, 1.0)).round() as i8);
+        compass.heading_decidegrees = compass.heading_decidegrees.map(|heading| {
+            let drift = (12.0 * wave(4.3, 2.0) + 5.0 * wave(1.9, 0.5)).round() as i32;
+            (i32::from(heading) + drift).rem_euclid(3600) as u16
+        });
+    }
+    motion
+}
+
 /// Starts on `screen` with the clock running in Dublin, facing 37°.
 fn start(driver: &mut Driver, screen: Screen) {
     driver.stage.show(screen);
     driver.run_clock();
+    driver.hold(hand);
     driver.sensors(dublin());
     driver.motion(facing(37.0));
 }
@@ -166,7 +191,7 @@ fn swipe_to_compass(driver: &mut Driver) {
     driver.wait(ms(1_200));
     page_left(driver);
     driver.wait(ms(800));
-    driver.motion_over(ms(700), |t| facing(37.0 + 50.0 * ease(t)));
+    driver.motion_over(ms(700), |t| facing(37.0 + 50.0 * swing(t)));
     driver.wait(ms(800));
     page_right(driver);
     driver.wait(ms(1_000));
@@ -191,7 +216,7 @@ fn compass_walk(driver: &mut Driver) {
     driver.wait(ms(300));
     driver.motion(facing(212.0));
     driver.wait(ms(1_000));
-    driver.motion_over(ms(900), |t| facing(212.0 + 70.0 * ease(t)));
+    driver.motion_over(ms(900), |t| facing(212.0 + 70.0 * swing(t)));
     driver.wait(ms(700));
     let mut disturbed = facing(282.0);
     disturbed.compass.disturbed = true;
@@ -203,6 +228,7 @@ fn compass_walk(driver: &mut Driver) {
 
 fn compass_calibration(driver: &mut Driver) {
     driver.stage.show(Screen::Compass);
+    driver.hold(hand);
     driver.motion(calibrating(0));
     compass_walk(driver);
 }
@@ -237,6 +263,7 @@ fn disturbed(degrees: f32) -> Motion {
 /// A row of each kind in `SCREEN-DESIGN-BRIEF.md`'s table of the compass's changes of state.
 fn compass_states(driver: &mut Driver) {
     driver.stage.show(Screen::Compass);
+    driver.hold(hand);
     driver.motion(calibrating(80));
     driver.wait(ms(600));
     driver.motion_over(ms(600), |t| calibrating(80 + (t * 19.0) as u8));
@@ -415,7 +442,7 @@ fn tour(driver: &mut Driver) {
     slow_page_left(driver);
     say("THE HEADING. THE DIAL TURNS WITH THE DEVICE OVER A STILL BLUE FIELD.");
     driver.wait(ms(2_000));
-    driver.motion_over(ms(2_000), |t| facing(37.0 + 90.0 * ease(t)));
+    driver.motion_over(ms(2_000), |t| facing(37.0 + 90.0 * swing(t)));
     driver.wait(HOLD);
     say("CALIBRATING. TURN THE DEVICE EVERY WAY UNTIL THE COUNT FILLS.");
     driver.motion(calibrating(0));
@@ -586,6 +613,7 @@ fn settings_walk(driver: &mut Driver) {
 fn boot(driver: &mut Driver, reports: [(Part, Outcome, u64); 6]) {
     driver.stage = Stage::starting(PeripheralState { firmware: "0.1.0", ..PeripheralState::default() });
     driver.run_clock();
+    driver.hold(hand);
     driver.sensors(dublin());
     for (part, outcome, at) in reports {
         driver.wait(ms(at).saturating_sub(driver.now()));

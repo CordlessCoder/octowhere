@@ -23,7 +23,7 @@ use super::{
     text,
 };
 use crate::chrome::{
-    self, Color, CoverageTarget, FontdueRenderer, OnBackground, RgbColorExt as _, Window, FRAKTION,
+    self, Color, CoverageTarget, FontdueRenderer, OnBackground, Window, FRAKTION,
     FRAKTION_BOLD, SHAPIRO,
 };
 
@@ -39,7 +39,7 @@ const TILE: Tile = Tile {
     module: 16,
     padding: 8,
 };
-/// The band ends where the ring's outer edge does, on the page's own circle, so a swipe carries
+/// The band ends on the page's own circle, just inside the glass, so a swipe carries
 /// its ends round with the page.
 const BAND_ROWS: core::ops::Range<i32> = 198..318;
 const BAND_RADIUS: f32 = 232.0;
@@ -119,7 +119,7 @@ pub fn solid_band() -> Rectangle {
 }
 
 /// How far each of the face's accents has come in, 0 to 255 along each one's own window: the
-/// ring's fade, the band label and lines, the first token line, the zone's lines, the wordmark,
+/// band label and lines, the first token line, the zone's lines, the wordmark,
 /// the scatter's bloom, its breath and the battery fill's rise; how many rows of the icon's modules show, 0
 /// to 5. Also the reveals of the time, across hours, minutes and seconds, and of the date line,
 /// which run only when a fix or a zone change replaces the time. The face applies each part's
@@ -128,7 +128,6 @@ pub fn solid_band() -> Rectangle {
 /// The time and date are centre content, so a page's entry and exit leave them whole.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Accents {
-    pub ring: u8,
     pub icon_rows: u8,
     pub label: u8,
     pub plate: u8,
@@ -145,7 +144,6 @@ pub struct Accents {
 
 impl Accents {
     pub const FULL: Self = Self {
-        ring: u8::MAX,
         icon_rows: 5,
         label: u8::MAX,
         plate: u8::MAX,
@@ -160,7 +158,6 @@ impl Accents {
         exposed: 0,
     };
     pub const HIDDEN: Self = Self {
-        ring: 0,
         icon_rows: 0,
         label: 0,
         plate: 0,
@@ -179,7 +176,6 @@ impl Accents {
     #[must_use]
     pub fn min(self, other: Self) -> Self {
         Self {
-            ring: self.ring.min(other.ring),
             icon_rows: self.icon_rows.min(other.icon_rows),
             label: self.label.min(other.label),
             plate: self.plate.min(other.plate),
@@ -365,7 +361,6 @@ pub fn abbreviation(view: &ClockView) -> Option<&'static str> {
 /// What each part of the face shows. Two frames that agree on a part draw it identically.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Parts {
-    ring: Option<Color>,
     icon: (&'static Glyph, Color, u8),
     band: Color,
     label: (&'static str, Reveal),
@@ -638,19 +633,9 @@ impl Parts {
             }
         }
 
-        let ring_color = if mode == Mode::NoData { chrome::RED } else { chrome::GRAY };
-        let ring = (accents.ring > 0).then(|| {
-            let fade = out_back(accents.ring);
-            if fade <= 1.0 {
-                chrome::BLACK.lerp(&ring_color, level(fade))
-            } else {
-                ring_color.lerp(&chrome::WHITE, level(fade - 1.0))
-            }
-        });
         let (glyph, icon_color) = mode.icon();
         let label = mode.label();
         Self {
-            ring,
             icon: (glyph, icon_color, accents.icon_rows),
             band,
             label: (label, Reveal::of(label_reveal, label.len())),
@@ -898,9 +883,6 @@ where
     if let Some(hour) = parts.rail.filter(|_| target.visible(&RAIL)) {
         draw_rail(hour, target)?;
     }
-    if let Some(color) = parts.ring {
-        super::smooth::perimeter().draw(&mut OnBackground::new(&mut *target, chrome::BLACK), color);
-    }
     Ok(())
 }
 
@@ -1016,9 +998,6 @@ pub fn damage(before: &Face, after: &Face, font: &FontdueRenderer<'static, Color
     let new = parts(after, font);
     if old == new {
         return;
-    }
-    if old.ring != new.ring {
-        super::smooth::perimeter().damage(damage);
     }
     if old.band != new.band {
         // The band's colour also shows through the mark and the text on it, and colours the
