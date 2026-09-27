@@ -164,7 +164,7 @@ K1 (`design/renderer/concept/family-pass-v1-out/clock-K1-*`) on the round 4 spec
   and no fill.
 - **The gauge** follows the implementation update of 2026-09-27
   (`context/octowhere-implementation-update-2026-09-27/`): a solid fill, split while charging
-  into uneven full-width bands that gather and regroup on a 2.4 s loop (`ui/charging.rs`,
+  into uneven full-width bands that gather and regroup in a 2.4 s pass, then rest 4 s on the pass's dispersed layout (owner) (`ui/charging.rs`,
   which matches the update's `render_fill.py` at every height and phase). A change of the
   charging flag between two readings of a known level wipes a solid layer down off the bands
   or back up over them, in 450 ms, or 180 ms below 35 %. The loop runs while the face shows,

@@ -371,7 +371,7 @@ fn tour(driver: &mut Driver) {
     show(driver, "THE BATTERY, RIGHT OF THE MINUTES. HERE 64%, ON BATTERY ALONE: A SOLID FILL.", |s| {
         s.battery = battery(64, false);
     });
-    show(driver, "PLUGGED IN. THE FILL DRAINS AWAY TO UNEVEN BANDS, WHICH GATHER AND REGROUP EVERY 2.4 SECONDS.", |s| {
+    show(driver, "PLUGGED IN. THE FILL DRAINS AWAY TO UNEVEN BANDS, WHICH GATHER AND REGROUP, THEN REST FOR FOUR SECONDS.", |s| {
         s.battery = battery(64, true);
     });
     driver.wait(ms(2_500));

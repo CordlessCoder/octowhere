@@ -4,8 +4,10 @@
 
 use super::{gesture::Micros, screens::Battery};
 
-/// The loop, in frames at 30 fps.
+/// The loop, in frames at 30 fps, and the rest after each pass, on its dispersed layout, where
+/// the pass both starts and ends (owner).
 pub const LOOP_FRAMES: u8 = 72;
+const REST_FRAMES: u64 = 120;
 const FRAME: Micros = 1_000_000 / 30;
 /// A phase in the loop's assembled hold: the wipes hold it, and a loop entered by one starts
 /// from it.
@@ -221,7 +223,8 @@ impl Charge {
     pub fn phase(&self, now: Micros) -> u8 {
         if self.charging == Some(true) && now >= self.runs_from {
             let frames = (now - self.runs_from) / FRAME;
-            ((u64::from(self.held) + frames) % u64::from(LOOP_FRAMES)) as u8
+            let at = (u64::from(self.held) + frames) % (u64::from(LOOP_FRAMES) + REST_FRAMES);
+            if at < u64::from(LOOP_FRAMES) { at as u8 } else { 0 }
         } else {
             self.held
         }
@@ -282,6 +285,11 @@ mod tests {
         assert_eq!(charge.phase(1_200_000), ASSEMBLED_PHASE);
         assert_eq!(charge.exposed(1_000_000 + WIPE), 1.0);
         assert_eq!(charge.phase(1_000_000 + WIPE + FRAME), ASSEMBLED_PHASE + 1);
+        let rest = 1_000_000 + WIPE + u64::from(LOOP_FRAMES - ASSEMBLED_PHASE) * FRAME;
+        assert_eq!(charge.phase(rest), 0);
+        assert_eq!(charge.phase(rest + (REST_FRAMES - 1) * FRAME), 0);
+        assert_eq!(charge.phase(rest + REST_FRAMES * FRAME), 0);
+        assert_eq!(charge.phase(rest + (REST_FRAMES + 1) * FRAME), 1);
     }
 
     #[test]
