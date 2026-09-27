@@ -325,8 +325,9 @@ interpreted them:
   `FAULT_YELLOW`, both moving while hidden. With more than one failure the count and the first
   two failures sit above the band, with `+N` for the rest, in place of the hatch. The hatch's
   stripes and gaps are 6 px and still (owner).
-- **The exit.** After its 120 frames the fault screen's last frame breaks up and lifts away over
-  18 frames, as the update specifies, then the clock runs its entry. A touch skips it.
+- **The exit.** After its 120 frames the fault screen breaks up and lifts away over 18 frames,
+  as the update specifies, then the clock runs its entry. A touch skips it. The ticker and the
+  giant name keep moving as it lifts (owner), where the update froze the last frame.
 - **The giant name** is rasterized at 100 px and drawn with each pixel as a 2 × 2 block. At
   200 px its largest glyph needs a 140 KB raster, and that allocation failed on the device.
   The edges show 2 px antialiasing steps.

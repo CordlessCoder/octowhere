@@ -897,8 +897,8 @@ fn draw_fault<D: CoverageTarget<Color = Color>>(
     at_ink(&bold, version, end + FAULT_VERSION_GAP, FAULT_BARCODE_TOP, field)
 }
 
-// The fault screen's exit: its last frame as one red surface that runs past the glass, most of
-// which drops out in two frames before what is left lifts away.
+// The fault screen's exit: the screen, still running, as one red surface that runs past the
+// glass, most of which drops out in two frames before what is left lifts away.
 
 /// The exit's first two frames drop the surface below these rows; the second also drops all of
 /// it above `CAP_END` but `FRAGMENTS`.
@@ -1055,8 +1055,8 @@ impl<T: CoverageTarget<Color = Color>> CoverageTarget for Damaged<'_, T> {
     }
 }
 
-/// The exit, `exit` frames in: the fault screen's last frame on a surface that is red past the
-/// glass, less what has dropped out, lifted.
+/// The exit, `exit` frames in: the fault screen at its own frame, its text still moving, on a
+/// surface that is red past the glass, less what has dropped out, lifted.
 fn draw_exit<D: CoverageTarget<Color = Color>>(
     exit: u32,
     startup: &Startup,
@@ -1087,7 +1087,7 @@ fn draw_exit<D: CoverageTarget<Color = Color>>(
             target.fill_solid(&Rectangle::new(Point::new(x, row), Size::new((on_glass.end - x) as u32, 1)), chrome::BLACK)?;
         }
     }
-    draw_fault(FAULT_FRAMES - 1, startup, version, font, false, &mut Damaged { parent: target, exit, lift })
+    draw_fault(FAULT_FRAMES + exit, startup, version, font, false, &mut Damaged { parent: target, exit, lift })
 }
 
 #[cfg(test)]
