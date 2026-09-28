@@ -52,7 +52,10 @@ pub struct Column {
 
 impl Column {
     pub fn new() -> Self {
-        Self { shown: (None, 1), pixels: vec![OFF_PANEL; COLUMN * HEIGHT] }
+        Self {
+            shown: (None, 1),
+            pixels: vec![OFF_PANEL; COLUMN * HEIGHT],
+        }
     }
 
     /// Redraws the column if the scene has said something new since.
@@ -70,7 +73,9 @@ impl Column {
     /// `panel`'s rows with the column's beside each.
     pub fn beside(&self, panel: &[u32]) -> Vec<u32> {
         panel
-            .as_chunks::<WIDTH>().0.iter()
+            .as_chunks::<WIDTH>()
+            .0
+            .iter()
             .zip(self.pixels.as_chunks::<COLUMN>().0)
             .flat_map(|(panel, column)| panel.iter().chain(column).copied())
             .collect()
@@ -79,12 +84,20 @@ impl Column {
 
 /// `text` in white microtext, wrapped to the column and centred on the panel's middle row.
 fn render(text: &str) -> Vec<u32> {
-    let font = FontdueRenderer::new(FontdueRendererCtx::new_rc(), SIZE, chrome::WHITE, chrome::FONTS);
+    let font = FontdueRenderer::new(
+        FontdueRendererCtx::new_rc(),
+        SIZE,
+        chrome::WHITE,
+        chrome::FONTS,
+    );
     let style = text::style(&font, chrome::WHITE, SIZE, chrome::FRAKTION);
     let mut lines: Vec<String> = Vec::new();
     for word in text.split(' ') {
         match lines.last_mut() {
-            Some(line) if style.advance(&format!("{line} {word}")) <= (COLUMN as i32 - 2 * MARGIN) as f32 => {
+            Some(line)
+                if style.advance(&format!("{line} {word}"))
+                    <= (COLUMN as i32 - 2 * MARGIN) as f32 =>
+            {
                 line.push(' ');
                 line.push_str(word);
             }
@@ -96,16 +109,28 @@ fn render(text: &str) -> Vec<u32> {
     let top = (HEIGHT as i32 - (LINE * (lines.len() as i32 - 1) + cap)) / 2;
     for (index, line) in lines.iter().enumerate() {
         let baseline = top + cap + LINE * index as i32;
-        style.draw_on_baseline(line, Point::new(MARGIN, baseline), &mut *fb).expect("drawing a caption");
+        style
+            .draw_on_baseline(line, Point::new(MARGIN, baseline), &mut *fb)
+            .expect("drawing a caption");
     }
     // White on black, so each channel is the text's coverage; blend it over the surround.
     let mut pixels = Vec::with_capacity(COLUMN * HEIGHT);
     for y in 0..HEIGHT {
         for x in 0..COLUMN {
-            let color = Rgb888::from(fb.pixel(Point::new(x as i32, y as i32)).expect("inside the buffer"));
+            let color = Rgb888::from(
+                fb.pixel(Point::new(x as i32, y as i32))
+                    .expect("inside the buffer"),
+            );
             let [_, r, g, b] = OFF_PANEL.to_be_bytes();
-            let mix = |under: u8, over: u8| (u16::from(under) + (255 - u16::from(under)) * u16::from(over) / 255) as u8;
-            pixels.push(u32::from_be_bytes([0, mix(r, color.r()), mix(g, color.g()), mix(b, color.b())]));
+            let mix = |under: u8, over: u8| {
+                (u16::from(under) + (255 - u16::from(under)) * u16::from(over) / 255) as u8
+            };
+            pixels.push(u32::from_be_bytes([
+                0,
+                mix(r, color.r()),
+                mix(g, color.g()),
+                mix(b, color.b()),
+            ]));
         }
     }
     pixels

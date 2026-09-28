@@ -6,6 +6,7 @@ use embedded_graphics::prelude::Point;
 
 use super::{
     always_on,
+    charging::Charge,
     clock::{ClockState, ZoneMode, ZoneState},
     clock_screen,
     compass::CompassView,
@@ -17,9 +18,8 @@ use super::{
     panel::{self, Cell},
     picker::Picker,
     rest::{self, Fade, Rest, Timeout},
-    charging::Charge,
     scatter,
-    screens::{self, Battery, Gnss, PeripheralState, Screen, DEFAULT_BRIGHTNESS},
+    screens::{self, Battery, DEFAULT_BRIGHTNESS, Gnss, PeripheralState, Screen},
     second::{self, Effects, Next, Page},
     sheet::Sheet,
     startup::{self, Phase, Replay, Report, Startup},
@@ -322,7 +322,10 @@ impl Stage {
     /// A stage that opens on the start-up sequence, for boot to report each part to.
     #[must_use]
     pub fn starting(peripherals: PeripheralState) -> Self {
-        Self { startup: Some(Startup::new()), ..Self::new(peripherals) }
+        Self {
+            startup: Some(Startup::new()),
+            ..Self::new(peripherals)
+        }
     }
 
     #[must_use]
@@ -394,7 +397,11 @@ impl Stage {
     #[must_use]
     pub fn next_change(&self) -> Option<Micros> {
         let rest = match self.rest {
-            Rest::Awake if self.startup.is_none() => self.peripherals.timeout.duration().map(|timeout| self.active_since + timeout),
+            Rest::Awake if self.startup.is_none() => self
+                .peripherals
+                .timeout
+                .duration()
+                .map(|timeout| self.active_since + timeout),
             Rest::Dimmed { since } => Some(since + rest::DIM_HOLD),
             Rest::Darkening { since } => Some(since + rest::OFF_FADE),
             _ => None,
@@ -521,7 +528,11 @@ impl Stage {
     /// while charging.
     #[must_use]
     pub fn is_changing(&self) -> bool {
-        self.pager.is_moving() || self.sheet.is_moving() || self.grid.snap.is_some() || self.fading || self.fade.is_some()
+        self.pager.is_moving()
+            || self.sheet.is_moving()
+            || self.grid.snap.is_some()
+            || self.fading
+            || self.fade.is_some()
     }
 
     pub fn step(&mut self, input: Input) -> Update {
@@ -587,7 +598,12 @@ impl Stage {
             self.swallowed = false;
         }
 
-        let previous = (self.pager.view(), self.sheet.offset(), self.grid.scroll, self.page.is_some());
+        let previous = (
+            self.pager.view(),
+            self.sheet.offset(),
+            self.grid.scroll,
+            self.page.is_some(),
+        );
         let event = if touch.is_some() && !self.swallowed {
             self.gesture.update(self.raw_touch[0], now)
         } else {
@@ -623,7 +639,8 @@ impl Stage {
         if let Some((page, _)) = &mut self.page {
             self.fading |= page.step(now);
         }
-        if self.sheet.is_open() && !was_open || self.sheet.is_open() && self.panel_settled.is_none() {
+        if self.sheet.is_open() && !was_open || self.sheet.is_open() && self.panel_settled.is_none()
+        {
             self.panel_settled = Some(now);
             // The face under the panel starts its entry again when the panel leaves it.
             self.compass_settled = None;
@@ -657,15 +674,26 @@ impl Stage {
         self.page_accents = self
             .page
             .as_ref()
-            .map_or(second::Accents::FULL, |(_, opened)| second::Accents::at(*opened, now));
+            .map_or(second::Accents::FULL, |(_, opened)| {
+                second::Accents::at(*opened, now)
+            });
         self.fading |= self.page_accents != second::Accents::FULL;
 
-        let current = (view, self.sheet.offset(), self.grid.scroll, self.page.is_some());
-        let grid_only = current.2 != previous.2 && (current.0, current.1, current.3) == (previous.0, previous.1, previous.3);
+        let current = (
+            view,
+            self.sheet.offset(),
+            self.grid.scroll,
+            self.page.is_some(),
+        );
+        let grid_only = current.2 != previous.2
+            && (current.0, current.1, current.3) == (previous.0, previous.1, previous.3);
         full |= current != previous && !grid_only;
         self.track_damage(full);
 
-        let moved = current != previous || self.pager.is_moving() || self.sheet.is_moving() || self.grid.snap.is_some();
+        let moved = current != previous
+            || self.pager.is_moving()
+            || self.sheet.is_moving()
+            || self.grid.snap.is_some();
         let cover = touch == Some(Touch::Cover);
         if contact || cover || moved || self.heading_moved(face_shows) {
             self.restart(now);
@@ -692,7 +720,9 @@ impl Stage {
             return false;
         }
         match (self.heading_anchor, heading) {
-            (Some(anchor), Some(heading)) => rest::heading_apart(anchor, heading) > rest::HEADING_RESTART,
+            (Some(anchor), Some(heading)) => {
+                rest::heading_apart(anchor, heading) > rest::HEADING_RESTART
+            }
             (None, Some(_)) => {
                 self.heading_anchor = heading;
                 false
@@ -703,7 +733,13 @@ impl Stage {
 
     /// Wakes the screen on a contact, and takes a dimmed screen on to rest. Returns whether the
     /// screen rests, so nothing else steps. A cover while dimmed is dropped from `touch`.
-    fn step_rest(&mut self, now: Micros, contact: bool, touch: &mut Option<Touch>, update: &mut Update) -> bool {
+    fn step_rest(
+        &mut self,
+        now: Micros,
+        contact: bool,
+        touch: &mut Option<Touch>,
+        update: &mut Update,
+    ) -> bool {
         match self.rest {
             Rest::Awake => return false,
             // The contact that lifts the dim does nothing else.
@@ -789,7 +825,12 @@ impl Stage {
 
     /// Fades from the level that shows to `to`, starting at `start`.
     fn fade_to(&mut self, to: u8, duration: Micros, start: Micros) {
-        self.fade = Some(Fade { from: self.shown_level, to, start, duration });
+        self.fade = Some(Fade {
+            from: self.shown_level,
+            to,
+            start,
+            duration,
+        });
     }
 
     fn step_fade(&mut self, now: Micros, update: &mut Update) {
@@ -808,7 +849,13 @@ impl Stage {
     /// Steps the start-up sequence, with `touched` set when a fresh touch reading came in.
     /// Returns whether it still shows; once it has handed over, the rest of the step shows the
     /// clock face.
-    fn step_startup(&mut self, now: Micros, boot: Option<Report>, touched: bool, update: &mut Update) -> bool {
+    fn step_startup(
+        &mut self,
+        now: Micros,
+        boot: Option<Report>,
+        touched: bool,
+        update: &mut Update,
+    ) -> bool {
         let Some(startup) = &mut self.startup else {
             return false;
         };
@@ -853,15 +900,27 @@ impl Stage {
         match (self.startup_view, view) {
             (Some(startup::View::SelfTest(before)), Some(startup::View::SelfTest(after))) => {
                 if before != after {
-                    for (i, _) in before.iter().zip(&after).enumerate().filter(|(_, (a, b))| a != b) {
+                    for (i, _) in before
+                        .iter()
+                        .zip(&after)
+                        .enumerate()
+                        .filter(|(_, (a, b))| a != b)
+                    {
                         self.changed.add(startup::cell_bounds(i));
                     }
-                    self.changed.add(startup::counter_bounds(&self.renderer, &before));
-                    self.changed.add(startup::counter_bounds(&self.renderer, &after));
+                    self.changed
+                        .add(startup::counter_bounds(&self.renderer, &before));
+                    self.changed
+                        .add(startup::counter_bounds(&self.renderer, &after));
                 }
             }
             (Some(startup::View::Identity(before)), Some(startup::View::Identity(after))) => {
-                self.identity_marks.changes(before, after, &self.peripherals.clock, &mut self.changed);
+                self.identity_marks.changes(
+                    before,
+                    after,
+                    &self.peripherals.clock,
+                    &mut self.changed,
+                );
             }
             (before, after) if before != after => self.changed.make_full(),
             _ => {}
@@ -898,12 +957,22 @@ impl Stage {
     /// Works out what the step changed, from what each settled screen showed before.
     fn track_damage(&mut self, full: bool) {
         let view = self.pager.view();
-        let faces_settled = self.page.is_none() && self.sheet.is_closed() && view.offset == 0 && view.neighbour.is_none();
-        let compass = (faces_settled && self.screen == Screen::Compass).then_some((self.peripherals.compass, self.accents));
-        let clock = (faces_settled && self.screen == Screen::Clock)
-            .then_some((self.peripherals.clock, self.peripherals.battery, self.clock_accents));
-        let panel = (self.page.is_none() && self.sheet.is_open())
-            .then_some((self.peripherals, self.grid.scroll, self.panel_accents));
+        let faces_settled = self.page.is_none()
+            && self.sheet.is_closed()
+            && view.offset == 0
+            && view.neighbour.is_none();
+        let compass = (faces_settled && self.screen == Screen::Compass)
+            .then_some((self.peripherals.compass, self.accents));
+        let clock = (faces_settled && self.screen == Screen::Clock).then_some((
+            self.peripherals.clock,
+            self.peripherals.battery,
+            self.clock_accents,
+        ));
+        let panel = (self.page.is_none() && self.sheet.is_open()).then_some((
+            self.peripherals,
+            self.grid.scroll,
+            self.panel_accents,
+        ));
         let page = self
             .page
             .as_ref()
@@ -924,7 +993,8 @@ impl Stage {
             if before != after {
                 self.changed.make_full();
             }
-        } else if full || compass.is_some() || clock.is_some() || panel.is_some() || page.is_some() {
+        } else if full || compass.is_some() || clock.is_some() || panel.is_some() || page.is_some()
+        {
             self.changed.make_full();
         }
         self.drawn_compass = compass;
@@ -940,7 +1010,11 @@ impl Stage {
         before: &(PeripheralState, i32, panel::Accents),
         after: &(PeripheralState, i32, panel::Accents),
     ) {
-        if (panel::Accents { breath: after.2.breath, ..before.2 }) != after.2 {
+        if (panel::Accents {
+            breath: after.2.breath,
+            ..before.2
+        }) != after.2
+        {
             self.changed.make_full();
             return;
         }
@@ -952,7 +1026,9 @@ impl Stage {
             return;
         }
         for cell in Cell::ALL {
-            if panel::in_view(cell.page(), after.1) && panel::cell_changed(cell, &before.0, &after.0) {
+            if panel::in_view(cell.page(), after.1)
+                && panel::cell_changed(cell, &before.0, &after.0)
+            {
                 self.changed.add(panel::cell_damage(cell, after.1));
             }
         }
@@ -960,7 +1036,13 @@ impl Stage {
 
     /// Sends a gesture to what it acts on: the pager or the panel's travel on the faces, the
     /// grid on the open panel, or the screen the panel opened.
-    fn route_event(&mut self, event: &GestureEvent, now: Micros, effects: &mut Effects, update: &mut Update) {
+    fn route_event(
+        &mut self,
+        event: &GestureEvent,
+        now: Micros,
+        effects: &mut Effects,
+        update: &mut Update,
+    ) {
         if let Some((page, _)) = &mut self.page {
             let next = page.handle(event, &self.peripherals, effects);
             match next {
@@ -988,7 +1070,8 @@ impl Stage {
                     Route::Sheet => self.sheet.grab(&drag),
                     Route::Grid => {
                         self.grid.grabbed = Some(self.grid.scroll);
-                        self.grid.scroll = (self.grid.scroll - drag.offset().x).clamp(0, panel::MAX_SCROLL);
+                        self.grid.scroll =
+                            (self.grid.scroll - drag.offset().x).clamp(0, panel::MAX_SCROLL);
                     }
                     Route::Nowhere => {}
                 }
@@ -1003,14 +1086,12 @@ impl Stage {
                 }
                 _ => {}
             },
-            GestureEvent::DragEnd(drag) => {
-                match self.route.take() {
-                    Some(Route::Pager) => self.pager.handle(event, now),
-                    Some(Route::Sheet) => self.sheet.release(&drag, now),
-                    Some(Route::Grid) => self.release_grid(&drag, now),
-                    _ => {}
-                }
-            }
+            GestureEvent::DragEnd(drag) => match self.route.take() {
+                Some(Route::Pager) => self.pager.handle(event, now),
+                Some(Route::Sheet) => self.sheet.release(&drag, now),
+                Some(Route::Grid) => self.release_grid(&drag, now),
+                _ => {}
+            },
             GestureEvent::Tap(point) => {
                 if self.sheet.is_open() {
                     self.tap_panel(point, now, update);
@@ -1054,7 +1135,8 @@ impl Stage {
         } else {
             (scroll + panel::PAGE_WIDTH / 2).div_euclid(panel::PAGE_WIDTH)
         };
-        self.grid.snap_to((page * panel::PAGE_WIDTH).clamp(0, panel::MAX_SCROLL), now);
+        self.grid
+            .snap_to((page * panel::PAGE_WIDTH).clamp(0, panel::MAX_SCROLL), now);
     }
 
     fn tap_panel(&mut self, point: Point, now: Micros, update: &mut Update) {
@@ -1062,10 +1144,14 @@ impl Stage {
         let Some(cell) = panel::cell_at(point, scroll) else {
             return;
         };
-        if !panel::in_view(cell.page(), scroll) { return; }
+        if !panel::in_view(cell.page(), scroll) {
+            return;
+        }
         let page = match cell {
             Cell::Zone => Page::Picker(Picker::new(&self.peripherals)),
-            Cell::Brightness => Page::Brightness(second::Brightness::new(self.peripherals.brightness)),
+            Cell::Brightness => {
+                Page::Brightness(second::Brightness::new(self.peripherals.brightness))
+            }
             Cell::Timeout => Page::Timeout(second::TimeoutChooser::new(self.peripherals.timeout)),
             Cell::AlwaysOn => {
                 let on = !self.peripherals.always_on;
@@ -1106,7 +1192,12 @@ impl Stage {
                 self.level = level;
                 update.brightness = Some(level);
             }
-            Store::ManualZone(id) => zone = ZoneState { mode: ZoneMode::Manual, zone: Some(id) },
+            Store::ManualZone(id) => {
+                zone = ZoneState {
+                    mode: ZoneMode::Manual,
+                    zone: Some(id),
+                }
+            }
             Store::AutomaticZone => zone.mode = ZoneMode::Automatic,
             Store::Timeout(timeout) => self.peripherals.timeout = timeout,
             Store::AlwaysOn(on) => self.peripherals.always_on = on,
@@ -1143,13 +1234,18 @@ impl Stage {
         let entry = match self.panel_settled {
             Some(settled) => {
                 let at = |delay: Micros| Some(settled + delay);
-                let cell = |start: Micros, i: usize| Some(settled + start + PANEL_STAGGER * i as Micros);
+                let cell =
+                    |start: Micros, i: usize| Some(settled + start + PANEL_STAGGER * i as Micros);
                 panel::Accents {
                     title: progress(now, at(0), PANEL_TITLE_REVEAL),
                     rules: progress(now, at(PANEL_RULES), PANEL_RULES_DRAW),
                     rows: core::array::from_fn(|i| rows_built(now, cell(PANEL_ICON, i))),
-                    index: core::array::from_fn(|i| progress(now, cell(PANEL_INDEX, i), PANEL_INDEX_REVEAL)),
-                    name: core::array::from_fn(|i| progress(now, cell(PANEL_NAME, i), PANEL_NAME_REVEAL)),
+                    index: core::array::from_fn(|i| {
+                        progress(now, cell(PANEL_INDEX, i), PANEL_INDEX_REVEAL)
+                    }),
+                    name: core::array::from_fn(|i| {
+                        progress(now, cell(PANEL_NAME, i), PANEL_NAME_REVEAL)
+                    }),
                     markers: now >= settled + PANEL_MARKERS,
                     hint: progress(now, at(PANEL_HINT), PANEL_HINT_REVEAL),
                     scatter: progress(now, at(0), PANEL_SCATTER_BLOOM),
@@ -1158,7 +1254,12 @@ impl Stage {
             }
             None => panel::Accents::HIDDEN,
         };
-        self.fading |= self.panel_settled.is_some() && entry != panel::Accents { breath: entry.breath, ..panel::Accents::FULL };
+        self.fading |= self.panel_settled.is_some()
+            && entry
+                != panel::Accents {
+                    breath: entry.breath,
+                    ..panel::Accents::FULL
+                };
         self.breathing |= self.panel_settled.is_some() && self.rest == Rest::Awake;
         // Going up, the accents follow the panel's offset, so reversing a drag restores them.
         let p = swipe_progress(self.sheet.height() - self.sheet.offset());
@@ -1179,7 +1280,6 @@ impl Stage {
     /// Advances the compass page's builds and reveals to `now`, and returns how far each has
     /// come.
     fn compass_accents(&mut self, now: Micros) -> Accents {
-
         if self.screen != Screen::Compass {
             self.compass_settled = None;
             self.top_edge_since = None;
@@ -1187,7 +1287,11 @@ impl Stage {
         }
         let offset = self.face_offset();
         let mode = Mode::of(&self.peripherals.compass);
-        let CompassSettled { times, shown, change } = match &mut self.compass_settled {
+        let CompassSettled {
+            times,
+            shown,
+            change,
+        } = match &mut self.compass_settled {
             Some(settled) => settled,
             None if offset == 0 => {
                 let from = now.max(self.entry_from);
@@ -1338,7 +1442,10 @@ impl Stage {
                     && times.plate.is_none_or(|start| start <= now)
                 {
                     times.plate = Some(now);
-                    restart(&mut times.zone, now + (CLOCK_ENTRY.zone - CLOCK_ENTRY.plate));
+                    restart(
+                        &mut times.zone,
+                        now + (CLOCK_ENTRY.zone - CLOCK_ENTRY.plate),
+                    );
                 }
             }
             *shown = keys;
@@ -1353,14 +1460,25 @@ impl Stage {
                 }
             };
             // Dashes and faults replace the time at once.
-            settled.retyped = if replaced { Some(now) } else { settled.retyped.filter(|_| time.is_some()) };
+            settled.retyped = if replaced {
+                Some(now)
+            } else {
+                settled.retyped.filter(|_| time.is_some())
+            };
             settled.time = time.map(|time| (time, now));
         }
         let times = &settled.times;
         let retyped = settled.retyped;
-        let icon = 1.0 - libm::powf(1.0 - f32::from(progress(now, times.icon, CLOCK_ICON_BUILD)) / 255.0, 3.0);
+        let icon = 1.0
+            - libm::powf(
+                1.0 - f32::from(progress(now, times.icon, CLOCK_ICON_BUILD)) / 255.0,
+                3.0,
+            );
         let exposed = libm::roundf(self.charge.exposed(now) * 255.0) as u8;
-        let lit = matches!(self.rest, Rest::Awake | Rest::Dimmed { .. } | Rest::Darkening { .. });
+        let lit = matches!(
+            self.rest,
+            Rest::Awake | Rest::Dimmed { .. } | Rest::Darkening { .. }
+        );
         let entry = Accents {
             icon_rows: libm::roundf(5.0 * icon) as u8,
             label: progress(now, times.label, CLOCK_LABEL_REVEAL),
@@ -1370,13 +1488,26 @@ impl Stage {
             scatter: progress(now, times.scatter, CLOCK_SCATTER_BLOOM),
             battery: progress(now, times.battery, CLOCK_BATTERY_RISE),
             time: progress(now, retyped, CLOCK_TIME_REVEAL),
-            date: progress(now, retyped.map(|start| start + CLOCK_DATE_DELAY), CLOCK_DATE_REVEAL),
-            bands: if exposed > 0 { self.charge.phase(now) } else { 0 },
+            date: progress(
+                now,
+                retyped.map(|start| start + CLOCK_DATE_DELAY),
+                CLOCK_DATE_REVEAL,
+            ),
+            bands: if exposed > 0 {
+                self.charge.phase(now)
+            } else {
+                0
+            },
             exposed,
             breath: self.breath,
         };
-        self.fading |=
-            entry != Accents { bands: entry.bands, exposed: entry.exposed, breath: entry.breath, ..Accents::FULL };
+        self.fading |= entry
+            != Accents {
+                bands: entry.bands,
+                exposed: entry.exposed,
+                breath: entry.breath,
+                ..Accents::FULL
+            };
         self.breathing |= self.rest == Rest::Awake;
         self.gauge_moving |= lit && self.charge.is_moving(now);
         let p = swipe_progress(offset);
@@ -1409,11 +1540,13 @@ impl Stage {
                 clock: &self.peripherals.clock,
                 firmware: self.peripherals.firmware,
             };
-            startup::draw(view, startup, &context, &self.renderer, target).expect("drawing the start-up failed");
+            startup::draw(view, startup, &context, &self.renderer, target)
+                .expect("drawing the start-up failed");
             return;
         }
         if let (Rest::AlwaysOn, Some(view)) = (self.rest, &self.drawn_always_on) {
-            always_on::draw(view, &self.renderer, target).expect("drawing the always-on face failed");
+            always_on::draw(view, &self.renderer, target)
+                .expect("drawing the always-on face failed");
             return;
         }
         if let Some((page, _)) = &self.page {

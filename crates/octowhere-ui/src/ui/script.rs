@@ -48,7 +48,13 @@ impl<'a> Driver<'a> {
 
     /// A driver whose stage opens on the start-up sequence.
     pub fn starting() -> Self {
-        Self { stage: Stage::starting(PeripheralState { firmware: "0.1.0", ..PeripheralState::default() }), ..Self::new() }
+        Self {
+            stage: Stage::starting(PeripheralState {
+                firmware: "0.1.0",
+                ..PeripheralState::default()
+            }),
+            ..Self::new()
+        }
     }
 
     pub fn on(screen: Screen) -> Self {
@@ -81,7 +87,10 @@ impl<'a> Driver<'a> {
     /// Advances the clock a frame and steps `input` in at the new time.
     pub fn step(&mut self, input: Input) -> Update {
         self.now += FRAME;
-        let mut input = Input { now: self.now, ..input };
+        let mut input = Input {
+            now: self.now,
+            ..input
+        };
         if let Some(motion) = input.motion {
             self.motion = Some(motion);
         }
@@ -92,10 +101,14 @@ impl<'a> Driver<'a> {
             self.sensors = Some((sensors, self.now));
         } else if let Some((sensors, since)) = self.sensors {
             let elapsed = self.now - since;
-            let due = self.clock_runs && elapsed / SENSOR_PERIOD != (elapsed - FRAME) / SENSOR_PERIOD;
+            let due =
+                self.clock_runs && elapsed / SENSOR_PERIOD != (elapsed - FRAME) / SENSOR_PERIOD;
             if due && !sensors.clock.stopped {
                 let mut advanced = sensors;
-                advanced.clock.utc = sensors.clock.utc.map(|utc| utc + (elapsed / SENSOR_PERIOD) as i64);
+                advanced.clock.utc = sensors
+                    .clock
+                    .utc
+                    .map(|utc| utc + (elapsed / SENSOR_PERIOD) as i64);
                 input.sensors = Some(advanced);
             }
         }
@@ -111,7 +124,10 @@ impl<'a> Driver<'a> {
     }
 
     pub fn read(&mut self, touch: Touch) -> Update {
-        self.step(Input { touch: Some(touch), ..Input::default() })
+        self.step(Input {
+            touch: Some(touch),
+            ..Input::default()
+        })
     }
 
     pub fn cover(&mut self) -> Update {
@@ -119,16 +135,25 @@ impl<'a> Driver<'a> {
     }
 
     pub fn motion(&mut self, motion: Motion) -> Update {
-        self.step(Input { motion: Some(motion), ..Input::default() })
+        self.step(Input {
+            motion: Some(motion),
+            ..Input::default()
+        })
     }
 
     pub fn sensors(&mut self, sensors: Sensors) -> Update {
-        self.step(Input { sensors: Some(sensors), ..Input::default() })
+        self.step(Input {
+            sensors: Some(sensors),
+            ..Input::default()
+        })
     }
 
     /// Reports how boot left `part`.
     pub fn boot(&mut self, part: Part, outcome: Outcome) -> Update {
-        self.step(Input { boot: Some(Report { part, outcome }), ..Input::default() })
+        self.step(Input {
+            boot: Some(Report { part, outcome }),
+            ..Input::default()
+        })
     }
 
     /// Steps without input for at least `duration`.
@@ -152,7 +177,9 @@ impl<'a> Driver<'a> {
     /// A stroke in a straight line from `from` to `to`, taking `duration` before the lift.
     pub fn swipe(&mut self, from: Point, to: Point, duration: Micros) -> Vec<Update> {
         let steps = frames(duration) as i32;
-        let path: Vec<_> = (0..=steps).map(|step| from + (to - from) * step / steps).collect();
+        let path: Vec<_> = (0..=steps)
+            .map(|step| from + (to - from) * step / steps)
+            .collect();
         self.stroke(&path)
     }
 

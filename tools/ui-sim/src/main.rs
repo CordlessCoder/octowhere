@@ -106,15 +106,37 @@ struct Readings {
 
 /// The supplies B steps through.
 const BATTERIES: [Option<Battery>; 3] = [
-    Some(Battery { present: true, percent: 87, millivolts: 4020, charging: true, usb: true }),
-    Some(Battery { present: true, percent: 64, millivolts: 3850, charging: false, usb: false }),
-    Some(Battery { present: false, percent: 0, millivolts: 0, charging: false, usb: true }),
+    Some(Battery {
+        present: true,
+        percent: 87,
+        millivolts: 4020,
+        charging: true,
+        usb: true,
+    }),
+    Some(Battery {
+        present: true,
+        percent: 64,
+        millivolts: 3850,
+        charging: false,
+        usb: false,
+    }),
+    Some(Battery {
+        present: false,
+        percent: 0,
+        millivolts: 0,
+        charging: false,
+        usb: true,
+    }),
 ];
 
 /// The clock's states R steps through: whether GNSS has set it, whether it stopped, and whether
 /// it can be read.
-const CLOCKS: [(bool, bool, bool); 4] =
-    [(true, false, true), (false, false, true), (false, true, true), (false, false, false)];
+const CLOCKS: [(bool, bool, bool); 4] = [
+    (true, false, true),
+    (false, false, true),
+    (false, true, true),
+    (false, false, false),
+];
 
 /// The zones Z steps through, and whether each was chosen by hand. `None` is automatic mode
 /// before any fix.
@@ -255,7 +277,11 @@ impl Panel {
     fn compose(&mut self, now: u64) {
         self.pixels.copy_from_slice(&self.base);
         if self.light < 1.0 {
-            let panel = self.pixels.iter_mut().zip(&self.mask).filter(|(_, on)| **on || !self.masked);
+            let panel = self
+                .pixels
+                .iter_mut()
+                .zip(&self.mask)
+                .filter(|(_, on)| **on || !self.masked);
             for (pixel, _) in panel {
                 let [_, r, g, b] = pixel.to_be_bytes();
                 let dim = |channel: u8| (f32::from(channel) * self.light) as u8;
@@ -324,7 +350,11 @@ impl Panel {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let after = |flag: &str| args.iter().position(|arg| arg == flag).map(|at| &args[at + 1..]);
+    let after = |flag: &str| {
+        args.iter()
+            .position(|arg| arg == flag)
+            .map(|at| &args[at + 1..])
+    };
     let masked = after("--unmasked").is_none();
     if after("--scenes").is_some() {
         for scene in scenes::SCENES {
@@ -333,16 +363,23 @@ fn main() {
         return;
     }
     if let Some(rest) = after("--record") {
-        let [name, out, ..] = rest else { panic!("--record takes a scene and an output path") };
+        let [name, out, ..] = rest else {
+            panic!("--record takes a scene and an output path")
+        };
         let out = PathBuf::from(out);
-        assert!(record::Format::of(&out).is_some(), "--record writes a .gif or an .mp4");
+        assert!(
+            record::Format::of(&out).is_some(),
+            "--record writes a .gif or an .mp4"
+        );
         record(scenes::find(name), out, masked);
         return;
     }
-    let scene = after("--play").map(|rest| {
-        scenes::find(rest.first().expect("--play takes a scene"))
-    });
-    let scale = match after("--scale").and_then(|rest| rest.first()).map(String::as_str) {
+    let scene =
+        after("--play").map(|rest| scenes::find(rest.first().expect("--play takes a scene")));
+    let scale = match after("--scale")
+        .and_then(|rest| rest.first())
+        .map(String::as_str)
+    {
         None | Some("1") => Scale::X1,
         Some("2") => Scale::X2,
         Some("4") => Scale::X4,
@@ -360,7 +397,15 @@ fn main() {
     .expect("opening the window");
     match scene {
         Some(scene) => play(&mut window, scene, masked),
-        None => interact(window, masked, if after("--mp4").is_some() { "mp4" } else { "gif" }),
+        None => interact(
+            window,
+            masked,
+            if after("--mp4").is_some() {
+                "mp4"
+            } else {
+                "gif"
+            },
+        ),
     }
 }
 
@@ -386,30 +431,36 @@ fn record(scene: &scenes::Scene, path: PathBuf, masked: bool) {
         last = now;
         let now = played;
         match &mut recording {
-        None => {
-            panel.draw(stage, true);
-            panel.touch(stage, now);
-            // The column shows in every frame.
-            let knock_out = panel.knock_out().map(|mask| {
-                mask.as_chunks::<WIDTH>().0.iter()
-                    .flat_map(|row| row.iter().copied().chain(std::iter::repeat_n(true, width - WIDTH)))
-                    .collect::<Vec<_>>()
-            });
-            recording = Some(record::Recording::start(
-                path.clone(),
-                now,
-                width,
-                &frame(&panel, &mut column),
-                knock_out.as_deref(),
-            ));
-        }
-        Some(recording) => {
-            // Samples due before this step show the step before.
-            recording.sample(now - 1, &frame(&panel, &mut column));
-            panel.draw(stage, false);
-            panel.touch(stage, now);
-            recording.sample(now, &frame(&panel, &mut column));
-        }
+            None => {
+                panel.draw(stage, true);
+                panel.touch(stage, now);
+                // The column shows in every frame.
+                let knock_out = panel.knock_out().map(|mask| {
+                    mask.as_chunks::<WIDTH>()
+                        .0
+                        .iter()
+                        .flat_map(|row| {
+                            row.iter()
+                                .copied()
+                                .chain(std::iter::repeat_n(true, width - WIDTH))
+                        })
+                        .collect::<Vec<_>>()
+                });
+                recording = Some(record::Recording::start(
+                    path.clone(),
+                    now,
+                    width,
+                    &frame(&panel, &mut column),
+                    knock_out.as_deref(),
+                ));
+            }
+            Some(recording) => {
+                // Samples due before this step show the step before.
+                recording.sample(now - 1, &frame(&panel, &mut column));
+                panel.draw(stage, false);
+                panel.touch(stage, now);
+                recording.sample(now, &frame(&panel, &mut column));
+            }
         }
     });
     (scene.run)(&mut driver);
@@ -427,7 +478,9 @@ fn play(window: &mut Window, scene: &scenes::Scene, masked: bool) {
         if !window.is_open() || window.is_key_down(Key::Escape) {
             std::process::exit(0);
         }
-        window.update_with_buffer(pixels, WIDTH, HEIGHT).expect("updating the window");
+        window
+            .update_with_buffer(pixels, WIDTH, HEIGHT)
+            .expect("updating the window");
     };
     loop {
         let mut panel = Panel::new(masked);
@@ -459,7 +512,10 @@ fn play(window: &mut Window, scene: &scenes::Scene, masked: bool) {
 fn interact(mut window: Window, masked: bool, extension: &str) {
     window.set_target_fps(60);
 
-    let mut stage = Stage::new(PeripheralState { firmware: "0.1.0", ..PeripheralState::default() });
+    let mut stage = Stage::new(PeripheralState {
+        firmware: "0.1.0",
+        ..PeripheralState::default()
+    });
     let mut readings = Readings {
         heading: 37.0,
         pitch: 0,
@@ -539,7 +595,12 @@ fn interact(mut window: Window, masked: bool, extension: &str) {
 
         let motion_due = now >= next_motion || readings_changed;
         if motion_due {
-            next_motion = now + if samples_fast { FAST_SAMPLE_US } else { SLOW_SAMPLE_US };
+            next_motion = now
+                + if samples_fast {
+                    FAST_SAMPLE_US
+                } else {
+                    SLOW_SAMPLE_US
+                };
             readings_changed = false;
         }
         let sensors_due = now >= next_sensors || zone_changed;
@@ -575,8 +636,10 @@ fn interact(mut window: Window, masked: bool, extension: &str) {
             // As the sensor task takes the choice and reports it from then on.
             if !matches!(store, Store::Brightness(_)) {
                 let zone = stage.peripherals().clock.zone();
-                readings.chosen =
-                    Some(ZoneState { zone: zone.zone.or(readings.zone_state().zone), ..zone });
+                readings.chosen = Some(ZoneState {
+                    zone: zone.zone.or(readings.zone_state().zone),
+                    ..zone
+                });
                 zone_changed = true;
             }
         }
@@ -592,7 +655,11 @@ fn interact(mut window: Window, masked: bool, extension: &str) {
             redraw = false;
         }
         if title_changed {
-            let recording = if recording.is_some() { " [recording]" } else { "" };
+            let recording = if recording.is_some() {
+                " [recording]"
+            } else {
+                ""
+            };
             let unmasked = if panel.masked { "" } else { " [unmasked]" };
             window.set_title(&format!("{drawn}{unmasked}{recording}"));
             title_changed = false;

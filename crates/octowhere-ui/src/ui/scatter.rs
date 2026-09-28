@@ -76,14 +76,22 @@ impl Scatter {
         origin: Point::new(12, -2),
         gap: Some((197..=317, 2)),
         color: chrome::PURPLE,
-        fields: &[Field { center: Point::new(233, 233), radius: 228.0, seed: 0x6f63_7477 }],
+        fields: &[Field {
+            center: Point::new(233, 233),
+            radius: 228.0,
+            seed: 0x6f63_7477,
+        }],
     };
 
     /// Draws the marks, with `looks` giving each field's look in order. The identity runs at a
     /// density of 1.15.
     ///
     /// Points whose marks the target would not show are skipped before any arithmetic.
-    pub fn draw<D: CoverageTarget<Color = Color>>(&self, looks: &[Look], target: &mut D) -> Result<(), D::Error> {
+    pub fn draw<D: CoverageTarget<Color = Color>>(
+        &self,
+        looks: &[Look],
+        target: &mut D,
+    ) -> Result<(), D::Error> {
         self.draw_clear_of(looks, &[], target)
     }
 
@@ -96,20 +104,37 @@ impl Scatter {
     ) -> Result<(), D::Error> {
         let mut result = Ok(());
         let visible = |target: &mut D, area: Rectangle| target.visible(&area);
-        self.each_shown(looks, clear, target, visible, |target, _, corner, hollow| {
-            if result.is_err() {
-                return;
-            }
-            result = if hollow {
-                [((0, 0), (6, 2)), ((0, 4), (6, 2)), ((0, 2), (2, 2)), ((4, 2), (2, 2))].into_iter().try_for_each(
-                    |(offset, size)| {
-                        target.fill_solid(&Rectangle::new(corner + Point::from(offset), Size::from(size)), self.color)
-                    },
-                )
-            } else {
-                target.fill_solid(&Rectangle::new(corner + Point::new(1, 1), Size::new_equal(4)), self.color)
-            };
-        });
+        self.each_shown(
+            looks,
+            clear,
+            target,
+            visible,
+            |target, _, corner, hollow| {
+                if result.is_err() {
+                    return;
+                }
+                result = if hollow {
+                    [
+                        ((0, 0), (6, 2)),
+                        ((0, 4), (6, 2)),
+                        ((0, 2), (2, 2)),
+                        ((4, 2), (2, 2)),
+                    ]
+                    .into_iter()
+                    .try_for_each(|(offset, size)| {
+                        target.fill_solid(
+                            &Rectangle::new(corner + Point::from(offset), Size::from(size)),
+                            self.color,
+                        )
+                    })
+                } else {
+                    target.fill_solid(
+                        &Rectangle::new(corner + Point::new(1, 1), Size::new_equal(4)),
+                        self.color,
+                    )
+                };
+            },
+        );
         result
     }
 
@@ -123,20 +148,33 @@ impl Scatter {
     #[must_use]
     pub fn shown_clear_of(&self, looks: &[Look], clear: &[Rectangle]) -> Shown {
         let words = (self.columns() * self.rows()).cast_unsigned().div_ceil(32) as usize;
-        let mut shown = Shown { shown: vec![0; words], hollow: vec![0; words] };
-        self.each_shown(looks, clear, &mut shown, |_, _| true, |shown, point, _, hollow| {
-            shown.shown[point / 32] |= 1 << (point % 32);
-            if hollow {
-                shown.hollow[point / 32] |= 1 << (point % 32);
-            }
-        });
+        let mut shown = Shown {
+            shown: vec![0; words],
+            hollow: vec![0; words],
+        };
+        self.each_shown(
+            looks,
+            clear,
+            &mut shown,
+            |_, _| true,
+            |shown, point, _, hollow| {
+                shown.shown[point / 32] |= 1 << (point % 32);
+                if hollow {
+                    shown.hollow[point / 32] |= 1 << (point % 32);
+                }
+            },
+        );
         shown
     }
 
     /// Adds the cell of every point that shows in one of `before` and `after` and not the other,
     /// or shows in both with a different mark.
     pub fn changed(&self, before: &Shown, after: &Shown, changed: &mut Dirty) {
-        let words = before.shown.iter().zip(&after.shown).zip(before.hollow.iter().zip(&after.hollow));
+        let words = before
+            .shown
+            .iter()
+            .zip(&after.shown)
+            .zip(before.hollow.iter().zip(&after.hollow));
         for (word, ((a, b), (hollow_a, hollow_b))) in words.enumerate() {
             let mut differ = (a ^ b) | (hollow_a ^ hollow_b);
             while differ != 0 {
@@ -162,7 +200,10 @@ impl Scatter {
     fn corner(&self, y: i32, column: i32) -> Point {
         let below = self.gap.as_ref().is_some_and(|(rows, _)| y > *rows.end());
         let shift = self.gap.as_ref().map_or(0, |(_, shift)| *shift);
-        Point::new(self.origin.x + column * PITCH, if below { y + shift } else { y })
+        Point::new(
+            self.origin.x + column * PITCH,
+            if below { y + shift } else { y },
+        )
     }
 
     /// Calls `mark` with the index, the mark's top-left corner and whether it is hollow for
@@ -180,7 +221,10 @@ impl Scatter {
         mut mark: impl FnMut(&mut T, usize, Point, bool),
     ) {
         debug_assert_eq!(looks.len(), self.fields.len());
-        let turns: Vec<(f32, f32)> = looks.iter().map(|look| (libm::sinf(look.facing), libm::cosf(look.facing))).collect();
+        let turns: Vec<(f32, f32)> = looks
+            .iter()
+            .map(|look| (libm::sinf(look.facing), libm::cosf(look.facing)))
+            .collect();
         let half = MARK / 2;
         let columns = self.columns();
         let mut spans: Vec<Option<(i32, i32)>> = vec![None; self.fields.len()];
@@ -194,7 +238,13 @@ impl Scatter {
             }
             let top = self.corner(y, 0).y;
             // A row the target would not show costs no arithmetic at all.
-            if !wanted(state, Rectangle::new(Point::new(0, top), Size::new(DISPLAY_SIZE.width, MARK as u32))) {
+            if !wanted(
+                state,
+                Rectangle::new(
+                    Point::new(0, top),
+                    Size::new(DISPLAY_SIZE.width, MARK as u32),
+                ),
+            ) {
                 continue;
             }
             // Each field's columns whose centres can lie inside; the test on each point settles
@@ -207,7 +257,8 @@ impl Scatter {
                     let chord = libm::sqrtf(room);
                     let offset = (field.center.x - self.origin.x - half) as f32;
                     let first = (libm::floorf((offset - chord) / PITCH as f32) as i32).max(0);
-                    let last = (libm::ceilf((offset + chord) / PITCH as f32) as i32).min(columns - 1);
+                    let last =
+                        (libm::ceilf((offset + chord) / PITCH as f32) as i32).min(columns - 1);
                     (first, last)
                 });
                 if let Some((first, last)) = *span {
@@ -262,7 +313,10 @@ impl Scatter {
                     let turn = 0.45 + 0.55 * toward;
                     if number(field.seed, n) < radial * turn * look.density {
                         // Checked only for a point that shows, as few do.
-                        if !clear.iter().any(|keep| !keep.intersection(&cell).is_zero_sized()) {
+                        if !clear
+                            .iter()
+                            .any(|keep| !keep.intersection(&cell).is_zero_sized())
+                        {
                             mark(state, point, corner, number(field.seed, n + 1) < HOLLOW);
                         }
                         break;
@@ -316,7 +370,13 @@ mod tests {
 
     fn each(scatter: &Scatter, looks: &[Look]) -> Vec<(Point, bool)> {
         let mut shown = Vec::new();
-        scatter.each_shown(looks, &[], &mut shown, |_, _| true, |shown, _, corner, hollow| shown.push((corner, hollow)));
+        scatter.each_shown(
+            looks,
+            &[],
+            &mut shown,
+            |_, _| true,
+            |shown, _, corner, hollow| shown.push((corner, hollow)),
+        );
         shown
     }
 
@@ -342,17 +402,29 @@ mod tests {
                     }
                 }
                 let half = MARK / 2;
-                let (dx, dy) = ((x + half - field.center.x) as f32, (y + half - field.center.y) as f32);
+                let (dx, dy) = (
+                    (x + half - field.center.x) as f32,
+                    (y + half - field.center.y) as f32,
+                );
                 let r = libm::sqrtf(dx * dx + dy * dy);
                 if r > field.radius {
                     continue;
                 }
                 let radial = 0.45 + 0.55 * ((r - 40.0) / 180.0).clamp(0.0, 1.0);
-                let toward = if r > 0.0 { (dx * cos + dy * sin) / r } else { 0.0 };
+                let toward = if r > 0.0 {
+                    (dx * cos + dy * sin) / r
+                } else {
+                    0.0
+                };
                 let turn = 0.45 + 0.55 * toward;
-                let inside = [(x, top), (x + MARK, top), (x, top + MARK), (x + MARK, top + MARK)]
-                    .iter()
-                    .all(|&(cx, cy)| (cx - GLASS).pow(2) + (cy - GLASS).pow(2) <= GLASS * GLASS);
+                let inside = [
+                    (x, top),
+                    (x + MARK, top),
+                    (x, top + MARK),
+                    (x + MARK, top + MARK),
+                ]
+                .iter()
+                .all(|&(cx, cy)| (cx - GLASS).pow(2) + (cy - GLASS).pow(2) <= GLASS * GLASS);
                 if v < radial * turn * look.density && inside {
                     shown.push((Point::new(x, top), kind < HOLLOW));
                 }
@@ -365,23 +437,67 @@ mod tests {
     fn the_identity_shows_the_marks_it_was_designed_with() {
         // The identity's facings and densities, and a full turn beyond them.
         for step in 0..160 {
-            let look = Look { facing: 0.8 + 0.055 * step as f32, density: 1.15 * (0.5 + step.min(6) as f32 / 12.0) };
-            assert_eq!(each(&Scatter::IDENTITY, &[look]), reference(&Scatter::IDENTITY, look), "step {step}");
+            let look = Look {
+                facing: 0.8 + 0.055 * step as f32,
+                density: 1.15 * (0.5 + step.min(6) as f32 / 12.0),
+            };
+            assert_eq!(
+                each(&Scatter::IDENTITY, &[look]),
+                reference(&Scatter::IDENTITY, look),
+                "step {step}"
+            );
         }
     }
 
-    const UPPER: Field = Field { center: Point::new(270, 145), radius: 150.0, seed: 1 };
+    const UPPER: Field = Field {
+        center: Point::new(270, 145),
+        radius: 150.0,
+        seed: 1,
+    };
     // Closer than the identity's two, so that many points fall in both.
-    const LOWER: Field = Field { center: Point::new(200, 240), radius: 150.0, seed: 2 };
-    const TWO: Scatter = Scatter { origin: Point::new(12, -2), gap: None, color: chrome::PURPLE, fields: &[UPPER, LOWER] };
-    const LOOKS: [Look; 2] = [Look { facing: -0.65, density: 0.9 }, Look { facing: -0.65, density: 0.9 }];
+    const LOWER: Field = Field {
+        center: Point::new(200, 240),
+        radius: 150.0,
+        seed: 2,
+    };
+    const TWO: Scatter = Scatter {
+        origin: Point::new(12, -2),
+        gap: None,
+        color: chrome::PURPLE,
+        fields: &[UPPER, LOWER],
+    };
+    const LOOKS: [Look; 2] = [
+        Look {
+            facing: -0.65,
+            density: 0.9,
+        },
+        Look {
+            facing: -0.65,
+            density: 0.9,
+        },
+    ];
 
     #[test]
     fn fields_show_their_own_marks_and_the_first_wins_where_they_overlap() {
-        let upper = each(&Scatter { fields: &[UPPER], ..TWO }, &LOOKS[..1]);
-        let lower = each(&Scatter { fields: &[LOWER], ..TWO }, &LOOKS[1..]);
+        let upper = each(
+            &Scatter {
+                fields: &[UPPER],
+                ..TWO
+            },
+            &LOOKS[..1],
+        );
+        let lower = each(
+            &Scatter {
+                fields: &[LOWER],
+                ..TWO
+            },
+            &LOOKS[1..],
+        );
         let overlap = |corner: &Point| upper.iter().any(|(other, _)| other == corner);
-        assert!(lower.iter().any(|(corner, _)| overlap(corner)), "the fields overlap");
+        assert!(
+            lower.iter().any(|(corner, _)| overlap(corner)),
+            "the fields overlap"
+        );
         let mut expected = upper.clone();
         expected.extend(lower.iter().filter(|(corner, _)| !overlap(corner)));
         expected.sort_by_key(|(corner, _)| (corner.y, corner.x));
@@ -401,7 +517,13 @@ mod tests {
         TWO.changed(&before, &after, &mut changed);
         let mut expected = Dirty::default();
         let (row, column) = (point as i32 / TWO.columns(), point as i32 % TWO.columns());
-        expected.add(Rectangle::new(TWO.corner(TWO.origin.y + row * PITCH, column), Size::new_equal(MARK as u32)));
-        assert_eq!((changed.bounding_box(), changed.pixels()), (expected.bounding_box(), expected.pixels()));
+        expected.add(Rectangle::new(
+            TWO.corner(TWO.origin.y + row * PITCH, column),
+            Size::new_equal(MARK as u32),
+        ));
+        assert_eq!(
+            (changed.bounding_box(), changed.pixels()),
+            (expected.bounding_box(), expected.pixels())
+        );
     }
 }

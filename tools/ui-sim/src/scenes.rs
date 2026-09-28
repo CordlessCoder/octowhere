@@ -5,16 +5,16 @@ use embedded_graphics::prelude::Point;
 
 use crate::caption::say;
 use octowhere_ui::ui::{
-    panel::Cell,
-    rest::Timeout,
-    screens::PeripheralState,
-    stage::Stage,
     clock::{ClockState, DateTime, ZoneMode, ZoneState},
     compass::CompassView,
     gesture::Micros,
+    panel::Cell,
+    rest::Timeout,
+    screens::PeripheralState,
     screens::{Battery, Gnss, Screen},
-    second::Store,
     script::Driver,
+    second::Store,
+    stage::Stage,
     stage::{Motion, Sensors},
     startup::{Outcome, Part},
 };
@@ -91,10 +91,13 @@ pub const SCENES: &[Scene] = &[
 ];
 
 pub fn find(name: &str) -> &'static Scene {
-    SCENES.iter().find(|scene| scene.name == name).unwrap_or_else(|| {
-        let names: Vec<_> = SCENES.iter().map(|scene| scene.name).collect();
-        panic!("no scene {name}; there are {}", names.join(", "))
-    })
+    SCENES
+        .iter()
+        .find(|scene| scene.name == name)
+        .unwrap_or_else(|| {
+            let names: Vec<_> = SCENES.iter().map(|scene| scene.name).collect();
+            panic!("no scene {name}; there are {}", names.join(", "))
+        })
 }
 
 const fn ms(milliseconds: u64) -> Micros {
@@ -107,18 +110,38 @@ fn dublin() -> Sensors {
     Sensors {
         clock: ClockState {
             utc: Some(
-                DateTime { year: 2026, month: 9, day: 24, hour: 12, minute: 7, second: 42 }
-                    .to_unix(),
+                DateTime {
+                    year: 2026,
+                    month: 9,
+                    day: 24,
+                    hour: 12,
+                    minute: 7,
+                    second: 42,
+                }
+                .to_unix(),
             ),
             set_from_gnss: true,
             stopped: false,
         },
         zone: ZoneState {
             mode: ZoneMode::Automatic,
-            zone: octowhere_ui::tz::DATABASE.find("Europe/Dublin").map(|zone| zone.id),
+            zone: octowhere_ui::tz::DATABASE
+                .find("Europe/Dublin")
+                .map(|zone| zone.id),
         },
-        battery: Some(Battery { present: true, percent: 87, millivolts: 4020, charging: true, usb: true }),
-        gnss: Gnss { fix: true, in_use: 9, in_view: 14, position: Some((533_498_000, -62_603_000)) },
+        battery: Some(Battery {
+            present: true,
+            percent: 87,
+            millivolts: 4020,
+            charging: true,
+            usb: true,
+        }),
+        gnss: Gnss {
+            fix: true,
+            in_use: 9,
+            in_view: 14,
+            position: Some((533_498_000, -62_603_000)),
+        },
     }
 }
 
@@ -149,11 +172,17 @@ fn swing(t: f32) -> f32 {
 /// A device held in the hand: a slow drift of pitch and roll about the reading, and of the
 /// heading by a degree or so, at unrelated periods so it never visibly repeats.
 fn hand(mut motion: Motion, now: Micros) -> Motion {
-    let wave = |period: f32, phase: f32| (std::f32::consts::TAU * now as f32 / (period * 1e6) + phase).sin();
+    let wave = |period: f32, phase: f32| {
+        (std::f32::consts::TAU * now as f32 / (period * 1e6) + phase).sin()
+    };
     let compass = &mut motion.compass;
     if compass.live {
-        compass.pitch_deg = compass.pitch_deg.saturating_add((3.0 + 2.5 * wave(3.7, 0.0)).round() as i8);
-        compass.roll_deg = compass.roll_deg.saturating_add((-2.0 + 3.5 * wave(5.3, 1.0)).round() as i8);
+        compass.pitch_deg = compass
+            .pitch_deg
+            .saturating_add((3.0 + 2.5 * wave(3.7, 0.0)).round() as i8);
+        compass.roll_deg = compass
+            .roll_deg
+            .saturating_add((-2.0 + 3.5 * wave(5.3, 1.0)).round() as i8);
         compass.heading_decidegrees = compass.heading_decidegrees.map(|heading| {
             let drift = (12.0 * wave(4.3, 2.0) + 5.0 * wave(1.9, 0.5)).round() as i32;
             (i32::from(heading) + drift).rem_euclid(3600) as u16
@@ -249,7 +278,11 @@ fn top_edge_up() -> Motion {
 /// Facing `degrees` with the top edge raised `pitch` degrees above level. The heading goes
 /// above 78°, where the compass loses it 11.5° from vertical.
 fn raised(degrees: f32, pitch: f32) -> Motion {
-    let mut motion = if pitch > 78.0 { top_edge_up() } else { facing(degrees) };
+    let mut motion = if pitch > 78.0 {
+        top_edge_up()
+    } else {
+        facing(degrees)
+    };
     motion.compass.pitch_deg = pitch.round() as i8;
     motion
 }
@@ -286,14 +319,18 @@ fn compass_states(driver: &mut Driver) {
     driver.wait(ms(1_200));
     driver.motion(facing(120.0));
     driver.wait(ms(800));
-    driver.motion(Motion { compass: CompassView::default() });
+    driver.motion(Motion {
+        compass: CompassView::default(),
+    });
     driver.wait(ms(1_000));
     // Calibration never falls on the device, but going through NO DATA shows both of its rows.
     driver.motion(calibrating(96));
     driver.wait(ms(1_000));
     driver.motion(facing(120.0));
     driver.wait(ms(1_200));
-    driver.motion(Motion { compass: CompassView::default() });
+    driver.motion(Motion {
+        compass: CompassView::default(),
+    });
     driver.wait(ms(1_000));
     driver.motion(facing(120.0));
     driver.wait(ms(1_200));
@@ -309,7 +346,10 @@ const SWIPE: Micros = ms(280);
 /// Dublin's readings at the driver's time, as the clock started by `boot` has run to.
 fn dublin_now(driver: &Driver) -> Sensors {
     let mut sensors = dublin();
-    sensors.clock.utc = sensors.clock.utc.map(|utc| utc + (driver.now() / 1_000_000) as i64);
+    sensors.clock.utc = sensors
+        .clock
+        .utc
+        .map(|utc| utc + (driver.now() / 1_000_000) as i64);
     sensors
 }
 
@@ -331,7 +371,13 @@ fn drain(driver: &mut Driver, from: u8, to: u8, charging: bool) {
     while percent != i16::from(to) {
         percent += step;
         let mut sensors = dublin_now(driver);
-        sensors.battery = Some(Battery { present: true, percent: percent as u8, millivolts: 3_900, charging, usb: charging });
+        sensors.battery = Some(Battery {
+            present: true,
+            percent: percent as u8,
+            millivolts: 3_900,
+            charging,
+            usb: charging,
+        });
         driver.sensors(sensors);
         driver.wait(ms(40));
     }
@@ -356,7 +402,11 @@ fn slow_tap(driver: &mut Driver, x: i32, y: i32) {
 /// Taps a row of the settings panel, turning to its page first.
 fn tap_row(driver: &mut Driver, cell: Cell) {
     if !octowhere_ui::ui::panel::in_view(cell.page(), driver.stage.panel_scroll()) {
-        let (from, to) = if cell.page() == 1 { (380, 80) } else { (80, 380) };
+        let (from, to) = if cell.page() == 1 {
+            (380, 80)
+        } else {
+            (80, 380)
+        };
         driver.swipe(Point::new(from, 250), Point::new(to, 250), SWIPE);
         driver.settle();
         driver.wait(ms(1_200));
@@ -381,61 +431,112 @@ fn close_settings(driver: &mut Driver) {
 fn tour(driver: &mut Driver) {
     use Outcome::Answered;
     say("SELF-TEST. EACH PART OF THE BOARD IS TICKED OFF AS IT ANSWERS.");
-    boot(driver, [
-        (Part::Power, Answered, 150),
-        (Part::Clock, Answered, 250),
-        (Part::Touch, Answered, 500),
-        (Part::Motion, Answered, 600),
-        (Part::Magnet, Answered, 750),
-        (Part::Gnss, Answered, 1_300),
-    ]);
+    boot(
+        driver,
+        [
+            (Part::Power, Answered, 150),
+            (Part::Clock, Answered, 250),
+            (Part::Touch, Answered, 500),
+            (Part::Motion, Answered, 600),
+            (Part::Magnet, Answered, 750),
+            (Part::Gnss, Answered, 1_300),
+        ],
+    );
     driver.motion(facing(37.0));
     driver.wait(ms(1_700).saturating_sub(driver.now()));
     say("EVERY PART ANSWERED, SO THE IDENTITY AND THE LOGO CARD PLAY.");
     while driver.stage.starting_up() {
         driver.wait(ms(100));
     }
-    say("THE CLOCK FACE. THE BLUE ICON MEANS GNSS SET THE TIME, AND THE ZONE CAME FROM THE POSITION.");
+    say(
+        "THE CLOCK FACE. THE BLUE ICON MEANS GNSS SET THE TIME, AND THE ZONE CAME FROM THE POSITION.",
+    );
     driver.wait(ms(5_000));
 
-    show(driver, "RTC. NO FIX SINCE START-UP, SO THE TIME IS THE BOARD'S OWN CLOCK.", |s| {
-        s.clock.set_from_gnss = false;
+    show(
+        driver,
+        "RTC. NO FIX SINCE START-UP, SO THE TIME IS THE BOARD'S OWN CLOCK.",
+        |s| {
+            s.clock.set_from_gnss = false;
+        },
+    );
+    show(
+        driver,
+        "MANUAL. A ZONE CHOSEN BY HAND IN SETTINGS, HERE NEW YORK.",
+        |s| {
+            s.zone = ZoneState {
+                mode: ZoneMode::Manual,
+                zone: octowhere_ui::tz::DATABASE
+                    .find("America/New_York")
+                    .map(|zone| zone.id),
+            };
+        },
+    );
+    show(
+        driver,
+        "STOPPED. THE CLOCK STOPPED SINCE IT WAS LAST SET, SO ITS TIME IS UNRELIABLE.",
+        |s| {
+            s.clock.stopped = true;
+        },
+    );
+    show(
+        driver,
+        "NO ZONE. NO FIX HAS PLACED THE DEVICE YET, SO THE FACE SHOWS UTC.",
+        |s| {
+            s.zone = ZoneState::default();
+        },
+    );
+    show(driver, "NO DATA. THE CLOCK COULD NOT BE READ.", |s| {
+        s.clock.utc = None
     });
-    show(driver, "MANUAL. A ZONE CHOSEN BY HAND IN SETTINGS, HERE NEW YORK.", |s| {
-        s.zone = ZoneState {
-            mode: ZoneMode::Manual,
-            zone: octowhere_ui::tz::DATABASE.find("America/New_York").map(|zone| zone.id),
-        };
-    });
-    show(driver, "STOPPED. THE CLOCK STOPPED SINCE IT WAS LAST SET, SO ITS TIME IS UNRELIABLE.", |s| {
-        s.clock.stopped = true;
-    });
-    show(driver, "NO ZONE. NO FIX HAS PLACED THE DEVICE YET, SO THE FACE SHOWS UTC.", |s| {
-        s.zone = ZoneState::default();
-    });
-    show(driver, "NO DATA. THE CLOCK COULD NOT BE READ.", |s| s.clock.utc = None);
     show(driver, "BACK TO A GNSS FIX.", |_| {});
     // Keeps the minute's timeout from dimming the screen before the swipe to the compass.
     say("A TAP ON THE CLOCK FACE DOES NOTHING BUT KEEP THE SCREEN AWAKE.");
     slow_tap(driver, 233, 400);
 
-    let battery = |percent, charging| Some(Battery { present: true, percent, millivolts: 3_900, charging, usb: charging });
-    show(driver, "THE BATTERY, RIGHT OF THE MINUTES. OFF USB, THE FILL GOES SOLID.", |s| {
-        s.battery = battery(87, false);
-    });
+    let battery = |percent, charging| {
+        Some(Battery {
+            present: true,
+            percent,
+            millivolts: 3_900,
+            charging,
+            usb: charging,
+        })
+    };
+    show(
+        driver,
+        "THE BATTERY, RIGHT OF THE MINUTES. OFF USB, THE FILL GOES SOLID.",
+        |s| {
+            s.battery = battery(87, false);
+        },
+    );
     say("ON BATTERY ALONE, THE FILL FALLS WITH THE CHARGE, HERE TO 64%.");
     drain(driver, 87, 64, false);
     driver.wait(HOLD);
-    show(driver, "PLUGGED IN. THE FILL DRAINS AWAY TO UNEVEN BANDS, WHICH GATHER AND REGROUP, THEN REST FOR FOUR SECONDS.", |s| {
-        s.battery = battery(64, true);
-    });
+    show(
+        driver,
+        "PLUGGED IN. THE FILL DRAINS AWAY TO UNEVEN BANDS, WHICH GATHER AND REGROUP, THEN REST FOR FOUR SECONDS.",
+        |s| {
+            s.battery = battery(64, true);
+        },
+    );
     driver.wait(ms(2_500));
-    show(driver, "UNPLUGGED. THE FILL RISES BACK OVER THE BANDS.", |s| s.battery = battery(64, false));
+    show(
+        driver,
+        "UNPLUGGED. THE FILL RISES BACK OVER THE BANDS.",
+        |s| s.battery = battery(64, false),
+    );
     say("LOW BATTERY, AT 15% OR LESS.");
     drain(driver, 64, 12, false);
     driver.wait(HOLD);
-    show(driver, "LOW AND CHARGING: FEWER BANDS, AND A SHORTER WIPE.", |s| s.battery = battery(12, true));
-    show(driver, "NO BATTERY READING. NO FILL, ONLY DASHES.", |s| s.battery = None);
+    show(
+        driver,
+        "LOW AND CHARGING: FEWER BANDS, AND A SHORTER WIPE.",
+        |s| s.battery = battery(12, true),
+    );
+    show(driver, "NO BATTERY READING. NO FILL, ONLY DASHES.", |s| {
+        s.battery = None
+    });
     show(driver, "BACK ON USB, CHARGING.", |_| {});
 
     say("SWIPE LEFT FOR THE COMPASS.");
@@ -463,7 +564,9 @@ fn tour(driver: &mut Driver) {
     driver.motion_over(ms(1_500), |t| raised(127.0, 84.0 * (1.0 - ease(t))));
     driver.wait(ms(2_000));
     say("NO DATA. THE MOTION SENSORS STOPPED ANSWERING.");
-    driver.motion(Motion { compass: CompassView::default() });
+    driver.motion(Motion {
+        compass: CompassView::default(),
+    });
     driver.wait(HOLD);
     say("THEY ANSWER AGAIN.");
     driver.motion(facing(127.0));
@@ -485,9 +588,17 @@ fn tour(driver: &mut Driver) {
     driver.wait(ms(1_500));
     slow_tap(driver, 233, 250);
     // The sensor task carries the stored zone from then on, as the firmware's does.
-    let stored = driver.stroke(&[Point::new(233, 250)]).iter().find_map(|update| update.store);
-    let Some(Store::ManualZone(zone)) = stored else { panic!("no zone was stored: {stored:?}") };
-    let zone = ZoneState { mode: ZoneMode::Manual, zone: Some(zone) };
+    let stored = driver
+        .stroke(&[Point::new(233, 250)])
+        .iter()
+        .find_map(|update| update.store);
+    let Some(Store::ManualZone(zone)) = stored else {
+        panic!("no zone was stored: {stored:?}")
+    };
+    let zone = ZoneState {
+        mode: ZoneMode::Manual,
+        zone: Some(zone),
+    };
     let mut sensors = dublin_now(driver);
     sensors.zone = zone;
     driver.sensors(sensors);
@@ -521,7 +632,9 @@ fn tour(driver: &mut Driver) {
         s.zone = zone;
         s.clock.stopped = true;
     });
-    show(driver, "ALWAYS ON, NO ZONE, IN UTC.", |s| s.zone = ZoneState::default());
+    show(driver, "ALWAYS ON, NO ZONE, IN UTC.", |s| {
+        s.zone = ZoneState::default()
+    });
     show(driver, "ALWAYS ON, NO DATA.", |s| s.clock.utc = None);
     show(driver, "ALWAYS ON, LOCAL TIME AGAIN.", |s| s.zone = zone);
     say("A TOUCH WAKES THE SCREEN.");
@@ -544,10 +657,16 @@ fn tour(driver: &mut Driver) {
     driver.wait(ms(2_000));
     slow_tap(driver, 233, 298);
     say("A REPLAY CAN DEMONSTRATE A PART FAILING. HERE, THE MAGNETOMETER.");
-    driver.swipe(Point::new(233, 330), Point::new(233, 330 - 40 * 5 - 10), ms(1_500));
+    driver.swipe(
+        Point::new(233, 330),
+        Point::new(233, 330 - 40 * 5 - 10),
+        ms(1_500),
+    );
     driver.wait(ms(2_000));
     tap(driver, 233, 258);
-    say("THE SELF-TEST MARKS THE PART FAILED, AND THE FAULT SCREEN NAMES IT. BOTH SAY IT IS A DEMO.");
+    say(
+        "THE SELF-TEST MARKS THE PART FAILED, AND THE FAULT SCREEN NAMES IT. BOTH SAY IT IS A DEMO.",
+    );
     // The last report at 1.3 s, its glyph and the 300 ms hold, then the fault screen's 4 s.
     driver.wait(ms(3_000));
     say("THE TICKER TURNS BETWEEN THE FAILED PART IN BLUE AND FAULT IN YELLOW.");
@@ -565,7 +684,10 @@ fn tap(driver: &mut Driver, x: i32, y: i32) {
 }
 
 fn settings(driver: &mut Driver) {
-    driver.stage = Stage::new(PeripheralState { firmware: "0.1.0", ..PeripheralState::default() });
+    driver.stage = Stage::new(PeripheralState {
+        firmware: "0.1.0",
+        ..PeripheralState::default()
+    });
     start(driver, Screen::Clock);
     driver.motion(calibrating(54));
     driver.wait(ms(1_200));
@@ -620,7 +742,10 @@ fn settings_walk(driver: &mut Driver) {
 
 /// Boots with the clock running in Dublin, each part reporting at `at` ms from power-on.
 fn boot(driver: &mut Driver, reports: [(Part, Outcome, u64); 6]) {
-    driver.stage = Stage::starting(PeripheralState { firmware: "0.1.0", ..PeripheralState::default() });
+    driver.stage = Stage::starting(PeripheralState {
+        firmware: "0.1.0",
+        ..PeripheralState::default()
+    });
     driver.run_clock();
     driver.hold(hand);
     driver.sensors(dublin());
@@ -632,27 +757,33 @@ fn boot(driver: &mut Driver, reports: [(Part, Outcome, u64); 6]) {
 
 fn startup(driver: &mut Driver) {
     use Outcome::Answered;
-    boot(driver, [
-        (Part::Power, Answered, 150),
-        (Part::Clock, Answered, 250),
-        (Part::Touch, Answered, 500),
-        (Part::Motion, Answered, 600),
-        (Part::Magnet, Answered, 750),
-        (Part::Gnss, Answered, 1_300),
-    ]);
+    boot(
+        driver,
+        [
+            (Part::Power, Answered, 150),
+            (Part::Clock, Answered, 250),
+            (Part::Touch, Answered, 500),
+            (Part::Motion, Answered, 600),
+            (Part::Magnet, Answered, 750),
+            (Part::Gnss, Answered, 1_300),
+        ],
+    );
     driver.wait(ms(5_900));
 }
 
 fn startup_failed(driver: &mut Driver) {
     use Outcome::{Answered, NoReply};
-    boot(driver, [
-        (Part::Power, Answered, 150),
-        (Part::Clock, Answered, 250),
-        (Part::Touch, Answered, 500),
-        (Part::Motion, Answered, 600),
-        (Part::Magnet, NoReply, 1_000),
-        (Part::Gnss, Answered, 1_300),
-    ]);
+    boot(
+        driver,
+        [
+            (Part::Power, Answered, 150),
+            (Part::Clock, Answered, 250),
+            (Part::Touch, Answered, 500),
+            (Part::Motion, Answered, 600),
+            (Part::Magnet, NoReply, 1_000),
+            (Part::Gnss, Answered, 1_300),
+        ],
+    );
     driver.wait(ms(5_200));
 }
 

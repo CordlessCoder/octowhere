@@ -13,11 +13,16 @@ const FLICK_VELOCITY: f32 = 600.0;
 enum Motion {
     Rest,
     /// Following a horizontal drag.
-    Dragging { offset: i32 },
+    Dragging {
+        offset: i32,
+    },
     /// A vertical drag, which the pager leaves alone until it lifts.
     Ignoring,
     /// Moving toward `target`: 0 to stay, or one width either way to change page.
-    Settling { ease: Ease, offset: f32 },
+    Settling {
+        ease: Ease,
+        offset: f32,
+    },
 }
 
 /// What to draw: the current page shifted right by `offset` pixels, and while it is shifted, the
@@ -82,7 +87,10 @@ impl Pager {
     }
 
     fn settle(&mut self, offset: f32, target: i32, now: Micros) {
-        self.motion = Motion::Settling { ease: Ease::new(offset, target, now), offset };
+        self.motion = Motion::Settling {
+            ease: Ease::new(offset, target, now),
+            offset,
+        };
     }
 
     /// Animates one page along, as a drag released past the commit point would.
@@ -158,9 +166,7 @@ impl Pager {
         };
         let neighbour = match offset {
             0 => None,
-            offset if offset < 0 => {
-                Some((self.wrap(self.page as isize + 1), offset + self.width))
-            }
+            offset if offset < 0 => Some((self.wrap(self.page as isize + 1), offset + self.width)),
             offset => Some((self.wrap(self.page as isize - 1), offset - self.width)),
         };
         PagerView {

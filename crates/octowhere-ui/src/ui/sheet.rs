@@ -13,8 +13,14 @@ const FLICK_VELOCITY: f32 = 600.0;
 enum Motion {
     Rest,
     /// Following a drag, which started at `from`.
-    Dragging { from: i32, offset: i32 },
-    Settling { ease: Ease, offset: f32 },
+    Dragging {
+        from: i32,
+        offset: i32,
+    },
+    Settling {
+        ease: Ease,
+        offset: f32,
+    },
 }
 
 /// How far the panel has come down over the faces: 0 closed, the height open.
@@ -28,7 +34,11 @@ pub struct Sheet {
 impl Sheet {
     #[must_use]
     pub const fn new(height: i32) -> Self {
-        Self { height, open: false, motion: Motion::Rest }
+        Self {
+            height,
+            open: false,
+            motion: Motion::Rest,
+        }
     }
 
     #[must_use]
@@ -40,7 +50,13 @@ impl Sheet {
     #[must_use]
     pub fn offset(&self) -> i32 {
         match self.motion {
-            Motion::Rest => if self.open { self.height } else { 0 },
+            Motion::Rest => {
+                if self.open {
+                    self.height
+                } else {
+                    0
+                }
+            }
             Motion::Dragging { offset, .. } => offset,
             Motion::Settling { offset, .. } => libm::roundf(offset) as i32,
         }
@@ -80,12 +96,18 @@ impl Sheet {
     pub fn grab(&mut self, drag: &Drag) {
         self.finish();
         let from = self.offset();
-        self.motion = Motion::Dragging { from, offset: self.follow(from, drag) };
+        self.motion = Motion::Dragging {
+            from,
+            offset: self.follow(from, drag),
+        };
     }
 
     pub fn drag(&mut self, drag: &Drag) {
         if let Motion::Dragging { from, .. } = self.motion {
-            self.motion = Motion::Dragging { from, offset: self.follow(from, drag) };
+            self.motion = Motion::Dragging {
+                from,
+                offset: self.follow(from, drag),
+            };
         }
     }
 
@@ -128,7 +150,10 @@ impl Sheet {
         self.motion = if target as f32 == offset {
             Motion::Rest
         } else {
-            Motion::Settling { ease: Ease::new(offset, target, now), offset }
+            Motion::Settling {
+                ease: Ease::new(offset, target, now),
+                offset,
+            }
         };
     }
 

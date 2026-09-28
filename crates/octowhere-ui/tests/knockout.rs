@@ -27,7 +27,12 @@ fn glyphs() -> [Glyph; 4] {
             .collect();
         (bounds, rows)
     };
-    [glyph(100, 5, 40, 30, 1), glyph(130, 8, 40, 20, 2), glyph(200, 12, 30, 25, 3), glyph(241, 6, 29, 28, 4)]
+    [
+        glyph(100, 5, 40, 30, 1),
+        glyph(130, 8, 40, 20, 2),
+        glyph(200, 12, 30, 25, 3),
+        glyph(241, 6, 29, 28, 4),
+    ]
 }
 
 fn channels(color: Rgb565) -> [i32; 3] {
@@ -48,7 +53,9 @@ fn a_knockout_matches_filling_then_blending_and_leaves_skipped_rows() {
     knockout.finish();
 
     let mut expected = FB::boxed();
-    expected.fill_solid(&chrome::DISPLAY_BBOX, chrome::RED).unwrap();
+    expected
+        .fill_solid(&chrome::DISPLAY_BBOX, chrome::RED)
+        .unwrap();
     let band = Rectangle::new(Point::new(0, ROWS.start), Size::new(466, ROWS.len() as u32));
     expected.fill_solid(&band, chrome::BLACK).unwrap();
     for (_, rows) in glyphs() {
@@ -66,7 +73,12 @@ fn a_knockout_matches_filling_then_blending_and_leaves_skipped_rows() {
                 continue;
             }
             let want = expected.pixel(point).unwrap();
-            let apart = channels(got).iter().zip(channels(want)).map(|(a, b)| (a - b).abs()).max().unwrap();
+            let apart = channels(got)
+                .iter()
+                .zip(channels(want))
+                .map(|(a, b)| (a - b).abs())
+                .max()
+                .unwrap();
             assert!(apart <= 1, "at {point}: {got:?} against {want:?}");
         }
     }

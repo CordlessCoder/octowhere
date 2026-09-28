@@ -15,7 +15,13 @@ pub enum Timeout {
 }
 
 impl Timeout {
-    pub const ALL: [Self; 5] = [Self::Seconds15, Self::Seconds30, Self::Minute1, Self::Minutes5, Self::Never];
+    pub const ALL: [Self; 5] = [
+        Self::Seconds15,
+        Self::Seconds30,
+        Self::Minute1,
+        Self::Minutes5,
+        Self::Never,
+    ];
 
     #[must_use]
     pub fn label(self) -> &'static str {
@@ -31,12 +37,15 @@ impl Timeout {
     /// What the settings store keeps: the timeout in seconds, 0 for never.
     #[must_use]
     pub fn seconds(self) -> u16 {
-        self.duration().map_or(0, |duration| (duration / 1_000_000) as u16)
+        self.duration()
+            .map_or(0, |duration| (duration / 1_000_000) as u16)
     }
 
     #[must_use]
     pub fn from_seconds(seconds: u16) -> Option<Self> {
-        Self::ALL.into_iter().find(|timeout| timeout.seconds() == seconds)
+        Self::ALL
+            .into_iter()
+            .find(|timeout| timeout.seconds() == seconds)
     }
 
     #[must_use]
@@ -57,9 +66,13 @@ pub enum Rest {
     #[default]
     Awake,
     /// Dimmed since then, showing what it showed.
-    Dimmed { since: Micros },
+    Dimmed {
+        since: Micros,
+    },
     /// Fading to dark since then, on the way to off.
-    Darkening { since: Micros },
+    Darkening {
+        since: Micros,
+    },
     AlwaysOn,
     Off,
 }
@@ -137,7 +150,12 @@ mod tests {
 
     #[test]
     fn a_fade_runs_from_one_level_to_the_other() {
-        let fade = Fade { from: 26, to: 200, start: 1_000, duration: 100_000 };
+        let fade = Fade {
+            from: 26,
+            to: 200,
+            start: 1_000,
+            duration: 100_000,
+        };
         assert_eq!(fade.level(0), 26);
         assert_eq!(fade.level(51_000), 113);
         assert_eq!(fade.level(101_000), 200);

@@ -14,8 +14,8 @@ use esp_hal::gpio::{Input, Output};
 use esp_hal::spi::master::{Address, Command, DataMode};
 
 use crate::board::{self, delay_ms, delay_ms_async, delay_us, delay_us_async};
-use crate::framebuffer::PixelFormat;
 use crate::drivers::qspi_bus::{QSPIOperation, QspiBus};
+use crate::framebuffer::PixelFormat;
 use crate::util::fill_buf_repeat;
 
 pub const X_OFFS: u16 = 6;

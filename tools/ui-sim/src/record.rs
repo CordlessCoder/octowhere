@@ -58,7 +58,13 @@ impl Recording {
     /// # Panics
     ///
     /// If `path` ends in neither `.gif` nor `.mp4`.
-    pub fn start(path: PathBuf, now: u64, width: usize, pixels: &[u32], knock_out: Option<&[bool]>) -> Self {
+    pub fn start(
+        path: PathBuf,
+        now: u64,
+        width: usize,
+        pixels: &[u32],
+        knock_out: Option<&[bool]>,
+    ) -> Self {
         let format = Format::of(&path)
             .unwrap_or_else(|| panic!("{} is neither a .gif nor an .mp4", path.display()));
         let (frames, received) = mpsc::channel();
@@ -146,9 +152,21 @@ fn encode_gif(
 }
 
 /// Streams a raw frame per frame period to `ffmpeg`, which encodes H.264.
-fn encode_mp4(path: &Path, width: usize, frames: Receiver<(Vec<u32>, u16)>) -> Result<(), Box<dyn Error>> {
+fn encode_mp4(
+    path: &Path,
+    width: usize,
+    frames: Receiver<(Vec<u32>, u16)>,
+) -> Result<(), Box<dyn Error>> {
     let mut ffmpeg = Command::new("ffmpeg")
-        .args(["-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24"])
+        .args([
+            "-y",
+            "-loglevel",
+            "error",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+        ])
         .args(["-video_size", &format!("{width}x{HEIGHT}")])
         .args(["-framerate", &FRAMES_PER_SECOND.to_string(), "-i", "-"])
         .args(["-c:v", "libx264", "-tune", "animation", "-crf", "18"])

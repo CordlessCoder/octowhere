@@ -41,7 +41,10 @@ fn by_remainder<const N: usize>(values: &[f64], order: &mut heapless::Vec<usize,
     order.clear();
     order.extend(0..values.len());
     order.sort_by(|&a, &b| {
-        let (a, b) = (values[a] - libm::floor(values[a]), values[b] - libm::floor(values[b]));
+        let (a, b) = (
+            values[a] - libm::floor(values[a]),
+            values[b] - libm::floor(values[b]),
+        );
         b.total_cmp(&a)
     });
 }
@@ -49,8 +52,9 @@ fn by_remainder<const N: usize>(values: &[f64], order: &mut heapless::Vec<usize,
 /// The gaps partway from `from` to `to`, each starting its move a quarter of the way in at
 /// most, in `order`, and kept summing to `GAP_SUM`.
 fn gaps_between(from: &[f64; 10], to: &[f64; 10], t: f64, order: &[u8; 10]) -> [f64; 10] {
-    let mut values: [f64; 10] =
-        core::array::from_fn(|i| from[i] + (to[i] - from[i]) * smoothstep((t - 0.25 * f64::from(order[i]) / 9.0) / 0.75));
+    let mut values: [f64; 10] = core::array::from_fn(|i| {
+        from[i] + (to[i] - from[i]) * smoothstep((t - 0.25 * f64::from(order[i]) / 9.0) / 0.75)
+    });
     let sum: f64 = values.iter().sum();
     for value in &mut values {
         *value = *value * GAP_SUM as f64 / sum;
@@ -97,9 +101,18 @@ fn resample(weights: &[f64], count: usize, out: &mut heapless::Vec<f64, MAX_BAND
 fn apportion(weights: &[f64], total: u32, out: &mut heapless::Vec<u32, MAX_BANDS>) {
     let free = (total - weights.len() as u32) as f64;
     let excess_sum: f64 = weights.iter().map(|w| (w - 1.0).max(0.0)).sum();
-    let basis = |w: f64| if excess_sum > 0.0 { (w - 1.0).max(0.0) } else { w };
+    let basis = |w: f64| {
+        if excess_sum > 0.0 {
+            (w - 1.0).max(0.0)
+        } else {
+            w
+        }
+    };
     let basis_sum: f64 = weights.iter().map(|&w| basis(w)).sum();
-    let fractions: heapless::Vec<f64, MAX_BANDS> = weights.iter().map(|&w| free * basis(w) / basis_sum).collect();
+    let fractions: heapless::Vec<f64, MAX_BANDS> = weights
+        .iter()
+        .map(|&w| free * basis(w) / basis_sum)
+        .collect();
     out.clear();
     out.extend(fractions.iter().map(|&f| 1 + libm::floor(f) as u32));
     let short = total - out.iter().sum::<u32>();
@@ -130,8 +143,14 @@ pub fn bands(height: u32, phase: u8) -> heapless::Vec<(u32, u32), MAX_BANDS> {
         _ = out.push((0, height));
         return out;
     }
-    let gap_total = round_half_even(height * GAP_SUM, MOTIF).min(height - count as u32).max(count as u32 - 1);
-    let (mut weights, mut heights, mut spaces) = (heapless::Vec::new(), heapless::Vec::new(), heapless::Vec::new());
+    let gap_total = round_half_even(height * GAP_SUM, MOTIF)
+        .min(height - count as u32)
+        .max(count as u32 - 1);
+    let (mut weights, mut heights, mut spaces) = (
+        heapless::Vec::new(),
+        heapless::Vec::new(),
+        heapless::Vec::new(),
+    );
     resample(&HEIGHTS, count, &mut weights);
     apportion(&weights, height - gap_total, &mut heights);
     resample(&gaps(phase), count - 1, &mut weights);
@@ -167,7 +186,11 @@ struct Wipe {
 
 impl Wipe {
     fn at(&self, now: Micros) -> f32 {
-        let t = if self.length == 0 { 1.0 } else { now.saturating_sub(self.start) as f32 / self.length as f32 };
+        let t = if self.length == 0 {
+            1.0
+        } else {
+            now.saturating_sub(self.start) as f32 / self.length as f32
+        };
         self.from + (self.to - self.from) * smoothstep(f64::from(t)) as f32
     }
 
@@ -180,7 +203,9 @@ impl Charge {
     /// Takes a reading. A change of the charging flag between two readings of a known, nonzero
     /// level wipes the solid layer; any other change shows its end at once.
     pub fn read(&mut self, battery: Option<Battery>, now: Micros) {
-        let level = battery.filter(|battery| battery.present).map(|battery| battery.percent);
+        let level = battery
+            .filter(|battery| battery.present)
+            .map(|battery| battery.percent);
         let charging = battery.is_some_and(|battery| battery.present && battery.charging);
         let before = self.charging.replace(charging);
         if before == Some(charging) {
@@ -190,7 +215,11 @@ impl Charge {
         let exposed = self.exposed(now);
         match level {
             Some(level) if level > 0 && before.is_some() => {
-                let whole = if level >= SHORT_BELOW { WIPE } else { SHORT_WIPE };
+                let whole = if level >= SHORT_BELOW {
+                    WIPE
+                } else {
+                    SHORT_WIPE
+                };
                 let length = libm::roundf(whole as f32 * (to - exposed).abs()) as Micros;
                 if charging {
                     // Bands that are still partly showing keep their layout; covered ones
@@ -202,10 +231,20 @@ impl Charge {
                 } else {
                     self.held = self.phase(now);
                 }
-                self.wipe = Wipe { from: exposed, to, start: now, length };
+                self.wipe = Wipe {
+                    from: exposed,
+                    to,
+                    start: now,
+                    length,
+                };
             }
             _ => {
-                self.wipe = Wipe { from: to, to, start: now, length: 0 };
+                self.wipe = Wipe {
+                    from: to,
+                    to,
+                    start: now,
+                    length: 0,
+                };
                 self.held = ASSEMBLED_PHASE;
                 self.runs_from = now;
             }
@@ -224,7 +263,11 @@ impl Charge {
         if self.charging == Some(true) && now >= self.runs_from {
             let frames = (now - self.runs_from) / FRAME;
             let at = (u64::from(self.held) + frames) % (u64::from(LOOP_FRAMES) + REST_FRAMES);
-            if at < u64::from(LOOP_FRAMES) { at as u8 } else { 0 }
+            if at < u64::from(LOOP_FRAMES) {
+                at as u8
+            } else {
+                0
+            }
         } else {
             self.held
         }
@@ -243,7 +286,13 @@ mod tests {
     use super::*;
 
     fn battery(percent: u8, charging: bool) -> Option<Battery> {
-        Some(Battery { present: true, percent, millivolts: 3_900, charging, usb: charging })
+        Some(Battery {
+            present: true,
+            percent,
+            millivolts: 3_900,
+            charging,
+            usb: charging,
+        })
     }
 
     fn rows(height: u32, phase: u8) -> (u32, u32, usize) {
@@ -270,7 +319,11 @@ mod tests {
                 assert_eq!(bands[0].0, 0);
                 let &(top, rows) = bands.last().unwrap();
                 assert_eq!(top + rows, height, "height {height} phase {phase}");
-                assert!(bands.windows(2).all(|pair| pair[1].0 > pair[0].0 + pair[0].1));
+                assert!(
+                    bands
+                        .windows(2)
+                        .all(|pair| pair[1].0 > pair[0].0 + pair[0].1)
+                );
             }
         }
     }

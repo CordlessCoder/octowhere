@@ -49,11 +49,19 @@ impl Reveal {
 
 /// The block that stands in character `index`'s cell, from the baseline up to cap height and
 /// that character's advance wide less a pixel each side.
-fn block(style: &FontdueRenderer<'static, Color>, text: &str, pen: Point, index: usize) -> Rectangle {
+fn block(
+    style: &FontdueRenderer<'static, Color>,
+    text: &str,
+    pen: Point,
+    index: usize,
+) -> Rectangle {
     let cap = style.baseline_bounds("H", Point::zero()).size.height as i32;
     let left = pen.x + libm::roundf(style.advance(&text[..index]) + 1.0) as i32;
     let right = pen.x + libm::roundf(style.advance(&text[..=index]) - 1.0) as i32;
-    Rectangle::with_corners(Point::new(left, pen.y - cap), Point::new(right - 1, pen.y - 1))
+    Rectangle::with_corners(
+        Point::new(left, pen.y - cap),
+        Point::new(right - 1, pen.y - 1),
+    )
 }
 
 pub fn draw_revealed<D: CoverageTarget<Color = Color>>(
@@ -71,14 +79,21 @@ pub fn draw_revealed<D: CoverageTarget<Color = Color>>(
 }
 
 /// Everything a revealed line can cover, at any stage of its reveal.
-pub fn revealed_bounds(style: &FontdueRenderer<'static, Color>, text: &str, pen: Point) -> Rectangle {
+pub fn revealed_bounds(
+    style: &FontdueRenderer<'static, Color>,
+    text: &str,
+    pen: Point,
+) -> Rectangle {
     let ink = style.baseline_bounds(text, pen);
     if text.is_empty() {
         return ink;
     }
     let blocks = block(style, text, pen, 0);
     let last = block(style, text, pen, text.len() - 1);
-    let blocks = Rectangle::with_corners(blocks.top_left, last.bottom_right().unwrap_or(blocks.top_left));
+    let blocks = Rectangle::with_corners(
+        blocks.top_left,
+        last.bottom_right().unwrap_or(blocks.top_left),
+    );
     // Text that is only spaces has no ink, and an empty box sits at the origin.
     if ink.is_zero_sized() {
         return blocks;

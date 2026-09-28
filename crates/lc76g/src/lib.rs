@@ -1550,10 +1550,7 @@ where
             match self.i2c.read(DATA_ADDRESS, data).await {
                 Ok(()) => return Ok(()),
                 Err(error) if attempt + 1 == MAX_I2C_RETRIES => {
-                    return Err(GnssError::I2c {
-                        operation,
-                        error,
-                    });
+                    return Err(GnssError::I2c { operation, error });
                 }
                 Err(_) => self.command_delay().await,
             }

@@ -14,7 +14,11 @@ impl Coverage {
 
     fn at(&self, point: Point) -> u8 {
         let inside = (0..SIZE).contains(&point.x) && (0..SIZE).contains(&point.y);
-        if inside { self.0[(point.y * SIZE + point.x) as usize] } else { 0 }
+        if inside {
+            self.0[(point.y * SIZE + point.x) as usize]
+        } else {
+            0
+        }
     }
 }
 
@@ -28,7 +32,10 @@ impl DrawTarget for Coverage {
     type Color = chrome::Color;
     type Error = core::convert::Infallible;
 
-    fn draw_iter<I: IntoIterator<Item = Pixel<Self::Color>>>(&mut self, _: I) -> Result<(), Self::Error> {
+    fn draw_iter<I: IntoIterator<Item = Pixel<Self::Color>>>(
+        &mut self,
+        _: I,
+    ) -> Result<(), Self::Error> {
         unreachable!("text draws through blend_row")
     }
 }
@@ -45,7 +52,12 @@ impl CoverageTarget for Coverage {
 }
 
 fn renderer(size: u32, font: usize) -> FontdueRenderer<'static, chrome::Color> {
-    let mut renderer = FontdueRenderer::new(chrome::FontdueRendererCtx::new_rc(), size, chrome::WHITE, chrome::FONTS);
+    let mut renderer = FontdueRenderer::new(
+        chrome::FontdueRendererCtx::new_rc(),
+        size,
+        chrome::WHITE,
+        chrome::FONTS,
+    );
     renderer.font_index = font;
     renderer
 }
@@ -53,13 +65,19 @@ fn renderer(size: u32, font: usize) -> FontdueRenderer<'static, chrome::Color> {
 #[test]
 fn an_outline_rings_the_ink_without_covering_it() {
     const ORIGIN: Point = Point::new(40, 300);
-    for (size, font) in [(40, chrome::SHAPIRO), (136, chrome::FRAKTION_BOLD), (16, chrome::FRAKTION)] {
+    for (size, font) in [
+        (40, chrome::SHAPIRO),
+        (136, chrome::FRAKTION_BOLD),
+        (16, chrome::FRAKTION),
+    ] {
         let style = renderer(size, font);
         let mut glyphs = Coverage::new();
         style.draw_on_baseline("O4E", ORIGIN, &mut glyphs).unwrap();
         for radius in [1u8, 2] {
             let mut outline = Coverage::new();
-            style.draw_outline_on_baseline("O4E", ORIGIN, radius, &mut outline).unwrap();
+            style
+                .draw_outline_on_baseline("O4E", ORIGIN, radius, &mut outline)
+                .unwrap();
             let reach = i32::from(radius);
             let mut ring = 0;
             for y in 0..SIZE {
@@ -67,13 +85,20 @@ fn an_outline_rings_the_ink_without_covering_it() {
                     let point = Point::new(x, y);
                     let covered = outline.at(point);
                     if glyphs.at(point) == u8::MAX {
-                        assert_eq!(covered, 0, "{size} px, radius {radius}: ring over solid ink at {point}");
+                        assert_eq!(
+                            covered, 0,
+                            "{size} px, radius {radius}: ring over solid ink at {point}"
+                        );
                     }
                     if covered > 0 {
                         ring += 1;
-                        let near = (-reach..=reach)
-                            .any(|dy| (-reach..=reach).any(|dx| glyphs.at(point + Point::new(dx, dy)) > 0));
-                        assert!(near, "{size} px, radius {radius}: ring farther than {radius} px from ink at {point}");
+                        let near = (-reach..=reach).any(|dy| {
+                            (-reach..=reach).any(|dx| glyphs.at(point + Point::new(dx, dy)) > 0)
+                        });
+                        assert!(
+                            near,
+                            "{size} px, radius {radius}: ring farther than {radius} px from ink at {point}"
+                        );
                     }
                 }
             }

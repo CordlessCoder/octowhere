@@ -6,7 +6,10 @@ use crate::drivers::co5300::{Co5300ColorMode, Co5300Display, DisplayError};
 use crate::framebuffer::Framebuffer;
 
 /// Sends a framebuffer, or a region of it, to the panel.
-#[expect(async_fn_in_trait, reason = "only the display core calls it, from one executor")]
+#[expect(
+    async_fn_in_trait,
+    reason = "only the display core calls it, from one executor"
+)]
 pub trait Flush<C: Co5300ColorMode>
 where
     C::Bytes: AsRef<[u8]>,

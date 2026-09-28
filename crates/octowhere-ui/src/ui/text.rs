@@ -52,7 +52,11 @@ pub fn baseline_for_ink_top(style: &FontdueRenderer<'static, Color>, text: &str,
 
 /// The baseline that ends `text`'s ink on row `bottom`, inclusive.
 #[must_use]
-pub fn baseline_for_ink_bottom(style: &FontdueRenderer<'static, Color>, text: &str, bottom: i32) -> i32 {
+pub fn baseline_for_ink_bottom(
+    style: &FontdueRenderer<'static, Color>,
+    text: &str,
+    bottom: i32,
+) -> i32 {
     let ink = style.baseline_bounds(text, Point::zero());
     bottom + 1 - (ink.top_left.y + ink.size.height as i32)
 }

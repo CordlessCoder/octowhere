@@ -8,12 +8,7 @@ use embedded_graphics::{
 };
 
 use super::{
-    clock::ClockView,
-    clock_screen,
-    compass::CompassView,
-    compass_screen,
-    panel,
-    rest::Timeout,
+    clock::ClockView, clock_screen, compass::CompassView, compass_screen, panel, rest::Timeout,
 };
 use crate::{
     board,
@@ -32,7 +27,10 @@ impl Screen {
 
     #[must_use]
     pub fn next(self) -> Self {
-        let index = Self::ALL.iter().position(|&screen| screen == self).unwrap_or(0);
+        let index = Self::ALL
+            .iter()
+            .position(|&screen| screen == self)
+            .unwrap_or(0);
         Self::ALL[(index + 1) % Self::ALL.len()]
     }
 }
@@ -136,19 +134,26 @@ where
     let painted = if state.screen == Screen::Compass && settled {
         Some(compass_screen::SLAB)
     } else {
-        clock_offset
-            .filter(|_| state.sheet < height)
-            .map(|offset| {
-                let band = clock_screen::solid_band();
-                Rectangle::new(band.top_left + Point::new(offset, state.sheet), band.size)
-            })
+        clock_offset.filter(|_| state.sheet < height).map(|offset| {
+            let band = clock_screen::solid_band();
+            Rectangle::new(band.top_left + Point::new(offset, state.sheet), band.size)
+        })
     };
     clear_visible(target, &bounds, painted, chrome::BLACK)?;
 
     if state.sheet > 0 {
-        let visible = Rectangle::new(Point::zero(), Size::new(board::LCD_WIDTH.into(), state.sheet as u32));
+        let visible = Rectangle::new(
+            Point::zero(),
+            Size::new(board::LCD_WIDTH.into(), state.sheet as u32),
+        );
         let panel = &mut chrome::Window::new(target, Point::new(0, state.sheet - height), visible);
-        panel::draw(&state.peripherals, state.panel_scroll, state.panel_accents, font, panel)?;
+        panel::draw(
+            &state.peripherals,
+            state.panel_scroll,
+            state.panel_accents,
+            font,
+            panel,
+        )?;
     }
     if state.sheet >= height {
         return Ok(());
@@ -177,7 +182,10 @@ pub fn clear<D: DrawTarget<Color = Color>>(target: &mut D) -> Result<(), D::Erro
 }
 
 /// Fills the round panel with `color`.
-pub fn clear_to<D: DrawTarget<Color = Color>>(target: &mut D, color: Color) -> Result<(), D::Error> {
+pub fn clear_to<D: DrawTarget<Color = Color>>(
+    target: &mut D,
+    color: Color,
+) -> Result<(), D::Error> {
     let bounds = target.bounding_box();
     clear_visible(target, &bounds, None, color)
 }
@@ -240,7 +248,15 @@ where
     let target = &mut chrome::Window::new(target, Point::new(offset, state.sheet), visible);
     let peripherals = &state.peripherals;
     match state.screen {
-        Screen::Clock => clock_screen::draw(&peripherals.clock, peripherals.battery, state.clock_accents, font, target),
-        Screen::Compass => compass_screen::draw(&peripherals.compass, state.compass_accents, font, target),
+        Screen::Clock => clock_screen::draw(
+            &peripherals.clock,
+            peripherals.battery,
+            state.clock_accents,
+            font,
+            target,
+        ),
+        Screen::Compass => {
+            compass_screen::draw(&peripherals.compass, state.compass_accents, font, target)
+        }
     }
 }

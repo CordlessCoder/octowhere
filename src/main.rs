@@ -18,6 +18,7 @@ use core::{
     future::Future,
     sync::atomic::{AtomicBool, Ordering},
 };
+use defmt::{debug, error, info, warn};
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_executor::Spawner;
 use embassy_futures::{
@@ -42,7 +43,6 @@ use esp_hal::{
     time::Rate,
     timer::timg::TimerGroup,
 };
-use defmt::{debug, error, info, warn};
 use esp_println as _;
 use lc76g::{
     GnssError, GnssOperation, GnssState, Lc76g, LowPowerMode, NmeaOutputRate, NmeaParser,
@@ -54,6 +54,11 @@ use octowhere::{
     drivers::{co5300::Co5300Display, framebuffer::Flush as _, qspi_bus::QspiBus},
     fontdue,
     framebuffer::Framebuffer,
+    motion::{
+        compass::{AxisMap, Calibration, CalibrationEvent, CompassView, Holds, Vec3},
+        fusion::Fusion,
+        imu::{accel_micro_ms2, gyro_micro_rad_s},
+    },
     peripherals::{
         magnetometer::{Bmm350, MagnetometerError},
         power::{Axp2101Error, Axp2101Power},
@@ -67,11 +72,6 @@ use octowhere::{
         screens::{Battery, DEFAULT_BRIGHTNESS, Gnss, PeripheralState},
         stage::{Input as StageInput, Motion, Sensors, Stage, Store as Choice, Touch},
         startup::{Outcome, Part, Report},
-    },
-    motion::{
-        compass::{AxisMap, Calibration, CalibrationEvent, CompassView, Holds, Vec3},
-        fusion::Fusion,
-        imu::{accel_micro_ms2, gyro_micro_rad_s},
     },
     util::{Swap, SwapThread},
 };
@@ -243,10 +243,12 @@ impl ZoneTracker {
     /// Looks up the zone at a fix, if automatic mode wants it, a step at a time so the other
     /// tasks on this core keep running. Returns a zone it newly found.
     async fn follow(&mut self, latitude: i32, longitude: i32) -> Option<ZoneId> {
-        let moved = self.looked_up_at.is_none_or(|(last_latitude, last_longitude)| {
-            latitude.abs_diff(last_latitude) >= ZONE_LOOKUP_DISTANCE_E7 as u32
-                || longitude.abs_diff(last_longitude) >= ZONE_LOOKUP_DISTANCE_E7 as u32
-        });
+        let moved = self
+            .looked_up_at
+            .is_none_or(|(last_latitude, last_longitude)| {
+                latitude.abs_diff(last_latitude) >= ZONE_LOOKUP_DISTANCE_E7 as u32
+                    || longitude.abs_diff(last_longitude) >= ZONE_LOOKUP_DISTANCE_E7 as u32
+            });
         if self.mode != ZoneMode::Automatic || !moved {
             return None;
         }
@@ -654,8 +656,7 @@ async fn motion_task(task: MotionTask) {
         last_update = Some(now);
         if let Some(gyro) = gyro {
             let trusted = calibration.progress() >= 1.0;
-            let trusted_field =
-                new_field.filter(|field| trusted && !calibration.disturbed(*field));
+            let trusted_field = new_field.filter(|field| trusted && !calibration.disturbed(*field));
             if trusted && !calibrated {
                 calibrated = true;
                 if let Some(accel) = accel {
@@ -664,7 +665,13 @@ async fn motion_task(task: MotionTask) {
             }
             fusion.update(gyro, accel, raw_field, trusted_field, dt);
         }
-        let compass = CompassView::new(fusion.attitude(), field, &calibration, &mut holds, now.as_micros());
+        let compass = CompassView::new(
+            fusion.attitude(),
+            field,
+            &calibration,
+            &mut holds,
+            now.as_micros(),
+        );
         if log && compass_active {
             debug!(
                 "[COMPASS] screen accel={} field={}uT offset={}uT gyro_offset={} candidate={} view={}",
@@ -781,7 +788,10 @@ async fn sensor_task(task: SensorTask) {
                         }
                         Ok(Some(NmeaUpdate::NmeaOutputRate { sentence, rate })) => {
                             updates += 1;
-                            debug!("[GNSS] NMEA_OUTPUT_RATE sentence={} rate={}", sentence, rate);
+                            debug!(
+                                "[GNSS] NMEA_OUTPUT_RATE sentence={} rate={}",
+                                sentence, rate
+                            );
                         }
                         Ok(Some(NmeaUpdate::Pair(message))) => {
                             updates += 1;
@@ -895,7 +905,9 @@ async fn sensor_task(task: SensorTask) {
         }
         if let Some(fix) = state.gnss.fix
             && let Some(zone) = zones.follow(fix.latitude.get(), fix.longitude.get()).await
-            && SETTINGS_WRITES.try_send(settings::Write::AutomaticZone(zone)).is_err()
+            && SETTINGS_WRITES
+                .try_send(settings::Write::AutomaticZone(zone))
+                .is_err()
         {
             warn!("[SETTINGS] queue full, automatic zone not saved");
         }
@@ -1117,14 +1129,23 @@ static BOOT_REPORTS: Channel<CriticalSectionRawMutex, Report, 6> = Channel::new(
 
 /// Runs one part's bring-up against its deadline and reports how it ended. Returns whether the
 /// part answered.
-async fn probe(part: Part, deadline: Duration, bring_up: impl Future<Output = Result<(), Outcome>>) -> bool {
+async fn probe(
+    part: Part,
+    deadline: Duration,
+    bring_up: impl Future<Output = Result<(), Outcome>>,
+) -> bool {
     let started = Instant::now();
     let outcome = match with_timeout(deadline, bring_up).await {
         Ok(Ok(())) => Outcome::Answered,
         Ok(Err(outcome)) => outcome,
         Err(TimeoutError) => Outcome::NoReply,
     };
-    info!("[BOOT] {} {} in {}ms", part, outcome, started.elapsed().as_millis());
+    info!(
+        "[BOOT] {} {} in {}ms",
+        part,
+        outcome,
+        started.elapsed().as_millis()
+    );
     if BOOT_REPORTS.try_send(Report { part, outcome }).is_err() {
         warn!("[BOOT] report queue full, {} not shown", part);
     }
@@ -1231,13 +1252,22 @@ async fn async_main(spawner: Spawner) {
         looked_up_at: None,
     };
     let touch = Cell::new(None);
-    join(bring_up(spawner, parts, zones, &touch), frame_loop(stage, fb_st, &touch)).await;
+    join(
+        bring_up(spawner, parts, zones, &touch),
+        frame_loop(stage, fb_st, &touch),
+    )
+    .await;
 }
 
 /// Brings up every part behind the self-test, each against its deadline, then starts the tasks
 /// that own them and hands the touch controller to the frame loop. A part that fails is left
 /// out, and its owner runs without it.
-async fn bring_up(spawner: Spawner, parts: Parts, zones: ZoneTracker, touch_slot: &Cell<Option<TouchDriver>>) {
+async fn bring_up(
+    spawner: Spawner,
+    parts: Parts,
+    zones: ZoneTracker,
+    touch_slot: &Cell<Option<TouchDriver>>,
+) {
     // The I²C pull-ups share VCC3V3 with the secondary board.
     Timer::after(Duration::from_millis(board::I2C_POWER_SETTLE_MS)).await;
 
@@ -1319,9 +1349,9 @@ async fn bring_up(spawner: Spawner, parts: Parts, zones: ZoneTracker, touch_slot
             let touch_ok = probe(Part::Touch, TOUCH_DEADLINE, async {
                 touch.init().await.map_err(|error| match error {
                     Cst9217Error::I2CError(_) | Cst9217Error::ResetError(_) => Outcome::NoReply,
-                    Cst9217Error::IDMismatch | Cst9217Error::NoFirmware | Cst9217Error::InvalidCheckcode => {
-                        Outcome::BadReply
-                    }
+                    Cst9217Error::IDMismatch
+                    | Cst9217Error::NoFirmware
+                    | Cst9217Error::InvalidCheckcode => Outcome::BadReply,
                 })
             })
             .await;
@@ -1331,9 +1361,12 @@ async fn bring_up(spawner: Spawner, parts: Parts, zones: ZoneTracker, touch_slot
                     _ => Outcome::BadReply,
                 };
                 imu.init(&mut embassy_time::Delay).await.map_err(outcome)?;
-                imu.set_mode_with_delay(&mut embassy_time::Delay, ph_qmi8658::OperatingMode::AccelGyroOnly)
-                    .await
-                    .map_err(outcome)?;
+                imu.set_mode_with_delay(
+                    &mut embassy_time::Delay,
+                    ph_qmi8658::OperatingMode::AccelGyroOnly,
+                )
+                .await
+                .map_err(outcome)?;
                 imu.set_sync_sample(true).await.map_err(outcome)
             })
             .await;
@@ -1343,12 +1376,22 @@ async fn bring_up(spawner: Spawner, parts: Parts, zones: ZoneTracker, touch_slot
                     _ => Outcome::BadReply,
                 };
                 magnetometer.init().await.map_err(outcome)?;
-                magnetometer.start_normal_mode().await.map_err(|_| Outcome::NoReply)?;
+                magnetometer
+                    .start_normal_mode()
+                    .await
+                    .map_err(|_| Outcome::NoReply)?;
                 Timer::after(Duration::from_millis(15)).await;
-                if !magnetometer.data_ready().await.map_err(|_| Outcome::NoReply)? {
+                if !magnetometer
+                    .data_ready()
+                    .await
+                    .map_err(|_| Outcome::NoReply)?
+                {
                     return Err(Outcome::BadReply);
                 }
-                let data = magnetometer.read_data().await.map_err(|_| Outcome::NoReply)?;
+                let data = magnetometer
+                    .read_data()
+                    .await
+                    .map_err(|_| Outcome::NoReply)?;
                 let compensated = magnetometer.compensate(&data).ok_or(Outcome::BadReply)?;
                 debug!(
                     "[BMM350] COMP x={}uT y={}uT z={}uT temp={}C",
@@ -1367,7 +1410,12 @@ async fn bring_up(spawner: Spawner, parts: Parts, zones: ZoneTracker, touch_slot
 
     let mut gnss = Lc76g::new(i2c.clone(), embassy_time::Delay);
     let mut nmea_parser = NmeaParser::new();
-    let gnss_ok = probe(Part::Gnss, GNSS_DEADLINE, configure_gnss(&mut gnss, &mut nmea_parser)).await;
+    let gnss_ok = probe(
+        Part::Gnss,
+        GNSS_DEADLINE,
+        configure_gnss(&mut gnss, &mut nmea_parser),
+    )
+    .await;
     info!(
         "[BOOT] answered: power={} clock={} touch={} motion={} magnet={} gnss={}",
         power.is_some(),
@@ -1379,7 +1427,14 @@ async fn bring_up(spawner: Spawner, parts: Parts, zones: ZoneTracker, touch_slot
     );
     initial_sensor_state.gnss = nmea_parser.state();
 
-    let lora = start_lora(parts.lora_spi, parts.lora_sck, parts.lora_mosi, parts.lora_miso, parts.lora_cs).await;
+    let lora = start_lora(
+        parts.lora_spi,
+        parts.lora_sck,
+        parts.lora_mosi,
+        parts.lora_miso,
+        parts.lora_cs,
+    )
+    .await;
     let lora_dio0 = Input::new(parts.lora_dio0, InputConfig::default());
     let lora_path = LoraPath::new(
         i2c.clone(),
@@ -1430,7 +1485,11 @@ async fn bring_up(spawner: Spawner, parts: Parts, zones: ZoneTracker, touch_slot
             .unwrap(),
         );
     }
-    info!("[MEM] internal_used={} psram_used={}", esp_alloc::HEAP.used(), PSRAM_HEAP.used());
+    info!(
+        "[MEM] internal_used={} psram_used={}",
+        esp_alloc::HEAP.used(),
+        PSRAM_HEAP.used()
+    );
 }
 
 /// Holds the GNSS module and the radio in reset, then releases them with the radio listening.
@@ -1446,14 +1505,22 @@ async fn reset_radios(i2c: SharedI2cDevice) -> Result<(), ()> {
     let output_mask = gps_reset | lora_reset | lora_rx_switch | lora_tx_switch;
     exio.write_direction(!output_mask).await.map_err(fail)?;
     info!("[TCA9554] OK");
-    exio.write_output(!(gps_reset | lora_reset | lora_tx_switch)).await.map_err(fail)?;
+    exio.write_output(!(gps_reset | lora_reset | lora_tx_switch))
+        .await
+        .map_err(fail)?;
     Timer::after(Duration::from_millis(10)).await;
     exio.write_output(!lora_tx_switch).await.map_err(fail)?;
     Timer::after(Duration::from_micros(200)).await;
-    exio.write_output(!(lora_reset | lora_tx_switch)).await.map_err(fail)?;
-    exio.write_direction(!(lora_reset | lora_rx_switch | lora_tx_switch)).await.map_err(fail)?;
+    exio.write_output(!(lora_reset | lora_tx_switch))
+        .await
+        .map_err(fail)?;
+    exio.write_direction(!(lora_reset | lora_rx_switch | lora_tx_switch))
+        .await
+        .map_err(fail)?;
     Timer::after(Duration::from_millis(10)).await;
-    exio.write_output(!(lora_reset | lora_tx_switch)).await.map_err(fail)?;
+    exio.write_output(!(lora_reset | lora_tx_switch))
+        .await
+        .map_err(fail)?;
     let direction = exio.read_direction().await.map_err(fail)?;
     debug!("[TCA9554] direction={=u8:#04x}", direction);
     Ok(())
@@ -1466,25 +1533,43 @@ async fn configure_gnss(
     nmea_parser: &mut NmeaParser,
 ) -> Result<(), Outcome> {
     let mut answered = false;
-    debug!("[GNSS] STARTUP PAIR_SEND command=732 mode={}", GNSS_LOW_POWER_MODE);
+    debug!(
+        "[GNSS] STARTUP PAIR_SEND command=732 mode={}",
+        GNSS_LOW_POWER_MODE
+    );
     match gnss.set_low_power_mode(GNSS_LOW_POWER_MODE).await {
         Ok(()) => answered = true,
-        Err(error) => warn!("[GNSS] STARTUP PAIR_SEND_RESULT command=732 status=error error={}", error),
+        Err(error) => warn!(
+            "[GNSS] STARTUP PAIR_SEND_RESULT command=732 status=error error={}",
+            error
+        ),
     }
     for sentence in [NmeaSentence::Gsa, NmeaSentence::Gsv] {
-        match gnss.set_nmea_output_rate(sentence, NmeaOutputRate::EVERY_FIX).await {
+        match gnss
+            .set_nmea_output_rate(sentence, NmeaOutputRate::EVERY_FIX)
+            .await
+        {
             Ok(()) => answered = true,
-            Err(error) => warn!("[GNSS] STARTUP PAIR_SEND_RESULT command=062 status=error error={}", error),
+            Err(error) => warn!(
+                "[GNSS] STARTUP PAIR_SEND_RESULT command=062 status=error error={}",
+                error
+            ),
         }
         match gnss.query_nmea_output_rate(sentence).await {
             Ok(()) => answered = true,
-            Err(error) => warn!("[GNSS] STARTUP PAIR_SEND_RESULT command=063 status=error error={}", error),
+            Err(error) => warn!(
+                "[GNSS] STARTUP PAIR_SEND_RESULT command=063 status=error error={}",
+                error
+            ),
         }
     }
     if let Ok(command) = PairCommandBuilder::new(67).and_then(|builder| builder.finish()) {
         match gnss.send_pair_command(&command).await {
             Ok(()) => answered = true,
-            Err(error) => warn!("[GNSS] STARTUP PAIR_SEND_RESULT command=067 status=error error={}", error),
+            Err(error) => warn!(
+                "[GNSS] STARTUP PAIR_SEND_RESULT command=067 status=error error={}",
+                error
+            ),
         }
     }
     let mut nmea = [0u8; 512];
@@ -1503,7 +1588,11 @@ async fn configure_gnss(
         Err(GnssError::BufferTooSmall { .. }) => warn!("[GNSS] NMEA_BUFFER_TOO_SMALL"),
         Err(GnssError::PairCommand(_)) => warn!("[GNSS] PAIR_COMMAND_BUILD_FAILED"),
     }
-    if answered { Ok(()) } else { Err(Outcome::NoReply) }
+    if answered {
+        Ok(())
+    } else {
+        Err(Outcome::NoReply)
+    }
 }
 
 async fn start_lora(
@@ -1764,7 +1853,6 @@ async fn frame_loop(
         }
     }
 }
-
 
 fn queue_write(write: settings::Write) {
     if SETTINGS_WRITES.try_send(write).is_err() {

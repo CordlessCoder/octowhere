@@ -4,7 +4,10 @@ use alloc::rc::Rc;
 use embedded_graphics::{
     Pixel,
     pixelcolor::{Gray8, Rgb565, Rgb888, raw::RawU16},
-    prelude::{Dimensions, DrawTarget, GrayColor, PixelColor, Point, PointsIter, RawData, RgbColor, Size, Transform},
+    prelude::{
+        Dimensions, DrawTarget, GrayColor, PixelColor, Point, PointsIter, RawData, RgbColor, Size,
+        Transform,
+    },
     primitives::Rectangle,
 };
 use embedded_layout::align::{HorizontalAlignment, VerticalAlignment};
@@ -78,8 +81,18 @@ pub trait CoverageTarget: DrawTarget {
 
     /// Replaces every pixel of the row: `color` mixed over `background` by its coverage, so 0
     /// writes `background`. It writes each pixel once where filling and then blending writes twice.
-    fn paint_row(&mut self, x: i32, y: i32, coverage: &[u8], color: Self::Color, background: Self::Color) {
-        let _ = self.fill_solid(&Rectangle::new(Point::new(x, y), Size::new(coverage.len() as u32, 1)), background);
+    fn paint_row(
+        &mut self,
+        x: i32,
+        y: i32,
+        coverage: &[u8],
+        color: Self::Color,
+        background: Self::Color,
+    ) {
+        let _ = self.fill_solid(
+            &Rectangle::new(Point::new(x, y), Size::new(coverage.len() as u32, 1)),
+            background,
+        );
         self.blend_row_over(x, y, coverage, color, background);
     }
 }
@@ -134,7 +147,8 @@ impl<T: CoverageTarget> CoverageTarget for OnBackground<'_, T> {
 
     #[inline]
     fn blend_row(&mut self, x: i32, y: i32, coverage: &[u8], color: Self::Color) {
-        self.parent.blend_row_over(x, y, coverage, color, self.background);
+        self.parent
+            .blend_row_over(x, y, coverage, color, self.background);
     }
 
     #[inline]
@@ -146,11 +160,19 @@ impl<T: CoverageTarget> CoverageTarget for OnBackground<'_, T> {
         color: Self::Color,
         background: Self::Color,
     ) {
-        self.parent.blend_row_over(x, y, coverage, color, background);
+        self.parent
+            .blend_row_over(x, y, coverage, color, background);
     }
 
     #[inline]
-    fn paint_row(&mut self, x: i32, y: i32, coverage: &[u8], color: Self::Color, background: Self::Color) {
+    fn paint_row(
+        &mut self,
+        x: i32,
+        y: i32,
+        coverage: &[u8],
+        color: Self::Color,
+        background: Self::Color,
+    ) {
         self.parent.paint_row(x, y, coverage, color, background);
     }
 }
@@ -164,7 +186,9 @@ impl CoverageTarget for FB {
     }
 
     fn blend_row_over(&mut self, x: i32, y: i32, coverage: &[u8], color: Color, background: Color) {
-        self.blend_row_with(x, y, coverage, color, |_, covered| background.lerp(&color, covered));
+        self.blend_row_with(x, y, coverage, color, |_, covered| {
+            background.lerp(&color, covered)
+        });
     }
 
     // PERF: storing uniform runs as words, two pixels a word, or eight bytes of coverage at a
@@ -303,7 +327,9 @@ impl<T: DrawTarget> DrawTarget for Window<'_, T> {
     {
         let area = area.translate(self.offset);
         if self.clip.contains(area.top_left)
-            && area.bottom_right().is_none_or(|corner| self.clip.contains(corner))
+            && area
+                .bottom_right()
+                .is_none_or(|corner| self.clip.contains(corner))
         {
             return self.parent.fill_contiguous(&area, colors);
         }
@@ -339,7 +365,13 @@ impl<T: CoverageTarget> Window<'_, T> {
         let end = x
             .saturating_add(coverage.len() as i32)
             .min(top.x + self.clip.size.width as i32);
-        (start < end).then(|| (start, y, &coverage[(start - x) as usize..(end - x) as usize]))
+        (start < end).then(|| {
+            (
+                start,
+                y,
+                &coverage[(start - x) as usize..(end - x) as usize],
+            )
+        })
     }
 }
 
@@ -359,7 +391,8 @@ impl<T: CoverageTarget> CoverageTarget for Window<'_, T> {
         background: Self::Color,
     ) {
         if let Some((x, y, coverage)) = self.clip_row(x, y, coverage) {
-            self.parent.blend_row_over(x, y, coverage, color, background);
+            self.parent
+                .blend_row_over(x, y, coverage, color, background);
         }
     }
 
@@ -371,7 +404,14 @@ impl<T: CoverageTarget> CoverageTarget for Window<'_, T> {
     }
 
     #[inline]
-    fn paint_row(&mut self, x: i32, y: i32, coverage: &[u8], color: Self::Color, background: Self::Color) {
+    fn paint_row(
+        &mut self,
+        x: i32,
+        y: i32,
+        coverage: &[u8],
+        color: Self::Color,
+        background: Self::Color,
+    ) {
         if let Some((x, y, coverage)) = self.clip_row(x, y, coverage) {
             self.parent.paint_row(x, y, coverage, color, background);
         }
@@ -388,7 +428,11 @@ pub struct Round<'a, T> {
 
 impl<'a, T: DrawTarget> Round<'a, T> {
     pub fn new(parent: &'a mut T, center: Point, radius: f32) -> Self {
-        Self { parent, center, radius }
+        Self {
+            parent,
+            center,
+            radius,
+        }
     }
 
     /// The columns of row `y` inside the circle, as a start and an end past it.
@@ -420,11 +464,12 @@ impl<T: DrawTarget> DrawTarget for Round<'_, T> {
         I: IntoIterator<Item = Pixel<Self::Color>>,
     {
         let (center, radius) = (self.center, self.radius);
-        self.parent.draw_iter(pixels.into_iter().filter(|Pixel(point, _)| {
-            let dx = point.x as f32 + 0.5 - center.x as f32;
-            let dy = point.y as f32 + 0.5 - center.y as f32;
-            dx * dx + dy * dy <= radius * radius
-        }))
+        self.parent
+            .draw_iter(pixels.into_iter().filter(|Pixel(point, _)| {
+                let dx = point.x as f32 + 0.5 - center.x as f32;
+                let dy = point.y as f32 + 0.5 - center.y as f32;
+                dx * dx + dy * dy <= radius * radius
+            }))
     }
 
     fn fill_solid(&mut self, area: &Rectangle, color: Self::Color) -> Result<(), Self::Error> {
@@ -474,11 +519,19 @@ impl<T: CoverageTarget> CoverageTarget for Round<'_, T> {
         background: Self::Color,
     ) {
         if let Some((x, coverage)) = self.clip_row(x, y, coverage) {
-            self.parent.blend_row_over(x, y, coverage, color, background);
+            self.parent
+                .blend_row_over(x, y, coverage, color, background);
         }
     }
 
-    fn paint_row(&mut self, x: i32, y: i32, coverage: &[u8], color: Self::Color, background: Self::Color) {
+    fn paint_row(
+        &mut self,
+        x: i32,
+        y: i32,
+        coverage: &[u8],
+        color: Self::Color,
+        background: Self::Color,
+    ) {
         if let Some((x, coverage)) = self.clip_row(x, y, coverage) {
             self.parent.paint_row(x, y, coverage, color, background);
         }
@@ -550,12 +603,14 @@ impl<T: DrawTarget> DrawTarget for Clip<'_, T> {
         let mut result = Ok(());
         for y in area.top_left.y.max(bounds.top_left.y)..=bottom_right.y.min(last.y) {
             let parent = &mut *self.parent;
-            self.damage.for_each_part(left, y, (right - left) as usize, |start, from, to| {
-                let row = Rectangle::new(Point::new(start, y), Size::new((to - from) as u32, 1));
-                if result.is_ok() {
-                    result = parent.fill_solid(&row, color);
-                }
-            });
+            self.damage
+                .for_each_part(left, y, (right - left) as usize, |start, from, to| {
+                    let row =
+                        Rectangle::new(Point::new(start, y), Size::new((to - from) as u32, 1));
+                    if result.is_ok() {
+                        result = parent.fill_solid(&row, color);
+                    }
+                });
         }
         result
     }
@@ -569,9 +624,10 @@ impl<T: CoverageTarget> CoverageTarget for Clip<'_, T> {
     #[inline]
     fn blend_row(&mut self, x: i32, y: i32, coverage: &[u8], color: Self::Color) {
         let parent = &mut *self.parent;
-        self.damage.for_each_part(x, y, coverage.len(), |start, from, to| {
-            parent.blend_row(start, y, &coverage[from..to], color);
-        });
+        self.damage
+            .for_each_part(x, y, coverage.len(), |start, from, to| {
+                parent.blend_row(start, y, &coverage[from..to], color);
+            });
     }
 
     #[inline]
@@ -584,17 +640,26 @@ impl<T: CoverageTarget> CoverageTarget for Clip<'_, T> {
         background: Self::Color,
     ) {
         let parent = &mut *self.parent;
-        self.damage.for_each_part(x, y, coverage.len(), |start, from, to| {
-            parent.blend_row_over(start, y, &coverage[from..to], color, background);
-        });
+        self.damage
+            .for_each_part(x, y, coverage.len(), |start, from, to| {
+                parent.blend_row_over(start, y, &coverage[from..to], color, background);
+            });
     }
 
     #[inline]
-    fn paint_row(&mut self, x: i32, y: i32, coverage: &[u8], color: Self::Color, background: Self::Color) {
+    fn paint_row(
+        &mut self,
+        x: i32,
+        y: i32,
+        coverage: &[u8],
+        color: Self::Color,
+        background: Self::Color,
+    ) {
         let parent = &mut *self.parent;
-        self.damage.for_each_part(x, y, coverage.len(), |start, from, to| {
-            parent.paint_row(start, y, &coverage[from..to], color, background);
-        });
+        self.damage
+            .for_each_part(x, y, coverage.len(), |start, from, to| {
+                parent.paint_row(start, y, &coverage[from..to], color, background);
+            });
     }
 }
 
@@ -665,8 +730,15 @@ impl<'a, T: CoverageTarget<Color = Color>> Knockout<'a, T> {
     fn paint_current(&mut self) {
         const WIDTH: i32 = board::LCD_WIDTH as i32;
         let [first, second] = &mut self.glyphs;
-        let (current, previous) = if self.current == 0 { (first, &*second) } else { (second, &*first) };
-        let (left, right) = (current.bounds.top_left.x, current.bounds.top_left.x + current.bounds.size.width as i32);
+        let (current, previous) = if self.current == 0 {
+            (first, &*second)
+        } else {
+            (second, &*first)
+        };
+        let (left, right) = (
+            current.bounds.top_left.x,
+            current.bounds.top_left.x + current.bounds.size.width as i32,
+        );
         let shared = left.max(previous.bounds.top_left.x)
             ..right.min(previous.bounds.top_left.x + previous.bounds.size.width as i32);
         for y in current.bounds.rows() {
@@ -676,19 +748,27 @@ impl<'a, T: CoverageTarget<Color = Color>> Knockout<'a, T> {
             let Some(row) = current.rows(y) else {
                 continue;
             };
-            if let Some(before) = (!shared.is_empty()).then(|| previous.span(y, shared.clone())).flatten() {
-                let over = &mut current.coverage[row.clone()][(shared.start - left) as usize..(shared.end - left) as usize];
+            if let Some(before) = (!shared.is_empty())
+                .then(|| previous.span(y, shared.clone()))
+                .flatten()
+            {
+                let over = &mut current.coverage[row.clone()]
+                    [(shared.start - left) as usize..(shared.end - left) as usize];
                 for (over, &under) in over.iter_mut().zip(before) {
                     *over = lerp_u8(under, u8::MAX, *over);
                 }
             }
             let painted = &mut self.painted[(y - self.rows.start) as usize];
             if *painted < left {
-                let gap = Rectangle::new(Point::new(*painted, y), Size::new((left.min(WIDTH) - *painted) as u32, 1));
+                let gap = Rectangle::new(
+                    Point::new(*painted, y),
+                    Size::new((left.min(WIDTH) - *painted) as u32, 1),
+                );
                 let _ = self.parent.fill_solid(&gap, self.background);
             }
             *painted = (*painted).max(right.clamp(0, WIDTH));
-            self.parent.paint_row(left, y, &current.coverage[row], self.color, self.background);
+            self.parent
+                .paint_row(left, y, &current.coverage[row], self.color, self.background);
         }
     }
 
@@ -698,7 +778,10 @@ impl<'a, T: CoverageTarget<Color = Color>> Knockout<'a, T> {
         self.paint_current();
         for (y, &painted) in self.rows.clone().zip(&self.painted) {
             if painted < WIDTH && !self.skip.contains(&y) {
-                let rest = Rectangle::new(Point::new(painted, y), Size::new((WIDTH - painted) as u32, 1));
+                let rest = Rectangle::new(
+                    Point::new(painted, y),
+                    Size::new((WIDTH - painted) as u32, 1),
+                );
                 let _ = self.parent.fill_solid(&rest, self.background);
             }
         }
@@ -731,14 +814,20 @@ impl<T: CoverageTarget<Color = Color>> CoverageTarget for Knockout<'_, T> {
     fn begin_glyph(&mut self, bounds: Rectangle) {
         self.paint_current();
         self.current = 1 - self.current;
-        let (top, bottom) = (bounds.top_left.y.max(self.rows.start), (bounds.top_left.y + bounds.size.height as i32).min(self.rows.end));
+        let (top, bottom) = (
+            bounds.top_left.y.max(self.rows.start),
+            (bounds.top_left.y + bounds.size.height as i32).min(self.rows.end),
+        );
         let glyph = &mut self.glyphs[self.current];
         glyph.bounds = Rectangle::new(
             Point::new(bounds.top_left.x, top),
             Size::new(bounds.size.width, (bottom - top).max(0) as u32),
         );
         glyph.coverage.clear();
-        glyph.coverage.resize((glyph.bounds.size.width * glyph.bounds.size.height) as usize, 0);
+        glyph.coverage.resize(
+            (glyph.bounds.size.width * glyph.bounds.size.height) as usize,
+            0,
+        );
     }
 
     /// A glyph sends each of its rows once, so its coverage is stored rather than blended.
@@ -753,7 +842,9 @@ impl<T: CoverageTarget<Color = Color>> CoverageTarget for Knockout<'_, T> {
         };
         let left = glyph.bounds.top_left.x;
         let start = x.max(left);
-        let end = x.saturating_add(coverage.len() as i32).min(left + glyph.bounds.size.width as i32);
+        let end = x
+            .saturating_add(coverage.len() as i32)
+            .min(left + glyph.bounds.size.width as i32);
         if start < end {
             glyph.coverage[row][(start - left) as usize..(end - left) as usize]
                 .copy_from_slice(&coverage[(start - x) as usize..(end - x) as usize]);
@@ -793,8 +884,12 @@ fontdue_macros::fontdue_font_from_file!(
 );
 
 /// The fonts a `FontdueRenderer` indexes with `font_index`.
-pub const FONTS: &[&dyn FontRepr] =
-    &[&MarathonShapiroFont, &FraktionMonoRegularFont, &FraktionMonoBoldFont, &InterferenceBoldFont];
+pub const FONTS: &[&dyn FontRepr] = &[
+    &MarathonShapiroFont,
+    &FraktionMonoRegularFont,
+    &FraktionMonoBoldFont,
+    &InterferenceBoldFont,
+];
 /// Indices into [`FONTS`].
 pub const SHAPIRO: usize = 0;
 pub const FRAKTION: usize = 1;
@@ -935,21 +1030,40 @@ fn dilate(coverage: &mut [u8], width: usize, square: bool, scratch: &mut alloc::
     let out = coverage.chunks_exact_mut(width).skip(1);
     if square {
         // Three across into `scratch`, then three of those down.
-        for (source, across) in coverage.chunks_exact(width).zip(scratch.chunks_exact_mut(width)) {
+        for (source, across) in coverage
+            .chunks_exact(width)
+            .zip(scratch.chunks_exact_mut(width))
+        {
             for (out, three) in across[1..width - 1].iter_mut().zip(source.windows(3)) {
                 *out = max3(three);
             }
         }
         let rows = scratch.chunks_exact(width);
         let out = coverage.chunks_exact_mut(width).skip(1);
-        for ((out, up), (middle, down)) in out.zip(rows.clone()).zip(rows.clone().skip(1).zip(rows.skip(2))) {
-            for (((out, &up), &middle), &down) in out[1..width - 1].iter_mut().zip(&up[1..]).zip(&middle[1..]).zip(&down[1..]) {
+        for ((out, up), (middle, down)) in out
+            .zip(rows.clone())
+            .zip(rows.clone().skip(1).zip(rows.skip(2)))
+        {
+            for (((out, &up), &middle), &down) in out[1..width - 1]
+                .iter_mut()
+                .zip(&up[1..])
+                .zip(&middle[1..])
+                .zip(&down[1..])
+            {
                 *out = up.max(middle).max(down);
             }
         }
     } else {
-        for ((out, up), (middle, down)) in out.zip(rows.clone()).zip(rows.clone().skip(1).zip(rows.skip(2))) {
-            for (((out, &up), three), &down) in out[1..width - 1].iter_mut().zip(&up[1..]).zip(middle.windows(3)).zip(&down[1..]) {
+        for ((out, up), (middle, down)) in out
+            .zip(rows.clone())
+            .zip(rows.clone().skip(1).zip(rows.skip(2)))
+        {
+            for (((out, &up), three), &down) in out[1..width - 1]
+                .iter_mut()
+                .zip(&up[1..])
+                .zip(middle.windows(3))
+                .zip(&down[1..])
+            {
                 *out = max3(three).max(up).max(down);
             }
         }
@@ -962,8 +1076,14 @@ fn glyph_reach(pen: (f32, f32), metrics: &fontdue::Metrics) -> f32 {
     if metrics.width == 0 || metrics.height == 0 {
         return 0.0;
     }
-    let (left, right) = (pen.0 + metrics.xmin as f32, pen.0 + (metrics.xmin + metrics.width as i32) as f32);
-    let (top, bottom) = (pen.1 - (metrics.ymin + metrics.height as i32) as f32, pen.1 - metrics.ymin as f32);
+    let (left, right) = (
+        pen.0 + metrics.xmin as f32,
+        pen.0 + (metrics.xmin + metrics.width as i32) as f32,
+    );
+    let (top, bottom) = (
+        pen.1 - (metrics.ymin + metrics.height as i32) as f32,
+        pen.1 - metrics.ymin as f32,
+    );
     let far = |a: f32, b: f32| a.abs().max(b.abs());
     libm::hypotf(far(left, right), far(top, bottom)) + 1.5
 }
@@ -1085,7 +1205,11 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
         let start = (-offsets.advance() / 2.0, (bottom + top) as f32 / 2.0);
         Some(
             fontdue::PenOffsets::new(font, text, px).map(move |(index, offset)| {
-                (index, (start.0 + offset, start.1), font.metrics_indexed(index, px))
+                (
+                    index,
+                    (start.0 + offset, start.1),
+                    font.metrics_indexed(index, px),
+                )
             }),
         )
     }
@@ -1122,8 +1246,10 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
             // The glyph turns about its pen, so it stays within its unturned reach of it.
             let reach = libm::ceilf(glyph_reach((0.0, 0.0), &metrics)) as i32;
             let around = Point::new(libm::floorf(pen.0) as i32, libm::floorf(pen.1) as i32);
-            if !target.visible(&Rectangle::with_center(around, Size::new_equal(2 * reach as u32 + 2)))
-            {
+            if !target.visible(&Rectangle::with_center(
+                around,
+                Size::new_equal(2 * reach as u32 + 2),
+            )) {
                 continue;
             }
             let (metrics, bitmap) =
@@ -1139,7 +1265,10 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
 
     /// Each glyph of `text` with its pen's distance from the first along the baseline, and its
     /// metrics.
-    pub fn pens<'s>(&'s self, text: &'s str) -> impl Iterator<Item = (u16, f32, fontdue::Metrics)> + 's {
+    pub fn pens<'s>(
+        &'s self,
+        text: &'s str,
+    ) -> impl Iterator<Item = (u16, f32, fontdue::Metrics)> + 's {
         let font = self.fonts[self.font_index];
         let px = self.font_size as f32;
         fontdue::PenOffsets::new(font, text, px)
@@ -1165,7 +1294,10 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
             let pen = (pen.0, pen.1 + offset);
             // The upright bitmap box turned, a pixel wider each way for the pen's fraction.
             let turned = Rectangle::new(
-                Point::new(libm::floorf(pen.0) as i32 + metrics.ymin - 1, libm::floorf(pen.1) as i32 + metrics.xmin - 1),
+                Point::new(
+                    libm::floorf(pen.0) as i32 + metrics.ymin - 1,
+                    libm::floorf(pen.1) as i32 + metrics.xmin - 1,
+                ),
                 Size::new(metrics.height as u32 + 2, metrics.width as u32 + 2),
             );
             if !target.visible(&turned) {
@@ -1184,11 +1316,22 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
 
     /// The ink box of one glyph drawn by [`draw_stretched`](Self::draw_stretched), a pixel wider
     /// each way for its edges.
-    fn stretched_glyph(origin: Point, offset: f32, metrics: &fontdue::Metrics, scale: f32) -> Rectangle {
+    fn stretched_glyph(
+        origin: Point,
+        offset: f32,
+        metrics: &fontdue::Metrics,
+        scale: f32,
+    ) -> Rectangle {
         let left = origin.x + libm::roundf(offset) as i32 + metrics.xmin - 1;
-        let top = libm::floorf(origin.y as f32 - (metrics.ymin + metrics.height as i32) as f32 * scale) as i32 - 1;
+        let top =
+            libm::floorf(origin.y as f32 - (metrics.ymin + metrics.height as i32) as f32 * scale)
+                as i32
+                - 1;
         let bottom = libm::ceilf(origin.y as f32 - metrics.ymin as f32 * scale) as i32 + 1;
-        Rectangle::with_corners(Point::new(left, top), Point::new(left + metrics.width as i32 + 1, bottom))
+        Rectangle::with_corners(
+            Point::new(left, top),
+            Point::new(left + metrics.width as i32 + 1, bottom),
+        )
     }
 
     /// The ink bounds [`draw_stretched`](Self::draw_stretched) can cover, edges included.
@@ -1197,7 +1340,10 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
         self.pens(text)
             .filter(|(_, _, metrics)| metrics.width > 0 && metrics.height > 0)
             .fold(Rectangle::zero(), |bounds, (_, offset, metrics)| {
-                Self::union_rect(bounds, Self::stretched_glyph(origin, offset, &metrics, scale))
+                Self::union_rect(
+                    bounds,
+                    Self::stretched_glyph(origin, offset, &metrics, scale),
+                )
             })
     }
 
@@ -1254,11 +1400,15 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
         for (index, corner, metrics) in self.glyphs_on_baseline(text, Point::zero()) {
             let corner = origin + corner * 2;
             let size = Size::new(2 * metrics.width as u32, 2 * metrics.height as u32);
-            if size.width == 0 || size.height == 0 || !target.visible(&Rectangle::new(corner, size)) {
+            if size.width == 0 || size.height == 0 || !target.visible(&Rectangle::new(corner, size))
+            {
                 continue;
             }
             let (metrics, bitmap) = font.rasterize_indexed(&mut canvas, index, px);
-            target.begin_glyph(Rectangle::new(corner, Size::new(2 * metrics.width as u32, 2 * metrics.height as u32)));
+            target.begin_glyph(Rectangle::new(
+                corner,
+                Size::new(2 * metrics.width as u32, 2 * metrics.height as u32),
+            ));
             row.resize(metrics.width, 0);
             bitmap.rows(&mut row, |y, x, span| {
                 doubled.clear();
@@ -1281,7 +1431,13 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
 
     /// The ink bounds of `text` once aligned in `region`, as [`draw_aligned`](Self::draw_aligned)
     /// would place it.
-    pub fn aligned_bounds<H, V>(&self, text: &str, region: &Rectangle, horizontal: H, vertical: V) -> Rectangle
+    pub fn aligned_bounds<H, V>(
+        &self,
+        text: &str,
+        region: &Rectangle,
+        horizontal: H,
+        vertical: V,
+    ) -> Rectangle
     where
         H: HorizontalAlignment,
         V: VerticalAlignment,
@@ -1389,8 +1545,14 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
         let mut mark = |glyph: Option<(u16, i32)>, baseline: i32| {
             if let Some((index, pen)) = glyph {
                 let metrics = font.metrics_indexed(index, px);
-                let corner = Point::new(pen + metrics.xmin, baseline - metrics.ymin - metrics.height as i32);
-                damage.add(Rectangle::new(corner, Size::new(metrics.width as u32, metrics.height as u32)));
+                let corner = Point::new(
+                    pen + metrics.xmin,
+                    baseline - metrics.ymin - metrics.height as i32,
+                );
+                damage.add(Rectangle::new(
+                    corner,
+                    Size::new(metrics.width as u32, metrics.height as u32),
+                ));
             }
         };
         let (mut olds, mut news) = (pens(old, old_origin), pens(new, new_origin));
@@ -1414,7 +1576,10 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
             .fold(Rectangle::zero(), |bounds, (_, corner, metrics)| {
                 Self::union_rect(
                     bounds,
-                    Rectangle::new(corner, Size::new(metrics.width as u32, metrics.height as u32)),
+                    Rectangle::new(
+                        corner,
+                        Size::new(metrics.width as u32, metrics.height as u32),
+                    ),
                 )
             })
     }
@@ -1435,7 +1600,8 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
         } = &mut *ctx;
         for (index, corner, metrics) in self.glyphs_on_baseline(text, origin) {
             let size = Size::new(metrics.width as u32, metrics.height as u32);
-            if size.width == 0 || size.height == 0 || !target.visible(&Rectangle::new(corner, size)) {
+            if size.width == 0 || size.height == 0 || !target.visible(&Rectangle::new(corner, size))
+            {
                 continue;
             }
             let color = self.text_color;
@@ -1487,13 +1653,22 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
         // One pixel more than the ring, which the dilation leaves as it is.
         let r = usize::from(radius) + 1;
         let mut ctx = self.ctx.borrow_mut();
-        let FontdueRendererCtx { canvas, coverage, .. } = &mut *ctx;
-        let (mut glyph, mut grown, mut scratch) = (alloc::vec::Vec::new(), alloc::vec::Vec::new(), alloc::vec::Vec::new());
+        let FontdueRendererCtx {
+            canvas, coverage, ..
+        } = &mut *ctx;
+        let (mut glyph, mut grown, mut scratch) = (
+            alloc::vec::Vec::new(),
+            alloc::vec::Vec::new(),
+            alloc::vec::Vec::new(),
+        );
         for (index, corner, metrics) in self.glyphs_on_baseline(text, origin) {
             let corner = corner - Point::new_equal(r as i32);
             let (width, height) = (metrics.width + 2 * r, metrics.height + 2 * r);
             let size = Size::new(width as u32, height as u32);
-            if metrics.width == 0 || metrics.height == 0 || !target.visible(&Rectangle::new(corner, size)) {
+            if metrics.width == 0
+                || metrics.height == 0
+                || !target.visible(&Rectangle::new(corner, size))
+            {
                 continue;
             }
             let (metrics, bitmap) = font.rasterize_indexed(canvas, index, px);
@@ -1510,9 +1685,17 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
             for pass in 0..usize::from(radius) {
                 dilate(&mut grown, width, pass % 2 == 1, &mut scratch);
             }
-            for (y, (ring, glyph)) in grown.chunks_exact_mut(width).zip(glyph.chunks_exact(width)).enumerate() {
+            for (y, (ring, glyph)) in grown
+                .chunks_exact_mut(width)
+                .zip(glyph.chunks_exact(width))
+                .enumerate()
+            {
                 for (ring, &glyph) in ring.iter_mut().zip(glyph) {
-                    *ring = if inside { glyph.saturating_sub(u8::MAX - *ring) } else { ring.saturating_sub(glyph) };
+                    *ring = if inside {
+                        glyph.saturating_sub(u8::MAX - *ring)
+                    } else {
+                        ring.saturating_sub(glyph)
+                    };
                 }
                 target.blend_row(corner.x, corner.y + y as i32, ring, self.text_color);
             }
@@ -1535,4 +1718,3 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
             })
     }
 }
-

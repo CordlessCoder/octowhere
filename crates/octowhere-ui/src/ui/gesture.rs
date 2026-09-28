@@ -197,7 +197,9 @@ mod tests {
                 None,
             ],
         );
-        assert!(matches!(events[1], GestureEvent::DragStart(drag) if drag.offset() == Point::new(-20, 0)));
+        assert!(
+            matches!(events[1], GestureEvent::DragStart(drag) if drag.offset() == Point::new(-20, 0))
+        );
         assert!(matches!(events[3], GestureEvent::DragMove(_)));
         let GestureEvent::DragEnd(end) = events[6] else {
             panic!("expected a drag end, got {:?}", events[6]);
@@ -237,7 +239,14 @@ mod tests {
         let mut tracker = GestureTracker::default();
         let events = run(
             &mut tracker,
-            &[Some((100, 100)), Some((160, 100)), Some((100, 100)), None, None, None],
+            &[
+                Some((100, 100)),
+                Some((160, 100)),
+                Some((100, 100)),
+                None,
+                None,
+                None,
+            ],
         );
         assert!(matches!(events[5], GestureEvent::DragEnd(_)));
     }

@@ -45,7 +45,10 @@ pub struct RowSpans<const WIDTH: usize, const BANDS: usize, const K: usize> {
 impl<const WIDTH: usize, const BANDS: usize, const K: usize> RowSpans<WIDTH, BANDS, K> {
     pub const HEIGHT: usize = BANDS * GRAIN as usize;
     const _CHECK: () = assert!(
-        K >= 1 && K <= MAX_K && WIDTH.is_multiple_of(GRAIN as usize) && WIDTH / GRAIN as usize <= u8::MAX as usize,
+        K >= 1
+            && K <= MAX_K
+            && WIDTH.is_multiple_of(GRAIN as usize)
+            && WIDTH / GRAIN as usize <= u8::MAX as usize,
         "K must be 1 to 7, and WIDTH even and at most 510"
     );
 
@@ -130,7 +133,13 @@ impl<const WIDTH: usize, const BANDS: usize, const K: usize> RowSpans<WIDTH, BAN
     /// Calls `part` with each damaged piece of row `y` within columns `x..x + len`: its first
     /// column, and where it starts and ends counted from `x`.
     #[inline]
-    pub fn for_each_part(&self, x: i32, y: i32, len: usize, mut part: impl FnMut(i32, usize, usize)) {
+    pub fn for_each_part(
+        &self,
+        x: i32,
+        y: i32,
+        len: usize,
+        mut part: impl FnMut(i32, usize, usize),
+    ) {
         if !(0..Self::HEIGHT as i32).contains(&y) {
             return;
         }
@@ -153,7 +162,9 @@ impl<const WIDTH: usize, const BANDS: usize, const K: usize> RowSpans<WIDTH, BAN
             return;
         }
         let start = start.max(0).div_euclid(GRAIN);
-        let end = (end + GRAIN - 1).div_euclid(GRAIN).min((WIDTH / GRAIN as usize) as i32);
+        let end = (end + GRAIN - 1)
+            .div_euclid(GRAIN)
+            .min((WIDTH / GRAIN as usize) as i32);
         if start >= end {
             return;
         }
@@ -419,9 +430,7 @@ impl<const WIDTH: usize, const BANDS: usize, const K: usize> Clone for RowSpans<
     }
 }
 
-impl<const WIDTH: usize, const BANDS: usize, const K: usize> Default
-    for RowSpans<WIDTH, BANDS, K>
-{
+impl<const WIDTH: usize, const BANDS: usize, const K: usize> Default for RowSpans<WIDTH, BANDS, K> {
     fn default() -> Self {
         Self::new()
     }
@@ -455,7 +464,10 @@ impl Open {
 
     fn rectangle(self) -> Rectangle {
         Rectangle::new(
-            Point::new(i32::from(self.span.start) * GRAIN, self.first_band as i32 * GRAIN),
+            Point::new(
+                i32::from(self.span.start) * GRAIN,
+                self.first_band as i32 * GRAIN,
+            ),
             Size::new(
                 self.span.len(),
                 (self.last_band - self.first_band + 1) as u32 * GRAIN as u32,

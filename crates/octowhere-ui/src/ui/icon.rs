@@ -38,7 +38,10 @@ impl Tile {
 
     #[must_use]
     pub const fn bounds(self) -> Rectangle {
-        Rectangle::new(self.corner, Size::new(self.side() as u32, self.side() as u32))
+        Rectangle::new(
+            self.corner,
+            Size::new(self.side() as u32, self.side() as u32),
+        )
     }
 
     /// The modules of rows `from..to`.
@@ -95,7 +98,14 @@ mod tests {
 
     #[test]
     fn the_frame_is_a_quarter_module_and_at_least_two_pixels() {
-        let frame = |module| Tile { corner: Point::zero(), module, padding: 0 }.frame();
+        let frame = |module| {
+            Tile {
+                corner: Point::zero(),
+                module,
+                padding: 0,
+            }
+            .frame()
+        };
         assert_eq!([5, 8, 10, 16].map(frame), [2, 2, 3, 4]);
     }
 }

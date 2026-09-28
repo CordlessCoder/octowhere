@@ -42,7 +42,10 @@ impl I2c<SevenBitAddress> for MockI2c {
         for operation in operations {
             match operation {
                 Operation::Write(data) => {
-                    self.state.borrow_mut().writes.push((address, data.to_vec()));
+                    self.state
+                        .borrow_mut()
+                        .writes
+                        .push((address, data.to_vec()));
                 }
                 Operation::Read(data) => {
                     if self.state.borrow().read_failures != 0 {
@@ -99,7 +102,12 @@ fn parser_rejects_a_bad_checksum_and_recovers() {
         parser.push(*byte).unwrap();
     }
     assert_eq!(
-        parser.state().fix.unwrap().satellites.map(|value| value.get()),
+        parser
+            .state()
+            .fix
+            .unwrap()
+            .satellites
+            .map(|value| value.get()),
         Some(8)
     );
 }
@@ -163,10 +171,7 @@ fn pair_command_builder_encodes_protocol_fields() {
     }
     let command = builder.finish().unwrap();
 
-    assert_eq!(
-        command.as_bytes(),
-        b"$PAIR066,1,1,1,1,0,0*3A\r\n"
-    );
+    assert_eq!(command.as_bytes(), b"$PAIR066,1,1,1,1,0,0*3A\r\n");
 
     let mut builder = PairCommandBuilder::new(62).unwrap();
     builder.field_i32(-1).unwrap();
@@ -240,8 +245,14 @@ fn read_nmea_chunk_uses_the_length_and_data_commands() {
     let data = block_on(gnss.read_nmea_chunk(&mut buffer)).unwrap();
 
     assert_eq!(data, b"abc");
-    assert_eq!(state.borrow().writes[0], (0x50, vec![0x08, 0, 0x51, 0xAA, 4, 0, 0, 0]));
-    assert_eq!(state.borrow().writes[1], (0x50, vec![0, 0x20, 0x51, 0xAA, 3, 0, 0, 0]));
+    assert_eq!(
+        state.borrow().writes[0],
+        (0x50, vec![0x08, 0, 0x51, 0xAA, 4, 0, 0, 0])
+    );
+    assert_eq!(
+        state.borrow().writes[1],
+        (0x50, vec![0, 0x20, 0x51, 0xAA, 3, 0, 0, 0])
+    );
 }
 
 #[test]
@@ -312,25 +323,19 @@ fn typed_receiver_configuration_uses_documented_wire_commands() {
     block_on(gnss.query_fix_interval()).unwrap();
     block_on(gnss.set_minimum_snr(MinimumSnrDb::new(15).unwrap())).unwrap();
     block_on(gnss.query_minimum_snr()).unwrap();
-    block_on(gnss.set_gnss_search_mode(GnssSearchMode::new(
-        true, false, true, true, false,
-    )))
-    .unwrap();
+    block_on(gnss.set_gnss_search_mode(GnssSearchMode::new(true, false, true, true, false)))
+        .unwrap();
     block_on(gnss.query_gnss_search_mode()).unwrap();
-    block_on(gnss.set_static_navigation_threshold(
-        StaticNavigationThreshold::new(4).unwrap(),
-    ))
-    .unwrap();
+    block_on(gnss.set_static_navigation_threshold(StaticNavigationThreshold::new(4).unwrap()))
+        .unwrap();
     block_on(gnss.query_static_navigation_threshold()).unwrap();
     block_on(gnss.set_elevation_mask(ElevationMaskDegrees::new(5).unwrap())).unwrap();
     block_on(gnss.query_elevation_mask()).unwrap();
     block_on(gnss.set_aic_mode(AicMode::Enabled)).unwrap();
     block_on(gnss.query_aic_mode()).unwrap();
-    block_on(gnss.set_navigation_mode(NavigationMode::Fitness))
-        .unwrap();
+    block_on(gnss.set_navigation_mode(NavigationMode::Fitness)).unwrap();
     block_on(gnss.query_navigation_mode()).unwrap();
-    block_on(gnss.set_debug_log_output(DebugLogOutput::Full))
-        .unwrap();
+    block_on(gnss.set_debug_log_output(DebugLogOutput::Full)).unwrap();
     block_on(gnss.query_debug_log_output()).unwrap();
 
     let command_data: Vec<Vec<u8>> = state
@@ -386,16 +391,9 @@ fn nmea_output_rate_configures_any_sentence_type() {
     };
     let mut gnss = Lc76g::new(i2c, MockDelay::default());
 
-    block_on(gnss.set_nmea_output_rate(
-        NmeaSentence::Gsa,
-        NmeaOutputRate::EVERY_FIX,
-    ))
-    .unwrap();
-    block_on(gnss.set_nmea_output_rate(
-        NmeaSentence::Gsv,
-        NmeaOutputRate::every(2).unwrap(),
-    ))
-    .unwrap();
+    block_on(gnss.set_nmea_output_rate(NmeaSentence::Gsa, NmeaOutputRate::EVERY_FIX)).unwrap();
+    block_on(gnss.set_nmea_output_rate(NmeaSentence::Gsv, NmeaOutputRate::every(2).unwrap()))
+        .unwrap();
 
     let writes = &state.borrow().writes;
     let command_data: Vec<&[u8]> = writes

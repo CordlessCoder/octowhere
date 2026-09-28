@@ -16,14 +16,15 @@ use super::{
     reveal::{Reveal, draw_revealed, revealed_bounds},
 };
 use crate::chrome::{
-    self, Color, CoverageTarget, FontdueRenderer, OnBackground, RgbColorExt as _, Window,
-    FRAKTION, FRAKTION_BOLD, SHAPIRO,
+    self, Color, CoverageTarget, FRAKTION, FRAKTION_BOLD, FontdueRenderer, OnBackground,
+    RgbColorExt as _, SHAPIRO, Window,
 };
 
 pub const CENTER: Point = Point::new(233, 233);
 // The dial's damage is worked out for half of it and turned about the panel's centre for the rest.
 const _: () = assert!(
-    CENTER.x * 2 == crate::board::LCD_WIDTH as i32 && CENTER.y * 2 == crate::board::LCD_HEIGHT as i32
+    CENTER.x * 2 == crate::board::LCD_WIDTH as i32
+        && CENTER.y * 2 == crate::board::LCD_HEIGHT as i32
 );
 /// Every state shares the slab, so a state change does not move it. It ends 16 px above the tilt
 /// line's ink. Every state fills it, which the clear before the screen relies on.
@@ -95,7 +96,10 @@ impl Texture {
             let (width, height) = if self.phase == 4 {
                 (2 + ((n >> 20) % 9) as i32, 2 + ((n >> 24) % 4) as i32)
             } else {
-                ([14, 26, 40, 64][((n >> 20) & 3) as usize], [2, 4, 7, 11][((n >> 24) & 3) as usize])
+                (
+                    [14, 26, 40, 64][((n >> 20) & 3) as usize],
+                    [2, 4, 7, 11][((n >> 24) & 3) as usize],
+                )
             };
             let area = Rectangle::new(Point::new(x, y), Size::new(width as u32, height as u32));
             if !texture_place(area) || !target.visible(&area) {
@@ -110,7 +114,10 @@ impl Texture {
             target.fill_solid(&area, color)?;
             if height >= 7 {
                 let stripe = Rectangle::new(Point::new(x, y + 3), Size::new(width as u32, 1));
-                target.fill_solid(&stripe, chrome::BLACK.lerp(&chrome::BLUE, self.dimmed(level.saturating_add(15))))?;
+                target.fill_solid(
+                    &stripe,
+                    chrome::BLACK.lerp(&chrome::BLUE, self.dimmed(level.saturating_add(15))),
+                )?;
             }
         }
         Ok(())
@@ -132,18 +139,29 @@ impl Texture {
                 let n = texture_hash(0x2d49_1805 ^ (row * 21 + column) as u32);
                 let dx = x - CENTER.x;
                 let dy = y - CENTER.y;
-                let chance = if dx * dx + dy * dy > 144 * 144 { 44 } else { 16 };
+                let chance = if dx * dx + dy * dy > 144 * 144 {
+                    44
+                } else {
+                    16
+                };
                 if n % 100 >= chance {
                     continue;
                 }
-                let base = if self.kind == TextureKind::Tiles { 20 } else { 36 };
+                let base = if self.kind == TextureKind::Tiles {
+                    20
+                } else {
+                    36
+                };
                 let level = base + ((n >> 28) & 3) as u8 * 10;
                 let color = chrome::BLACK.lerp(&chrome::BLUE, self.dimmed(level));
                 let rising = n & (1 << 19) != 0;
                 for step in 0..4 {
                     let left = if rising { x + step * 4 } else { x };
                     target.fill_solid(
-                        &Rectangle::new(Point::new(left, y + step * 4), Size::new((18 - step * 4) as u32, 4)),
+                        &Rectangle::new(
+                            Point::new(left, y + step * 4),
+                            Size::new((18 - step * 4) as u32, 4),
+                        ),
                         color,
                     )?;
                 }
@@ -170,13 +188,18 @@ fn texture_place(area: Rectangle) -> bool {
     let Some(end) = area.bottom_right() else {
         return false;
     };
-    [area.top_left, Point::new(end.x, area.top_left.y), Point::new(area.top_left.x, end.y), end]
-        .into_iter()
-        .all(|p| {
-            let dx = p.x - CENTER.x;
-            let dy = p.y - CENTER.y;
-            dx * dx + dy * dy <= 228 * 228
-        })
+    [
+        area.top_left,
+        Point::new(end.x, area.top_left.y),
+        Point::new(area.top_left.x, end.y),
+        end,
+    ]
+    .into_iter()
+    .all(|p| {
+        let dx = p.x - CENTER.x;
+        let dy = p.y - CENTER.y;
+        dx * dx + dy * dy <= 228 * 228
+    })
 }
 
 /// What the screen shows, in the order that decides between them.
@@ -357,7 +380,10 @@ impl Change {
             old_line,
             new_line,
         };
-        let settled = Self { from: None, ..change } == Self::NONE;
+        let settled = Self {
+            from: None,
+            ..change
+        } == Self::NONE;
         if settled { Self::NONE } else { change }
     }
 
@@ -478,7 +504,11 @@ impl Slab {
 
     /// The colour of the slab's row `y`.
     fn row(self, y: i32) -> Color {
-        if y < SLAB.top_left.y + self.split as i32 { self.new } else { self.old }
+        if y < SLAB.top_left.y + self.split as i32 {
+            self.new
+        } else {
+            self.old
+        }
     }
 }
 
@@ -525,9 +555,16 @@ impl Parts {
         };
         Self {
             texture: Texture::of(mode, accents.texture, accents.field),
-            dial: mode.heading().filter(|_| marks > 0).map(|heading| (heading, marks)),
+            dial: mode
+                .heading()
+                .filter(|_| marks > 0)
+                .map(|heading| (heading, marks)),
             icon: (mode.icon(), mode.icon_color(), accents.icon_rows),
-            caption: (caption, caption_color, Reveal::of(accents.caption, caption.len())),
+            caption: (
+                caption,
+                caption_color,
+                Reveal::of(accents.caption, caption.len()),
+            ),
             slab,
             readout,
             status: [
@@ -555,7 +592,10 @@ fn three_digits(value: u16) -> heapless::String<4> {
     digits
 }
 
-fn caption_style(font: &FontdueRenderer<'static, Color>, color: Color) -> FontdueRenderer<'static, Color> {
+fn caption_style(
+    font: &FontdueRenderer<'static, Color>,
+    color: Color,
+) -> FontdueRenderer<'static, Color> {
     style(font, color, 16, FRAKTION_BOLD)
 }
 
@@ -563,7 +603,10 @@ fn tilt_style(font: &FontdueRenderer<'static, Color>) -> FontdueRenderer<'static
     style(font, chrome::GRAY, 23, FRAKTION)
 }
 
-fn letter_style(font: &FontdueRenderer<'static, Color>, color: Color) -> FontdueRenderer<'static, Color> {
+fn letter_style(
+    font: &FontdueRenderer<'static, Color>,
+    color: Color,
+) -> FontdueRenderer<'static, Color> {
     style(font, color, 40, SHAPIRO)
 }
 
@@ -615,7 +658,13 @@ where
     let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
     for (status, reveal) in parts.status.into_iter().flatten() {
         let (style, baseline) = status.style(font);
-        draw_revealed(&style, status.text, status.pen(&style, baseline), reveal, field)?;
+        draw_revealed(
+            &style,
+            status.text,
+            status.pen(&style, baseline),
+            reveal,
+            field,
+        )?;
     }
     if let Some(tilt) = &parts.tilt {
         centred(&tilt_style(font), tilt, CENTER.x, TILT_BASELINE, field)?;
@@ -650,7 +699,8 @@ pub fn damage(
         }
     }
     if old.icon != new.icon {
-        let ((old_glyph, old_color, old_rows), (new_glyph, new_color, new_rows)) = (old.icon, new.icon);
+        let ((old_glyph, old_color, old_rows), (new_glyph, new_color, new_rows)) =
+            (old.icon, new.icon);
         if (old_glyph, old_color) == (new_glyph, new_color) {
             damage.add(ICON.rows(old_rows.min(new_rows), old_rows.max(new_rows)));
         } else {
@@ -679,15 +729,25 @@ pub fn damage(
     if old.status != new.status {
         for (status, _) in old.status.into_iter().chain(new.status).flatten() {
             let (style, baseline) = status.style(font);
-            damage.add(revealed_bounds(&style, status.text, status.pen(&style, baseline)));
+            damage.add(revealed_bounds(
+                &style,
+                status.text,
+                status.pen(&style, baseline),
+            ));
         }
     }
     if old.tilt != new.tilt {
         let style = tilt_style(font);
         match (&old.tilt, &new.tilt) {
             (Some(was), Some(now)) => style.glyph_damage(
-                (was, Point::new(centred_left(&style, was, CENTER.x), TILT_BASELINE)),
-                (now, Point::new(centred_left(&style, now, CENTER.x), TILT_BASELINE)),
+                (
+                    was,
+                    Point::new(centred_left(&style, was, CENTER.x), TILT_BASELINE),
+                ),
+                (
+                    now,
+                    Point::new(centred_left(&style, now, CENTER.x), TILT_BASELINE),
+                ),
                 damage,
             ),
             (was, now) => {
@@ -720,7 +780,12 @@ impl Default for DialFootprint {
 impl DialFootprint {
     /// Marks the pixels a whole dial turned to `heading` covers, which a partly swept one stays
     /// inside.
-    fn mark(&mut self, (heading, _): (u16, u8), font: &FontdueRenderer<'static, Color>, damage: &mut chrome::Dirty) {
+    fn mark(
+        &mut self,
+        (heading, _): (u16, u8),
+        font: &FontdueRenderer<'static, Color>,
+        damage: &mut chrome::Dirty,
+    ) {
         if self.key != Some(heading) {
             self.half.clear();
             half_dial(heading, font, &mut self.half);
@@ -775,7 +840,12 @@ fn centred_left(style: &FontdueRenderer<'static, Color>, text: &str, x: i32) -> 
 }
 
 /// The ink [`centred`] covers.
-fn centred_bounds(style: &FontdueRenderer<'static, Color>, text: &str, x: i32, baseline: i32) -> Rectangle {
+fn centred_bounds(
+    style: &FontdueRenderer<'static, Color>,
+    text: &str,
+    x: i32,
+    baseline: i32,
+) -> Rectangle {
     style.baseline_bounds(text, Point::new(centred_left(style, text, x), baseline))
 }
 
@@ -805,7 +875,10 @@ fn status(mode: Mode) -> Option<Status> {
 
 impl Status {
     /// Its style, and the baseline that centres its ink in the status band.
-    fn style(self, font: &FontdueRenderer<'static, Color>) -> (FontdueRenderer<'static, Color>, i32) {
+    fn style(
+        self,
+        font: &FontdueRenderer<'static, Color>,
+    ) -> (FontdueRenderer<'static, Color>, i32) {
         let style = style(font, self.color, self.size, self.index);
         let ink = style.baseline_bounds(self.text, Point::zero());
         let baseline = STATUS_BAND.top_left.y
@@ -881,16 +954,34 @@ where
     let mut coverage = alloc::vec::Vec::new();
     let shown = |mark: usize| mark < usize::from(marks);
     for tick in 0..9 {
-        let quarters = (0..4).filter(|quarter| shown(quarter * 9 + tick)).fold(0, |bits, quarter| bits | 1 << quarter);
+        let quarters = (0..4)
+            .filter(|quarter| shown(quarter * 9 + tick))
+            .fold(0, |bits, quarter| bits | 1 << quarter);
         if quarters == 0 {
             continue;
         }
         let (corners, _, color) = tick_shape(tick, turn);
-        super::smooth::polygon_quarters(field, &mut raster, &mut coverage, &corners, CENTER, quarters, color);
+        super::smooth::polygon_quarters(
+            field,
+            &mut raster,
+            &mut coverage,
+            &corners,
+            CENTER,
+            quarters,
+            color,
+        );
     }
-    for (quarter, letter) in LETTERS.into_iter().enumerate().filter(|&(quarter, _)| shown(quarter * 9)) {
+    for (quarter, letter) in LETTERS
+        .into_iter()
+        .enumerate()
+        .filter(|&(quarter, _)| shown(quarter * 9))
+    {
         let (at, cos, sin) = letter_place(quarter, turn);
-        let color = if quarter == 0 { chrome::ORANGE } else { chrome::WHITE };
+        let color = if quarter == 0 {
+            chrome::ORANGE
+        } else {
+            chrome::WHITE
+        };
         letter_style(font, color).draw_rotated(letter, at, cos, sin, field)?;
     }
     Ok(())
@@ -940,10 +1031,19 @@ mod tests {
     #[test]
     fn modes_follow_the_handoffs_precedence() {
         assert_eq!(Mode::of(&view(false, 100, Some(900), true)), Mode::NoData);
-        assert_eq!(Mode::of(&view(true, 100, Some(900), true)), Mode::Interference(90));
-        assert_eq!(Mode::of(&view(true, 100, Some(900), false)), Mode::Heading(90));
+        assert_eq!(
+            Mode::of(&view(true, 100, Some(900), true)),
+            Mode::Interference(90)
+        );
+        assert_eq!(
+            Mode::of(&view(true, 100, Some(900), false)),
+            Mode::Heading(90)
+        );
         // A heading with calibration short of 100 still shows as a heading.
-        assert_eq!(Mode::of(&view(true, 40, Some(900), false)), Mode::Heading(90));
+        assert_eq!(
+            Mode::of(&view(true, 40, Some(900), false)),
+            Mode::Heading(90)
+        );
         assert_eq!(Mode::of(&view(true, 54, None, true)), Mode::Calibrating(54));
         assert_eq!(Mode::of(&view(true, 100, None, false)), Mode::TopEdgeUp);
     }
@@ -957,11 +1057,23 @@ mod tests {
     #[test]
     fn c1_field_is_fixed_for_values_and_clear_for_a_fault() {
         let full = Accents::FULL.texture;
-        assert_eq!(Texture::of(Mode::Heading(0), full, 255), Texture::of(Mode::Heading(359), full, 255));
-        assert_eq!(Texture::of(Mode::Interference(0), full, 255), Texture::of(Mode::Interference(359), full, 255));
-        assert_eq!(Texture::of(Mode::Calibrating(0), full, 255), Texture::of(Mode::TopEdgeUp, full, 255));
+        assert_eq!(
+            Texture::of(Mode::Heading(0), full, 255),
+            Texture::of(Mode::Heading(359), full, 255)
+        );
+        assert_eq!(
+            Texture::of(Mode::Interference(0), full, 255),
+            Texture::of(Mode::Interference(359), full, 255)
+        );
+        assert_eq!(
+            Texture::of(Mode::Calibrating(0), full, 255),
+            Texture::of(Mode::TopEdgeUp, full, 255)
+        );
         assert_eq!(Texture::of(Mode::NoData, full, 255), None);
-        assert_eq!(Texture::of(Mode::Heading(47), Accents::HIDDEN.texture, 255), None);
+        assert_eq!(
+            Texture::of(Mode::Heading(47), Accents::HIDDEN.texture, 255),
+            None
+        );
     }
 
     #[test]
@@ -969,7 +1081,10 @@ mod tests {
         assert!(!texture_place(SLAB));
         assert!(!texture_place(ICON.bounds()));
         assert!(!texture_place(STATUS_BAND));
-        assert!(texture_place(Rectangle::new(Point::new(190, 30), Size::new(20, 4))));
+        assert!(texture_place(Rectangle::new(
+            Point::new(190, 30),
+            Size::new(20, 4)
+        )));
     }
 
     fn renderer() -> FontdueRenderer<'static, Color> {
@@ -989,12 +1104,23 @@ mod tests {
     fn every_readout_fits_the_slab() {
         let font = renderer();
         let (numerals, suffix) = (numerals(&font), suffix(&font));
-        for (digits, unit) in [("000", "\u{b0}"), ("359", "\u{b0}"), ("000", "%"), ("100", "%")] {
+        for (digits, unit) in [
+            ("000", "\u{b0}"),
+            ("359", "\u{b0}"),
+            ("000", "%"),
+            ("100", "%"),
+        ] {
             let ink = numerals.baseline_bounds(digits, READOUT);
             let mark = suffix.baseline_bounds(unit, SUFFIX);
             assert!(!mark.is_zero_sized(), "{unit} has no glyph");
-            assert!(inside(ink, SLAB), "{digits} spills out of the slab: {ink:?}");
-            assert!(inside(mark, SLAB), "{unit} spills out of the slab: {mark:?}");
+            assert!(
+                inside(ink, SLAB),
+                "{digits} spills out of the slab: {ink:?}"
+            );
+            assert!(
+                inside(mark, SLAB),
+                "{unit} spills out of the slab: {mark:?}"
+            );
             assert!(
                 ink.intersection(&mark).is_zero_sized(),
                 "{unit} overlaps {digits}: {ink:?} {mark:?}"
@@ -1006,7 +1132,10 @@ mod tests {
             horizontal::Center,
             vertical::Center,
         );
-        assert!(inside(no_data, SLAB), "NO DATA spills out of the slab: {no_data:?}");
+        assert!(
+            inside(no_data, SLAB),
+            "NO DATA spills out of the slab: {no_data:?}"
+        );
     }
 
     #[test]
@@ -1015,7 +1144,10 @@ mod tests {
         let numerals = numerals(&font);
         let ink = numerals.baseline_bounds(DASHES, dashes_origin(&numerals));
         let offset = ink.center() - SLAB.center();
-        assert!(offset.x.abs() <= 1 && offset.y.abs() <= 1, "{ink:?} is off centre by {offset:?}");
+        assert!(
+            offset.x.abs() <= 1 && offset.y.abs() <= 1,
+            "{ink:?} is off centre by {offset:?}"
+        );
     }
 
     #[test]
@@ -1036,7 +1168,10 @@ mod tests {
             // reaches about 20 px inside its centre's radius.
             let corner = ink.top_left - CENTER;
             let reach = libm::hypotf(corner.x as f32, corner.y as f32);
-            assert!(reach < LETTER_RADIUS - 20.0, "{text} reaches r {reach}: {ink:?}");
+            assert!(
+                reach < LETTER_RADIUS - 20.0,
+                "{text} reaches r {reach}: {ink:?}"
+            );
         }
     }
 }

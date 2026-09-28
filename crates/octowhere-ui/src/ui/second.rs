@@ -844,10 +844,10 @@ impl Stepper {
         big.draw_on_baseline(&chosen, pen, &mut OnBackground::new(&mut *target, accent))?;
         if replay && !failure {
             let note = style(font, chrome::BLACK, 12, FRAKTION_BOLD);
-        let pen = Point::new(
+            let pen = Point::new(
                 text::pen_x_for_ink_right(&note, "SUCCESSFUL BOOT", 370),
                 text::baseline_for_ink_top(&note, "SUCCESSFUL BOOT", 249),
-        );
+            );
             note.draw_on_baseline(
                 "SUCCESSFUL BOOT",
                 pen,
@@ -884,7 +884,7 @@ impl Stepper {
                     &mut OnBackground::new(&mut *target, chrome::BLACK),
                 )?;
             }
-            }
+        }
         let mut position = String::<20>::new();
         if failure {
             _ = write!(position, "DEMO / {:02} OF 06", self.index);

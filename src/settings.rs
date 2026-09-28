@@ -75,7 +75,9 @@ impl defmt::Format for Write {
             Self::AutomaticZone(zone) => {
                 defmt::write!(f, "AutomaticZone({=str})", DATABASE.zone(*zone).name);
             }
-            Self::ManualZone(zone) => defmt::write!(f, "ManualZone({=str})", DATABASE.zone(*zone).name),
+            Self::ManualZone(zone) => {
+                defmt::write!(f, "ManualZone({=str})", DATABASE.zone(*zone).name)
+            }
             Self::Automatic => defmt::write!(f, "Automatic"),
             Self::Brightness(level) => defmt::write!(f, "Brightness({})", level),
             Self::Timeout(timeout) => defmt::write!(f, "Timeout({=str})", timeout.label()),
@@ -111,7 +113,12 @@ impl ekv::flash::Flash for Partition {
         self.flash.erase(at, at + PAGE_SIZE)
     }
 
-    async fn read(&mut self, page: PageID, offset: usize, data: &mut [u8]) -> Result<(), Self::Error> {
+    async fn read(
+        &mut self,
+        page: PageID,
+        offset: usize,
+        data: &mut [u8],
+    ) -> Result<(), Self::Error> {
         let at = self.at(page, offset);
         self.flash.read(at, data)
     }
@@ -143,7 +150,8 @@ impl Store {
             .and_then(|table| {
                 table.iter().find(|entry| {
                     entry.label_as_str() == PARTITION
-                        && entry.partition_type() == PartitionType::Data(DataPartitionSubType::Undefined)
+                        && entry.partition_type()
+                            == PartitionType::Data(DataPartitionSubType::Undefined)
                 })
             })
             .map(|entry| (entry.offset(), entry.len()));
@@ -154,8 +162,17 @@ impl Store {
         let pages = ((length / PAGE_SIZE) as usize).min(ekv::config::MAX_PAGE_COUNT);
         let mut config = Config::default();
         config.random_seed = random_seed;
-        let database = Database::new(Partition { flash, offset, pages }, config);
-        Self { database: Some(database) }
+        let database = Database::new(
+            Partition {
+                flash,
+                offset,
+                pages,
+            },
+            config,
+        );
+        Self {
+            database: Some(database),
+        }
     }
 
     /// Reads every setting, taking a default for any missing or unreadable. Formats the
@@ -189,17 +206,25 @@ impl Store {
             };
             let zone = |name: Option<heapless::Vec<u8, VALUE_BUFFER>>| {
                 let name = name?;
-                DATABASE.find(core::str::from_utf8(&name).ok()?).map(|zone| zone.id)
+                DATABASE
+                    .find(core::str::from_utf8(&name).ok()?)
+                    .map(|zone| zone.id)
             };
-            let always_on = value(KEY_ALWAYS_ON).await.and_then(|on| on.first().map(|&on| on != 0));
+            let always_on = value(KEY_ALWAYS_ON)
+                .await
+                .and_then(|on| on.first().map(|&on| on != 0));
             let automatic_zone = zone(value(KEY_AUTOMATIC_ZONE).await);
-            let brightness = value(KEY_BRIGHTNESS).await.and_then(|level| level.first().copied());
+            let brightness = value(KEY_BRIGHTNESS)
+                .await
+                .and_then(|level| level.first().copied());
             let manual_zone = zone(value(KEY_MANUAL_ZONE).await);
             let timeout = value(KEY_TIMEOUT)
                 .await
                 .and_then(|seconds| Some(u16::from_le_bytes(seconds.as_slice().try_into().ok()?)))
                 .and_then(Timeout::from_seconds);
-            let mode = value(KEY_ZONE_MODE).await.and_then(|mode| mode.first().copied());
+            let mode = value(KEY_ZONE_MODE)
+                .await
+                .and_then(|mode| mode.first().copied());
             Saved {
                 // A manual choice needs its zone, which a rebuilt zone table may have dropped.
                 zone_mode: match mode {
@@ -228,7 +253,9 @@ impl Store {
             let mut transaction = database.write_transaction().await;
             // A transaction takes its keys in ascending order, and commits them all or none.
             let written = match write {
-                Write::AutomaticZone(zone) => transaction.write(KEY_AUTOMATIC_ZONE, name(zone)).await,
+                Write::AutomaticZone(zone) => {
+                    transaction.write(KEY_AUTOMATIC_ZONE, name(zone)).await
+                }
                 Write::ManualZone(zone) => {
                     match transaction.write(KEY_MANUAL_ZONE, name(zone)).await {
                         Ok(()) => transaction.write(KEY_ZONE_MODE, &[MODE_MANUAL]).await,
@@ -237,7 +264,11 @@ impl Store {
                 }
                 Write::Automatic => transaction.write(KEY_ZONE_MODE, &[MODE_AUTOMATIC]).await,
                 Write::Brightness(level) => transaction.write(KEY_BRIGHTNESS, &[level]).await,
-                Write::Timeout(timeout) => transaction.write(KEY_TIMEOUT, &timeout.seconds().to_le_bytes()).await,
+                Write::Timeout(timeout) => {
+                    transaction
+                        .write(KEY_TIMEOUT, &timeout.seconds().to_le_bytes())
+                        .await
+                }
                 Write::AlwaysOn(on) => transaction.write(KEY_ALWAYS_ON, &[u8::from(on)]).await,
                 Write::Clear => unreachable!("handled above"),
             };

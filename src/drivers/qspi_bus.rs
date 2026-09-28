@@ -213,7 +213,10 @@ impl<'d> QspiBus<'d> {
     }
 
     /// Starts a quad write with `command`, leaving CS asserted for the data that follows.
-    pub(crate) async fn begin_quad_write_async(&mut self, command: u8) -> Result<(), esp_hal::spi::Error> {
+    pub(crate) async fn begin_quad_write_async(
+        &mut self,
+        command: u8,
+    ) -> Result<(), esp_hal::spi::Error> {
         self.cs_low();
         let spi = self.spi.take().unwrap();
         let transfer = spi

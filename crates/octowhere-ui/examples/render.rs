@@ -99,11 +99,46 @@ fn main() {
 
     let fixture = sensors();
     for (name, clock, zone) in [
-        ("rtc", ClockState { set_from_gnss: false, ..fixture.clock }, fixture.zone),
-        ("manual", fixture.clock, ZoneState { mode: ZoneMode::Manual, ..fixture.zone }),
-        ("stopped", ClockState { stopped: true, ..fixture.clock }, fixture.zone),
-        ("no-zone", fixture.clock, ZoneState { zone: None, ..fixture.zone }),
-        ("no-data", ClockState { utc: None, ..fixture.clock }, fixture.zone),
+        (
+            "rtc",
+            ClockState {
+                set_from_gnss: false,
+                ..fixture.clock
+            },
+            fixture.zone,
+        ),
+        (
+            "manual",
+            fixture.clock,
+            ZoneState {
+                mode: ZoneMode::Manual,
+                ..fixture.zone
+            },
+        ),
+        (
+            "stopped",
+            ClockState {
+                stopped: true,
+                ..fixture.clock
+            },
+            fixture.zone,
+        ),
+        (
+            "no-zone",
+            fixture.clock,
+            ZoneState {
+                zone: None,
+                ..fixture.zone
+            },
+        ),
+        (
+            "no-data",
+            ClockState {
+                utc: None,
+                ..fixture.clock
+            },
+            fixture.zone,
+        ),
         (
             "longest-zone",
             fixture.clock,
@@ -120,29 +155,58 @@ fn main() {
         for now in [1_000_001, 2_000_000] {
             stage.step(Input {
                 now,
-                sensors: Some(Sensors { clock, zone, ..fixture }),
+                sensors: Some(Sensors {
+                    clock,
+                    zone,
+                    ..fixture
+                }),
                 ..Input::default()
             });
         }
         frames.push((format!("clock-{name}"), stage));
     }
-    let charging = Battery { present: true, percent: 87, millivolts: 3900, charging: true, usb: true };
+    let charging = Battery {
+        present: true,
+        percent: 87,
+        millivolts: 3900,
+        charging: true,
+        usb: true,
+    };
     for (name, battery) in [
         ("charging", Some(charging)),
-        ("battery-low", Some(Battery { percent: 12, charging: false, usb: false, ..charging })),
+        (
+            "battery-low",
+            Some(Battery {
+                percent: 12,
+                charging: false,
+                usb: false,
+                ..charging
+            }),
+        ),
         ("battery-unknown", None),
     ] {
-        let stage = stage_with(Screen::Clock, calibrated, Sensors { battery, ..fixture }, 1_000_000);
+        let stage = stage_with(
+            Screen::Clock,
+            calibrated,
+            Sensors { battery, ..fixture },
+            1_000_000,
+        );
         frames.push((format!("clock-{name}"), stage));
     }
     // 200 ms into the clock's entry: the icon building, the first line typing, the battery
     // hatch past its level.
     let mut entering = stage_at(Screen::Clock, calibrated, 200_000);
-    entering.step(Input { now: 200_001, ..Input::default() });
+    entering.step(Input {
+        now: 200_001,
+        ..Input::default()
+    });
     frames.push(("clock-entering".into(), entering));
     // 380 ms in: the wordmark holding, its first block standing, before it snaps in.
     let mut marking = stage_at(Screen::Clock, calibrated, 380_000);
-    marking.step(Input { now: 380_001, ..Input::default() });
+    marking.step(Input {
+        now: 380_001,
+        ..Input::default()
+    });
     frames.push(("clock-marking".into(), marking));
     let mut swiping = stage(Screen::Clock, calibrated);
     for (step, x) in [400, 340, 280].into_iter().enumerate() {
@@ -204,10 +268,15 @@ fn settings_frames() -> Vec<(String, Stage)> {
     };
     let start = || {
         let mut driver = Driver::on(Screen::Clock);
-        driver.stage = Stage::new(PeripheralState { firmware: "0.1.0", ..PeripheralState::default() });
+        driver.stage = Stage::new(PeripheralState {
+            firmware: "0.1.0",
+            ..PeripheralState::default()
+        });
         driver.stage.show(Screen::Clock);
         driver.sensors(sensors());
-        driver.motion(Motion { compass: calibrating });
+        driver.motion(Motion {
+            compass: calibrating,
+        });
         driver.wait(600_000);
         driver
     };
@@ -274,7 +343,11 @@ fn settings_frames() -> Vec<(String, Stage)> {
         driver.swipe(Point::new(233, 440), Point::new(233, 80), 300_000);
         tap(&mut driver, 233, 298);
         if steps > 0 {
-            driver.swipe(Point::new(233, 330), Point::new(233, 330 - 40 * steps - 10), 300_000);
+            driver.swipe(
+                Point::new(233, 330),
+                Point::new(233, 330 - 40 * steps - 10),
+                300_000,
+            );
             driver.wait(400_000);
         }
         driver
@@ -310,13 +383,31 @@ fn settings_frames() -> Vec<(String, Stage)> {
 /// the fault screen and its exit. Every part reports a tenth of a second after the last.
 fn startup_frames() -> Vec<(String, Stage)> {
     let boot = |failing: &[Part], parts: usize, now: u64| {
-        let mut stage = Stage::starting(PeripheralState { firmware: "0.1.0", ..PeripheralState::default() });
-        stage.step(Input { now: 1, sensors: Some(sensors()), ..Input::default() });
+        let mut stage = Stage::starting(PeripheralState {
+            firmware: "0.1.0",
+            ..PeripheralState::default()
+        });
+        stage.step(Input {
+            now: 1,
+            sensors: Some(sensors()),
+            ..Input::default()
+        });
         for (i, part) in Part::ALL.into_iter().take(parts).enumerate() {
-            let outcome = if failing.contains(&part) { Outcome::NoReply } else { Outcome::Answered };
-            stage.step(Input { now: 100_000 * (i as u64 + 1), boot: Some(Report { part, outcome }), ..Input::default() });
+            let outcome = if failing.contains(&part) {
+                Outcome::NoReply
+            } else {
+                Outcome::Answered
+            };
+            stage.step(Input {
+                now: 100_000 * (i as u64 + 1),
+                boot: Some(Report { part, outcome }),
+                ..Input::default()
+            });
         }
-        stage.step(Input { now, ..Input::default() });
+        stage.step(Input {
+            now,
+            ..Input::default()
+        });
         stage
     };
     // The last glyph lands at 720 ms, and the hold ends 200 ms later.
@@ -325,20 +416,42 @@ fn startup_frames() -> Vec<(String, Stage)> {
         ("startup-selftest".to_string(), boot(&[], 0, 50_000)),
         ("startup-selftest-building".into(), boot(&[], 3, 345_000)),
         ("startup-selftest-passed".into(), boot(&[], 6, 850_000)),
-        ("startup-selftest-failing".into(), boot(&[Part::Magnet], 5, 850_000)),
-        ("startup-selftest-failed".into(), boot(&[Part::Magnet], 6, 850_000)),
+        (
+            "startup-selftest-failing".into(),
+            boot(&[Part::Magnet], 5, 850_000),
+        ),
+        (
+            "startup-selftest-failed".into(),
+            boot(&[Part::Magnet], 6, 850_000),
+        ),
     ];
     // The identity's frames 0–119, then the card's 120–138, then the clock.
-    for n in [0, 3, 6, 12, 13, 20, 24, 30, 38, 42, 45, 51, 53, 56, 66, 77, 119, 120, 123, 129, 133, 137, 138, 139] {
+    for n in [
+        0, 3, 6, 12, 13, 20, 24, 30, 38, 42, 45, 51, 53, 56, 66, 77, 119, 120, 123, 129, 133, 137,
+        138, 139,
+    ] {
         frames.push((format!("startup-frame-{n:02}"), boot(&[], 6, frame(n))));
     }
     // With a failure the hold is 300 ms, from 720 ms. The ticker turns every 36 frames, and the
     // exit runs over frames 120–137.
     for n in [0, 3, 40, 30, 119, 120, 121, 122, 125, 128, 131, 134, 137] {
-        frames.push((format!("startup-fault-{n:03}"), boot(&[Part::Magnet], 6, frame(n) + 100_000)));
+        frames.push((
+            format!("startup-fault-{n:03}"),
+            boot(&[Part::Magnet], 6, frame(n) + 100_000),
+        ));
     }
-    frames.push(("startup-fault-two".into(), boot(&[Part::Magnet, Part::Gnss], 6, frame(3) + 100_000)));
-    frames.push(("startup-fault-four".into(), boot(&[Part::Clock, Part::Touch, Part::Magnet, Part::Gnss], 6, frame(3) + 100_000)));
+    frames.push((
+        "startup-fault-two".into(),
+        boot(&[Part::Magnet, Part::Gnss], 6, frame(3) + 100_000),
+    ));
+    frames.push((
+        "startup-fault-four".into(),
+        boot(
+            &[Part::Clock, Part::Touch, Part::Magnet, Part::Gnss],
+            6,
+            frame(3) + 100_000,
+        ),
+    ));
     frames
 }
 
@@ -348,9 +461,30 @@ fn always_on_frames() -> Vec<(String, Stage)> {
     let fixture = sensors();
     [
         ("local", fixture.clock, fixture.zone),
-        ("stopped", ClockState { stopped: true, ..fixture.clock }, fixture.zone),
-        ("no-zone", fixture.clock, ZoneState { zone: None, ..fixture.zone }),
-        ("no-data", ClockState { utc: None, ..fixture.clock }, fixture.zone),
+        (
+            "stopped",
+            ClockState {
+                stopped: true,
+                ..fixture.clock
+            },
+            fixture.zone,
+        ),
+        (
+            "no-zone",
+            fixture.clock,
+            ZoneState {
+                zone: None,
+                ..fixture.zone
+            },
+        ),
+        (
+            "no-data",
+            ClockState {
+                utc: None,
+                ..fixture.clock
+            },
+            fixture.zone,
+        ),
     ]
     .into_iter()
     .map(|(name, clock, zone)| {
@@ -361,10 +495,25 @@ fn always_on_frames() -> Vec<(String, Stage)> {
             ..PeripheralState::default()
         });
         stage.show(Screen::Clock);
-        stage.step(Input { now: 1, sensors: Some(fixture), ..Input::default() });
-        stage.step(Input { now: 2, sensors: Some(Sensors { clock, zone, ..fixture }), ..Input::default() });
+        stage.step(Input {
+            now: 1,
+            sensors: Some(fixture),
+            ..Input::default()
+        });
+        stage.step(Input {
+            now: 2,
+            sensors: Some(Sensors {
+                clock,
+                zone,
+                ..fixture
+            }),
+            ..Input::default()
+        });
         for now in [16_000_000, 21_000_000] {
-            stage.step(Input { now, ..Input::default() });
+            stage.step(Input {
+                now,
+                ..Input::default()
+            });
         }
         assert_eq!(stage.rest(), Rest::AlwaysOn);
         (format!("always-on-{name}"), stage)
@@ -386,24 +535,47 @@ fn sensors() -> Sensors {
     Sensors {
         clock: ClockState {
             utc: Some(
-                DateTime { year: 2026, month: 9, day: 24, hour: 12, minute: 7, second: 42 }
-                    .to_unix(),
+                DateTime {
+                    year: 2026,
+                    month: 9,
+                    day: 24,
+                    hour: 12,
+                    minute: 7,
+                    second: 42,
+                }
+                .to_unix(),
             ),
             set_from_gnss: true,
             stopped: false,
         },
         zone: ZoneState {
             mode: ZoneMode::Automatic,
-            zone: octowhere_ui::tz::DATABASE.find("Europe/Dublin").map(|zone| zone.id),
+            zone: octowhere_ui::tz::DATABASE
+                .find("Europe/Dublin")
+                .map(|zone| zone.id),
         },
-        battery: Some(Battery { present: true, percent: 87, millivolts: 4020, charging: false, usb: false }),
-        gnss: Gnss { fix: true, in_use: 9, in_view: 14, position: Some((533_498_000, -62_603_000)) },
+        battery: Some(Battery {
+            present: true,
+            percent: 87,
+            millivolts: 4020,
+            charging: false,
+            usb: false,
+        }),
+        gnss: Gnss {
+            fix: true,
+            in_use: 9,
+            in_view: 14,
+            position: Some((533_498_000, -62_603_000)),
+        },
     }
 }
 
 /// A stage on `screen` that settled at 1 µs and has stepped to `now`.
 fn stage_with(screen: Screen, compass: CompassView, sensors: Sensors, now: u64) -> Stage {
-    let mut stage = Stage::new(PeripheralState { firmware: "0.1.0", ..PeripheralState::default() });
+    let mut stage = Stage::new(PeripheralState {
+        firmware: "0.1.0",
+        ..PeripheralState::default()
+    });
     stage.show(screen);
     stage.step(Input {
         now: 1,

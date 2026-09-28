@@ -1,7 +1,7 @@
 //! Time as the screens receive it: UTC from the real-time clock, and the zone to show it in.
 
-pub use octowhere_tz::{DateTime, Offset, ZoneId};
 use octowhere_tz::DATABASE;
+pub use octowhere_tz::{DateTime, Offset, ZoneId};
 
 /// The real-time clock's last reading.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

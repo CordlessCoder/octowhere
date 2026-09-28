@@ -11,22 +11,22 @@
 use core::fmt::Write as _;
 
 use embedded_graphics::{
+    Pixel,
     draw_target::DrawTarget,
     prelude::{Dimensions, Point, Size},
     primitives::Rectangle,
-    Pixel,
 };
 
 use super::{
     clock::ClockView,
     scatter::{Field, Look, Scatter, Shown},
     screens,
-    startup::{self, Context, Mark, CARD_MARK, CARD_SCALE, CENTER, PAGE_RADIUS},
+    startup::{self, CARD_MARK, CARD_SCALE, CENTER, Context, Mark, PAGE_RADIUS},
     text,
 };
 use crate::chrome::{
-    self, Color, CoverageTarget, Dirty, FontdueRenderer, OnBackground, Round, Window, FRAKTION, INTERFERENCE_BOLD,
-    SHAPIRO,
+    self, Color, CoverageTarget, Dirty, FRAKTION, FontdueRenderer, INTERFERENCE_BOLD, OnBackground,
+    Round, SHAPIRO, Window,
 };
 
 /// The identity's frames, then the card's.
@@ -49,7 +49,12 @@ const BLOCK_LEVELS: [u8; 4] = [245, 209, 232, 255];
 const TONGUE_SHIFTS: [i32; 5] = [0, 9, 17, 24, 31];
 const BACKDROP_BLOCKS: usize = 185;
 const BACKDROP_LEVELS: [u8; 3] = [26, 33, 46];
-const REGISTRATION: [Point; 4] = [Point::new(55, 48), Point::new(411, 48), Point::new(55, 418), Point::new(411, 418)];
+const REGISTRATION: [Point; 4] = [
+    Point::new(55, 48),
+    Point::new(411, 48),
+    Point::new(55, 418),
+    Point::new(411, 418),
+];
 const REGISTRATION_LEVEL: u8 = 74;
 const BOOT: &str = "BOOT";
 const BOOT_PX: u32 = 38;
@@ -133,15 +138,30 @@ const MICRO_GNSS_LEFT: i32 = 237;
 const MICRO_TEXT_LEFT: i32 = 263;
 const MICRO_TEXT_TOPS: [i32; 2] = [266, 282];
 const MICRO_MODULE: i32 = 3;
-const IDENTITY_DIGITS: Rectangle = Rectangle::new(Point::new(DIGITS_LEFT, MICRO_TOP), Size::new(51, 15));
+const IDENTITY_DIGITS: Rectangle =
+    Rectangle::new(Point::new(DIGITS_LEFT, MICRO_TOP), Size::new(51, 15));
 
 // The scatter: an upper field that turns a step on five late frames, and a lower one that
 // holds still, from the end of the opening.
 
-const UPPER: Field = Field { center: Point::new(270, 145), radius: 150.0, seed: 0x6f63_7475 };
-const LOWER: Field = Field { center: Point::new(190, 334), radius: 125.0, seed: 0x6f63_7476 };
-const UPPER_LOOK: Look = Look { facing: -0.65, density: 0.65 };
-const LOWER_LOOK: Look = Look { facing: 2.55, density: 0.40 };
+const UPPER: Field = Field {
+    center: Point::new(270, 145),
+    radius: 150.0,
+    seed: 0x6f63_7475,
+};
+const LOWER: Field = Field {
+    center: Point::new(190, 334),
+    radius: 125.0,
+    seed: 0x6f63_7476,
+};
+const UPPER_LOOK: Look = Look {
+    facing: -0.65,
+    density: 0.65,
+};
+const LOWER_LOOK: Look = Look {
+    facing: 2.55,
+    density: 0.40,
+};
 const TURN_FROM: u32 = 66;
 const TURN_EVERY: u32 = 11;
 const TURNS: u32 = 5;
@@ -152,7 +172,10 @@ const SCATTER_LEVEL: u8 = 69;
 /// redraws everything.
 const SETTLED: u32 = LOGO_FROM + 11;
 const _: () = assert!(
-    ARMS_UNTIL <= SETTLED && FLICKER_FROM + 11 <= SETTLED && ROW_FROM + 5 <= SETTLED && TURN_FROM + TURN_EVERY >= SETTLED
+    ARMS_UNTIL <= SETTLED
+        && FLICKER_FROM + 11 <= SETTLED
+        && ROW_FROM + 5 <= SETTLED
+        && TURN_FROM + TURN_EVERY >= SETTLED
 );
 
 /// How a flickering element shows, some frames after its flicker starts: on for two, off for
@@ -185,8 +208,16 @@ fn scatter() -> Scatter {
 }
 
 fn looks(frame: u32) -> [Look; 2] {
-    let turns = frame.checked_sub(TURN_FROM).map_or(0, |since| (since / TURN_EVERY + 1).min(TURNS));
-    [Look { facing: UPPER_LOOK.facing + TURN * turns as f32, ..UPPER_LOOK }, LOWER_LOOK]
+    let turns = frame
+        .checked_sub(TURN_FROM)
+        .map_or(0, |since| (since / TURN_EVERY + 1).min(TURNS));
+    [
+        Look {
+            facing: UPPER_LOOK.facing + TURN * turns as f32,
+            ..UPPER_LOOK
+        },
+        LOWER_LOOK,
+    ]
 }
 
 /// The scatter's points on the last frame [`IdentityMarks::changes`] saw, so each frame's damage
@@ -225,7 +256,12 @@ impl IdentityMarks {
     }
 }
 
-fn style(font: &FontdueRenderer<'static, Color>, color: Color, size: u32, index: usize) -> FontdueRenderer<'static, Color> {
+fn style(
+    font: &FontdueRenderer<'static, Color>,
+    color: Color,
+    size: u32,
+    index: usize,
+) -> FontdueRenderer<'static, Color> {
     text::style(font, color, size, index)
 }
 
@@ -254,9 +290,15 @@ pub fn draw_identity<D: CoverageTarget<Color = Color>>(
     if frame >= TICKS_FROM {
         let lit = lit(frame, FLICKER_FROM);
         for x in TICKS {
-            field.fill_solid(&Rectangle::new(Point::new(x - 5, 232), Size::new(11, 2)), lime(lit))?;
+            field.fill_solid(
+                &Rectangle::new(Point::new(x - 5, 232), Size::new(11, 2)),
+                lime(lit),
+            )?;
             if lit != Lit::Partial {
-                field.fill_solid(&Rectangle::new(Point::new(x, 228), Size::new(2, 10)), lime(lit))?;
+                field.fill_solid(
+                    &Rectangle::new(Point::new(x, 228), Size::new(2, 10)),
+                    lime(lit),
+                )?;
             }
         }
     }
@@ -264,9 +306,14 @@ pub fn draw_identity<D: CoverageTarget<Color = Color>>(
     if matches!(logo, Lit::On | Lit::Partial) {
         // Each pixel takes the area of it the lit modules cover, in tenths of a pixel each way,
         // so the 1.3 px modules keep their proportions instead of rounding to 1 or 2 px.
-        let overlap = |module: i32, pixel: i32| (((module + 1) * LOGO_MODULE).min(pixel * 10 + 10) - (module * LOGO_MODULE).max(pixel * 10)).max(0);
+        let overlap = |module: i32, pixel: i32| {
+            (((module + 1) * LOGO_MODULE).min(pixel * 10 + 10)
+                - (module * LOGO_MODULE).max(pixel * 10))
+            .max(0)
+        };
         let lit = |i: i32, j: i32| {
-            MARK_ROWS[j as usize] & (1 << (14 - i)) != 0 && (logo == Lit::On || [0, 7, 14].contains(&i))
+            MARK_ROWS[j as usize] & (1 << (14 - i)) != 0
+                && (logo == Lit::On || [0, 7, 14].contains(&i))
         };
         let side = (15 * LOGO_MODULE + 9) / 10;
         let mut coverage = [0u8; 20];
@@ -282,7 +329,12 @@ pub fn draw_identity<D: CoverageTarget<Color = Color>>(
                 }
                 *cover = (area * 255 / 100).min(255) as u8;
             }
-            field.blend_row(LOGO_CORNER.x, LOGO_CORNER.y + y, &coverage[..side as usize], chrome::LIME);
+            field.blend_row(
+                LOGO_CORNER.x,
+                LOGO_CORNER.y + y,
+                &coverage[..side as usize],
+                chrome::LIME,
+            );
         }
     }
     Ok(())
@@ -309,14 +361,26 @@ fn draw_opening<D: CoverageTarget<Color = Color>>(
     for _ in 0..BACKDROP_BLOCKS {
         let x = (15 + numbers.below(430) as i32) / 8 * 8;
         let y = (15 + numbers.below(430) as i32) / 8 * 8;
-        let size = Size::new([8, 16, 24][numbers.below(3) as usize], [2, 8][numbers.below(2) as usize]);
+        let size = Size::new(
+            [8, 16, 24][numbers.below(3) as usize],
+            [2, 8][numbers.below(2) as usize],
+        );
         let level = BACKDROP_LEVELS[numbers.below(3) as usize];
-        target.fill_solid(&Rectangle::new(Point::new(x, y), size), chrome::shade(chrome::DEEP_BLUE, level))?;
+        target.fill_solid(
+            &Rectangle::new(Point::new(x, y), size),
+            chrome::shade(chrome::DEEP_BLUE, level),
+        )?;
     }
     let registration = chrome::shade(chrome::DEEP_BLUE, REGISTRATION_LEVEL);
     for centre in REGISTRATION {
-        target.fill_solid(&Rectangle::new(centre - Point::new(6, 0), Size::new(13, 1)), registration)?;
-        target.fill_solid(&Rectangle::new(centre - Point::new(0, 6), Size::new(1, 13)), registration)?;
+        target.fill_solid(
+            &Rectangle::new(centre - Point::new(6, 0), Size::new(13, 1)),
+            registration,
+        )?;
+        target.fill_solid(
+            &Rectangle::new(centre - Point::new(0, 6), Size::new(1, 13)),
+            registration,
+        )?;
     }
     for row in 0..4 {
         for column in 0..3 {
@@ -326,16 +390,29 @@ fn draw_opening<D: CoverageTarget<Color = Color>>(
             target.fill_solid(&Rectangle::new(corner, Size::new_equal(BLOCK as u32)), ink)?;
             // The socket the tongue leaves: a notch as it opens, then clear to the block's edge.
             match phase {
-                0 => target.fill_solid(&Rectangle::new(corner + Point::new(25, 17), Size::new(6, 14)), chrome::BLACK)?,
-                1.. => target.fill_solid(&Rectangle::new(corner + Point::new(25, 17), Size::new(24, 14)), chrome::BLACK)?,
+                0 => target.fill_solid(
+                    &Rectangle::new(corner + Point::new(25, 17), Size::new(6, 14)),
+                    chrome::BLACK,
+                )?,
+                1.. => target.fill_solid(
+                    &Rectangle::new(corner + Point::new(25, 17), Size::new(24, 14)),
+                    chrome::BLACK,
+                )?,
                 _ => {}
             }
             let shift = TONGUE_SHIFTS[phase.clamp(0, 4) as usize];
-            target.fill_solid(&Rectangle::new(corner + Point::new(31 + shift, 17), Size::new(38, 14)), ink)?;
+            target.fill_solid(
+                &Rectangle::new(corner + Point::new(31 + shift, 17), Size::new(38, 14)),
+                ink,
+            )?;
         }
     }
     if frame >= BOOT_FROM {
-        let color = if frame >= BOOT_FROM + 2 { chrome::DEEP_BLUE } else { chrome::shade(chrome::DEEP_BLUE, BOOT_DIM) };
+        let color = if frame >= BOOT_FROM + 2 {
+            chrome::DEEP_BLUE
+        } else {
+            chrome::shade(chrome::DEEP_BLUE, BOOT_DIM)
+        };
         let style = style(font, color, BOOT_PX, INTERFERENCE_BOLD);
         // Upright, the ink's top-left is at (left, top) from the pen; turned, it runs down from
         // the pen with the ink's top to the right.
@@ -354,14 +431,26 @@ fn draw_marks<D: DrawTarget<Color = Color>>(frame: u32, target: &mut D) -> Resul
     if frame < MARKS_FROM {
         return Ok(());
     }
-    let (mark, hair) = (chrome::shade(chrome::GRAY, MARK_LEVEL), chrome::shade(chrome::GRAY, HAIR_LEVEL));
+    let (mark, hair) = (
+        chrome::shade(chrome::GRAY, MARK_LEVEL),
+        chrome::shade(chrome::GRAY, HAIR_LEVEL),
+    );
     let span = |target: &mut D, x0: i32, y0: i32, x1: i32, y1: i32, color: Color| {
-        target.fill_solid(&Rectangle::with_corners(Point::new(x0.min(x1), y0.min(y1)), Point::new(x0.max(x1), y0.max(y1))), color)
+        target.fill_solid(
+            &Rectangle::with_corners(
+                Point::new(x0.min(x1), y0.min(y1)),
+                Point::new(x0.max(x1), y0.max(y1)),
+            ),
+            color,
+        )
     };
     let hop = |from: u32| HOP[frame.saturating_sub(from).min(3) as usize];
     for ((sx, sy), [across, down, centre, inner_across, inner_down]) in MARK_TIMING {
         let (cx, cy) = (CENTER.x + sx * MARK_REACH, CENTER.y + sy * MARK_REACH);
-        let (qx, qy) = (cx - sx * (40 + hop(SQUARES.start)), cy - sy * (34 + hop(HOP_DOWN_FROM)));
+        let (qx, qy) = (
+            cx - sx * (40 + hop(SQUARES.start)),
+            cy - sy * (34 + hop(HOP_DOWN_FROM)),
+        );
         // Both fragments register to the square's corner that faces the centre.
         let (corner_x, corner_y) = (qx - sx * 5, qy - sy * 5);
         if (inner_across..FRAGMENTS_UNTIL[0]).contains(&frame) {
@@ -371,7 +460,10 @@ fn draw_marks<D: DrawTarget<Color = Color>>(frame: u32, target: &mut D) -> Resul
             span(target, corner_x, qy + sy * 10, corner_x, qy + sy * 30, hair)?;
         }
         if SQUARES.contains(&frame) {
-            target.fill_solid(&Rectangle::new(Point::new(qx - 5, qy - 5), Size::new_equal(10)), mark)?;
+            target.fill_solid(
+                &Rectangle::new(Point::new(qx - 5, qy - 5), Size::new_equal(10)),
+                mark,
+            )?;
         }
         if (across..ARMS_UNTIL).contains(&frame) {
             span(target, cx - 28, cy, cx + 28, cy, hair)?;
@@ -380,7 +472,10 @@ fn draw_marks<D: DrawTarget<Color = Color>>(frame: u32, target: &mut D) -> Resul
             span(target, cx, cy - 28, cx, cy + 28, hair)?;
         }
         if (centre..ARMS_UNTIL).contains(&frame) {
-            target.fill_solid(&Rectangle::new(Point::new(cx - 1, cy - 1), Size::new_equal(2)), mark)?;
+            target.fill_solid(
+                &Rectangle::new(Point::new(cx - 1, cy - 1), Size::new_equal(2)),
+                mark,
+            )?;
         }
     }
     Ok(())
@@ -411,7 +506,12 @@ fn draw_title<D: CoverageTarget<Color = Color>>(
                     break;
                 }
                 let at = pen + Point::new(libm::roundf(filled.advance(&WORD[..i])) as i32, 0);
-                hollow(libm::roundf(f32::from(DIM) * k) as u8).draw_hollow_on_baseline(&WORD[i..=i], at, HOLLOW, target)?;
+                hollow(libm::roundf(f32::from(DIM) * k) as u8).draw_hollow_on_baseline(
+                    &WORD[i..=i],
+                    at,
+                    HOLLOW,
+                    target,
+                )?;
             }
             Ok(())
         }
@@ -421,8 +521,15 @@ fn draw_title<D: CoverageTarget<Color = Color>>(
             let ink = filled.baseline_bounds(WORD, pen);
             for fraction in SLICES {
                 let left = ink.top_left.x + libm::roundf(ink.size.width as f32 * fraction) as i32;
-                let slice = Rectangle::new(Point::new(left, ink.top_left.y), Size::new(SLICE, ink.size.height));
-                filled.draw_on_baseline(WORD, pen, &mut Window::new(&mut *target, Point::zero(), slice))?;
+                let slice = Rectangle::new(
+                    Point::new(left, ink.top_left.y),
+                    Size::new(SLICE, ink.size.height),
+                );
+                filled.draw_on_baseline(
+                    WORD,
+                    pen,
+                    &mut Window::new(&mut *target, Point::zero(), slice),
+                )?;
             }
             Ok(())
         }
@@ -438,23 +545,51 @@ fn draw_row<D: CoverageTarget<Color = Color>>(
 ) -> Result<(), D::Error> {
     let shown = |element: u32| frame >= ROW_FROM + element;
     if shown(0) {
-        startup::barcode(context.firmware, BARCODE_LEFT, MICRO_TOP, 15, chrome::LIME, target)?;
+        startup::barcode(
+            context.firmware,
+            BARCODE_LEFT,
+            MICRO_TOP,
+            15,
+            chrome::LIME,
+            target,
+        )?;
     }
     if shown(1) {
         let origin = (MICRO_MARK_LEFT as f32, MICRO_TOP as f32);
-        Mark { origin, module: 3.0, stroke: 1.0 }.draw(true, false, chrome::LIME, target)?;
+        Mark {
+            origin,
+            module: 3.0,
+            stroke: 1.0,
+        }
+        .draw(true, false, chrome::LIME, target)?;
     }
     if shown(2) {
         let digits = startup::utc_digits(context.clock);
         for i in 0..4 {
-            let rows = digits.map_or(&startup::PIXEL_DASH, |digits| &startup::PIXEL_DIGITS[usize::from(digits[i])]);
+            let rows = digits.map_or(&startup::PIXEL_DASH, |digits| {
+                &startup::PIXEL_DIGITS[usize::from(digits[i])]
+            });
             // A space between the hours and the minutes.
             let left = DIGITS_LEFT + 12 * i as i32 + if i >= 2 { 6 } else { 0 };
-            startup::modules(rows, 3, Point::new(left, MICRO_TOP), MICRO_MODULE, chrome::LIME, target)?;
+            startup::modules(
+                rows,
+                3,
+                Point::new(left, MICRO_TOP),
+                MICRO_MODULE,
+                chrome::LIME,
+                target,
+            )?;
         }
     }
     if shown(3) {
-        startup::modules(&startup::GNSS, 5, Point::new(MICRO_GNSS_LEFT, MICRO_TOP), MICRO_MODULE, chrome::LIME, target)?;
+        startup::modules(
+            &startup::GNSS,
+            5,
+            Point::new(MICRO_GNSS_LEFT, MICRO_TOP),
+            MICRO_MODULE,
+            chrome::LIME,
+            target,
+        )?;
     }
     if shown(4) {
         let style = style(font, chrome::LIME, 14, FRAKTION);
@@ -462,7 +597,10 @@ fn draw_row<D: CoverageTarget<Color = Color>>(
         let _ = write!(version, "VERSION {}", context.firmware);
         let mut count = heapless::String::<24>::new();
         let _ = write!(count, "SELF TEST {answered}/6 OK");
-        for (line, top) in [version.as_str(), count.as_str()].into_iter().zip(MICRO_TEXT_TOPS) {
+        for (line, top) in [version.as_str(), count.as_str()]
+            .into_iter()
+            .zip(MICRO_TEXT_TOPS)
+        {
             let pen = Point::new(
                 text::pen_x_for_ink_left(&style, line, MICRO_TEXT_LEFT),
                 text::baseline_for_ink_top(&style, line, top),
@@ -494,20 +632,36 @@ impl<T: DrawTarget> DrawTarget for Stripes<'_, T> {
     type Color = T::Color;
     type Error = T::Error;
 
-    fn draw_iter<I: IntoIterator<Item = Pixel<Self::Color>>>(&mut self, pixels: I) -> Result<(), Self::Error> {
-        self.0.draw_iter(pixels.into_iter().filter(|Pixel(point, _)| point.x.rem_euclid(STRIPE_PITCH) == STRIPE_PHASE))
+    fn draw_iter<I: IntoIterator<Item = Pixel<Self::Color>>>(
+        &mut self,
+        pixels: I,
+    ) -> Result<(), Self::Error> {
+        self.0.draw_iter(
+            pixels
+                .into_iter()
+                .filter(|Pixel(point, _)| point.x.rem_euclid(STRIPE_PITCH) == STRIPE_PHASE),
+        )
     }
 
     fn fill_solid(&mut self, area: &Rectangle, color: Self::Color) -> Result<(), Self::Error> {
         let first = area.top_left.x + (STRIPE_PHASE - area.top_left.x).rem_euclid(STRIPE_PITCH);
         for x in (first..area.top_left.x + area.size.width as i32).step_by(STRIPE_PITCH as usize) {
-            self.0.fill_solid(&Rectangle::new(Point::new(x, area.top_left.y), Size::new(1, area.size.height)), color)?;
+            self.0.fill_solid(
+                &Rectangle::new(
+                    Point::new(x, area.top_left.y),
+                    Size::new(1, area.size.height),
+                ),
+                color,
+            )?;
         }
         Ok(())
     }
 }
 
-pub fn draw_card<D: CoverageTarget<Color = Color>>(frame: u32, target: &mut D) -> Result<(), D::Error> {
+pub fn draw_card<D: CoverageTarget<Color = Color>>(
+    frame: u32,
+    target: &mut D,
+) -> Result<(), D::Error> {
     // The lime frames clear to the page's colour rather than painting it over black.
     let page = matches!(frame, 0..9 | 17);
     screens::clear_to(target, if page { chrome::LIME } else { chrome::BLACK })?;
@@ -519,14 +673,32 @@ pub fn draw_card<D: CoverageTarget<Color = Color>>(frame: u32, target: &mut D) -
             let (outer, inner) = TILE_FRAME;
             let far = 2 * CENTER.x - outer;
             let near = 2 * CENTER.x - inner;
-            for (x0, y0, x1, y1) in [(outer, outer, far, inner), (outer, near, far, far), (outer, inner, inner, near), (near, inner, far, near)] {
-                stripes.fill_solid(&Rectangle::with_corners(Point::new(x0, y0), Point::new(x1 - 1, y1 - 1)), chrome::BLACK)?;
+            for (x0, y0, x1, y1) in [
+                (outer, outer, far, inner),
+                (outer, near, far, far),
+                (outer, inner, inner, near),
+                (near, inner, far, near),
+            ] {
+                stripes.fill_solid(
+                    &Rectangle::with_corners(Point::new(x0, y0), Point::new(x1 - 1, y1 - 1)),
+                    chrome::BLACK,
+                )?;
             }
         }
         3..9 => CARD_MARK.draw(true, true, chrome::BLACK, target)?,
         9..13 => CARD_MARK.draw(true, true, chrome::LIME, target)?,
-        13..17 => scaled.draw(true, true, chrome::LIME, &mut Round::new(&mut *target, CENTER, PAGE_RADIUS))?,
-        17 => scaled.draw(true, true, chrome::BLACK, &mut Round::new(&mut *target, CENTER, PAGE_RADIUS))?,
+        13..17 => scaled.draw(
+            true,
+            true,
+            chrome::LIME,
+            &mut Round::new(&mut *target, CENTER, PAGE_RADIUS),
+        )?,
+        17 => scaled.draw(
+            true,
+            true,
+            chrome::BLACK,
+            &mut Round::new(&mut *target, CENTER, PAGE_RADIUS),
+        )?,
         _ => {}
     }
     Ok(())
@@ -540,13 +712,20 @@ mod tests {
     fn the_flicker_follows_the_reference_cadence() {
         let cadence: alloc::vec::Vec<Lit> = (0..13).map(|frame| lit(frame + 10, 10)).collect();
         use Lit::{Off, On, Partial};
-        assert_eq!(cadence, [On, On, Off, Off, On, Off, Off, On, On, Partial, Partial, On, On]);
+        assert_eq!(
+            cadence,
+            [
+                On, On, Off, Off, On, Off, Off, On, On, Partial, Partial, On, On
+            ]
+        );
         assert_eq!(lit(9, 10), Lit::Before);
     }
 
     #[test]
     fn the_upper_field_turns_on_five_frames_and_the_lower_never() {
-        let turned: alloc::vec::Vec<u32> = (1..FRAMES).filter(|&frame| looks(frame) != looks(frame - 1)).collect();
+        let turned: alloc::vec::Vec<u32> = (1..FRAMES)
+            .filter(|&frame| looks(frame) != looks(frame - 1))
+            .collect();
         assert_eq!(turned, [66, 77, 88, 99, 110]);
     }
 }

@@ -18,12 +18,11 @@ use super::{
     clock::ClockView,
     gesture::Micros,
     icon::{self, Glyph, Tile},
-    identity, screens,
-    text,
+    identity, screens, text,
 };
 use crate::chrome::{
-    self, Color, CoverageTarget, FontdueRenderer, Knockout, OnBackground, Window, FRAKTION, FRAKTION_BOLD,
-    SHAPIRO,
+    self, Color, CoverageTarget, FRAKTION, FRAKTION_BOLD, FontdueRenderer, Knockout, OnBackground,
+    SHAPIRO, Window,
 };
 
 /// A part the self-test waits for, in the order its cells run.
@@ -39,7 +38,14 @@ pub enum Part {
 }
 
 impl Part {
-    pub const ALL: [Self; 6] = [Self::Power, Self::Clock, Self::Touch, Self::Motion, Self::Magnet, Self::Gnss];
+    pub const ALL: [Self; 6] = [
+        Self::Power,
+        Self::Clock,
+        Self::Touch,
+        Self::Motion,
+        Self::Magnet,
+        Self::Gnss,
+    ];
 
     #[must_use]
     pub fn index(self) -> usize {
@@ -185,7 +191,10 @@ pub enum Phase {
     Fault(u32),
     /// Over. The clock face shows next: settled if a touch skipped the identity, otherwise
     /// running its entry, and typing its time in after the card.
-    Done { entry: bool, after_card: bool },
+    Done {
+        entry: bool,
+        after_card: bool,
+    },
 }
 
 /// What one cell of the self-test shows.
@@ -241,7 +250,11 @@ impl Startup {
         Self {
             began: Some(now.saturating_sub(RAMP)),
             outcomes: core::array::from_fn(|i| {
-                let outcome = if i == failing.index() { Outcome::NoReply } else { Outcome::Answered };
+                let outcome = if i == failing.index() {
+                    Outcome::NoReply
+                } else {
+                    Outcome::Answered
+                };
                 Some((outcome, now + DEMO_REPORTS[i]))
             }),
             skipped: false,
@@ -269,14 +282,20 @@ impl Startup {
     }
 
     fn failed(&self) -> impl Iterator<Item = (Part, Outcome)> + '_ {
-        Part::ALL.into_iter().filter_map(|part| match self.outcomes[part.index()] {
-            Some((outcome, _)) if outcome != Outcome::Answered => Some((part, outcome)),
-            _ => None,
-        })
+        Part::ALL
+            .into_iter()
+            .filter_map(|part| match self.outcomes[part.index()] {
+                Some((outcome, _)) if outcome != Outcome::Answered => Some((part, outcome)),
+                _ => None,
+            })
     }
 
     pub(super) fn answered(&self) -> usize {
-        self.outcomes.iter().flatten().filter(|(outcome, _)| *outcome == Outcome::Answered).count()
+        self.outcomes
+            .iter()
+            .flatten()
+            .filter(|(outcome, _)| *outcome == Outcome::Answered)
+            .count()
     }
 
     /// When the identity or the fault screen starts: once every cell has been decided, the last
@@ -288,10 +307,18 @@ impl Startup {
         let mut built = 0;
         for outcome in &self.outcomes {
             let (outcome, at) = (*outcome)?;
-            let lands = if outcome == Outcome::Answered { at + 4 * ROW } else { at };
+            let lands = if outcome == Outcome::Answered {
+                at + 4 * ROW
+            } else {
+                at
+            };
             built = built.max(lands);
         }
-        let hold = if self.failed().next().is_some() { FAIL_HOLD } else { PASS_HOLD };
+        let hold = if self.failed().next().is_some() {
+            FAIL_HOLD
+        } else {
+            PASS_HOLD
+        };
         Some(built + hold)
     }
 
@@ -303,11 +330,23 @@ impl Startup {
         };
         let frame = ((now - from) * FRAMES_PER_SECOND / 1_000_000) as u32;
         match (failed, self.skipped) {
-            (true, true) => Phase::Done { entry: true, after_card: false },
-            (false, true) => Phase::Done { entry: false, after_card: false },
-            (true, false) if frame >= FAULT_FRAMES + EXIT_FRAMES => Phase::Done { entry: true, after_card: false },
+            (true, true) => Phase::Done {
+                entry: true,
+                after_card: false,
+            },
+            (false, true) => Phase::Done {
+                entry: false,
+                after_card: false,
+            },
+            (true, false) if frame >= FAULT_FRAMES + EXIT_FRAMES => Phase::Done {
+                entry: true,
+                after_card: false,
+            },
             (true, false) => Phase::Fault(frame),
-            (false, false) if frame >= CLOCK_FROM => Phase::Done { entry: true, after_card: true },
+            (false, false) if frame >= CLOCK_FROM => Phase::Done {
+                entry: true,
+                after_card: true,
+            },
             (false, false) => Phase::Identity(frame),
         }
     }
@@ -318,7 +357,9 @@ impl Startup {
             Phase::SelfTest => View::SelfTest(core::array::from_fn(|i| match self.outcomes[i] {
                 None => Cell::Waiting,
                 Some((_, at)) if at > now => Cell::Waiting,
-                Some((Outcome::Answered, at)) => Cell::Answered(((now.saturating_sub(at)) / ROW + 1).min(5) as u8),
+                Some((Outcome::Answered, at)) => {
+                    Cell::Answered(((now.saturating_sub(at)) / ROW + 1).min(5) as u8)
+                }
                 Some(_) => Cell::Failed,
             })),
             Phase::Identity(frame) if frame < CARD_FROM => View::Identity(frame),
@@ -332,7 +373,11 @@ impl Startup {
     #[must_use]
     pub fn brightness(&self, now: Micros, level: u8) -> u8 {
         let since = self.began.map_or(0, |began| now.saturating_sub(began));
-        if since < RAMP { (u64::from(level) * since / RAMP) as u8 } else { level }
+        if since < RAMP {
+            (u64::from(level) * since / RAMP) as u8
+        } else {
+            level
+        }
     }
 
     /// When the sequence next changes on its own, if nothing else arrives first.
@@ -383,13 +428,27 @@ where
     match view {
         View::SelfTest(cells) => {
             let mut version = heapless::String::<32>::new();
-            let _ = if startup.demo { write!(version, "DEMO, NOT A HARDWARE TEST") } else { write!(version, "VERSION {}", context.firmware) };
+            let _ = if startup.demo {
+                write!(version, "DEMO, NOT A HARDWARE TEST")
+            } else {
+                write!(version, "VERSION {}", context.firmware)
+            };
             draw_self_test(&cells, &version, font, target)
         }
-        View::Identity(frame) => identity::draw_identity(frame, startup.answered(), context, font, target),
+        View::Identity(frame) => {
+            identity::draw_identity(frame, startup.answered(), context, font, target)
+        }
         View::Card(frame) => identity::draw_card(frame, target),
-        View::Fault(frame) if frame < FAULT_FRAMES => draw_fault(frame, startup, context.firmware, font, true, target),
-        View::Fault(frame) => draw_exit(frame - FAULT_FRAMES, startup, context.firmware, font, target),
+        View::Fault(frame) if frame < FAULT_FRAMES => {
+            draw_fault(frame, startup, context.firmware, font, true, target)
+        }
+        View::Fault(frame) => draw_exit(
+            frame - FAULT_FRAMES,
+            startup,
+            context.firmware,
+            font,
+            target,
+        ),
     }
 }
 
@@ -412,18 +471,29 @@ fn row_top(index: usize) -> i32 {
 }
 
 fn row_columns(index: usize) -> (i32, i32) {
-    if index == 0 || index == 5 { NARROW } else { WIDE }
+    if index == 0 || index == 5 {
+        NARROW
+    } else {
+        WIDE
+    }
 }
 
 fn row_tile(index: usize) -> Tile {
-    Tile { corner: Point::new(row_columns(index).0 + 38, row_top(index) + 6), module: 5, padding: 4 }
+    Tile {
+        corner: Point::new(row_columns(index).0 + 38, row_top(index) + 6),
+        module: 5,
+        padding: 4,
+    }
 }
 
 /// Everything in one row below its rule.
 #[must_use]
 pub fn cell_bounds(index: usize) -> Rectangle {
     let (left, right) = row_columns(index);
-    Rectangle::with_corners(Point::new(left, row_top(index) + 1), Point::new(right - 1, row_top(index) + ROW_PITCH - 1))
+    Rectangle::with_corners(
+        Point::new(left, row_top(index) + 1),
+        Point::new(right - 1, row_top(index) + ROW_PITCH - 1),
+    )
 }
 
 fn counter(cells: &[Cell; 6]) -> heapless::String<16> {
@@ -433,7 +503,12 @@ fn counter(cells: &[Cell; 6]) -> heapless::String<16> {
     text
 }
 
-fn small(font: &FontdueRenderer<'static, Color>, color: Color, size: u32, index: usize) -> FontdueRenderer<'static, Color> {
+fn small(
+    font: &FontdueRenderer<'static, Color>,
+    color: Color,
+    size: u32,
+    index: usize,
+) -> FontdueRenderer<'static, Color> {
     text::style(font, color, size, index)
 }
 
@@ -475,13 +550,21 @@ fn draw_self_test<D: CoverageTarget<Color = Color>>(
 ) -> Result<(), D::Error> {
     screens::clear(target)?;
     let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
-    centred(&small(font, chrome::WHITE, 27, SHAPIRO), TITLE, TITLE_TOP, field)?;
+    centred(
+        &small(font, chrome::WHITE, 27, SHAPIRO),
+        TITLE,
+        TITLE_TOP,
+        field,
+    )?;
     centred(&counter_style(font), &counter(cells), COUNTER_TOP, field)?;
     let index_style = small(font, chrome::GRAY, 13, FRAKTION);
     for (i, (part, cell)) in Part::ALL.into_iter().zip(cells).enumerate() {
         let (left, right) = row_columns(i);
         let top = row_top(i);
-        field.fill_solid(&Rectangle::with_corners(Point::new(left, top), Point::new(right - 1, top)), chrome::GRAY)?;
+        field.fill_solid(
+            &Rectangle::with_corners(Point::new(left, top), Point::new(right - 1, top)),
+            chrome::GRAY,
+        )?;
         if !field.visible(&cell_bounds(i)) {
             continue;
         }
@@ -504,7 +587,10 @@ fn draw_self_test<D: CoverageTarget<Color = Color>>(
             }
             Cell::Failed => {
                 tile.draw(&icon::NO_DATA, chrome::RED, 5, field)?;
-                field.fill_solid(&Rectangle::new(Point::new(left, top + 4), Size::new(4, 36)), chrome::RED)?;
+                field.fill_solid(
+                    &Rectangle::new(Point::new(left, top + 4), Size::new(4, 36)),
+                    chrome::RED,
+                )?;
                 ("FAIL", chrome::RED, chrome::RED)
             }
         };
@@ -523,8 +609,19 @@ fn draw_self_test<D: CoverageTarget<Color = Color>>(
         status_style.draw_on_baseline(status, pen, field)?;
     }
     let (left, right) = NARROW;
-    field.fill_solid(&Rectangle::with_corners(Point::new(left, LAST_RULE), Point::new(right - 1, LAST_RULE)), chrome::GRAY)?;
-    centred(&small(font, chrome::GRAY, 13, FRAKTION), version, VERSION_TOP, field)
+    field.fill_solid(
+        &Rectangle::with_corners(
+            Point::new(left, LAST_RULE),
+            Point::new(right - 1, LAST_RULE),
+        ),
+        chrome::GRAY,
+    )?;
+    centred(
+        &small(font, chrome::GRAY, 13, FRAKTION),
+        version,
+        VERSION_TOP,
+        field,
+    )
 }
 
 // Shared by the identity and the fault screen.
@@ -562,7 +659,10 @@ pub(super) fn barcode<D: DrawTarget<Color = Color>>(
     for byte in version.bytes() {
         for bit in 0..4 {
             let width = if byte & (1 << bit) != 0 { 2 } else { 1 };
-            target.fill_solid(&Rectangle::new(Point::new(x, top), Size::new(width, height)), color)?;
+            target.fill_solid(
+                &Rectangle::new(Point::new(x, top), Size::new(width, height)),
+                color,
+            )?;
             x += width as i32 + 2;
         }
     }
@@ -586,10 +686,17 @@ pub(super) fn hatch<D: DrawTarget<Color = Color>>(
         let mut x = area.top_left.x;
         while x <= bottom_right.x {
             let phase = (x + y + shift).rem_euclid(pitch);
-            let run = if phase < width { width - phase } else { pitch - phase };
+            let run = if phase < width {
+                width - phase
+            } else {
+                pitch - phase
+            };
             let end = (x + run).min(bottom_right.x + 1);
             if phase < width {
-                target.fill_solid(&Rectangle::new(Point::new(x, y), Size::new((end - x) as u32, 1)), color)?;
+                target.fill_solid(
+                    &Rectangle::new(Point::new(x, y), Size::new((end - x) as u32, 1)),
+                    color,
+                )?;
             }
             x = end;
         }
@@ -617,7 +724,10 @@ pub(super) fn utc_digits(clock: &ClockView) -> Option<[u8; 4]> {
     let state = clock.clock();
     let utc = state.utc.filter(|_| !state.stopped)?;
     let minutes = utc.div_euclid(60);
-    let (hours, minutes) = (minutes.div_euclid(60).rem_euclid(24) as u8, minutes.rem_euclid(60) as u8);
+    let (hours, minutes) = (
+        minutes.div_euclid(60).rem_euclid(24) as u8,
+        minutes.rem_euclid(60) as u8,
+    );
     Some([hours / 10, hours % 10, minutes / 10, minutes % 10])
 }
 
@@ -625,7 +735,11 @@ pub(super) fn utc_digits(clock: &ClockView) -> Option<[u8; 4]> {
 
 pub(super) const PAGE_RADIUS: f32 = 232.0;
 /// The mark on the card: 42 px modules, the icons' frame rule's 11 px strokes, top-left at 128.
-pub(super) const CARD_MARK: Mark = Mark { origin: (128.0, 128.0), module: 42.0, stroke: 11.0 };
+pub(super) const CARD_MARK: Mark = Mark {
+    origin: (128.0, 128.0),
+    module: 42.0,
+    stroke: 11.0,
+};
 /// The card's mark scaled about the centre for the scaled and impact frames.
 pub(super) const CARD_SCALE: f32 = 1.9;
 /// The hatch on the card at 1×: inset 5 px inside the tile's outline, 5 px stripes on a 12 px
@@ -648,7 +762,10 @@ impl Mark {
     pub(super) fn scaled(self, scale: f32) -> Self {
         let about = |v: f32, c: i32| c as f32 + (v - c as f32) * scale;
         Self {
-            origin: (about(self.origin.0, CENTER.x), about(self.origin.1, CENTER.y)),
+            origin: (
+                about(self.origin.0, CENTER.x),
+                about(self.origin.1, CENTER.y),
+            ),
             module: self.module * scale,
             stroke: self.stroke * scale,
         }
@@ -659,7 +776,12 @@ impl Mark {
     fn tile(self) -> [(f32, f32, f32, f32); 4] {
         let (m, s) = (self.module, self.stroke);
         let (a, b) = (m, 4.0 * m);
-        [(a, a, b, a + s), (a, b - s, b, b), (a, a + s, a + s, b - s), (b - s, a + s, b, b - s)]
+        [
+            (a, a, b, a + s),
+            (a, b - s, b, b),
+            (a, a + s, a + s, b - s),
+            (b - s, a + s, b, b - s),
+        ]
     }
 
     fn surround(self) -> [(f32, f32, f32, f32); 12] {
@@ -681,12 +803,20 @@ impl Mark {
         ]
     }
 
-    fn fill<D: DrawTarget<Color = Color>>(self, span: (f32, f32, f32, f32), color: Color, target: &mut D) -> Result<(), D::Error> {
+    fn fill<D: DrawTarget<Color = Color>>(
+        self,
+        span: (f32, f32, f32, f32),
+        color: Color,
+        target: &mut D,
+    ) -> Result<(), D::Error> {
         let at = |v: f32, o: f32| libm::roundf(o + v) as i32;
         let (x0, y0) = (at(span.0, self.origin.0), at(span.1, self.origin.1));
         let (x1, y1) = (at(span.2, self.origin.0), at(span.3, self.origin.1));
         if x1 > x0 && y1 > y0 {
-            let area = Rectangle::new(Point::new(x0, y0), Size::new((x1 - x0) as u32, (y1 - y0) as u32));
+            let area = Rectangle::new(
+                Point::new(x0, y0),
+                Size::new((x1 - x0) as u32, (y1 - y0) as u32),
+            );
             target.fill_solid(&area, color)?;
         }
         Ok(())
@@ -694,7 +824,13 @@ impl Mark {
 
     /// Draws the tile, the rest of the mark if `whole`, and the hatch inside the tile if
     /// `hatched`, scaling the hatch with the mark from its size on the card.
-    pub(super) fn draw<D: DrawTarget<Color = Color>>(self, whole: bool, hatched: bool, color: Color, target: &mut D) -> Result<(), D::Error> {
+    pub(super) fn draw<D: DrawTarget<Color = Color>>(
+        self,
+        whole: bool,
+        hatched: bool,
+        color: Color,
+        target: &mut D,
+    ) -> Result<(), D::Error> {
         for span in self.tile() {
             self.fill(span, color, target)?;
         }
@@ -724,7 +860,10 @@ impl Mark {
                         break;
                     }
                     if last > first {
-                        let run = Rectangle::new(Point::new(first, y), Size::new((last - first) as u32, 1));
+                        let run = Rectangle::new(
+                            Point::new(first, y),
+                            Size::new((last - first) as u32, 1),
+                        );
                         target.fill_solid(&run, color)?;
                     }
                     n += 1.0;
@@ -737,11 +876,20 @@ impl Mark {
 
 /// Draws the mark filling the square `bounds`, as an icon: strokes by the icons' frame rule and
 /// the hatch inside the tile.
-pub fn draw_mark_icon<D: DrawTarget<Color = Color>>(bounds: Rectangle, color: Color, target: &mut D) -> Result<(), D::Error> {
+pub fn draw_mark_icon<D: DrawTarget<Color = Color>>(
+    bounds: Rectangle,
+    color: Color,
+    target: &mut D,
+) -> Result<(), D::Error> {
     let module = bounds.size.width as f32 / 5.0;
     let stroke = libm::roundf((module + 2.0) / 4.0).max(2.0);
     let origin = (bounds.top_left.x as f32, bounds.top_left.y as f32);
-    Mark { origin, module, stroke }.draw(true, true, color, target)
+    Mark {
+        origin,
+        module,
+        stroke,
+    }
+    .draw(true, true, color, target)
 }
 
 // The fault screen.
@@ -750,7 +898,12 @@ const DASH_ROWS: [i32; 4] = [86, 150, 366, 430];
 const DASH: Size = Size::new(9, 2);
 const DASH_PITCH: i32 = 46;
 const DASH_FROM: i32 = 20;
-const PART_CENTRES: [Point; 4] = [Point::new(110, 118), Point::new(356, 118), Point::new(110, 348), Point::new(356, 348)];
+const PART_CENTRES: [Point; 4] = [
+    Point::new(110, 118),
+    Point::new(356, 118),
+    Point::new(110, 348),
+    Point::new(356, 348),
+];
 const PART_MODULE: i32 = 9;
 const BAND_ROWS: core::ops::Range<i32> = 198..318;
 const STRIP_ROWS: core::ops::Range<i32> = 234..282;
@@ -789,7 +942,10 @@ fn at_ink<D: CoverageTarget<Color = Color>>(
     top: i32,
     target: &mut D,
 ) -> Result<(), D::Error> {
-    let pen = Point::new(text::pen_x_for_ink_left(style, text, left), text::baseline_for_ink_top(style, text, top));
+    let pen = Point::new(
+        text::pen_x_for_ink_left(style, text, left),
+        text::baseline_for_ink_top(style, text, top),
+    );
     style.draw_on_baseline(text, pen, target)
 }
 
@@ -809,9 +965,15 @@ fn draw_fault<D: CoverageTarget<Color = Color>>(
     let frame = frame as i32;
     // The field, band and strip run to the glass's edge, and the corners past it are never seen.
     // The band paints its own rows, black with the text knocked out of it.
-    for rows in [0..BAND_ROWS.start, BAND_ROWS.end..466].into_iter().filter(|_| field) {
+    for rows in [0..BAND_ROWS.start, BAND_ROWS.end..466]
+        .into_iter()
+        .filter(|_| field)
+    {
         let area = Rectangle::new(Point::new(0, rows.start), Size::new(466, rows.len() as u32));
-        screens::clear_to(&mut Window::new(&mut *target, Point::zero(), area), chrome::RED)?;
+        screens::clear_to(
+            &mut Window::new(&mut *target, Point::zero(), area),
+            chrome::RED,
+        )?;
     }
     for y in DASH_ROWS {
         for x in (DASH_FROM..466).step_by(DASH_PITCH as usize) {
@@ -820,9 +982,19 @@ fn draw_fault<D: CoverageTarget<Color = Color>>(
     }
     for centre in PART_CENTRES {
         let half = 5 * PART_MODULE / 2;
-        modules(first.glyph(), 5, centre - Point::new_equal(half), PART_MODULE, chrome::BLACK, target)?;
+        modules(
+            first.glyph(),
+            5,
+            centre - Point::new_equal(half),
+            PART_MODULE,
+            chrome::BLACK,
+            target,
+        )?;
         for top in [centre.y - 38, centre.y + 30] {
-            target.fill_solid(&Rectangle::new(Point::new(centre.x - 32, top), Size::new(64, 8)), chrome::BLACK)?;
+            target.fill_solid(
+                &Rectangle::new(Point::new(centre.x - 32, top), Size::new(64, 8)),
+                chrome::BLACK,
+            )?;
         }
     }
 
@@ -871,7 +1043,11 @@ fn draw_fault<D: CoverageTarget<Color = Color>>(
     let mut count = heapless::String::<24>::new();
     let _ = write!(count, "SELF TEST {}/6 OK", startup.answered());
     let failures = startup.failed().count();
-    let tops: &[i32] = if failures > 1 { &SUMMARY_TOPS } else { &ABOVE_TOPS };
+    let tops: &[i32] = if failures > 1 {
+        &SUMMARY_TOPS
+    } else {
+        &ABOVE_TOPS
+    };
     at_ink(&bold, &count, MICRO_LEFT, tops[0], field)?;
     for ((part, _), &top) in startup.failed().zip(&tops[1..]) {
         let mut failure = heapless::String::<24>::new();
@@ -884,12 +1060,36 @@ fn draw_fault<D: CoverageTarget<Color = Color>>(
         at_ink(&regular, &more, MORE_LEFT, SUMMARY_TOPS[2], field)?;
     }
     if failures == 1 {
-        hatch(FAULT_HATCH, 2 * FAULT_HATCH_STRIPE, FAULT_HATCH_STRIPE, 0, chrome::BLACK, field)?;
+        hatch(
+            FAULT_HATCH,
+            2 * FAULT_HATCH_STRIPE,
+            FAULT_HATCH_STRIPE,
+            0,
+            chrome::BLACK,
+            field,
+        )?;
     }
-    let reason = if startup.demo { "DEMO, NOT A FAULT" } else { outcome.reason() };
+    let reason = if startup.demo {
+        "DEMO, NOT A FAULT"
+    } else {
+        outcome.reason()
+    };
     at_ink(&regular, reason, MICRO_LEFT, REASON_TOP, field)?;
-    let end = barcode(version, MICRO_LEFT, FAULT_BARCODE_TOP, 12, chrome::BLACK, field)?;
-    at_ink(&bold, version, end + FAULT_VERSION_GAP, FAULT_BARCODE_TOP, field)
+    let end = barcode(
+        version,
+        MICRO_LEFT,
+        FAULT_BARCODE_TOP,
+        12,
+        chrome::BLACK,
+        field,
+    )?;
+    at_ink(
+        &bold,
+        version,
+        end + FAULT_VERSION_GAP,
+        FAULT_BARCODE_TOP,
+        field,
+    )
 }
 
 // The fault screen's exit: the screen, still running, as one red surface that runs past the
@@ -900,7 +1100,8 @@ fn draw_fault<D: CoverageTarget<Color = Color>>(
 const DROPS: [i32; 2] = [408, 338];
 const CAP_END: i32 = 171;
 /// Blocks bitten out of the dropped edge: their columns, and how far above the edge they reach.
-const BITES: [(core::ops::Range<i32>, i32); 4] = [(0..64, 8), (104..160, 20), (224..288, 36), (352..416, 24)];
+const BITES: [(core::ops::Range<i32>, i32); 4] =
+    [(0..64, 8), (104..160, 20), (224..288, 36), (352..416, 24)];
 const FRAGMENTS: [Rectangle; 3] = [
     Rectangle::new(Point::new(40, 92), Size::new(57, 67)),
     Rectangle::new(Point::new(176, 102), Size::new(105, 55)),
@@ -937,7 +1138,10 @@ fn left_of(exit: u32, y: i32) -> heapless::Vec<core::ops::Range<i32>, 8> {
         push(x..466);
     }
     if exit >= 2 {
-        for fragment in FRAGMENTS.iter().filter(|fragment| fragment.rows().contains(&y)) {
+        for fragment in FRAGMENTS
+            .iter()
+            .filter(|fragment| fragment.rows().contains(&y))
+        {
             push(fragment.columns());
         }
     }
@@ -980,7 +1184,12 @@ struct Damaged<'a, T> {
 impl<T: CoverageTarget<Color = Color>> Damaged<'_, T> {
     /// Calls `f` with each part of `columns` left in the surface's row `y`, and the parent's row
     /// it lands on.
-    fn each(&mut self, y: i32, columns: core::ops::Range<i32>, mut f: impl FnMut(&mut T, core::ops::Range<i32>, i32)) {
+    fn each(
+        &mut self,
+        y: i32,
+        columns: core::ops::Range<i32>,
+        mut f: impl FnMut(&mut T, core::ops::Range<i32>, i32),
+    ) {
         let row = y - self.lift;
         if !(0..466).contains(&row) {
             return;
@@ -988,7 +1197,10 @@ impl<T: CoverageTarget<Color = Color>> Damaged<'_, T> {
         // Only the glass shows the surface.
         let glass = glass(row);
         for span in left_of(self.exit, y) {
-            let (start, end) = (span.start.max(columns.start).max(glass.start), span.end.min(columns.end).min(glass.end));
+            let (start, end) = (
+                span.start.max(columns.start).max(glass.start),
+                span.end.min(columns.end).min(glass.end),
+            );
             if start < end {
                 f(self.parent, start..end, row);
             }
@@ -1012,7 +1224,10 @@ impl<T: CoverageTarget<Color = Color>> DrawTarget for Damaged<'_, T> {
     {
         for embedded_graphics::Pixel(point, color) in pixels {
             self.each(point.y, point.x..point.x + 1, |parent, _, row| {
-                _ = parent.fill_solid(&Rectangle::new(Point::new(point.x, row), Size::new(1, 1)), color);
+                _ = parent.fill_solid(
+                    &Rectangle::new(Point::new(point.x, row), Size::new(1, 1)),
+                    color,
+                );
             });
         }
         Ok(())
@@ -1021,7 +1236,10 @@ impl<T: CoverageTarget<Color = Color>> DrawTarget for Damaged<'_, T> {
     fn fill_solid(&mut self, area: &Rectangle, color: Color) -> Result<(), Self::Error> {
         for y in area.rows() {
             self.each(y, area.columns(), |parent, span, row| {
-                _ = parent.fill_solid(&Rectangle::new(Point::new(span.start, row), Size::new(span.len() as u32, 1)), color);
+                _ = parent.fill_solid(
+                    &Rectangle::new(Point::new(span.start, row), Size::new(span.len() as u32, 1)),
+                    color,
+                );
             });
         }
         Ok(())
@@ -1031,7 +1249,12 @@ impl<T: CoverageTarget<Color = Color>> DrawTarget for Damaged<'_, T> {
 impl<T: CoverageTarget<Color = Color>> CoverageTarget for Damaged<'_, T> {
     fn blend_row(&mut self, x: i32, y: i32, coverage: &[u8], color: Color) {
         self.each(y, x..x + coverage.len() as i32, |parent, span, row| {
-            parent.blend_row(span.start, row, &coverage[(span.start - x) as usize..(span.end - x) as usize], color);
+            parent.blend_row(
+                span.start,
+                row,
+                &coverage[(span.start - x) as usize..(span.end - x) as usize],
+                color,
+            );
         });
     }
 
@@ -1066,12 +1289,24 @@ fn draw_exit<D: CoverageTarget<Color = Color>>(
         let y = row + lift;
         let on_glass = glass(row);
         let mut x = on_glass.start;
-        let spans = if (0..466).contains(&y) { left_of(exit, y) } else { heapless::Vec::new() };
-        for span in spans.iter().map(|span| span.start.max(on_glass.start)..span.end.min(on_glass.end)) {
+        let spans = if (0..466).contains(&y) {
+            left_of(exit, y)
+        } else {
+            heapless::Vec::new()
+        };
+        for span in spans
+            .iter()
+            .map(|span| span.start.max(on_glass.start)..span.end.min(on_glass.end))
+        {
             if span.is_empty() {
                 continue;
             }
-            let at = |columns: core::ops::Range<i32>| Rectangle::new(Point::new(columns.start, row), Size::new(columns.len() as u32, 1));
+            let at = |columns: core::ops::Range<i32>| {
+                Rectangle::new(
+                    Point::new(columns.start, row),
+                    Size::new(columns.len() as u32, 1),
+                )
+            };
             target.fill_solid(&at(x..span.start.max(x)), chrome::BLACK)?;
             if !BAND_ROWS.contains(&y) {
                 target.fill_solid(&at(span.clone()), chrome::RED)?;
@@ -1079,10 +1314,24 @@ fn draw_exit<D: CoverageTarget<Color = Color>>(
             x = span.end;
         }
         if x < on_glass.end {
-            target.fill_solid(&Rectangle::new(Point::new(x, row), Size::new((on_glass.end - x) as u32, 1)), chrome::BLACK)?;
+            target.fill_solid(
+                &Rectangle::new(Point::new(x, row), Size::new((on_glass.end - x) as u32, 1)),
+                chrome::BLACK,
+            )?;
         }
     }
-    draw_fault(FAULT_FRAMES + exit, startup, version, font, false, &mut Damaged { parent: target, exit, lift })
+    draw_fault(
+        FAULT_FRAMES + exit,
+        startup,
+        version,
+        font,
+        false,
+        &mut Damaged {
+            parent: target,
+            exit,
+            lift,
+        },
+    )
 }
 
 #[cfg(test)]
@@ -1093,7 +1342,13 @@ mod tests {
         let mut startup = Startup::new();
         startup.begin(0);
         for (part, at) in Part::ALL.into_iter().zip(times) {
-            startup.report(Report { part, outcome: Outcome::Answered }, at);
+            startup.report(
+                Report {
+                    part,
+                    outcome: Outcome::Answered,
+                },
+                at,
+            );
         }
         startup
     }
@@ -1107,7 +1362,13 @@ mod tests {
         assert_eq!(startup.phase(from + 33_334), Phase::Identity(1));
         // 120 identity frames and 19 of the card.
         assert_eq!(startup.phase(from + 4_633_333), Phase::Identity(138));
-        assert_eq!(startup.phase(from + 4_633_334), Phase::Done { entry: true, after_card: true });
+        assert_eq!(
+            startup.phase(from + 4_633_334),
+            Phase::Done {
+                entry: true,
+                after_card: true
+            }
+        );
         assert_eq!(startup.view(from + 4_000_000), Some(View::Card(0)));
     }
 
@@ -1120,7 +1381,13 @@ mod tests {
         assert_eq!(startup.phase(from), Phase::Fault(0));
         assert_eq!(startup.phase(from + 3_999_999), Phase::Fault(119));
         assert_eq!(startup.phase(from + 4_599_999), Phase::Fault(137));
-        assert_eq!(startup.phase(from + 4_600_000), Phase::Done { entry: true, after_card: false });
+        assert_eq!(
+            startup.phase(from + 4_600_000),
+            Phase::Done {
+                entry: true,
+                after_card: false
+            }
+        );
     }
 
     #[test]
@@ -1129,13 +1396,22 @@ mod tests {
         startup.touch(0);
         assert_eq!(startup.phase(ROW), Phase::SelfTest);
         startup.touch(1_000_000);
-        assert_eq!(startup.phase(1_000_000), Phase::Done { entry: false, after_card: false });
+        assert_eq!(
+            startup.phase(1_000_000),
+            Phase::Done {
+                entry: false,
+                after_card: false
+            }
+        );
     }
 
     #[test]
     fn the_brightness_climbs_then_holds() {
         let startup = passed_at([0; 6]);
-        assert_eq!([0, 100_000, RAMP].map(|now| startup.brightness(now, 200)), [0, 100, 200]);
+        assert_eq!(
+            [0, 100_000, RAMP].map(|now| startup.brightness(now, 200)),
+            [0, 100, 200]
+        );
         let from = 4 * ROW + PASS_HOLD;
         assert_eq!(startup.brightness(from + 40_000, 200), 200);
     }
@@ -1153,13 +1429,24 @@ mod tests {
     fn a_passed_cell_builds_its_glyph_a_row_at_a_time() {
         let mut startup = Startup::new();
         startup.begin(0);
-        startup.report(Report { part: Part::Touch, outcome: Outcome::Answered }, 300_000);
+        startup.report(
+            Report {
+                part: Part::Touch,
+                outcome: Outcome::Answered,
+            },
+            300_000,
+        );
         let cells = |now| match startup.view(now) {
             Some(View::SelfTest(cells)) => cells[Part::Touch.index()],
             other => panic!("{other:?}"),
         };
-        assert!(matches!(startup.view(300_000), Some(View::SelfTest(cells)) if cells[0] == Cell::Waiting));
-        assert_eq!([300_000, 329_999, 330_000, 500_000].map(cells), [1, 1, 2, 5].map(Cell::Answered));
+        assert!(
+            matches!(startup.view(300_000), Some(View::SelfTest(cells)) if cells[0] == Cell::Waiting)
+        );
+        assert_eq!(
+            [300_000, 329_999, 330_000, 500_000].map(cells),
+            [1, 1, 2, 5].map(Cell::Answered)
+        );
         assert_eq!(startup.next_change(310_000), Some(330_000));
         assert_eq!(startup.next_change(420_000), None);
     }
@@ -1176,7 +1463,10 @@ mod tests {
         assert_eq!(cells(1_800_000)[Part::Magnet.index()], Cell::Failed);
         assert_eq!(cells(1_800_000)[Part::Gnss.index()], Cell::Waiting);
         assert_eq!(demo.next_change(1_100_000), Some(1_150_000));
-        assert_eq!(demo.phase(1_000_000 + 1_300_000 + 4 * ROW + FAIL_HOLD), Phase::Fault(0));
+        assert_eq!(
+            demo.phase(1_000_000 + 1_300_000 + 4 * ROW + FAIL_HOLD),
+            Phase::Fault(0)
+        );
         assert_eq!(demo.brightness(1_000_000, 200), 200);
     }
 
@@ -1204,15 +1494,30 @@ mod tests {
     impl DrawTarget for Lit {
         type Color = Color;
         type Error = core::convert::Infallible;
-        fn draw_iter<I: IntoIterator<Item = embedded_graphics::Pixel<Color>>>(&mut self, pixels: I) -> Result<(), Self::Error> {
-            self.0.extend(pixels.into_iter().map(|embedded_graphics::Pixel(point, _)| (point.x, point.y)));
+        fn draw_iter<I: IntoIterator<Item = embedded_graphics::Pixel<Color>>>(
+            &mut self,
+            pixels: I,
+        ) -> Result<(), Self::Error> {
+            self.0.extend(
+                pixels
+                    .into_iter()
+                    .map(|embedded_graphics::Pixel(point, _)| (point.x, point.y)),
+            );
             Ok(())
         }
     }
 
     #[test]
     fn the_hatch_lights_the_pixels_the_stripe_test_does() {
-        for mark in [CARD_MARK, CARD_MARK.scaled(CARD_SCALE), Mark { origin: (100.0, 50.0), module: 13.0, stroke: 4.0 }] {
+        for mark in [
+            CARD_MARK,
+            CARD_MARK.scaled(CARD_SCALE),
+            Mark {
+                origin: (100.0, 50.0),
+                module: 13.0,
+                stroke: 4.0,
+            },
+        ] {
             let mut drawn = Lit(alloc::collections::BTreeSet::new());
             mark.draw(false, true, chrome::LIME, &mut drawn).unwrap();
             let mut tile = Lit(alloc::collections::BTreeSet::new());
@@ -1220,18 +1525,25 @@ mod tests {
             let scale = mark.module / CARD_MARK.module;
             let inset = mark.module + mark.stroke + HATCH_INSET * scale;
             let (pitch, stripe) = (HATCH_PITCH * scale, HATCH_STRIPE * scale);
-            let span = |o: f32| libm::roundf(o + inset) as i32..libm::roundf(o + 5.0 * mark.module - inset) as i32;
+            let span = |o: f32| {
+                libm::roundf(o + inset) as i32..libm::roundf(o + 5.0 * mark.module - inset) as i32
+            };
             let mut expected = tile.0.clone();
             for y in span(mark.origin.1) {
                 for x in span(mark.origin.0) {
-                    let across = ((x - CENTER.x) + (y - CENTER.y) + 1) as f32 / core::f32::consts::SQRT_2;
+                    let across =
+                        ((x - CENTER.x) + (y - CENTER.y) + 1) as f32 / core::f32::consts::SQRT_2;
                     if across - libm::floorf(across / pitch) * pitch < stripe {
                         expected.insert((x, y));
                     }
                 }
             }
             let differ = drawn.0.symmetric_difference(&expected).count();
-            assert!(differ <= expected.len() / 1000, "{differ} of {} differ", expected.len());
+            assert!(
+                differ <= expected.len() / 1000,
+                "{differ} of {} differ",
+                expected.len()
+            );
         }
     }
 
@@ -1246,7 +1558,10 @@ mod tests {
         impl DrawTarget for Columns {
             type Color = Color;
             type Error = core::convert::Infallible;
-            fn draw_iter<I: IntoIterator<Item = embedded_graphics::Pixel<Color>>>(&mut self, pixels: I) -> Result<(), Self::Error> {
+            fn draw_iter<I: IntoIterator<Item = embedded_graphics::Pixel<Color>>>(
+                &mut self,
+                pixels: I,
+            ) -> Result<(), Self::Error> {
                 for embedded_graphics::Pixel(point, _) in pixels {
                     if point.y == 0 && !self.0.contains(&point.x) {
                         self.0.push(point.x);
@@ -1258,9 +1573,13 @@ mod tests {
         let mut columns = Columns(alloc::vec::Vec::new());
         let end = barcode("0.1.0", 34, 0, 1, chrome::LIME, &mut columns).unwrap();
         assert_eq!(end, 99);
-        let row: alloc::string::String = (34..99).map(|x| if columns.0.contains(&x) { '#' } else { '.' }).collect();
+        let row: alloc::string::String = (34..99)
+            .map(|x| if columns.0.contains(&x) { '#' } else { '.' })
+            .collect();
         // The measured row of the design's identity.
-        assert_eq!(row, "#..#..#..#..#..##..##..##..##..#..#..#..#..##..##..##..#..#..#..#");
+        assert_eq!(
+            row,
+            "#..#..#..#..#..##..##..##..##..#..#..#..#..##..##..##..#..#..#..#"
+        );
     }
 }
-

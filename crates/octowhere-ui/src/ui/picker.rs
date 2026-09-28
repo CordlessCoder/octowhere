@@ -20,7 +20,7 @@ use super::{
     text::{self, style},
 };
 use crate::{
-    chrome::{self, Color, CoverageTarget, FontdueRenderer, OnBackground, FRAKTION, FRAKTION_BOLD},
+    chrome::{self, Color, CoverageTarget, FRAKTION, FRAKTION_BOLD, FontdueRenderer, OnBackground},
     tz::DATABASE,
 };
 
@@ -45,7 +45,11 @@ enum Step {
     Offset { offsets: Vec<i32> },
     /// The zones at `offset`, in the order they are listed, which is nearest first when the
     /// position is known.
-    Zone { offset: i32, zones: Vec<ZoneId>, nearest: bool },
+    Zone {
+        offset: i32,
+        zones: Vec<ZoneId>,
+        nearest: bool,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -63,15 +67,25 @@ pub struct Picker {
 impl Eq for Picker {}
 
 fn time_of(peripherals: &PeripheralState) -> Option<i64> {
-    peripherals.clock.clock().utc.filter(|_| !peripherals.clock.clock().stopped)
+    peripherals
+        .clock
+        .clock()
+        .utc
+        .filter(|_| !peripherals.clock.clock().stopped)
 }
 
 /// A zone's offset at `unix`, or without a time, each offset it keeps during a year.
-fn offsets_of(zone: &crate::tz::Zone, unix: Option<i64>) -> heapless::Vec<crate::tz::Offset<'static>, 2> {
+fn offsets_of(
+    zone: &crate::tz::Zone,
+    unix: Option<i64>,
+) -> heapless::Vec<crate::tz::Offset<'static>, 2> {
     let mut offsets = heapless::Vec::new();
     for time in unix.map_or(RULES_ONLY.to_vec(), |unix| alloc::vec![unix]) {
         let offset = zone.at(time);
-        if !offsets.iter().any(|kept: &crate::tz::Offset<'_>| kept.utc_offset == offset.utc_offset) {
+        if !offsets
+            .iter()
+            .any(|kept: &crate::tz::Offset<'_>| kept.utc_offset == offset.utc_offset)
+        {
             _ = offsets.push(offset);
         }
     }
@@ -83,7 +97,11 @@ fn offsets_of(zone: &crate::tz::Zone, unix: Option<i64>) -> heapless::Vec<crate:
 fn offsets_at(unix: Option<i64>) -> Vec<i32> {
     let mut offsets: Vec<i32> = DATABASE
         .zones()
-        .flat_map(|zone| offsets_of(&zone, unix).into_iter().map(|offset| offset.utc_offset))
+        .flat_map(|zone| {
+            offsets_of(&zone, unix)
+                .into_iter()
+                .map(|offset| offset.utc_offset)
+        })
         .collect();
     offsets.sort_unstable();
     offsets.dedup();
@@ -96,7 +114,11 @@ fn offsets_at(unix: Option<i64>) -> Vec<i32> {
 fn zones_at(offset: i32, unix: Option<i64>, position: Option<(i32, i32)>) -> Vec<ZoneId> {
     let mut zones: Vec<_> = DATABASE
         .zones()
-        .filter(|zone| offsets_of(zone, unix).iter().any(|each| each.utc_offset == offset))
+        .filter(|zone| {
+            offsets_of(zone, unix)
+                .iter()
+                .any(|each| each.utc_offset == offset)
+        })
         .map(|zone| zone.id)
         .collect();
     zones.sort_by(|&a, &b| {
@@ -108,7 +130,10 @@ fn zones_at(offset: i32, unix: Option<i64>, position: Option<(i32, i32)>) -> Vec
             (zone.name.starts_with("Etc/"), distance, city(zone.name))
         };
         let (a, b) = (key(a), key(b));
-        (a.0, a.1).partial_cmp(&(b.0, b.1)).unwrap_or(core::cmp::Ordering::Equal).then(a.2.cmp(&b.2))
+        (a.0, a.1)
+            .partial_cmp(&(b.0, b.1))
+            .unwrap_or(core::cmp::Ordering::Equal)
+            .then(a.2.cmp(&b.2))
     });
     zones
 }
@@ -137,7 +162,11 @@ fn city(name: &str) -> String<32> {
         return city;
     }
     for c in name.rsplit('/').next().unwrap_or(name).chars() {
-        _ = city.push(if c == '_' { ' ' } else { c.to_ascii_uppercase() });
+        _ = city.push(if c == '_' {
+            ' '
+        } else {
+            c.to_ascii_uppercase()
+        });
     }
     city
 }
@@ -167,12 +196,19 @@ impl Picker {
     #[must_use]
     pub fn new(peripherals: &PeripheralState) -> Self {
         let offsets = offsets_at(time_of(peripherals));
-        let current = clock_screen::offset(&peripherals.clock).map_or(0, |offset| offset.utc_offset);
+        let current =
+            clock_screen::offset(&peripherals.clock).map_or(0, |offset| offset.utc_offset);
         let index = offsets
             .iter()
             .position(|&offset| offset >= current)
             .unwrap_or(offsets.len().saturating_sub(1));
-        Self { step: Step::Offset { offsets }, index, grabbed: None, fling: None, flung_from: 0 }
+        Self {
+            step: Step::Offset { offsets },
+            index,
+            grabbed: None,
+            fling: None,
+            flung_from: 0,
+        }
     }
 
     fn len(&self) -> usize {
@@ -187,7 +223,12 @@ impl Picker {
         (from as isize + steps).clamp(0, self.len() as isize - 1) as usize
     }
 
-    pub fn handle(&mut self, event: &GestureEvent, peripherals: &PeripheralState, effects: &mut Effects) -> Next {
+    pub fn handle(
+        &mut self,
+        event: &GestureEvent,
+        peripherals: &PeripheralState,
+        effects: &mut Effects,
+    ) -> Next {
         match *event {
             GestureEvent::Down(_) => self.fling = None,
             GestureEvent::DragStart(drag) => {
@@ -230,8 +271,15 @@ impl Picker {
                 let position = peripherals.gnss.position;
                 let zones = zones_at(offset, unix, position);
                 let current = peripherals.clock.zone().zone;
-                self.index = zones.iter().position(|&zone| Some(zone) == current).unwrap_or(0);
-                self.step = Step::Zone { offset, zones, nearest: position.is_some() };
+                self.index = zones
+                    .iter()
+                    .position(|&zone| Some(zone) == current)
+                    .unwrap_or(0);
+                self.step = Step::Zone {
+                    offset,
+                    zones,
+                    nearest: position.is_some(),
+                };
                 self.fling = None;
                 Next::Stay
             }
@@ -279,13 +327,18 @@ impl Picker {
         target: &mut D,
     ) -> Result<(), D::Error> {
         match &self.step {
-            Step::Offset { offsets } => self.draw_offsets(offsets, peripherals, accents, font, target),
+            Step::Offset { offsets } => {
+                self.draw_offsets(offsets, peripherals, accents, font, target)
+            }
             Step::Zone { .. } => self.draw_zones(peripherals, accents, font, target),
         }
     }
 
     fn neighbours(&self) -> [Option<usize>; 2] {
-        [self.index.checked_sub(1), Some(self.index + 1).filter(|&next| next < self.len())]
+        [
+            self.index.checked_sub(1),
+            Some(self.index + 1).filter(|&next| next < self.len()),
+        ]
     }
 
     fn draw_neighbour<D: CoverageTarget<Color = Color>>(
@@ -311,19 +364,36 @@ impl Picker {
         font: &FontdueRenderer<'static, Color>,
         target: &mut D,
     ) -> Result<(), D::Error> {
-        second::draw_cap("OFFSET / 01", "CANCEL", &panel::ZONE, chrome::VIOLET, accents, font, target)?;
+        second::draw_cap(
+            "OFFSET / 01",
+            "CANCEL",
+            &panel::ZONE,
+            chrome::VIOLET,
+            accents,
+            font,
+            target,
+        )?;
         second::draw_slab(189, 278, chrome::VIOLET, target)?;
         let unix = time_of(peripherals);
         let offset = offsets[self.index];
         if let Some(previous) = self.neighbours()[0] {
             let mut line = String::<16>::new();
-            _ = write!(line, "{}   {}", clock_at(unix, offsets[previous]), signed(offsets[previous]));
+            _ = write!(
+                line,
+                "{}   {}",
+                clock_at(unix, offsets[previous]),
+                signed(offsets[previous])
+            );
             let small = style(font, chrome::GRAY, 16, FRAKTION);
             let pen = Point::new(
                 text::pen_x_for_ink_left(&small, &line, TEXT_LEFT),
                 text::baseline_for_ink_middle(&small, &line, NEIGHBOURS[0]),
             );
-            small.draw_on_baseline(&line, pen, &mut OnBackground::new(&mut *target, chrome::BLACK))?;
+            small.draw_on_baseline(
+                &line,
+                pen,
+                &mut OnBackground::new(&mut *target, chrome::BLACK),
+            )?;
         }
         let big = style(font, chrome::BLACK, 51, FRAKTION_BOLD);
         let time = clock_at(unix, offset);
@@ -331,29 +401,50 @@ impl Picker {
             text::pen_x_for_ink_left(&big, &time, TEXT_LEFT),
             text::baseline_for_ink_middle(&big, &time, 233.0),
         );
-        big.draw_on_baseline(&time, pen, &mut OnBackground::new(&mut *target, chrome::VIOLET))?;
+        big.draw_on_baseline(
+            &time,
+            pen,
+            &mut OnBackground::new(&mut *target, chrome::VIOLET),
+        )?;
         let label = style(font, chrome::BLACK, 11, FRAKTION_BOLD);
         let pen = Point::new(
             text::pen_x_for_ink_left(&label, "UTC", 309),
             text::baseline_for_ink_top(&label, "UTC", 251),
         );
-        label.draw_on_baseline("UTC", pen, &mut OnBackground::new(&mut *target, chrome::VIOLET))?;
+        label.draw_on_baseline(
+            "UTC",
+            pen,
+            &mut OnBackground::new(&mut *target, chrome::VIOLET),
+        )?;
         let value = style(font, chrome::BLACK, 11, FRAKTION_BOLD);
         let text = signed(offset);
         let pen = Point::new(
             text::pen_x_for_ink_right(&value, &text, 378),
             text::baseline_for_ink_top(&value, &text, 251),
         );
-        value.draw_on_baseline(&text, pen, &mut OnBackground::new(&mut *target, chrome::VIOLET))?;
+        value.draw_on_baseline(
+            &text,
+            pen,
+            &mut OnBackground::new(&mut *target, chrome::VIOLET),
+        )?;
         if let Some(next) = self.neighbours()[1] {
             let mut line = String::<16>::new();
-            _ = write!(line, "{}   {}", clock_at(unix, offsets[next]), signed(offsets[next]));
+            _ = write!(
+                line,
+                "{}   {}",
+                clock_at(unix, offsets[next]),
+                signed(offsets[next])
+            );
             let small = style(font, chrome::GRAY, 17, FRAKTION);
             let pen = Point::new(
                 text::pen_x_for_ink_left(&small, &line, TEXT_LEFT),
                 text::baseline_for_ink_middle(&small, &line, NEIGHBOURS[1]),
             );
-            small.draw_on_baseline(&line, pen, &mut OnBackground::new(&mut *target, chrome::BLACK))?;
+            small.draw_on_baseline(
+                &line,
+                pen,
+                &mut OnBackground::new(&mut *target, chrome::BLACK),
+            )?;
         }
         second::draw_button("AUTO", AUTO, true, font, target)?;
         second::draw_footer("DRAG OFFSET / TAP FOR ZONES", accents, font, target)
@@ -366,11 +457,24 @@ impl Picker {
         font: &FontdueRenderer<'static, Color>,
         target: &mut D,
     ) -> Result<(), D::Error> {
-        let Step::Zone { offset, zones, nearest } = &self.step else {
+        let Step::Zone {
+            offset,
+            zones,
+            nearest,
+        } = &self.step
+        else {
             return Ok(());
         };
         let (offset, nearest) = (*offset, *nearest);
-        second::draw_cap("ZONE / 02", "BACK", &panel::ZONE, chrome::VIOLET, accents, font, target)?;
+        second::draw_cap(
+            "ZONE / 02",
+            "BACK",
+            &panel::ZONE,
+            chrome::VIOLET,
+            accents,
+            font,
+            target,
+        )?;
         second::draw_slab(188, 278, chrome::VIOLET, target)?;
         let unix = time_of(peripherals);
         let zone = DATABASE.zone(zones[self.index]);
@@ -380,7 +484,11 @@ impl Picker {
             text::pen_x_for_ink_left(&big, &name, TEXT_LEFT),
             text::baseline_for_ink_middle(&big, &name, 220.0),
         );
-        big.draw_on_baseline(&name, pen, &mut OnBackground::new(&mut *target, chrome::VIOLET))?;
+        big.draw_on_baseline(
+            &name,
+            pen,
+            &mut OnBackground::new(&mut *target, chrome::VIOLET),
+        )?;
         let mut line = String::<48>::new();
         for c in zone.name.chars() {
             _ = line.push(c.to_ascii_uppercase());
@@ -395,7 +503,11 @@ impl Picker {
             text::pen_x_for_ink_left(&small, &line, TEXT_LEFT),
             text::baseline_for_ink_top(&small, &line, 253),
         );
-        small.draw_on_baseline(&line, pen, &mut OnBackground::new(&mut *target, chrome::VIOLET))?;
+        small.draw_on_baseline(
+            &line,
+            pen,
+            &mut OnBackground::new(&mut *target, chrome::VIOLET),
+        )?;
         for (neighbour, row) in self.neighbours().into_iter().zip(NEIGHBOURS) {
             if let Some(index) = neighbour {
                 Self::draw_neighbour(&city(DATABASE.zone(zones[index]).name), row, font, target)?;
@@ -404,13 +516,22 @@ impl Picker {
         // The order shares the count's line: above the slab it would meet the zone before.
         let mut position = String::<32>::new();
         let order = if nearest { "NEAREST FIRST" } else { "A-Z" };
-        _ = write!(position, "{order}  {:02} / {:02}", self.index + 1, zones.len());
+        _ = write!(
+            position,
+            "{order}  {:02} / {:02}",
+            self.index + 1,
+            zones.len()
+        );
         let style = second::hint_style(font);
         let pen = Point::new(
             text::pen_x_for_ink_right(&style, &position, 370),
             text::baseline_for_ink_top(&style, &position, 326),
         );
-        style.draw_on_baseline(&position, pen, &mut OnBackground::new(&mut *target, chrome::BLACK))?;
+        style.draw_on_baseline(
+            &position,
+            pen,
+            &mut OnBackground::new(&mut *target, chrome::BLACK),
+        )?;
         second::draw_footer("DRAG TO CHOOSE / TAP TO SELECT", accents, font, target)
     }
 }
@@ -429,7 +550,14 @@ mod tests {
 
     #[test]
     fn the_offsets_are_distinct_and_ascending_and_every_one_has_zones() {
-        let unix = DateTime { year: 2026, month: 9, day: 24, hour: 12, ..DateTime::default() }.to_unix();
+        let unix = DateTime {
+            year: 2026,
+            month: 9,
+            day: 24,
+            hour: 12,
+            ..DateTime::default()
+        }
+        .to_unix();
         let offsets = offsets_at(Some(unix));
         assert!(offsets.len() > 30, "{} offsets", offsets.len());
         assert!(offsets.windows(2).all(|pair| pair[0] < pair[1]));
@@ -437,12 +565,23 @@ mod tests {
             assert!(!zones_at(offset, Some(unix), None).is_empty(), "{offset}");
         }
         let dublin = zones_at(3600, Some(unix), None);
-        assert!(dublin.iter().any(|&zone| DATABASE.zone(zone).name == "Europe/Dublin"));
+        assert!(
+            dublin
+                .iter()
+                .any(|&zone| DATABASE.zone(zone).name == "Europe/Dublin")
+        );
     }
 
     #[test]
     fn with_a_position_the_nearest_zone_comes_first_and_etc_last() {
-        let unix = DateTime { year: 2026, month: 9, day: 24, hour: 12, ..DateTime::default() }.to_unix();
+        let unix = DateTime {
+            year: 2026,
+            month: 9,
+            day: 24,
+            hour: 12,
+            ..DateTime::default()
+        }
+        .to_unix();
         // Just outside Dublin.
         let zones = zones_at(3600, Some(unix), Some((533_500_000, -63_000_000)));
         let names: Vec<_> = zones.iter().map(|&zone| DATABASE.zone(zone).name).collect();
@@ -458,7 +597,11 @@ mod untrusted {
 
     #[test]
     fn without_a_time_a_zone_is_found_under_its_winter_and_summer_offsets() {
-        let dublin = |offset| zones_at(offset, None, None).into_iter().any(|zone| DATABASE.zone(zone).name == "Europe/Dublin");
+        let dublin = |offset| {
+            zones_at(offset, None, None)
+                .into_iter()
+                .any(|zone| DATABASE.zone(zone).name == "Europe/Dublin")
+        };
         assert!(dublin(0) && dublin(3600));
         assert!(offsets_at(None).len() >= offsets_at(Some(RULES_ONLY[0])).len());
     }

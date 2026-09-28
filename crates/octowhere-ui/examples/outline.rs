@@ -32,21 +32,36 @@ const SAMPLES: [Sample; 3] = [
         text: "OCTO",
         size: 40,
         font: chrome::SHAPIRO,
-        pens: [Point::new(70, 150), Point::new(250, 150), Point::new(70, 320), Point::new(250, 320)],
+        pens: [
+            Point::new(70, 150),
+            Point::new(250, 150),
+            Point::new(70, 320),
+            Point::new(250, 320),
+        ],
     },
     Sample {
         name: "fraktion-bold-136",
         text: "48",
         size: 136,
         font: chrome::FRAKTION_BOLD,
-        pens: [Point::new(60, 200), Point::new(245, 200), Point::new(60, 370), Point::new(245, 370)],
+        pens: [
+            Point::new(60, 200),
+            Point::new(245, 200),
+            Point::new(60, 370),
+            Point::new(245, 370),
+        ],
     },
     Sample {
         name: "fraktion-16",
         text: "WED 25 SEP",
         size: 16,
         font: chrome::FRAKTION,
-        pens: [Point::new(80, 150), Point::new(260, 150), Point::new(80, 320), Point::new(260, 320)],
+        pens: [
+            Point::new(80, 150),
+            Point::new(260, 150),
+            Point::new(80, 320),
+            Point::new(260, 320),
+        ],
     },
 ];
 
@@ -58,7 +73,12 @@ fn main() {
         PathBuf::from,
     );
     std::fs::create_dir_all(&out).expect("creating the output directory");
-    let base = FontdueRenderer::new(chrome::FontdueRendererCtx::new_rc(), 12, chrome::GRAY, chrome::FONTS);
+    let base = FontdueRenderer::new(
+        chrome::FontdueRendererCtx::new_rc(),
+        12,
+        chrome::GRAY,
+        chrome::FONTS,
+    );
     for sample in &SAMPLES {
         let mut fb = FB::boxed();
         screens::clear(&mut *fb).unwrap();
@@ -70,16 +90,24 @@ fn main() {
             let radius = if i % 2 == 0 { 1 } else { 2 };
             if i < 2 {
                 style.text_color = chrome::WHITE;
-                style.draw_outline_on_baseline(sample.text, pen, radius, &mut *fb).unwrap();
+                style
+                    .draw_outline_on_baseline(sample.text, pen, radius, &mut *fb)
+                    .unwrap();
             } else {
                 style.text_color = chrome::ORANGE;
-                style.draw_outline_on_baseline(sample.text, pen, radius, &mut *fb).unwrap();
+                style
+                    .draw_outline_on_baseline(sample.text, pen, radius, &mut *fb)
+                    .unwrap();
                 style.text_color = chrome::WHITE;
                 style.draw_on_baseline(sample.text, pen, &mut *fb).unwrap();
             }
-            label.draw_on_baseline(text, pen + Point::new(0, 30), &mut *fb).unwrap();
+            label
+                .draw_on_baseline(text, pen + Point::new(0, 30), &mut *fb)
+                .unwrap();
         }
-        label.draw_on_baseline("OUTLINE SAMPLES", Point::new(175, 60), &mut *fb).unwrap();
+        label
+            .draw_on_baseline("OUTLINE SAMPLES", Point::new(175, 60), &mut *fb)
+            .unwrap();
         write_png(&fb, &out.join(format!("outline-{}.png", sample.name)));
     }
 }

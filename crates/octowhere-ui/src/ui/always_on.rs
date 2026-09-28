@@ -12,10 +12,12 @@ use heapless::String;
 
 use super::{
     clock::ClockView,
-    clock_screen::{self, Mode, MONTHS, WEEKDAYS},
+    clock_screen::{self, MONTHS, Mode, WEEKDAYS},
     screens::{self, Battery},
 };
-use crate::chrome::{self, Color, CoverageTarget, FontdueRenderer, FRAKTION, FRAKTION_BOLD, SHAPIRO};
+use crate::chrome::{
+    self, Color, CoverageTarget, FRAKTION, FRAKTION_BOLD, FontdueRenderer, SHAPIRO,
+};
 
 const CENTER: Point = Point::new(233, 233);
 const DIGITS_PX: u32 = 136;
@@ -39,8 +41,10 @@ const RAIL_PITCH: i32 = 14;
 const RAIL_CELL: Rectangle = Rectangle::new(Point::new(0, 408), Size::new(5, 2));
 const RAIL_MARKER: Rectangle = Rectangle::new(Point::new(0, 404), Size::new(5, 7));
 /// NO DATA's dashes, its word centred on this row, and its caption's ink top.
-const NO_DATA_DASHES: [Rectangle; 2] =
-    [Rectangle::new(Point::new(86, 204), Size::new(29, 4)), Rectangle::new(Point::new(350, 204), Size::new(29, 4))];
+const NO_DATA_DASHES: [Rectangle; 2] = [
+    Rectangle::new(Point::new(86, 204), Size::new(29, 4)),
+    Rectangle::new(Point::new(350, 204), Size::new(29, 4)),
+];
 const NO_DATA_MIDDLE: f32 = 256.0;
 const NO_DATA_CAPTION_TOP: i32 = 301;
 /// The blocks between the hours and the minutes while the time is local: left, top, width,
@@ -57,7 +61,13 @@ const BRIDGES: [(i32, i32, u32, u32, usize); 7] = [
 ];
 /// The blocks while the time is unknown or UTC: left, top and width, each 6 px tall with a
 /// scanline through it.
-const BARS: [(i32, i32, u32); 5] = [(42, 196, 35), (227, 194, 43), (373, 198, 40), (36, 382, 26), (383, 380, 28)];
+const BARS: [(i32, i32, u32); 5] = [
+    (42, 196, 35),
+    (227, 194, 43),
+    (373, 198, 40),
+    (36, 382, 26),
+    (383, 380, 28),
+];
 const TICKS: [i32; 8] = [30, 37, 44, 51, 374, 382, 390, 398];
 const TICKS_TOP: i32 = 214;
 
@@ -107,11 +117,20 @@ impl View {
             State::Local => local.map_or((None, None), |local| {
                 let t = &local.time;
                 let mut date = String::new();
-                _ = write!(date, "{} {:02} {}", WEEKDAYS[usize::from(t.weekday())], t.day, MONTHS[usize::from(t.month - 1)]);
+                _ = write!(
+                    date,
+                    "{} {:02} {}",
+                    WEEKDAYS[usize::from(t.weekday())],
+                    t.day,
+                    MONTHS[usize::from(t.month - 1)]
+                );
                 (Some((t.hour, t.minute)), Some(date))
             }),
             // Without a zone the face shows the time it can vouch for, in UTC.
-            State::NoZone => (view.clock().utc_time().map(|utc| (utc.hour, utc.minute)), None),
+            State::NoZone => (
+                view.clock().utc_time().map(|utc| (utc.hour, utc.minute)),
+                None,
+            ),
             State::Stopped | State::NoData => (None, None),
         };
         let two = |value: u8| {
@@ -120,10 +139,21 @@ impl View {
             text
         };
         let time = clock.map_or_else(
-            || [String::try_from("--").unwrap(), String::try_from("--").unwrap()],
+            || {
+                [
+                    String::try_from("--").unwrap(),
+                    String::try_from("--").unwrap(),
+                ]
+            },
             |(hour, minute)| [two(hour), two(minute)],
         );
-        Self { state, time, clock, date, battery }
+        Self {
+            state,
+            time,
+            clock,
+            date,
+            battery,
+        }
     }
 
     /// Whether the face's time stands still, so only the stage's own clock marks its minutes.
@@ -169,20 +199,34 @@ pub fn draw<D: CoverageTarget<Color = Color>>(
         let ink = word.baseline_bounds("NO DATA", Point::zero());
         let top = libm::roundf(NO_DATA_MIDDLE - ink.size.height as f32 / 2.0) as i32;
         centred(&word, "NO DATA", top, target)?;
-        return centred(&clock_screen::style(font, chrome::GRAY, 13, FRAKTION), "CLOCK", NO_DATA_CAPTION_TOP, target);
+        return centred(
+            &clock_screen::style(font, chrome::GRAY, 13, FRAKTION),
+            "CLOCK",
+            NO_DATA_CAPTION_TOP,
+            target,
+        );
     }
 
     match (view.state, view.clock) {
         (State::Local, Some((_, minute))) => draw_bridges(minute, target)?,
         _ => {
             for (x, y, width) in BARS {
-                target.fill_solid(&Rectangle::new(Point::new(x, y), Size::new(width, 6)), shaded(chrome::BLUE, BAR_LEVEL))?;
-                target.fill_solid(&Rectangle::new(Point::new(x, y + 2), Size::new(width, 1)), shaded(chrome::BLUE, BAR_SCAN_LEVEL))?;
+                target.fill_solid(
+                    &Rectangle::new(Point::new(x, y), Size::new(width, 6)),
+                    shaded(chrome::BLUE, BAR_LEVEL),
+                )?;
+                target.fill_solid(
+                    &Rectangle::new(Point::new(x, y + 2), Size::new(width, 1)),
+                    shaded(chrome::BLUE, BAR_SCAN_LEVEL),
+                )?;
             }
         }
     }
     for h in 0..24 {
-        target.fill_solid(&at(RAIL_CELL, RAIL_LEFT + RAIL_PITCH * h), shaded(chrome::BLUE, RAIL_LEVEL))?;
+        target.fill_solid(
+            &at(RAIL_CELL, RAIL_LEFT + RAIL_PITCH * h),
+            shaded(chrome::BLUE, RAIL_LEVEL),
+        )?;
     }
     // STOPPED knows no hour, and NO ZONE's is UTC's, so its marker is subdued.
     let marker = match (view.state, view.clock) {
@@ -191,7 +235,10 @@ pub fn draw<D: CoverageTarget<Color = Color>>(
         _ => None,
     };
     if let Some((hour, color)) = marker {
-        target.fill_solid(&at(RAIL_MARKER, RAIL_LEFT + RAIL_PITCH * i32::from(hour)), color)?;
+        target.fill_solid(
+            &at(RAIL_MARKER, RAIL_LEFT + RAIL_PITCH * i32::from(hour)),
+            color,
+        )?;
     }
 
     let digits = clock_screen::style(font, chrome::WHITE, DIGITS_PX, FRAKTION);
@@ -205,24 +252,45 @@ pub fn draw<D: CoverageTarget<Color = Color>>(
         State::NoZone => ("UTC  /  NO ZONE", chrome::GRAY),
         State::Stopped | State::NoData => ("STOPPED", chrome::ORANGE),
     };
-    centred(&clock_screen::style(font, color, SMALL_PX, FRAKTION), line, LINE_INK_TOP, target)
+    centred(
+        &clock_screen::style(font, color, SMALL_PX, FRAKTION),
+        line,
+        LINE_INK_TOP,
+        target,
+    )
 }
 
-fn draw_bridges<D: CoverageTarget<Color = Color>>(minute: u8, target: &mut D) -> Result<(), D::Error> {
+fn draw_bridges<D: CoverageTarget<Color = Color>>(
+    minute: u8,
+    target: &mut D,
+) -> Result<(), D::Error> {
     let phase = i32::from(minute % 3);
     for (i, (x, y, width, height, shade)) in BRIDGES.into_iter().enumerate() {
-        let x = if i % 2 == 0 { x } else { x + ((i32::from(minute) + i as i32) % 3 - 1) * 4 };
+        let x = if i % 2 == 0 {
+            x
+        } else {
+            x + ((i32::from(minute) + i as i32) % 3 - 1) * 4
+        };
         let block = Rectangle::new(Point::new(x, y), Size::new(width, height));
         target.fill_solid(&block, shaded(chrome::BLUE, BRIDGE_LEVELS[shade]))?;
         for line in (y + phase..y + height as i32).step_by(3) {
-            target.fill_solid(&Rectangle::new(Point::new(x, line), Size::new(width, 1)), shaded(chrome::BLUE, SCAN_LEVELS[shade]))?;
+            target.fill_solid(
+                &Rectangle::new(Point::new(x, line), Size::new(width, 1)),
+                shaded(chrome::BLUE, SCAN_LEVELS[shade]),
+            )?;
         }
         if i % 2 == 0 {
-            target.fill_solid(&Rectangle::new(Point::new(x + width as i32 - 8, y), Size::new(8, 5)), chrome::BLACK)?;
+            target.fill_solid(
+                &Rectangle::new(Point::new(x + width as i32 - 8, y), Size::new(8, 5)),
+                chrome::BLACK,
+            )?;
         }
     }
     for x in TICKS {
-        target.fill_solid(&Rectangle::new(Point::new(x, TICKS_TOP), Size::new_equal(2)), shaded(chrome::BLUE, TICK_LEVEL))?;
+        target.fill_solid(
+            &Rectangle::new(Point::new(x, TICKS_TOP), Size::new_equal(2)),
+            shaded(chrome::BLUE, TICK_LEVEL),
+        )?;
     }
     Ok(())
 }
@@ -237,7 +305,14 @@ fn draw_battery<D: CoverageTarget<Color = Color>>(
     let (percent, color) = match battery.filter(|battery| battery.present) {
         Some(battery) => {
             _ = write!(line, "BAT {}%", battery.percent);
-            (Some(battery.percent.min(100)), if battery.percent <= LOW { chrome::ORANGE } else { chrome::GRAY })
+            (
+                Some(battery.percent.min(100)),
+                if battery.percent <= LOW {
+                    chrome::ORANGE
+                } else {
+                    chrome::GRAY
+                },
+            )
         }
         None => {
             _ = line.push_str("BAT --");
@@ -246,15 +321,23 @@ fn draw_battery<D: CoverageTarget<Color = Color>>(
     };
     let style = clock_screen::style(font, color, 14, FRAKTION_BOLD);
     let ink = style.baseline_bounds(&line, Point::zero());
-    let pen = Point::new(BATTERY_RIGHT + 1 - ink.top_left.x - ink.size.width as i32, BATTERY_TOP - ink.top_left.y);
+    let pen = Point::new(
+        BATTERY_RIGHT + 1 - ink.top_left.x - ink.size.width as i32,
+        BATTERY_TOP - ink.top_left.y,
+    );
     style.draw_on_baseline(&line, pen, target)?;
     for i in 0..10 {
         let cell = Rectangle::new(Point::new(CELLS_LEFT + CELL_PITCH * i, CELLS_TOP), CELL);
         target.fill_solid(&cell, shaded(chrome::BLUE, CELL_LEVEL))?;
-        let fraction = percent.map_or(0.0, |percent| (f32::from(percent) / 10.0 - i as f32).clamp(0.0, 1.0));
+        let fraction = percent.map_or(0.0, |percent| {
+            (f32::from(percent) / 10.0 - i as f32).clamp(0.0, 1.0)
+        });
         if fraction > 0.0 {
             let width = libm::roundf(6.0 * fraction) as u32 + 1;
-            target.fill_solid(&Rectangle::new(cell.top_left, Size::new(width, CELL.height)), color)?;
+            target.fill_solid(
+                &Rectangle::new(cell.top_left, Size::new(width, CELL.height)),
+                color,
+            )?;
         }
     }
     Ok(())

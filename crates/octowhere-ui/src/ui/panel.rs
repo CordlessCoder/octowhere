@@ -17,8 +17,8 @@ use super::{
     text::{self, style},
 };
 use crate::chrome::{
-    self, Color, CoverageTarget, FRAKTION, FRAKTION_BOLD, FontdueRenderer, OnBackground,
-    Round, SHAPIRO, Window,
+    self, Color, CoverageTarget, FRAKTION, FRAKTION_BOLD, FontdueRenderer, OnBackground, Round,
+    SHAPIRO, Window,
 };
 
 /// Distance between the two complete pages during a sideways drag.
@@ -494,18 +494,27 @@ fn draw_rules<D: CoverageTarget<Color = Color>>(
 }
 
 fn scatter() -> Scatter {
-    Scatter { color: chrome::shade(chrome::PURPLE, 100), ..SCATTER }
+    Scatter {
+        color: chrome::shade(chrome::PURPLE, 100),
+        ..SCATTER
+    }
 }
 
 /// The scatter's looks at its bloom and breath: the bloom eases in, as the clock face's does.
 fn scatter_looks(accents: &Accents) -> [Look; 2] {
     let bloom = f32::from(accents.scatter) / 255.0;
     let k = bloom * bloom * f32::from(accents.breath) / 255.0;
-    SCATTER_LOOKS.map(|look| Look { density: look.density * k, ..look })
+    SCATTER_LOOKS.map(|look| Look {
+        density: look.density * k,
+        ..look
+    })
 }
 
 /// The scatter the panel and the screens it opens share, at `accents`' bloom and breath.
-pub fn draw_scatter<D: CoverageTarget<Color = Color>>(accents: &Accents, target: &mut D) -> Result<(), D::Error> {
+pub fn draw_scatter<D: CoverageTarget<Color = Color>>(
+    accents: &Accents,
+    target: &mut D,
+) -> Result<(), D::Error> {
     scatter().draw_clear_of(&scatter_looks(accents), &SCATTER_CLEAR, target)
 }
 

@@ -1,8 +1,8 @@
+use embedded_graphics::{prelude::*, primitives::Rectangle};
 use octowhere_ui::ui::{
     dirty::RowSpans,
     geometry::{FillRegion, clipped_fill_region, for_each_visible_color},
 };
-use embedded_graphics::{prelude::*, primitives::Rectangle};
 
 #[test]
 fn fill_region_clips_negative_coordinates() {
@@ -50,7 +50,10 @@ fn damaged(spans: &Spans) -> Vec<Point> {
 fn spans_widen_to_the_panels_grain() {
     let mut spans = Spans::new();
     spans.add(Rectangle::new(Point::new(3, 3), Size::new(1, 1)));
-    assert_eq!(spans.bounding_box(), Rectangle::new(Point::new(2, 2), Size::new(2, 2)));
+    assert_eq!(
+        spans.bounding_box(),
+        Rectangle::new(Point::new(2, 2), Size::new(2, 2))
+    );
     assert_eq!(spans.pixels(), 4);
 }
 
@@ -109,7 +112,10 @@ fn rectangles_cover_every_damaged_pixel_at_any_overhead() {
         let mut spans = Wide::new();
         for _ in 0..next(12) {
             let (x, y) = (next(64) as i32, next(64) as i32);
-            spans.add(Rectangle::new(Point::new(x, y), Size::new(next(20) + 1, next(20) + 1)));
+            spans.add(Rectangle::new(
+                Point::new(x, y),
+                Size::new(next(20) + 1, next(20) + 1),
+            ));
         }
         for overhead in [0, 16, 200, 2400, 1 << 20] {
             let rects: Vec<_> = spans.rectangles(overhead).collect();
@@ -135,5 +141,8 @@ fn a_reflection_turns_damage_half_a_turn_about_the_centre() {
     let mut turned = Spans::new();
     turned.extend_reflected(&spans);
     // Pixel (x, y) lands on (15 - x, 15 - y) on a 16 × 16 panel.
-    assert_eq!(turned.bounding_box(), Rectangle::new(Point::new(10, 10), Size::new(4, 2)));
+    assert_eq!(
+        turned.bounding_box(),
+        Rectangle::new(Point::new(10, 10), Size::new(4, 2))
+    );
 }

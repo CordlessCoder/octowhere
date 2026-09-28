@@ -1,14 +1,14 @@
 use embedded_graphics::prelude::{Point, Size};
 use embedded_graphics::primitives::Rectangle;
 use octowhere_ui::{
-    chrome::{Clip, Color, Dirty, Window, FB},
+    chrome::{Clip, Color, Dirty, FB, Window},
     tz::DATABASE,
     ui::{
         clock::{ClockState, DateTime, ZoneMode, ZoneState},
         clock_screen::Accents as ClockAccents,
         compass::CompassView,
-        gesture::{LIFT_SAMPLES, Micros},
         compass_screen::{Accents, CENTER as COMPASS_CENTER},
+        gesture::{LIFT_SAMPLES, Micros},
         screens::Screen,
         script::{self, Driver},
         stage::{Input, Motion, Sensors, Stage},
@@ -38,7 +38,9 @@ fn heading(decidegrees: u16) -> Motion {
 #[test]
 fn a_swipe_left_moves_to_the_next_screen_and_right_moves_back() {
     let mut driver = Driver::new();
-    let left: Vec<_> = (0..8).map(|step| Point::new(400 - step * 40, 233)).collect();
+    let left: Vec<_> = (0..8)
+        .map(|step| Point::new(400 - step * 40, 233))
+        .collect();
     driver.stroke(&left);
     driver.settle();
     assert_eq!(driver.stage.screen(), Screen::Compass);
@@ -55,7 +57,10 @@ fn a_cover_on_the_compass_goes_to_the_clock_and_leaves_the_calibration() {
     assert!(!driver.cover().recalibrate);
     driver.settle();
     assert_eq!(driver.stage.screen(), Screen::Clock);
-    assert_eq!(driver.stage.peripherals().compass.heading_decidegrees, Some(470));
+    assert_eq!(
+        driver.stage.peripherals().compass.heading_decidegrees,
+        Some(470)
+    );
 }
 
 #[test]
@@ -113,7 +118,14 @@ fn a_swipe_off_the_compass_takes_its_accents_reversibly() {
     let part = accents(&driver);
     assert!(part.caption < 255 && part.icon_rows > 0, "{part:?}");
     driver.touch(Some(Point::new(200, 233)));
-    assert_eq!(accents(&driver), Accents { texture: 5, field: 102, ..Accents::HIDDEN });
+    assert_eq!(
+        accents(&driver),
+        Accents {
+            texture: 5,
+            field: 102,
+            ..Accents::HIDDEN
+        }
+    );
     driver.touch(Some(Point::new(399, 233)));
     driver.touch(None);
     driver.touch(None);
@@ -138,11 +150,19 @@ fn the_compass_accents_stay_hidden_while_it_slides_in() {
         if driver.stage.screen() == Screen::Compass {
             break;
         }
-        assert_eq!(driver.stage.accents().caption, 255, "an unsettled compass changed its accents");
+        assert_eq!(
+            driver.stage.accents().caption,
+            255,
+            "an unsettled compass changed its accents"
+        );
         driver.step(Input::default());
     }
     assert_eq!(driver.stage.screen(), Screen::Compass);
-    assert_eq!(accents(&driver).caption, 0, "the entry began before the page settled");
+    assert_eq!(
+        accents(&driver).caption,
+        0,
+        "the entry began before the page settled"
+    );
 }
 
 #[test]
@@ -313,7 +333,11 @@ fn heading_back_after(absence: Motion, gap: Micros) -> Accents {
 #[test]
 fn a_heading_back_quickly_from_top_edge_up_skips_the_reveal() {
     let back = heading_back_after(top_edge_up(), 300_000);
-    assert_eq!((back.dial, back.icon_rows, back.caption), (255, 5, 255), "{back:?}");
+    assert_eq!(
+        (back.dial, back.icon_rows, back.caption),
+        (255, 5, 255),
+        "{back:?}"
+    );
 }
 
 #[test]
@@ -372,7 +396,11 @@ impl Buffers {
             stage.draw(&mut Clip::new(fb, &repaint));
         }
         // The panel shows the step before, so the flush sends only this step's damage.
-        let flush = if self.flushed { changed.clone() } else { Dirty::new_full() };
+        let flush = if self.flushed {
+            changed.clone()
+        } else {
+            Dirty::new_full()
+        };
         self.flushed = true;
         let rows = |rect: Rectangle| {
             (rect.top_left.y..rect.top_left.y + rect.size.height as i32).map(move |y| {
@@ -384,7 +412,9 @@ impl Buffers {
         let rects: Vec<_> = if flush.is_full() {
             vec![whole]
         } else {
-            flush.rectangles(octowhere_ui::chrome::FLUSH_OVERHEAD).collect()
+            flush
+                .rectangles(octowhere_ui::chrome::FLUSH_OVERHEAD)
+                .collect()
         };
         for rect in rects {
             for range in rows(rect) {
@@ -414,7 +444,10 @@ fn compass_walk() -> Vec<(String, Motion)> {
     for step in 0..40 {
         // Uneven steps, across north, both ways.
         let decidegrees = (3400 + step * 37) % 3600;
-        walk.push((format!("heading {decidegrees}"), heading(decidegrees as u16)));
+        walk.push((
+            format!("heading {decidegrees}"),
+            heading(decidegrees as u16),
+        ));
     }
     for step in 0..12 {
         let mut motion = heading(1234 - step * 13);
@@ -424,7 +457,17 @@ fn compass_walk() -> Vec<(String, Motion)> {
         walk.push((format!("tilted {step}"), motion));
     }
     // A degree at a time, through zero and across a change in the line's length.
-    for (pitch, roll) in [(5, -12), (6, -12), (6, -11), (1, -1), (0, 0), (-1, 1), (9, 99), (10, 100), (-10, -100)] {
+    for (pitch, roll) in [
+        (5, -12),
+        (6, -12),
+        (6, -11),
+        (1, -1),
+        (0, 0),
+        (-1, 1),
+        (9, 99),
+        (10, 100),
+        (-10, -100),
+    ] {
         let mut motion = heading(1800);
         motion.compass.pitch_deg = pitch;
         motion.compass.roll_deg = roll;
@@ -461,7 +504,10 @@ fn compass_damage_redraws_what_changed() {
             let wrong = differing(partial, &whole);
             assert_eq!(wrong, 0, "{name}, frame {frame}: {wrong} pixels differ");
             let wrong = differing(&buffers.panel, &whole);
-            assert_eq!(wrong, 0, "{name}, frame {frame}: {wrong} pixels differ on the panel");
+            assert_eq!(
+                wrong, 0,
+                "{name}, frame {frame}: {wrong} pixels differ on the panel"
+            );
             driver.step(Input::default());
         }
     }
@@ -482,7 +528,10 @@ fn a_turning_dial_repaints_a_fraction_of_the_panel() {
         buffers.draw(&driver.stage, driver.stage.changed());
     }
     let share = buffers.pixels as f64 / (STEPS * 466 * 466) as f64;
-    println!("a degree a step repaints {:.1}% of the panel", share * 100.0);
+    println!(
+        "a degree a step repaints {:.1}% of the panel",
+        share * 100.0
+    );
     // What the flush would send for the last step, at a few region costs, and what that takes
     // at the cost per pixel and per region measured on the target.
     let mut repaint = buffers.previous.clone();
@@ -491,7 +540,9 @@ fn a_turning_dial_repaints_a_fraction_of_the_panel() {
     for overhead in [0, 64, 128, 256, 512, 1024] {
         let (regions, pixels) = repaint
             .rectangles(overhead)
-            .fold((0, 0), |(regions, pixels), rect| (regions + 1, pixels + rect.size.width * rect.size.height));
+            .fold((0, 0), |(regions, pixels), rect| {
+                (regions + 1, pixels + rect.size.width * rect.size.height)
+            });
         println!(
             "overhead {overhead}: {regions} regions, {pixels} px, modelled {:.2} ms",
             f64::from(pixels) * 59e-6 + f64::from(regions) * 0.056
@@ -502,7 +553,17 @@ fn a_turning_dial_repaints_a_fraction_of_the_panel() {
 
 fn clock_at(hour: u8, minute: u8, second: u8) -> ClockState {
     ClockState {
-        utc: Some(DateTime { year: 2026, month: 10, day: 24, hour, minute, second }.to_unix()),
+        utc: Some(
+            DateTime {
+                year: 2026,
+                month: 10,
+                day: 24,
+                hour,
+                minute,
+                second,
+            }
+            .to_unix(),
+        ),
         set_from_gnss: true,
         stopped: false,
     }
@@ -517,7 +578,11 @@ fn zone(name: &str, mode: ZoneMode) -> ZoneState {
 
 fn sensors(clock: ClockState, zone: ZoneState) -> Input {
     Input {
-        sensors: Some(Sensors { clock, zone, ..Sensors::default() }),
+        sensors: Some(Sensors {
+            clock,
+            zone,
+            ..Sensors::default()
+        }),
         ..Input::default()
     }
 }
@@ -526,12 +591,18 @@ fn sensors(clock: ClockState, zone: ZoneState) -> Input {
 fn clock_accents(driver: &Driver) -> ClockAccents {
     let mut fb = FB::boxed();
     driver.stage.draw(&mut *fb);
-    ClockAccents { breath: u8::MAX, ..driver.stage.clock_accents() }
+    ClockAccents {
+        breath: u8::MAX,
+        ..driver.stage.clock_accents()
+    }
 }
 
 /// The panel's accents, with the scatter's breath taken as full.
 fn panel_accents(driver: &Driver) -> PanelAccents {
-    PanelAccents { breath: u8::MAX, ..driver.stage.panel_accents() }
+    PanelAccents {
+        breath: u8::MAX,
+        ..driver.stage.panel_accents()
+    }
 }
 
 #[test]
@@ -556,26 +627,71 @@ fn clock_walk() -> Vec<(String, Input)> {
     let dublin = zone("Europe/Dublin", ZoneMode::Automatic);
     let mut walk = Vec::new();
     for second in 55..60 {
-        walk.push((format!("second {second}"), sensors(clock_at(22, 59, second), dublin)));
+        walk.push((
+            format!("second {second}"),
+            sensors(clock_at(22, 59, second), dublin),
+        ));
     }
     // Into the next hour, then across local midnight.
     walk.push(("hour".into(), sensors(clock_at(23, 0, 0), dublin)));
-    walk.push(("midnight".into(), sensors(clock_at(23, 0, 1), zone("Europe/Berlin", ZoneMode::Automatic))));
-    walk.push(("manual".into(), sensors(clock_at(23, 0, 2), zone("Europe/Berlin", ZoneMode::Manual))));
+    walk.push((
+        "midnight".into(),
+        sensors(
+            clock_at(23, 0, 1),
+            zone("Europe/Berlin", ZoneMode::Automatic),
+        ),
+    ));
+    walk.push((
+        "manual".into(),
+        sensors(clock_at(23, 0, 2), zone("Europe/Berlin", ZoneMode::Manual)),
+    ));
     walk.push((
         "rtc".into(),
-        sensors(ClockState { set_from_gnss: false, ..clock_at(23, 0, 3) }, dublin),
+        sensors(
+            ClockState {
+                set_from_gnss: false,
+                ..clock_at(23, 0, 3)
+            },
+            dublin,
+        ),
     ));
     walk.push(("gnss".into(), sensors(clock_at(23, 0, 4), dublin)));
     walk.push((
         "stopped".into(),
-        sensors(ClockState { stopped: true, ..clock_at(0, 0, 0) }, dublin),
+        sensors(
+            ClockState {
+                stopped: true,
+                ..clock_at(0, 0, 0)
+            },
+            dublin,
+        ),
     ));
     walk.push(("set again".into(), sensors(clock_at(23, 0, 5), dublin)));
-    walk.push(("no zone".into(), sensors(clock_at(23, 0, 6), ZoneState::default())));
-    walk.push(("no zone tick".into(), sensors(clock_at(23, 1, 6), ZoneState::default())));
-    walk.push(("found".into(), sensors(clock_at(23, 1, 7), zone("America/Argentina/Buenos_Aires", ZoneMode::Automatic))));
-    walk.push(("no data".into(), sensors(ClockState { utc: None, ..clock_at(0, 0, 0) }, dublin)));
+    walk.push((
+        "no zone".into(),
+        sensors(clock_at(23, 0, 6), ZoneState::default()),
+    ));
+    walk.push((
+        "no zone tick".into(),
+        sensors(clock_at(23, 1, 6), ZoneState::default()),
+    ));
+    walk.push((
+        "found".into(),
+        sensors(
+            clock_at(23, 1, 7),
+            zone("America/Argentina/Buenos_Aires", ZoneMode::Automatic),
+        ),
+    ));
+    walk.push((
+        "no data".into(),
+        sensors(
+            ClockState {
+                utc: None,
+                ..clock_at(0, 0, 0)
+            },
+            dublin,
+        ),
+    ));
     walk.push(("back".into(), sensors(clock_at(23, 1, 8), dublin)));
     walk
 }
@@ -593,7 +709,10 @@ fn clock_damage_redraws_what_changed() {
             let wrong = differing(partial, &whole);
             assert_eq!(wrong, 0, "{name}, frame {frame}: {wrong} pixels differ");
             let wrong = differing(&buffers.panel, &whole);
-            assert_eq!(wrong, 0, "{name}, frame {frame}: {wrong} pixels differ on the panel");
+            assert_eq!(
+                wrong, 0,
+                "{name}, frame {frame}: {wrong} pixels differ on the panel"
+            );
             driver.step(Input::default());
         }
     }
@@ -609,7 +728,10 @@ fn a_second_repaints_one_small_region() {
     let pixels = driver.stage.changed().pixels();
     assert!(pixels > 0 && pixels < 1_500, "{pixels} px");
     driver.step(sensors(clock_at(12, 7, 42), dublin));
-    assert!(driver.stage.changed().is_empty(), "an unchanged reading repainted");
+    assert!(
+        driver.stage.changed().is_empty(),
+        "an unchanged reading repainted"
+    );
 }
 
 #[test]
@@ -637,25 +759,48 @@ fn the_clock_accents_build_after_the_page_settles_and_leave_with_the_offset() {
     }
     driver.settle();
     assert_eq!(driver.stage.screen(), Screen::Clock);
-    assert_eq!(clock_accents(&driver), ClockAccents::FULL, "the entry replayed");
+    assert_eq!(
+        clock_accents(&driver),
+        ClockAccents::FULL,
+        "the entry replayed"
+    );
 }
 
 #[test]
 fn the_clock_rebuilds_on_a_change_and_shows_a_fault_at_once() {
     let dublin = zone("Europe/Dublin", ZoneMode::Automatic);
     let mut driver = Driver::on(Screen::Clock);
-    driver.step(sensors(ClockState { set_from_gnss: false, ..clock_at(12, 7, 42) }, dublin));
+    driver.step(sensors(
+        ClockState {
+            set_from_gnss: false,
+            ..clock_at(12, 7, 42)
+        },
+        dublin,
+    ));
     driver.wait(500_000);
     driver.step(sensors(clock_at(12, 7, 43), dublin));
     let resync = clock_accents(&driver);
-    assert_eq!((resync.icon_rows, resync.label, resync.plate), (0, 255, 255), "{resync:?}");
+    assert_eq!(
+        (resync.icon_rows, resync.label, resync.plate),
+        (0, 255, 255),
+        "{resync:?}"
+    );
     driver.wait(500_000);
-    driver.step(sensors(ClockState { utc: None, ..clock_at(12, 7, 43) }, dublin));
+    driver.step(sensors(
+        ClockState {
+            utc: None,
+            ..clock_at(12, 7, 43)
+        },
+        dublin,
+    ));
     assert_eq!(clock_accents(&driver), ClockAccents::FULL);
     driver.step(sensors(clock_at(12, 7, 44), dublin));
     // The plate kept the zone's offset through the fault, so only the icon and label rebuild.
     let back = clock_accents(&driver);
-    assert!(back.icon_rows < 5 && back.label < 255 && back.plate == 255, "{back:?}");
+    assert!(
+        back.icon_rows < 5 && back.label < 255 && back.plate == 255,
+        "{back:?}"
+    );
 }
 
 #[test]
@@ -675,8 +820,15 @@ fn interference_rebuilds_the_icon_and_leaves_the_dial() {
     for motion in [disturbed, heading(470)] {
         driver.motion(motion);
         let changing = accents(&driver);
-        assert_eq!((changing.dial, changing.caption), (255, 255), "{changing:?}");
-        assert!(changing.icon_rows < 5 && !changing.change.done(), "{changing:?}");
+        assert_eq!(
+            (changing.dial, changing.caption),
+            (255, 255),
+            "{changing:?}"
+        );
+        assert!(
+            changing.icon_rows < 5 && !changing.change.done(),
+            "{changing:?}"
+        );
         assert!(driver.stage.is_animating());
         driver.wait(200_000);
         assert_eq!(accents(&driver), Accents::FULL);
@@ -687,7 +839,10 @@ fn interference_rebuilds_the_icon_and_leaves_the_dial() {
 /// The slab's colour at its top row and its bottom row.
 fn slab_ends(stage: &Stage) -> (Option<Color>, Option<Color>) {
     let fb = render(stage);
-    (fb.pixel(Point::new(140, 205)), fb.pixel(Point::new(140, 293)))
+    (
+        fb.pixel(Point::new(140, 205)),
+        fb.pixel(Point::new(140, 293)),
+    )
 }
 
 #[test]
@@ -725,11 +880,23 @@ fn a_running_clock_ticks_each_second_unless_stopped() {
     driver.wait(500_000);
     assert!(driver.stage.changed().is_empty());
     driver.wait(600_000);
-    assert_eq!(driver.stage.peripherals().clock.clock().utc, clock_at(12, 7, 42).utc);
+    assert_eq!(
+        driver.stage.peripherals().clock.clock().utc,
+        clock_at(12, 7, 42).utc
+    );
 
-    driver.step(sensors(ClockState { stopped: true, ..clock_at(12, 7, 50) }, dublin));
+    driver.step(sensors(
+        ClockState {
+            stopped: true,
+            ..clock_at(12, 7, 50)
+        },
+        dublin,
+    ));
     driver.wait(1_500_000);
-    assert_eq!(driver.stage.peripherals().clock.clock().utc, clock_at(12, 7, 50).utc);
+    assert_eq!(
+        driver.stage.peripherals().clock.clock().utc,
+        clock_at(12, 7, 50).utc
+    );
 }
 
 #[test]
@@ -747,7 +914,11 @@ fn retypes(driver: &mut Driver, input: Input) -> bool {
     let typing = clock_accents(driver).time < 255;
     if typing {
         driver.wait(400_000);
-        assert_eq!(clock_accents(driver), ClockAccents::FULL, "the reveal never finished");
+        assert_eq!(
+            clock_accents(driver),
+            ClockAccents::FULL,
+            "the reveal never finished"
+        );
     }
     typing
 }
@@ -755,26 +926,53 @@ fn retypes(driver: &mut Driver, input: Input) -> bool {
 #[test]
 fn the_time_types_in_again_when_a_fix_or_zone_replaces_it_and_not_on_a_tick() {
     let dublin = zone("Europe/Dublin", ZoneMode::Automatic);
-    let unset = |clock: ClockState| ClockState { set_from_gnss: false, ..clock };
+    let unset = |clock: ClockState| ClockState {
+        set_from_gnss: false,
+        ..clock
+    };
     let mut driver = Driver::on(Screen::Clock);
     driver.step(sensors(unset(clock_at(12, 7, 40)), ZoneState::default()));
     driver.wait(500_000);
 
-    assert!(retypes(&mut driver, sensors(clock_at(12, 7, 41), dublin)), "a first fix");
+    assert!(
+        retypes(&mut driver, sensors(clock_at(12, 7, 41), dublin)),
+        "a first fix"
+    );
     // The reveal took 400 ms and the clock ticks a second later, which is no jump.
     driver.wait(100_000);
-    assert!(!retypes(&mut driver, sensors(clock_at(12, 7, 42), dublin)), "a tick");
+    assert!(
+        !retypes(&mut driver, sensors(clock_at(12, 7, 42), dublin)),
+        "a tick"
+    );
     driver.wait(500_000);
-    assert!(!retypes(&mut driver, sensors(unset(clock_at(12, 7, 43)), dublin)), "no time change");
-    assert!(retypes(&mut driver, sensors(clock_at(12, 12, 0), dublin)), "a correction");
+    assert!(
+        !retypes(&mut driver, sensors(unset(clock_at(12, 7, 43)), dublin)),
+        "no time change"
+    );
+    assert!(
+        retypes(&mut driver, sensors(clock_at(12, 12, 0), dublin)),
+        "a correction"
+    );
     // Both are an hour ahead of UTC in October.
     let london = zone("Europe/London", ZoneMode::Automatic);
-    assert!(!retypes(&mut driver, sensors(clock_at(12, 12, 0), london)), "the same offset");
+    assert!(
+        !retypes(&mut driver, sensors(clock_at(12, 12, 0), london)),
+        "the same offset"
+    );
     let berlin = zone("Europe/Berlin", ZoneMode::Automatic);
-    assert!(retypes(&mut driver, sensors(clock_at(12, 12, 0), berlin)), "a new offset");
-    let stopped = ClockState { stopped: true, ..clock_at(12, 12, 0) };
+    assert!(
+        retypes(&mut driver, sensors(clock_at(12, 12, 0), berlin)),
+        "a new offset"
+    );
+    let stopped = ClockState {
+        stopped: true,
+        ..clock_at(12, 12, 0)
+    };
     assert!(!retypes(&mut driver, sensors(stopped, berlin)), "dashes");
-    assert!(retypes(&mut driver, sensors(clock_at(12, 12, 1), berlin)), "leaving STOPPED");
+    assert!(
+        retypes(&mut driver, sensors(clock_at(12, 12, 1), berlin)),
+        "leaving STOPPED"
+    );
 }
 
 // The settings panel.
@@ -791,14 +989,28 @@ const HEIGHT: i32 = 466;
 /// Settled on `screen`, with readings in every cell.
 fn driver_on(screen: Screen) -> Driver<'static> {
     let mut driver = Driver::on(screen);
-    driver.stage = Stage::new(PeripheralState { firmware: "0.1.0", ..PeripheralState::default() });
+    driver.stage = Stage::new(PeripheralState {
+        firmware: "0.1.0",
+        ..PeripheralState::default()
+    });
     driver.stage.show(screen);
     driver.step(Input {
         sensors: Some(Sensors {
             clock: clock_at(12, 7, 42),
             zone: zone("Europe/Dublin", ZoneMode::Automatic),
-            battery: Some(Battery { present: true, percent: 87, millivolts: 4020, charging: true, usb: true }),
-            gnss: Gnss { fix: true, in_use: 9, in_view: 14, position: None },
+            battery: Some(Battery {
+                present: true,
+                percent: 87,
+                millivolts: 4020,
+                charging: true,
+                usb: true,
+            }),
+            gnss: Gnss {
+                fix: true,
+                in_use: 9,
+                in_view: 14,
+                position: None,
+            },
         }),
         motion: Some(heading(470)),
         ..Input::default()
@@ -880,7 +1092,10 @@ fn the_panel_arrives_with_its_accents_hidden_and_builds_them_once_open() {
     }
     driver.wait(100_000);
     let early = panel_accents(&driver);
-    assert!(early.title > 0 && early.hint == 0 && early.rows[5] == 0, "{early:?}");
+    assert!(
+        early.title > 0 && early.hint == 0 && early.rows[5] == 0,
+        "{early:?}"
+    );
     driver.wait(400_000);
     assert_eq!(panel_accents(&driver), PanelAccents::FULL);
 }
@@ -892,7 +1107,11 @@ fn an_upward_drag_closes_the_panel_to_the_face_it_came_from() {
     driver.settle();
     assert_eq!(driver.stage.panel_offset(), 0);
     assert_eq!(driver.stage.screen(), Screen::Compass);
-    assert_eq!(accents(&driver), Accents::FULL, "the compass entry did not run again");
+    assert_eq!(
+        accents(&driver),
+        Accents::FULL,
+        "the compass entry did not run again"
+    );
 }
 
 #[test]
@@ -913,13 +1132,25 @@ fn a_sideways_drag_switches_between_complete_pages() {
     assert_eq!(driver.stage.panel_offset(), HEIGHT);
     driver.swipe(Point::new(200, 250), Point::new(260, 250), 400_000);
     driver.settle();
-    assert_eq!(driver.stage.panel_scroll(), panel::PAGE_WIDTH, "a short drag moved it");
+    assert_eq!(
+        driver.stage.panel_scroll(),
+        panel::PAGE_WIDTH,
+        "a short drag moved it"
+    );
     driver.swipe(Point::new(260, 250), Point::new(200, 250), 50_000);
     driver.settle();
-    assert_eq!(driver.stage.panel_scroll(), panel::MAX_SCROLL, "it went past the end");
+    assert_eq!(
+        driver.stage.panel_scroll(),
+        panel::MAX_SCROLL,
+        "it went past the end"
+    );
     driver.swipe(Point::new(200, 250), Point::new(260, 250), 50_000);
     driver.settle();
-    assert_eq!(driver.stage.panel_scroll(), 0, "a flick back did not return to page one");
+    assert_eq!(
+        driver.stage.panel_scroll(),
+        0,
+        "a flick back did not return to page one"
+    );
     driver.swipe(Point::new(100, 250), Point::new(400, 250), 400_000);
     driver.settle();
     assert_eq!(driver.stage.panel_scroll(), 0);
@@ -958,9 +1189,19 @@ fn the_brightness_editor_shows_each_step_live_and_stores_on_a_tap_on_its_hint() 
     tap(&mut driver, 150, 190);
     assert!(matches!(driver.stage.page(), Some(Page::Brightness(_))));
     let updates = driver.swipe(Point::new(150, 280), Point::new(420, 280), 300_000);
-    let levels: Vec<_> = updates.iter().filter_map(|update| update.brightness).collect();
-    assert!(levels.len() > 3 && levels.last() == Some(&255), "{levels:?}");
-    assert_eq!(driver.stage.peripherals().brightness, 120, "the level was stored before a tap");
+    let levels: Vec<_> = updates
+        .iter()
+        .filter_map(|update| update.brightness)
+        .collect();
+    assert!(
+        levels.len() > 3 && levels.last() == Some(&255),
+        "{levels:?}"
+    );
+    assert_eq!(
+        driver.stage.peripherals().brightness,
+        120,
+        "the level was stored before a tap"
+    );
     let updates = tap(&mut driver, 233, 378);
     assert_eq!(stored(&updates), Some(Store::Brightness(255)));
     assert!(driver.stage.page().is_none());
@@ -973,7 +1214,10 @@ fn cancel_or_a_cover_puts_the_brightness_back() {
     tap(&mut driver, 150, 190);
     driver.swipe(Point::new(150, 280), Point::new(80, 280), 200_000);
     let updates = tap(&mut driver, 120, 120);
-    assert_eq!(updates.iter().rev().find_map(|update| update.brightness), Some(120));
+    assert_eq!(
+        updates.iter().rev().find_map(|update| update.brightness),
+        Some(120)
+    );
     assert!(driver.stage.page().is_none());
     assert_eq!(driver.stage.panel_offset(), HEIGHT);
 
@@ -1020,26 +1264,42 @@ fn the_picker_stores_a_zone_by_hand_and_automatic_from_its_first_step() {
     let Some(Store::ManualZone(zone)) = stored(&updates) else {
         panic!("no zone was stored: {:?}", stored(&updates));
     };
-    assert_eq!(DATABASE.zone(zone).at(clock_at(12, 7, 42).utc.unwrap()).utc_offset, 7200);
-    assert_eq!(driver.stage.peripherals().clock.zone(), octowhere_ui::ui::clock::ZoneState {
-        mode: ZoneMode::Manual,
-        zone: Some(zone),
-    });
+    assert_eq!(
+        DATABASE
+            .zone(zone)
+            .at(clock_at(12, 7, 42).utc.unwrap())
+            .utc_offset,
+        7200
+    );
+    assert_eq!(
+        driver.stage.peripherals().clock.zone(),
+        octowhere_ui::ui::clock::ZoneState {
+            mode: ZoneMode::Manual,
+            zone: Some(zone),
+        }
+    );
 
     tap(&mut driver, 150, 115);
     let updates = tap(&mut driver, 233, 342);
     assert_eq!(stored(&updates), Some(Store::AutomaticZone));
-    assert_eq!(driver.stage.peripherals().clock.zone().mode, ZoneMode::Automatic);
+    assert_eq!(
+        driver.stage.peripherals().clock.zone().mode,
+        ZoneMode::Automatic
+    );
 }
 
 #[test]
 fn a_fling_in_the_picker_keeps_stepping_and_stops() {
     let mut driver = open_panel(Screen::Clock);
     tap(&mut driver, 150, 115);
-    let Some(Page::Picker(before)) = driver.stage.page().cloned() else { panic!() };
+    let Some(Page::Picker(before)) = driver.stage.page().cloned() else {
+        panic!()
+    };
     driver.swipe(Point::new(233, 300), Point::new(233, 200), 60_000);
     driver.settle();
-    let Some(Page::Picker(after)) = driver.stage.page().cloned() else { panic!() };
+    let Some(Page::Picker(after)) = driver.stage.page().cloned() else {
+        panic!()
+    };
     assert_ne!(before, after);
     assert!(!driver.stage.is_changing());
 }
@@ -1119,7 +1379,6 @@ fn panel_damage_redraws_what_changed() {
     }
 }
 
-
 /// The clear leaves the parts a screen paints solid, so drawing over an old frame must still
 /// replace every pixel, settled, mid-swipe and under the moving panel.
 #[test]
@@ -1127,13 +1386,37 @@ fn a_frame_replaces_everything_under_it() {
     use embedded_graphics::draw_target::DrawTarget as _;
     let mut cases = stages();
     for (name, path) in [
-        ("swiping left", [Point::new(400, 233), Point::new(380, 233), Point::new(250, 236)]),
-        ("swiping right", [Point::new(60, 233), Point::new(80, 233), Point::new(300, 230)]),
-        ("pulling the panel", [Point::new(233, 40), Point::new(233, 60), Point::new(236, 200)]),
+        (
+            "swiping left",
+            [
+                Point::new(400, 233),
+                Point::new(380, 233),
+                Point::new(250, 236),
+            ],
+        ),
+        (
+            "swiping right",
+            [
+                Point::new(60, 233),
+                Point::new(80, 233),
+                Point::new(300, 230),
+            ],
+        ),
+        (
+            "pulling the panel",
+            [
+                Point::new(233, 40),
+                Point::new(233, 60),
+                Point::new(236, 200),
+            ],
+        ),
     ] {
         for screen in Screen::ALL {
             let mut driver = Driver::on(screen);
-            driver.step(sensors(clock_at(12, 7, 42), zone("Europe/Dublin", ZoneMode::Automatic)));
+            driver.step(sensors(
+                clock_at(12, 7, 42),
+                zone("Europe/Dublin", ZoneMode::Automatic),
+            ));
             driver.wait(500_000);
             for point in path {
                 driver.touch(Some(point));
@@ -1143,8 +1426,11 @@ fn a_frame_replaces_everything_under_it() {
     }
     for (name, stage) in cases {
         let mut over = FB::boxed();
-        over.fill_solid(&Rectangle::new(Point::zero(), Size::new(466, 466)), octowhere_ui::chrome::PURPLE)
-            .unwrap();
+        over.fill_solid(
+            &Rectangle::new(Point::zero(), Size::new(466, 466)),
+            octowhere_ui::chrome::PURPLE,
+        )
+        .unwrap();
         stage.draw(&mut *over);
         let wrong = differing(&over, &render(&stage));
         assert_eq!(wrong, 0, "{name}: {wrong} pixels kept the old frame");
@@ -1155,7 +1441,11 @@ fn a_frame_replaces_everything_under_it() {
 fn boot_all(driver: &mut Driver, failing: Option<Part>) {
     for part in Part::ALL {
         driver.wait(100_000);
-        let outcome = if failing == Some(part) { Outcome::NoReply } else { Outcome::Answered };
+        let outcome = if failing == Some(part) {
+            Outcome::NoReply
+        } else {
+            Outcome::Answered
+        };
         driver.boot(part, outcome);
     }
 }
@@ -1167,20 +1457,35 @@ fn boot_all(driver: &mut Driver, failing: Option<Part>) {
 fn start_up_damage_redraws_what_changed() {
     for failing in [None, Some(Part::Magnet)] {
         let mut driver = Driver::starting();
-        driver.sensors(sensors(clock_at(12, 7, 42), zone("Europe/Dublin", ZoneMode::Automatic)).sensors.unwrap());
+        driver.sensors(
+            sensors(
+                clock_at(12, 7, 42),
+                zone("Europe/Dublin", ZoneMode::Automatic),
+            )
+            .sensors
+            .unwrap(),
+        );
         let mut buffers = Buffers::new();
         let mut check = |driver: &Driver, when: &str| {
             let partial = buffers.draw(&driver.stage, driver.stage.changed());
             let whole = render(&driver.stage);
             assert_eq!(differing(partial, &whole), 0, "{failing:?} {when}");
-            assert_eq!(differing(&buffers.panel, &whole), 0, "{failing:?} {when}, on the panel");
+            assert_eq!(
+                differing(&buffers.panel, &whole),
+                0,
+                "{failing:?} {when}, on the panel"
+            );
         };
         for part in Part::ALL {
             for _ in 0..6 {
                 driver.step(Input::default());
                 check(&driver, "waiting");
             }
-            let outcome = if failing == Some(part) { Outcome::NoReply } else { Outcome::Answered };
+            let outcome = if failing == Some(part) {
+                Outcome::NoReply
+            } else {
+                Outcome::Answered
+            };
             driver.boot(part, outcome);
             check(&driver, part.name());
         }
@@ -1188,7 +1493,11 @@ fn start_up_damage_redraws_what_changed() {
             // A new minute every few steps, some between the identity's frames.
             if step % 7 == 3 {
                 let clock = clock_at(12, (8 + step / 7) as u8, 0);
-                driver.sensors(sensors(clock, zone("Europe/Dublin", ZoneMode::Automatic)).sensors.unwrap());
+                driver.sensors(
+                    sensors(clock, zone("Europe/Dublin", ZoneMode::Automatic))
+                        .sensors
+                        .unwrap(),
+                );
             } else {
                 driver.step(Input::default());
             }
@@ -1202,8 +1511,13 @@ fn start_up_damage_redraws_what_changed() {
 fn the_brightness_climbs_from_dark_on_the_first_frame() {
     let mut driver = Driver::starting();
     assert_eq!(driver.step(Input::default()).brightness, Some(0));
-    let levels: Vec<_> = (0..14).filter_map(|_| driver.step(Input::default()).brightness).collect();
-    assert!(levels.windows(2).all(|pair| pair[0] < pair[1]), "{levels:?}");
+    let levels: Vec<_> = (0..14)
+        .filter_map(|_| driver.step(Input::default()).brightness)
+        .collect();
+    assert!(
+        levels.windows(2).all(|pair| pair[0] < pair[1]),
+        "{levels:?}"
+    );
     assert_eq!(levels.last(), Some(&120));
 }
 
@@ -1235,13 +1549,23 @@ fn a_touch_during_the_identity_goes_to_the_settled_clock_and_is_not_a_swipe() {
 #[test]
 fn after_the_card_the_clock_runs_its_entry_and_types_its_time_in() {
     let mut driver = Driver::starting();
-    driver.sensors(sensors(clock_at(12, 7, 42), zone("Europe/Dublin", ZoneMode::Automatic)).sensors.unwrap());
+    driver.sensors(
+        sensors(
+            clock_at(12, 7, 42),
+            zone("Europe/Dublin", ZoneMode::Automatic),
+        )
+        .sensors
+        .unwrap(),
+    );
     boot_all(&mut driver, None);
     while driver.stage.starting_up() {
         driver.step(Input::default());
     }
     let accents = driver.stage.clock_accents();
-    assert!(accents.time < u8::MAX && accents.icon_rows < 5, "{accents:?}");
+    assert!(
+        accents.time < u8::MAX && accents.icon_rows < 5,
+        "{accents:?}"
+    );
 }
 
 #[test]
@@ -1300,7 +1624,10 @@ fn a_replay_after_a_failed_boot_still_shows_the_identity() {
     tap(&mut driver, 233, 258);
     assert!(driver.stage.starting_up());
     driver.wait(1_000_000);
-    assert!(driver.stage.starting_up(), "the fault screen would have ended by now");
+    assert!(
+        driver.stage.starting_up(),
+        "the fault screen would have ended by now"
+    );
 }
 
 #[test]
@@ -1328,7 +1655,11 @@ fn open_replay_chooser(steps: i32) -> Driver<'static> {
     tap(&mut driver, 233, 298);
     assert!(matches!(driver.stage.page(), Some(Page::Replay(_))));
     if steps > 0 {
-        driver.swipe(Point::new(233, 330), Point::new(233, 330 - 40 * steps - 10), 300_000);
+        driver.swipe(
+            Point::new(233, 330),
+            Point::new(233, 330 - 40 * steps - 10),
+            300_000,
+        );
     }
     driver
 }
@@ -1366,7 +1697,11 @@ fn a_demonstration_leaves_the_boot_record_for_a_good_replay() {
         scroll_device_to_end(driver);
         tap(driver, 233, 298);
         if steps > 0 {
-            driver.swipe(Point::new(233, 330), Point::new(233, 330 - 40 * steps - 10), 300_000);
+            driver.swipe(
+                Point::new(233, 330),
+                Point::new(233, 330 - 40 * steps - 10),
+                300_000,
+            );
         }
         tap(driver, 233, 258);
     };
@@ -1391,7 +1726,11 @@ fn demonstration_damage_redraws_what_changed() {
         let partial = buffers.draw(&driver.stage, driver.stage.changed());
         let whole = render(&driver.stage);
         assert_eq!(differing(partial, &whole), 0, "step {step}");
-        assert_eq!(differing(&buffers.panel, &whole), 0, "step {step}, on the panel");
+        assert_eq!(
+            differing(&buffers.panel, &whole),
+            0,
+            "step {step}, on the panel"
+        );
         driver.step(Input::default());
     }
 }
@@ -1401,9 +1740,17 @@ use octowhere_ui::ui::rest::{self, Rest, Timeout};
 /// Settled on `screen` with the clock running, resting after `timeout`.
 fn resting_on(screen: Screen, timeout: Timeout, always_on: bool) -> Driver<'static> {
     let mut driver = Driver::on(screen);
-    driver.stage = Stage::new(PeripheralState { firmware: "0.1.0", timeout, always_on, ..PeripheralState::default() });
+    driver.stage = Stage::new(PeripheralState {
+        firmware: "0.1.0",
+        timeout,
+        always_on,
+        ..PeripheralState::default()
+    });
     driver.stage.show(screen);
-    driver.step(sensors(clock_at(12, 7, 42), zone("Europe/Dublin", ZoneMode::Automatic)));
+    driver.step(sensors(
+        clock_at(12, 7, 42),
+        zone("Europe/Dublin", ZoneMode::Automatic),
+    ));
     driver.motion(heading(470));
     driver.run_clock();
     driver.wait(600_000);
@@ -1424,7 +1771,9 @@ fn wait_until(driver: &mut Driver, within: Micros, reached: impl Fn(Rest) -> boo
 
 /// The levels sent over `duration` of steps without input.
 fn levels_over(driver: &mut Driver, duration: Micros) -> Vec<u8> {
-    (0..frames_in(duration)).filter_map(|_| driver.step(Input::default()).brightness).collect()
+    (0..frames_in(duration))
+        .filter_map(|_| driver.step(Input::default()).brightness)
+        .collect()
 }
 
 fn is_dimmed(rest: Rest) -> bool {
@@ -1442,19 +1791,27 @@ fn the_screen_dims_at_the_timeout_and_a_touch_only_restores_it() {
     let after = driver.now() - start;
     assert!((59_900_000..60_100_000).contains(&after), "{after}");
     let levels = levels_over(&mut driver, rest::DIM_FADE + script::FRAME);
-    assert!(levels.len() > 5 && levels.is_sorted_by(|a, b| a >= b), "{levels:?}");
+    assert!(
+        levels.len() > 5 && levels.is_sorted_by(|a, b| a >= b),
+        "{levels:?}"
+    );
     assert_eq!(levels.last(), Some(&rest::dim_level(120)));
 
     let mut updates = driver.swipe(Point::new(400, 233), Point::new(100, 233), 200_000);
     updates.extend((0..30).map(|_| driver.step(Input::default())));
-    let levels: Vec<_> = updates.iter().filter_map(|update| update.brightness).collect();
+    let levels: Vec<_> = updates
+        .iter()
+        .filter_map(|update| update.brightness)
+        .collect();
     assert!(levels.len() > 5 && levels.is_sorted(), "{levels:?}");
     assert_eq!(levels.last(), Some(&120));
     assert_eq!(driver.stage.rest(), Rest::Awake);
-    assert!(!driver.stage.is_changing(), "the touch that lifted the dim turned the page");
+    assert!(
+        !driver.stage.is_changing(),
+        "the touch that lifted the dim turned the page"
+    );
     assert_eq!(driver.stage.screen(), Screen::Clock);
 }
-
 
 #[test]
 fn a_cover_while_dimmed_does_nothing() {
@@ -1478,8 +1835,17 @@ fn after_the_dim_the_panel_goes_off_and_nothing_redraws() {
     let after = driver.now() - since;
     assert!((5_300_000..5_400_000).contains(&after), "{after}");
     assert_eq!((off.brightness, off.display_on), (Some(0), Some(false)));
-    let darkening: Vec<_> = updates.iter().rev().skip(1).take(10).filter_map(|update| update.brightness).collect();
-    assert!(darkening.len() > 5 && darkening.is_sorted(), "the level fades out before the panel goes off: {darkening:?}");
+    let darkening: Vec<_> = updates
+        .iter()
+        .rev()
+        .skip(1)
+        .take(10)
+        .filter_map(|update| update.brightness)
+        .collect();
+    assert!(
+        darkening.len() > 5 && darkening.is_sorted(),
+        "the level fades out before the panel goes off: {darkening:?}"
+    );
     for _ in 0..200 {
         let update = driver.step(Input::default());
         assert!(driver.stage.changed().is_empty());
@@ -1493,29 +1859,50 @@ fn a_wake_from_off_runs_the_entry_and_the_climb_once_the_panel_is_on() {
     let mut driver = resting_on(Screen::Compass, Timeout::Seconds15, false);
     wait_until(&mut driver, 22_000_000, |rest| rest == Rest::Off);
     let woken = driver.now() + script::FRAME;
-    let mut updates = driver.stroke(&[Point::new(400, 233), Point::new(300, 233), Point::new(200, 233)]);
+    let mut updates = driver.stroke(&[
+        Point::new(400, 233),
+        Point::new(300, 233),
+        Point::new(200, 233),
+    ]);
     assert_eq!(updates[0].display_on, Some(true));
     assert_eq!(driver.stage.rest(), Rest::Awake);
     assert_eq!(driver.stage.screen(), Screen::Compass);
     while driver.now() < woken + rest::PANEL_WAKE - script::FRAME {
         updates.push(driver.step(Input::default()));
-        assert_eq!(accents(&driver), Accents::HIDDEN, "the entry started on a dark panel");
+        assert_eq!(
+            accents(&driver),
+            Accents::HIDDEN,
+            "the entry started on a dark panel"
+        );
     }
     while driver.stage.is_changing() {
         updates.push(driver.step(Input::default()));
     }
-    let levels: Vec<_> = updates.iter().filter_map(|update| update.brightness).collect();
+    let levels: Vec<_> = updates
+        .iter()
+        .filter_map(|update| update.brightness)
+        .collect();
     assert!(levels.len() > 3, "{levels:?}");
-    assert!(levels.is_sorted() && levels.last() == Some(&120), "{levels:?}");
+    assert!(
+        levels.is_sorted() && levels.last() == Some(&120),
+        "{levels:?}"
+    );
     assert_eq!(accents(&driver), Accents::FULL);
-    assert_eq!(driver.stage.screen(), Screen::Compass, "the waking touch turned the page");
+    assert_eq!(
+        driver.stage.screen(),
+        Screen::Compass,
+        "the waking touch turned the page"
+    );
 }
 
 #[test]
 fn the_always_on_face_shows_after_the_dim_and_redraws_once_a_minute() {
     let mut driver = resting_on(Screen::Compass, Timeout::Seconds15, true);
     let updates = wait_until(&mut driver, 22_000_000, |rest| rest == Rest::AlwaysOn);
-    assert_eq!(updates.last().unwrap().brightness, Some(rest::always_on_level(120)));
+    assert_eq!(
+        updates.last().unwrap().brightness,
+        Some(rest::always_on_level(120))
+    );
     assert!(driver.stage.changed().is_full());
     assert_eq!(tiled_differs(&driver.stage), 0);
     // The clock started at 12:07:42 and is now about 21 seconds on, so the next two minutes
@@ -1546,16 +1933,54 @@ fn the_always_on_face_takes_a_new_battery_reading_with_its_minute() {
     let mut driver = resting_on(Screen::Clock, Timeout::Seconds15, true);
     wait_until(&mut driver, 22_000_000, |rest| rest == Rest::AlwaysOn);
     let dublin = zone("Europe/Dublin", ZoneMode::Automatic);
-    let battery = |percent| Some(Battery { present: true, percent, millivolts: 3800, charging: false, usb: false });
+    let battery = |percent| {
+        Some(Battery {
+            present: true,
+            percent,
+            millivolts: 3800,
+            charging: false,
+            usb: false,
+        })
+    };
     // The clock's own minute ends 55 s after 12:08:05.
-    driver.sensors(Sensors { clock: clock_at(12, 8, 5), zone: dublin, battery: battery(50), ..Sensors::default() });
-    assert!(driver.stage.changed().is_empty(), "the battery alone redrew the face");
+    driver.sensors(Sensors {
+        clock: clock_at(12, 8, 5),
+        zone: dublin,
+        battery: battery(50),
+        ..Sensors::default()
+    });
+    assert!(
+        driver.stage.changed().is_empty(),
+        "the battery alone redrew the face"
+    );
     assert!(until_redrawn(&mut driver, 60_000_000) > 50_000_000);
     // A stopped clock has no minute of its own, so the battery waits for the stage's.
-    driver.sensors(Sensors { clock: ClockState { stopped: true, ..clock_at(12, 9, 0) }, zone: dublin, battery: battery(50), ..Sensors::default() });
-    assert!(!driver.stage.changed().is_empty(), "the change to STOPPED did not redraw");
-    driver.sensors(Sensors { clock: ClockState { stopped: true, ..clock_at(12, 9, 0) }, zone: dublin, battery: battery(40), ..Sensors::default() });
-    assert!(driver.stage.changed().is_empty(), "the battery alone redrew the face");
+    driver.sensors(Sensors {
+        clock: ClockState {
+            stopped: true,
+            ..clock_at(12, 9, 0)
+        },
+        zone: dublin,
+        battery: battery(50),
+        ..Sensors::default()
+    });
+    assert!(
+        !driver.stage.changed().is_empty(),
+        "the change to STOPPED did not redraw"
+    );
+    driver.sensors(Sensors {
+        clock: ClockState {
+            stopped: true,
+            ..clock_at(12, 9, 0)
+        },
+        zone: dublin,
+        battery: battery(40),
+        ..Sensors::default()
+    });
+    assert!(
+        driver.stage.changed().is_empty(),
+        "the battery alone redrew the face"
+    );
     assert!(until_redrawn(&mut driver, 61_000_000) <= 60_000_000);
 }
 
@@ -1572,8 +1997,14 @@ fn a_wake_from_the_always_on_face_climbs_from_its_level() {
     while driver.stage.is_changing() {
         updates.push(driver.step(Input::default()));
     }
-    let levels: Vec<_> = updates.iter().filter_map(|update| update.brightness).collect();
-    assert!(levels[0] > rest::always_on_level(120) && levels.is_sorted(), "{levels:?}");
+    let levels: Vec<_> = updates
+        .iter()
+        .filter_map(|update| update.brightness)
+        .collect();
+    assert!(
+        levels[0] > rest::always_on_level(120) && levels.is_sorted(),
+        "{levels:?}"
+    );
     assert_eq!(levels.last(), Some(&120));
     assert_eq!(clock_accents(&driver), ClockAccents::FULL);
 }
@@ -1585,7 +2016,9 @@ fn a_wake_from_the_panel_lands_on_the_clock_and_drops_the_edit() {
     driver.swipe(Point::new(150, 280), Point::new(420, 280), 300_000);
     let updates = wait_until(&mut driver, 70_000_000, |rest| rest == Rest::Off);
     assert!(
-        updates.iter().any(|update| update.brightness == Some(rest::dim_level(255))),
+        updates
+            .iter()
+            .any(|update| update.brightness == Some(rest::dim_level(255))),
         "the dim is taken from the level that shows"
     );
     let mut updates = driver.stroke(&[Point::new(233, 233)]);
@@ -1596,7 +2029,10 @@ fn a_wake_from_the_panel_lands_on_the_clock_and_drops_the_edit() {
     assert!(driver.stage.page().is_none());
     assert_eq!(driver.stage.panel_offset(), 0);
     assert_eq!(driver.stage.screen(), Screen::Clock);
-    assert_eq!(updates.iter().rev().find_map(|update| update.brightness), Some(120));
+    assert_eq!(
+        updates.iter().rev().find_map(|update| update.brightness),
+        Some(120)
+    );
     assert_eq!(driver.stage.peripherals().brightness, 120);
 }
 
@@ -1615,8 +2051,14 @@ fn turning_the_compass_keeps_the_screen_lit() {
     }
     driver.wait(500_000);
     assert!(is_dimmed(driver.stage.rest()));
-    let Rest::Dimmed { since } = driver.stage.rest() else { unreachable!() };
-    assert!((15_000_000..15_100_000).contains(&(since - turned)), "{}", since - turned);
+    let Rest::Dimmed { since } = driver.stage.rest() else {
+        unreachable!()
+    };
+    assert!(
+        (15_000_000..15_100_000).contains(&(since - turned)),
+        "{}",
+        since - turned
+    );
 }
 
 #[test]

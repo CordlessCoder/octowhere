@@ -170,7 +170,13 @@ fn rules_in_every_form_parse() {
 fn zones_have_reference_points_except_etc() {
     let dublin = octowhere_tz::DATABASE.find("Europe/Dublin").unwrap();
     assert_eq!(dublin.reference(), Some((533_300_000, -62_500_000)));
-    assert_eq!(octowhere_tz::DATABASE.find("Etc/GMT-1").unwrap().reference(), None);
+    assert_eq!(
+        octowhere_tz::DATABASE
+            .find("Etc/GMT-1")
+            .unwrap()
+            .reference(),
+        None
+    );
     let without = octowhere_tz::DATABASE
         .zones()
         .filter(|zone| !zone.name.starts_with("Etc/") && zone.reference().is_none())

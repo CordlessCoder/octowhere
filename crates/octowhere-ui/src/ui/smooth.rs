@@ -56,7 +56,10 @@ fn draw_disc_row<D: CoverageTarget>(
 ) -> Result<(), D::Error> {
     let (left, right) = (center.x - 1 - i, center.x + i);
     if *i >= 0 {
-        target.fill_solid(&Rectangle::with_corners(Point::new(left, y), Point::new(right, y)), color)?;
+        target.fill_solid(
+            &Rectangle::with_corners(Point::new(left, y), Point::new(right, y)),
+            color,
+        )?;
     }
     let mut edge = edge.clone();
     target.blend_row(left - edge.len() as i32, y, &edge, color);
@@ -66,7 +69,10 @@ fn draw_disc_row<D: CoverageTarget>(
 }
 
 /// The rows of `rows` within the target's bounds.
-fn bounded_rows<D: CoverageTarget>(target: &D, rows: core::ops::Range<i32>) -> core::ops::Range<i32> {
+fn bounded_rows<D: CoverageTarget>(
+    target: &D,
+    rows: core::ops::Range<i32>,
+) -> core::ops::Range<i32> {
     let bounds = target.bounding_box();
     rows.start.max(bounds.top_left.y)..rows.end.min(bounds.top_left.y + bounds.size.height as i32)
 }
@@ -74,7 +80,10 @@ fn bounded_rows<D: CoverageTarget>(target: &D, rows: core::ops::Range<i32>) -> c
 /// Whether the target can show anything on row `y`.
 fn row_visible<D: CoverageTarget>(target: &D, y: i32) -> bool {
     let bounds = target.bounding_box();
-    target.visible(&Rectangle::new(Point::new(bounds.top_left.x, y), Size::new(bounds.size.width, 1)))
+    target.visible(&Rectangle::new(
+        Point::new(bounds.top_left.x, y),
+        Size::new(bounds.size.width, 1),
+    ))
 }
 
 /// Fills rows `rows` of the disc of `radius` about the pixel corner `center`, one span per row
@@ -171,7 +180,10 @@ pub fn polygon_quarters<D: CoverageTarget>(
     // Offsets from the centre corner of the fill's first column and row, and of its last.
     let (dx0, dy0) = (left - center.x, top - center.y);
     let (dx1, dy1) = (dx0 + width as i32 - 1, dy0 + height as i32 - 1);
-    let (along, across) = (Size::new(width as u32, height as u32), Size::new(height as u32, width as u32));
+    let (along, across) = (
+        Size::new(width as u32, height as u32),
+        Size::new(height as u32, width as u32),
+    );
     let turned = |quarter: u32| quarters & (1 << quarter) != 0;
     let places = [
         Rectangle::new(Point::new(left, top), along),
@@ -190,7 +202,12 @@ pub fn polygon_quarters<D: CoverageTarget>(
             PathEvent::LineTo([x, y])
         }
     });
-    rasterize_path_clipped(raster, path, Transform::IDENTITY, (-left as f32, -top as f32));
+    rasterize_path_clipped(
+        raster,
+        path,
+        Transform::IDENTITY,
+        (-left as f32, -top as f32),
+    );
     coverage.clear();
     raster
         .get_bitmap_iter()
