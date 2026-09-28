@@ -869,9 +869,11 @@ fn parse_pair_message(line: &[u8]) -> Option<PairMessage> {
         .position(|&byte| byte == b',')
         .unwrap_or(star);
     let command = decimal(&line[5..command_end])?;
-    let fields_start = (command_end < star)
-        .then_some(command_end + 1)
-        .unwrap_or(star);
+    let fields_start = if command_end < star {
+        command_end + 1
+    } else {
+        star
+    };
     let fields = &line[fields_start..star];
     if fields.len() > PAIR_MESSAGE_FIELDS_CAPACITY {
         return None;
