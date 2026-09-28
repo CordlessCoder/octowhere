@@ -1508,7 +1508,9 @@ async fn bring_up(
     let lora_dio0 = Input::new(parts.lora_dio0, InputConfig::default());
     let lora_path = LoraPath::new(
         i2c.clone(),
-        !((1 << board::EXIO_LORA_RESET) | (1 << board::EXIO_LORA_TX_SWITCH)),
+        !((1 << board::EXIO_GPS_RESET)
+            | (1 << board::EXIO_LORA_RESET)
+            | (1 << board::EXIO_LORA_TX_SWITCH)),
     );
 
     if touch_ok {
@@ -1563,6 +1565,10 @@ async fn bring_up(
 }
 
 /// Holds the GNSS module and the radio in reset, then releases them with the radio listening.
+///
+/// The GNSS `RESET_N` is pulled up inside the module to 1.8 V and must be driven open-drain, so
+/// its output bit stays low in every write: it is an output only while held in reset, and it is
+/// released by making it an input again.
 async fn reset_radios(i2c: SharedI2cDevice) -> Result<(), ()> {
     let mut exio = Tca9554::new(i2c, tca9554::Address::standard());
     let gps_reset = 1 << board::EXIO_GPS_RESET;
@@ -1571,24 +1577,26 @@ async fn reset_radios(i2c: SharedI2cDevice) -> Result<(), ()> {
     let lora_tx_switch = 1 << board::EXIO_LORA_TX_SWITCH;
     let fail = |_| ();
     exio.init().await.map_err(fail)?;
-    exio.write_output(u8::MAX).await.map_err(fail)?;
-    let output_mask = gps_reset | lora_reset | lora_rx_switch | lora_tx_switch;
-    exio.write_direction(!output_mask).await.map_err(fail)?;
-    info!("[TCA9554] OK");
+    // Set while every pin is still an input, so no output starts high and then falls.
     exio.write_output(!(gps_reset | lora_reset | lora_tx_switch))
         .await
         .map_err(fail)?;
+    let output_mask = gps_reset | lora_reset | lora_rx_switch | lora_tx_switch;
+    exio.write_direction(!output_mask).await.map_err(fail)?;
+    info!("[TCA9554] OK");
     Timer::after(Duration::from_millis(10)).await;
-    exio.write_output(!lora_tx_switch).await.map_err(fail)?;
+    exio.write_output(!(gps_reset | lora_tx_switch))
+        .await
+        .map_err(fail)?;
     Timer::after(Duration::from_micros(200)).await;
-    exio.write_output(!(lora_reset | lora_tx_switch))
+    exio.write_output(!(gps_reset | lora_reset | lora_tx_switch))
         .await
         .map_err(fail)?;
     exio.write_direction(!(lora_reset | lora_rx_switch | lora_tx_switch))
         .await
         .map_err(fail)?;
     Timer::after(Duration::from_millis(10)).await;
-    exio.write_output(!(lora_reset | lora_tx_switch))
+    exio.write_output(!(gps_reset | lora_reset | lora_tx_switch))
         .await
         .map_err(fail)?;
     let direction = exio.read_direction().await.map_err(fail)?;
