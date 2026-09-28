@@ -32,35 +32,28 @@ impl PixelFormat for Gray8 {
     const BYTES_PER_PIXEL: usize = 1;
 }
 
-const CHUNK_SIZE: usize = 32;
+/// The most `fill_buf_repeat` copies at once. Each copy reads from the start of `buf`, so a small
+/// source stays in cache while a large destination, such as a PSRAM framebuffer, is written.
+const REPEAT_BLOCK: usize = 256;
 
 /// Writes `data` into `buf` `n` times over and returns the part written.
 #[inline]
-pub fn fill_buf_repeat<'b>(mut buf: &'b mut [u8], data: &[u8], mut n: usize) -> &'b mut [u8] {
-    if n == 0 {
-        return &mut [];
-    }
+pub fn fill_buf_repeat<'b>(buf: &'b mut [u8], data: &[u8], n: usize) -> &'b mut [u8] {
     let bytes = data.len() * n;
-    assert!(buf.len() >= bytes);
-    if bytes >= 4 * CHUNK_SIZE && CHUNK_SIZE.is_multiple_of(data.len()) {
-        let mut arr = [0; CHUNK_SIZE];
-        arr.chunks_exact_mut(data.len())
-            .for_each(|chunk| chunk.copy_from_slice(data));
-        let mut chunks = buf.chunks_exact_mut(arr.len());
-        chunks
-            .by_ref()
-            .take(n / (CHUNK_SIZE / data.len()))
-            .for_each(|chunk| {
-                chunk.copy_from_slice(&arr);
-            });
-        n %= CHUNK_SIZE / data.len();
-        buf = chunks.into_remainder();
+    let buf = &mut buf[..bytes];
+    if bytes == 0 {
+        return buf;
     }
-    buf.chunks_exact_mut(data.len()).take(n).for_each(|chunk| {
-        chunk.copy_from_slice(data);
-    });
-
-    &mut buf[..data.len() * n]
+    buf[..data.len()].copy_from_slice(data);
+    // Whole copies of `data`, so every copy lands in phase.
+    let block = REPEAT_BLOCK.max(data.len()) / data.len() * data.len();
+    let mut filled = data.len();
+    while filled < bytes {
+        let len = filled.min(block).min(bytes - filled);
+        buf.copy_within(..len, filled);
+        filled += len;
+    }
+    buf
 }
 
 #[repr(align(64))]
@@ -74,17 +67,21 @@ where
     color: PhantomData<C>,
 }
 
-/// Fills `bytes` with a repeated 2-byte pixel in whole words. A row that starts at an arbitrary
-/// pixel is not word-aligned, and a byte-wise copy into it runs well below the word rate.
+/// Uses word stores for the aligned middle to fill 2-byte pixels faster.
 fn fill_pairs(bytes: &mut [u8], pixel: [u8; 2]) {
     // SAFETY: every bit pattern is a valid `u32`, so viewing aligned bytes as words is sound.
     let (head, words, tail) = unsafe { bytes.align_to_mut::<u32>() };
-    let word = u32::from_ne_bytes([pixel[0], pixel[1], pixel[0], pixel[1]]);
-    // The buffer is word-aligned and pixels are 2 bytes, so the ends are whole pixels.
-    for end in [head, tail] {
-        end.as_chunks_mut::<2>().0.fill(pixel);
-    }
-    words.fill(word);
+    // `word` repeats the slice's bytes as they fall from the end of the head, so the head matches
+    // its last bytes and the tail its first.
+    let lead = if head.len() % 2 == 0 {
+        pixel
+    } else {
+        [pixel[1], pixel[0]]
+    };
+    let word = [lead[0], lead[1], lead[0], lead[1]];
+    head.copy_from_slice(&word[4 - head.len()..]);
+    words.fill(u32::from_ne_bytes(word));
+    tail.copy_from_slice(&word[..tail.len()]);
 }
 
 /// Calculates the required buffer size.
@@ -236,5 +233,47 @@ where
             color.to_be_bytes().as_ref(),
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{fill_buf_repeat, fill_pairs};
+
+    #[test]
+    fn fill_pairs_preserves_pixel_phase_at_every_alignment() {
+        let pixel = [0x12, 0x34];
+        for prefix in 0..4 {
+            for len in 0..40 {
+                let mut storage = [0xa5; 44];
+                let bytes = &mut storage[prefix..prefix + len];
+                fill_pairs(bytes, pixel);
+
+                for (index, byte) in bytes.iter().enumerate() {
+                    assert_eq!(*byte, pixel[index % 2], "prefix={prefix}, len={len}");
+                }
+                assert!(storage[..prefix].iter().all(|&byte| byte == 0xa5));
+                assert!(storage[prefix + len..].iter().all(|&byte| byte == 0xa5));
+            }
+        }
+    }
+
+    #[test]
+    fn fill_buf_repeat_writes_only_the_repeats_into_a_longer_buffer() {
+        for data in [&[7u8][..], &[1, 2], &[1, 2, 3], &[9, 8, 7, 6, 5]] {
+            for n in [0, 1, 15, 16, 70, 300] {
+                let mut buf = [0u8; 2048];
+                let bytes = data.len() * n;
+                let written = fill_buf_repeat(&mut buf, data, n);
+                assert_eq!(written.len(), bytes, "data={data:?}, n={n}");
+                for (index, byte) in buf[..bytes].iter().enumerate() {
+                    assert_eq!(*byte, data[index % data.len()], "data={data:?}, n={n}");
+                }
+                assert!(
+                    buf[bytes..].iter().all(|&byte| byte == 0),
+                    "data={data:?}, n={n}"
+                );
+            }
+        }
     }
 }
