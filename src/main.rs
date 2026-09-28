@@ -199,6 +199,12 @@ pub static PSRAM_HEAP: esp_alloc::EspHeap = esp_alloc::EspHeap::empty();
 const GNSS_LOW_POWER_MODE: LowPowerMode = LowPowerMode::Disabled;
 #[cfg(not(feature = "gnss-full-power"))]
 const GNSS_LOW_POWER_MODE: LowPowerMode = LowPowerMode::Adaptive;
+/// GSA and GSV, which give the satellites in view and the signal, go out every fourth fix.
+/// GSV alone carries every satellite in view, so at every fix it is most of the traffic.
+const GNSS_SATELLITE_RATE: NmeaOutputRate = match NmeaOutputRate::every(4) {
+    Some(rate) => rate,
+    None => panic!("an output rate is 1 to 20 fixes"),
+};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct SensorSnapshot {
@@ -1624,7 +1630,7 @@ async fn configure_gnss(
     }
     for sentence in [NmeaSentence::Gsa, NmeaSentence::Gsv] {
         match gnss
-            .set_nmea_output_rate(sentence, NmeaOutputRate::EVERY_FIX)
+            .set_nmea_output_rate(sentence, GNSS_SATELLITE_RATE)
             .await
         {
             Ok(()) => answered = true,
