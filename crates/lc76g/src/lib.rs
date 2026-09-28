@@ -1058,14 +1058,13 @@ impl NmeaParser {
             FixType::Fix2D => GnssFixType::Fix2D,
             FixType::Fix3D => GnssFixType::Fix3D,
         };
+        // One GSA comes per constellation, so the satellites in use are counted from GGA's
+        // total instead.
         if gsa.fix_type == FixType::NoFix {
-            self.state.signal.satellites_used = SatelliteCount::default();
             self.state.signal.pdop = None;
             self.state.signal.hdop = None;
             self.state.signal.vdop = None;
         } else {
-            self.state.signal.satellites_used =
-                SatelliteCount::new(gsa.get_fix_satellites_prn().len().min(u8::MAX as usize) as u8);
             self.state.signal.pdop = Some(dop_milli(gsa.pdop));
             self.state.signal.hdop = Some(dop_milli(gsa.hdop));
             self.state.signal.vdop = Some(dop_milli(gsa.vdop));
@@ -1130,8 +1129,10 @@ impl NmeaParser {
         let quality = gps_quality(&gga.gps_quality);
         if quality == FixQuality::NoFix {
             self.state.fix = None;
+            self.state.signal.satellites_used = SatelliteCount::default();
             return;
         }
+        self.state.signal.satellites_used = SatelliteCount::new(gga.sat_in_use);
 
         let previous = self.state.fix.unwrap_or_default();
         self.state.fix = Some(GnssFix {
@@ -1703,6 +1704,26 @@ mod tests {
         assert_eq!(fix.altitude.map(|value| value.get()), Some(545_400));
         assert_eq!(fix.satellites.map(|value| value.get()), Some(8));
         assert_eq!(fix.hdop.map(|value| value.get()), Some(900));
+    }
+
+    #[test]
+    fn satellites_in_use_are_the_total_across_constellations() {
+        let mut parser = NmeaParser::new();
+        for sentence in [
+            "$GNGGA,123519.000,4807.038,N,01131.000,E,1,20,0.9,545.4,M,46.9,M,,*4D\r\n",
+            "$GNGSA,A,3,1,3,5,7,9,11,13,15,,,,,1.20,0.90,0.80,1*3C\r\n",
+            "$GNGSA,A,3,65,67,69,71,73,,,,,,,,1.20,0.90,0.80,2*0F\r\n",
+            "$GNGSA,A,3,2,4,6,8,,,,,,,,,1.20,0.90,0.80,3*09\r\n",
+            "$GNGSA,A,3,21,23,25,,,,,,,,,,1.20,0.90,0.80,4*03\r\n",
+        ] {
+            for byte in sentence.bytes() {
+                parser.push(byte).unwrap();
+            }
+        }
+        let signal = parser.state().signal;
+        assert_eq!(signal.satellites_used.get(), 20);
+        assert_eq!(signal.fix_type, super::GnssFixType::Fix3D);
+        assert_eq!(signal.pdop.map(|value| value.get()), Some(1_200));
     }
 
     #[test]
