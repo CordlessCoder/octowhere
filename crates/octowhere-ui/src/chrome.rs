@@ -592,26 +592,14 @@ impl<T: DrawTarget> DrawTarget for Clip<'_, T> {
     }
 
     fn fill_solid(&mut self, area: &Rectangle, color: Self::Color) -> Result<(), Self::Error> {
-        let Some(bottom_right) = area.bottom_right() else {
-            return Ok(());
-        };
-        let (left, right) = (area.top_left.x, bottom_right.x + 1);
-        let bounds = self.bounds;
-        let Some(last) = bounds.bottom_right() else {
-            return Ok(());
-        };
+        let parent = &mut *self.parent;
         let mut result = Ok(());
-        for y in area.top_left.y.max(bounds.top_left.y)..=bottom_right.y.min(last.y) {
-            let parent = &mut *self.parent;
-            self.damage
-                .for_each_part(left, y, (right - left) as usize, |start, from, to| {
-                    let row =
-                        Rectangle::new(Point::new(start, y), Size::new((to - from) as u32, 1));
-                    if result.is_ok() {
-                        result = parent.fill_solid(&row, color);
-                    }
-                });
-        }
+        self.damage
+            .for_each_rect(&area.intersection(&self.bounds), |part| {
+                if result.is_ok() {
+                    result = parent.fill_solid(&part, color);
+                }
+            });
         result
     }
 }

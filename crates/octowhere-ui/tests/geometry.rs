@@ -146,3 +146,35 @@ fn a_reflection_turns_damage_half_a_turn_about_the_centre() {
         Rectangle::new(Point::new(10, 10), Size::new(4, 2))
     );
 }
+
+#[test]
+fn damaged_pieces_cover_the_area_once_within_a_band() {
+    let mut spans = Spans::new();
+    spans.add(Rectangle::new(Point::new(2, 1), Size::new(5, 6)));
+    spans.add(Rectangle::new(Point::new(10, 3), Size::new(4, 4)));
+    for area in [
+        Rectangle::new(Point::new(-3, -2), Size::new(30, 30)),
+        Rectangle::new(Point::new(3, 3), Size::new(9, 3)),
+        Rectangle::new(Point::new(0, 5), Size::new(16, 1)),
+        Rectangle::new(Point::new(4, 4), Size::zero()),
+    ] {
+        let mut hits = [[0u8; 16]; 16];
+        spans.for_each_rect(&area, |part| {
+            assert_eq!(
+                part.top_left.y / 2,
+                part.bottom_right().unwrap().y / 2,
+                "{part:?}"
+            );
+            for point in part.points() {
+                hits[point.y as usize][point.x as usize] += 1;
+            }
+        });
+        for y in 0..16 {
+            for x in 0..16 {
+                let point = Point::new(x, y);
+                let want = u8::from(area.contains(point) && spans.contains(point));
+                assert_eq!(hits[y as usize][x as usize], want, "{point:?} in {area:?}");
+            }
+        }
+    }
+}

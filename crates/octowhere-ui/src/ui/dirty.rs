@@ -352,6 +352,36 @@ impl<const WIDTH: usize, const BANDS: usize, const K: usize> RowSpans<WIDTH, BAN
         })
     }
 
+    /// Calls `part` with each damaged piece of `area`, left to right within a band and top to
+    /// bottom across them. A piece is at most one band tall.
+    pub fn for_each_rect(&self, area: &Rectangle, mut part: impl FnMut(Rectangle)) {
+        let Some(bottom_right) = area.bottom_right() else {
+            return;
+        };
+        let (left, right) = (area.top_left.x, bottom_right.x + 1);
+        let (top, bottom) = (
+            area.top_left.y.max(0),
+            (bottom_right.y + 1).min(Self::HEIGHT as i32),
+        );
+        let mut y = top;
+        while y < bottom {
+            let next = ((y.div_euclid(GRAIN) + 1) * GRAIN).min(bottom);
+            for (start, end) in self.band(y.div_euclid(GRAIN) as usize) {
+                if start >= right {
+                    break;
+                }
+                let (from, to) = (left.max(start), right.min(end));
+                if from < to {
+                    part(Rectangle::new(
+                        Point::new(from, y),
+                        Size::new((to - from) as u32, (next - y) as u32),
+                    ));
+                }
+            }
+            y = next;
+        }
+    }
+
     #[must_use]
     pub fn contains(&self, point: Point) -> bool {
         self.spans(point.y)
