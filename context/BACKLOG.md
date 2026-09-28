@@ -143,9 +143,9 @@ until the feature set is complete, because profiling an incomplete firmware pric
      has stopped.
   3. Send `$PAIR511` now and then after a fix, so the ephemeris survives the reset line the
      firmware pulses at every boot. Whether that pulse clears the module's RAM is not known.
-  4. Consider EPOC (`$PAIR498`, `$PAIR496`), which predicts orbits for GPS with Galileo or
-     BDS. EASY, on by default, predicts GPS alone. Both predict only from ephemeris the module
-     has received itself.
+  4. Widen EPOC's prediction to GPS with Galileo or BDS (`$PAIR498`). The board's module has
+     EPOC on for GPS alone and refuses EASY's `$PAIR491` as unsupported (`bench/gnss-nack`,
+     `gnss-query`). EPOC predicts only from ephemeris the module has received itself.
 
   Sharing orbit data between units does not work: the module can output its ephemeris as
   RTCM 3 (`$PAIR436`), but it takes orbit data only as Quectel's EPO (`$PAIR471`), which comes
