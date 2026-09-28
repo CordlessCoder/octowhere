@@ -263,7 +263,7 @@ fn compass_calibration(driver: &mut Driver) {
 }
 
 /// Calibrated, with the top edge raised too near vertical for a heading.
-fn top_edge_up() -> Motion {
+fn hold_level() -> Motion {
     Motion {
         compass: CompassView {
             live: true,
@@ -279,7 +279,7 @@ fn top_edge_up() -> Motion {
 /// above 78°, where the compass loses it 11.5° from vertical.
 fn raised(degrees: f32, pitch: f32) -> Motion {
     let mut motion = if pitch > 78.0 {
-        top_edge_up()
+        hold_level()
     } else {
         facing(degrees)
     };
@@ -301,16 +301,16 @@ fn compass_states(driver: &mut Driver) {
     driver.wait(ms(600));
     driver.motion_over(ms(600), |t| calibrating(80 + (t * 19.0) as u8));
     // Calibration completes with the top edge raised, then the device is laid level.
-    driver.motion(top_edge_up());
+    driver.motion(hold_level());
     driver.wait(ms(1_000));
     driver.motion(facing(120.0));
     driver.wait(ms(1_000));
     // Raised briefly, inside the grace, and then for longer than it.
-    driver.motion(top_edge_up());
+    driver.motion(hold_level());
     driver.wait(ms(400));
     driver.motion(facing(120.0));
     driver.wait(ms(800));
-    driver.motion(top_edge_up());
+    driver.motion(hold_level());
     driver.wait(ms(1_200));
     driver.motion(facing(120.0));
     driver.wait(ms(1_000));
@@ -558,7 +558,7 @@ fn tour(driver: &mut Driver) {
     driver.wait(HOLD);
     driver.motion(facing(127.0));
     driver.wait(ms(2_000));
-    say("TOP EDGE UP. HELD NEAR VERTICAL, THE COMPASS HAS NO HEADING TO GIVE.");
+    say("HOLD LEVEL. STOOD ON AN EDGE, THE DIAL NO LONGER LIES FLAT, SO THE HEADING GOES.");
     driver.motion_over(ms(1_500), |t| raised(127.0, 84.0 * ease(t)));
     driver.wait(HOLD);
     driver.motion_over(ms(1_500), |t| raised(127.0, 84.0 * (1.0 - ease(t))));

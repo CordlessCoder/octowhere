@@ -106,7 +106,7 @@ the panel. Touch targets are no smaller than about 10 mm.
   replaces types in again by cell reveal: the hours, minutes and seconds over 180 ms, and the
   first token line over 160 ms from 120 ms. A tick never animates the digits.
 - **Compass:** C1 adds a fixed dim blue field after a five-step build within the 440 ms entry.
-  Heading holds low horizontal blocks through turns; calibration and TOP EDGE UP use sparse
+  Heading holds low horizontal blocks through turns; calibration and HOLD LEVEL use sparse
   stepped tiles; interference dims the blocks; NO DATA has none. The dial, five states and
   state transitions remain as the compass spec and animation addendum describe, with the 66 px
   outlined icon. It no longer has cover-to-recalibrate, its `COVER SCREEN TO RECAL`
@@ -205,7 +205,7 @@ The compass's original specification was removed once it was built, so this sect
 record of its states and of what happens between them. The layout is in the clock face spec's
 "Compass changes"; the entry, swipe-out and heading-arrival motion is in the animation addendum.
 The captures `compass-calibrating`, `compass-heading`, `compass-interference`,
-`compass-top-edge-up` and `compass-no-data` show the five states. The `ui-sim` scene
+`compass-hold-level` and `compass-no-data` show the five states. The `ui-sim` scene
 `compass-states` plays a change of each kind below, and
 `context/screen-captures/compass-states.gif` is its recording.
 
@@ -219,7 +219,7 @@ Listed in precedence order: the first whose condition holds is shown.
 | INTERFERENCE | a heading, and the field is disturbed | turned to the heading | interference glyph, `ORANGE` | `MAGNETIC`, `GRAY` | `INTERFERENCE`, Mono Bold 24 px `ORANGE` | `ORANGE` | degrees | shown |
 | HEADING | a heading | turned to the heading | arrow, `BLUE` | `MAGNETIC`, `GRAY` | none | `WHITE` | degrees | shown |
 | CALIBRATING | no heading, calibration under 100 % | none | open loop, `ORANGE` | `CALIBRATION`, `ORANGE` | `TURN ALL WAYS`, Mono Regular 19 px `GRAY` | `ORANGE` | percent | shown |
-| TOP EDGE UP | no heading, calibrated | none | top bar, `WHITE` | `MAGNETIC`, `GRAY` | `TOP EDGE UP`, Mono Regular 20 px `GRAY` | `WHITE` | `---` | shown |
+| HOLD LEVEL | no heading, calibrated | none | letter L, `WHITE` | `MAGNETIC`, `GRAY` | `HOLD LEVEL`, Mono Regular 20 px `GRAY` | `WHITE` | `---` | shown |
 
 The slab, icon and caption never move or resize. The state line's space is kept when it is
 empty.
@@ -234,8 +234,9 @@ motion task holds the two conditions that would otherwise flicker, before the sc
   within 30 % for 1 s without a break. The fusion still stops using a field on the first
   reading more than 35 % off, and the heading carries on from the gyroscope, without magnetic
   correction.
-- **Top edge up:** the heading goes when the top edge points within about 11.5° of straight up
-  or straight down, at once, and comes back only past 15°.
+- **Hold level:** the heading goes when the screen stands within about 11.5° of vertical,
+  whichever edge or corner is up, at once, and comes back only past 15°. The dial lies in the
+  screen's plane, so held upright it no longer matches directions on the ground.
 - **Calibration:** the percentage rises as the device turns through orientations and never
   falls. Only the panel's COMPASS cell restarts it, and that re-enters the compass page, so the
   page runs its entry rather than a change of state.
@@ -257,7 +258,7 @@ specifies these, and they are built as it says. In short:
 - **Cuts:** a change into NO DATA is a single frame. On leaving NO DATA, the slab, readout
   and tilt take their new state in the first frame. The dial and readout go in the first frame
   when the heading goes, so no stale bearing shows.
-- The dial sweeps as before when a heading arrives. Back from TOP EDGE UP within 750 ms, the
+- The dial sweeps as before when a heading arrives. Back from HOLD LEVEL within 750 ms, the
   dial and icon show at once, and only the state line and slab change.
 - A change that arrives while another runs starts from the state shown.
 

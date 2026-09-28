@@ -69,7 +69,7 @@ impl Texture {
             return None;
         }
         let kind = match mode {
-            Mode::Calibrating(_) | Mode::TopEdgeUp => TextureKind::Tiles,
+            Mode::Calibrating(_) | Mode::HoldLevel => TextureKind::Tiles,
             Mode::Interference(_) => TextureKind::DimBlocks,
             Mode::Heading(_) => TextureKind::Blocks,
             Mode::NoData => return None,
@@ -210,8 +210,8 @@ pub enum Mode {
     Interference(u16),
     Heading(u16),
     Calibrating(u8),
-    /// Calibrated, but the top edge points too close to vertical for a heading.
-    TopEdgeUp,
+    /// Calibrated, but the screen stands too close to vertical for a heading.
+    HoldLevel,
 }
 
 impl Mode {
@@ -222,7 +222,7 @@ impl Mode {
             Some(decidegrees) if view.disturbed => Self::Interference(degrees(decidegrees)),
             Some(decidegrees) => Self::Heading(degrees(decidegrees)),
             None if view.calibration_percent < 100 => Self::Calibrating(view.calibration_percent),
-            None => Self::TopEdgeUp,
+            None => Self::HoldLevel,
         }
     }
 
@@ -247,7 +247,7 @@ impl Mode {
             Self::Interference(_) => &INTERFERENCE,
             Self::Heading(_) => &ARROW,
             Self::Calibrating(_) => &OPEN_LOOP,
-            Self::TopEdgeUp => &TOP_BAR,
+            Self::HoldLevel => &LETTER_L,
         }
     }
 
@@ -256,7 +256,7 @@ impl Mode {
         match self {
             Self::NoData => chrome::RED,
             Self::Interference(_) | Self::Calibrating(_) => chrome::ORANGE,
-            Self::Heading(_) | Self::TopEdgeUp => chrome::WHITE,
+            Self::Heading(_) | Self::HoldLevel => chrome::WHITE,
         }
     }
 
@@ -409,7 +409,7 @@ impl Default for Accents {
 const ARROW: Glyph = [0b00100, 0b01110, 0b10101, 0b00100, 0b00100];
 const OPEN_LOOP: Glyph = [0b01110, 0b10001, 0b10000, 0b10001, 0b01110];
 const INTERFERENCE: Glyph = [0b10101, 0b01110, 0b11011, 0b01110, 0b10101];
-const TOP_BAR: Glyph = [0b11111, 0b00100, 0b00100, 0b00100, 0b00100];
+const LETTER_L: Glyph = [0b10000, 0b10000, 0b10000, 0b10000, 0b11111];
 
 /// The dial's marks sit every 10°, so the letters share bearings with ticks.
 const MARKS: u8 = 36;
@@ -524,7 +524,7 @@ impl Parts {
         let mode = Mode::of(view);
         let readout = match mode {
             Mode::NoData => Readout::NoData,
-            Mode::TopEdgeUp => Readout::Dashes,
+            Mode::HoldLevel => Readout::Dashes,
             Mode::Heading(value) | Mode::Interference(value) => {
                 Readout::Digits(three_digits(value), "\u{b0}")
             }
@@ -862,7 +862,7 @@ fn status(mode: Mode) -> Option<Status> {
     let (text, color, size, index) = match mode {
         Mode::Interference(_) => ("INTERFERENCE", chrome::ORANGE, 24, FRAKTION_BOLD),
         Mode::Calibrating(_) => ("TURN ALL WAYS", chrome::GRAY, 19, FRAKTION),
-        Mode::TopEdgeUp => ("TOP EDGE UP", chrome::GRAY, 20, FRAKTION),
+        Mode::HoldLevel => ("HOLD LEVEL", chrome::GRAY, 20, FRAKTION),
         Mode::Heading(_) | Mode::NoData => return None,
     };
     Some(Status {
@@ -1045,7 +1045,7 @@ mod tests {
             Mode::Heading(90)
         );
         assert_eq!(Mode::of(&view(true, 54, None, true)), Mode::Calibrating(54));
-        assert_eq!(Mode::of(&view(true, 100, None, false)), Mode::TopEdgeUp);
+        assert_eq!(Mode::of(&view(true, 100, None, false)), Mode::HoldLevel);
     }
 
     #[test]
@@ -1067,7 +1067,7 @@ mod tests {
         );
         assert_eq!(
             Texture::of(Mode::Calibrating(0), full, 255),
-            Texture::of(Mode::TopEdgeUp, full, 255)
+            Texture::of(Mode::HoldLevel, full, 255)
         );
         assert_eq!(Texture::of(Mode::NoData, full, 255), None);
         assert_eq!(
@@ -1153,7 +1153,7 @@ mod tests {
     #[test]
     fn the_status_lines_sit_in_their_band_and_clear_the_letters() {
         let font = renderer();
-        for mode in [Mode::Interference(0), Mode::Calibrating(0), Mode::TopEdgeUp] {
+        for mode in [Mode::Interference(0), Mode::Calibrating(0), Mode::HoldLevel] {
             let status = status(mode).unwrap();
             let (style, baseline) = status.style(&font);
             let text = status.text;

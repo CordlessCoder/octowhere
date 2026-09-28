@@ -315,7 +315,7 @@ fn the_compass_withholds_its_heading_until_calibrated() {
     );
 }
 
-fn top_edge_up() -> Motion {
+fn hold_level() -> Motion {
     let mut motion = heading(470);
     motion.compass.heading_decidegrees = None;
     motion
@@ -331,8 +331,8 @@ fn heading_back_after(absence: Motion, gap: Micros) -> Accents {
 }
 
 #[test]
-fn a_heading_back_quickly_from_top_edge_up_skips_the_reveal() {
-    let back = heading_back_after(top_edge_up(), 300_000);
+fn a_heading_back_quickly_from_hold_level_skips_the_reveal() {
+    let back = heading_back_after(hold_level(), 300_000);
     assert_eq!(
         (back.dial, back.icon_rows, back.caption),
         (255, 5, 255),
@@ -341,8 +341,8 @@ fn a_heading_back_quickly_from_top_edge_up_skips_the_reveal() {
 }
 
 #[test]
-fn a_heading_back_slowly_from_top_edge_up_reveals_again() {
-    let accents = heading_back_after(top_edge_up(), 1_000_000);
+fn a_heading_back_slowly_from_hold_level_reveals_again() {
+    let accents = heading_back_after(hold_level(), 1_000_000);
     assert!(accents.dial < 255 && accents.icon_rows < 5, "{accents:?}");
 }
 
@@ -473,8 +473,8 @@ fn compass_walk() -> Vec<(String, Motion)> {
         motion.compass.roll_deg = roll;
         walk.push((format!("tilt {pitch} {roll}"), motion));
     }
-    walk.push(("top edge up".into(), top_edge_up()));
-    walk.push(("back from top edge".into(), heading(900)));
+    walk.push(("hold level".into(), hold_level()));
+    walk.push(("back from hold level".into(), heading(900)));
     for percent in [0, 9, 10, 54, 99] {
         let mut motion = heading(900);
         motion.compass.heading_decidegrees = None;

@@ -65,7 +65,7 @@ fn main() {
             },
         ),
         (
-            "top-edge-up",
+            "hold-level",
             CompassView {
                 heading_decidegrees: None,
                 ..calibrated

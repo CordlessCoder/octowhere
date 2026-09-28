@@ -38,9 +38,12 @@ pub const INTERFERENCE_CLEAR_FRACTION: f32 = 0.30;
 pub const INTERFERENCE_ENTER_US: u64 = 200_000;
 /// How long, in µs, it must stay clear without a break before the screen stops showing it.
 pub const INTERFERENCE_LEAVE_US: u64 = 1_000_000;
-/// Once the heading has gone with the top edge near vertical, it comes back only when the top
-/// edge's horizontal part exceeds this: 15° from vertical, against the 11.5° it goes at.
-const TOP_EDGE_CLEAR: f32 = 0.258_819;
+/// The heading goes when the screen stands within 11.5° of vertical, whichever edge is up, since
+/// the dial lies in the screen's plane and no longer matches the ground's: this is the vertical
+/// part of the screen's normal there.
+const UPRIGHT_ENTER: f32 = 0.2;
+/// Once gone, it comes back only when the screen is 15° from vertical.
+const UPRIGHT_CLEAR: f32 = 0.258_819;
 
 /// A sample joins the sphere fit only this far, in µT, from the last one that did, so a board held
 /// still does not outweigh every other direction.
@@ -523,14 +526,14 @@ pub struct CompassView {
 }
 
 /// What the screen has shown of the two conditions that would otherwise flicker: interference,
-/// held on both edges, and the heading withheld with the top edge near vertical, with
+/// held on both edges, and the heading withheld with the screen near vertical, with
 /// hysteresis. The fusion still stops trusting a disturbed field on the reading it strays.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Holds {
     interference: bool,
     /// When the field started reading against what `interference` shows, while it still does.
     contrary_since: Option<u64>,
-    top_edge_up: bool,
+    upright: bool,
 }
 
 impl Holds {
@@ -565,10 +568,16 @@ impl Holds {
                 self.contrary_since = None;
             }
         }
-        self.top_edge_up = if self.top_edge_up {
-            libm::cosf(attitude.pitch_deg.to_radians()) <= TOP_EDGE_CLEAR
+        // Gravity's parts along x and y are the sines of the roll and pitch.
+        let (roll, pitch) = (
+            libm::sinf(attitude.roll_deg.to_radians()),
+            libm::sinf(attitude.pitch_deg.to_radians()),
+        );
+        let normal = libm::sqrtf((1.0 - roll * roll - pitch * pitch).max(0.0));
+        self.upright = if self.upright {
+            normal <= UPRIGHT_CLEAR
         } else {
-            attitude.heading_deg.is_none()
+            normal < UPRIGHT_ENTER || attitude.heading_deg.is_none()
         };
     }
 }
@@ -597,7 +606,7 @@ impl CompassView {
             calibration_percent,
             heading_decidegrees: attitude
                 .heading_deg
-                .filter(|_| calibration_percent >= 100 && !holds.top_edge_up)
+                .filter(|_| calibration_percent >= 100 && !holds.upright)
                 .map(|degrees| (libm::roundf(degrees * 10.0) as u16) % 3600),
             pitch_deg: libm::roundf(attitude.pitch_deg) as i8,
             roll_deg: libm::roundf(attitude.roll_deg) as i8,
@@ -747,6 +756,26 @@ mod tests {
         })
     }
 
+    /// The screen tilted `tilt_deg` about its diagonal, raising the top right corner.
+    fn on_a_corner(tilt_deg: f32) -> Option<Attitude> {
+        let each =
+            libm::asinf(libm::sinf(tilt_deg.to_radians()) * core::f32::consts::FRAC_1_SQRT_2)
+                .to_degrees();
+        Some(Attitude {
+            heading_deg: Some(10.0),
+            pitch_deg: each,
+            roll_deg: each,
+        })
+    }
+
+    fn rolled(roll_deg: f32) -> Option<Attitude> {
+        Some(Attitude {
+            heading_deg: Some(10.0),
+            pitch_deg: 0.0,
+            roll_deg,
+        })
+    }
+
     /// Feeds a field `strength` times the calibrated one every 20 ms over `from..to` ms, and
     /// returns whether the view showed interference after each.
     fn disturbed_over(
@@ -816,6 +845,22 @@ mod tests {
             "back within 15° of vertical"
         );
         assert_eq!(heading(74.0, Some(10.0)), Some(100));
+    }
+
+    #[test]
+    fn a_screen_on_its_side_has_no_heading() {
+        let calibration = fully_calibrated();
+        let mut holds = Holds::default();
+        let mut heading = |attitude| {
+            CompassView::new(attitude, None, &calibration, &mut holds, 0).heading_decidegrees
+        };
+        assert_eq!(heading(rolled(70.0)), Some(100));
+        assert_eq!(heading(rolled(-80.0)), None, "the left edge up");
+        assert_eq!(heading(rolled(77.0)), None, "back within 15° of vertical");
+        assert_eq!(heading(rolled(74.0)), Some(100));
+        // Tilted about the diagonal, so a corner rises and neither edge alone is near vertical.
+        assert_eq!(heading(on_a_corner(55.0)), Some(100));
+        assert_eq!(heading(on_a_corner(82.0)), None, "a corner up");
     }
 
     #[test]

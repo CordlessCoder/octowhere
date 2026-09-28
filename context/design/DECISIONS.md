@@ -32,3 +32,8 @@ Recorded 2026-09-26. These override the hand-off where they differ.
 8. **The start-up's blue is `#000DF6`**, the colour of the intro cinematic's opening, added as
    a token of its own for the BOOT word and the grid behind it. It is an exception to board
    colours only (owner, 2026-09-26).
+9. **HOLD LEVEL replaces TOP EDGE UP** (owner, 2026-09-28). The heading goes when the screen
+   stands within 11.5° of vertical whichever edge is up, not only the top or bottom edge, since
+   the dial lies in the screen's plane and stops matching the ground. The state line reads
+   `HOLD LEVEL` and the icon is a letter L; the thresholds, hysteresis and 750 ms grace are
+   unchanged. This overrides the round 3 spec's TOP EDGE UP and the hand-off's state wording.

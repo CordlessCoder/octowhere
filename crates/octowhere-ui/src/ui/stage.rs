@@ -67,9 +67,9 @@ const ICON_ROW: Micros = 30_000;
 const CAPTION_REVEAL: Micros = 120_000;
 const DIAL_SWEEP: Micros = 170_000;
 const COMPASS_TEXTURE_SETTLE: Micros = 400_000;
-/// A heading back from TOP EDGE UP within this shows the dial at once, so tilting through
+/// A heading back from HOLD LEVEL within this shows the dial at once, so tilting through
 /// vertical does not replay anything.
-const TOP_EDGE_GRACE: Micros = 750_000;
+const LEVEL_GRACE: Micros = 750_000;
 
 /// The compass page since it settled.
 struct CompassSettled {
@@ -248,8 +248,8 @@ pub struct Stage {
     covered_at: Option<Micros>,
     /// The compass page, while it has settled into view.
     compass_settled: Option<CompassSettled>,
-    /// When the heading gave way to TOP EDGE UP, while nothing else has shown since.
-    top_edge_since: Option<Micros>,
+    /// When the heading gave way to HOLD LEVEL, while nothing else has shown since.
+    level_since: Option<Micros>,
     accents: Accents,
     fading: bool,
     /// The clock's battery gauge is moving for charging, which needs steps that nothing else
@@ -343,7 +343,7 @@ impl Stage {
             ),
             covered_at: None,
             compass_settled: None,
-            top_edge_since: None,
+            level_since: None,
             accents: Accents::FULL,
             fading: false,
             gauge_moving: false,
@@ -438,7 +438,7 @@ impl Stage {
         self.pager = Pager::new(page, Screen::ALL.len(), board::LCD_WIDTH as i32);
         self.screen = screen;
         self.compass_settled = None;
-        self.top_edge_since = None;
+        self.level_since = None;
         self.drawn_compass = None;
         self.clock_settled = None;
         self.drawn_clock = None;
@@ -1282,7 +1282,7 @@ impl Stage {
     fn compass_accents(&mut self, now: Micros) -> Accents {
         if self.screen != Screen::Compass {
             self.compass_settled = None;
-            self.top_edge_since = None;
+            self.level_since = None;
             return Accents::FULL;
         }
         let offset = self.face_offset();
@@ -1323,12 +1323,12 @@ impl Stage {
                 if *shown == Mode::NoData {
                     times.texture = Some(now);
                 }
-                // Back from TOP EDGE UP within the grace, the dial and icon show at once.
-                let quick = *shown == Mode::TopEdgeUp
+                // Back from HOLD LEVEL within the grace, the dial and icon show at once.
+                let quick = *shown == Mode::HoldLevel
                     && mode.heading().is_some()
                     && self
-                        .top_edge_since
-                        .is_some_and(|since| now.saturating_sub(since) < TOP_EDGE_GRACE);
+                        .level_since
+                        .is_some_and(|since| now.saturating_sub(since) < LEVEL_GRACE);
                 if !quick {
                     times.icon = from_now(times.icon);
                     if mode.heading().is_some() && shown.heading().is_none() {
@@ -1341,10 +1341,10 @@ impl Stage {
                 // A change still running gives way: the new one starts from the state shown.
                 *change = Some((now, *shown));
             }
-            if mode == Mode::TopEdgeUp && shown.heading().is_some() {
-                self.top_edge_since = Some(now);
-            } else if mode != Mode::TopEdgeUp {
-                self.top_edge_since = None;
+            if mode == Mode::HoldLevel && shown.heading().is_some() {
+                self.level_since = Some(now);
+            } else if mode != Mode::HoldLevel {
+                self.level_since = None;
             }
             *shown = mode;
         }

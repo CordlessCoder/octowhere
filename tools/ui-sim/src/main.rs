@@ -24,8 +24,8 @@
 //!
 //! - Left / Right: heading down / up 5°, 1° with Shift. Space spins it.
 //! - Up / Down: pitch; Q / E: roll, 5° a press, 1° with Shift.
-//! - C: calibration through none, part-way and complete. T: top edge vertical or not, which
-//!   withholds the heading.
+//! - C: calibration through none, part-way and complete. T: the screen stood near vertical or
+//!   not, which withholds the heading.
 //! - D: magnetic disturbance on or off. L: sensors live or silent.
 //! - Z: the clock's zone, through unknown, automatic in Dublin, and chosen by hand in New York
 //!   and Kolkata. R: the clock, through set from GNSS, running unconfirmed, stopped and
