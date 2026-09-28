@@ -240,7 +240,9 @@ draw with the start-up frame it drew (`charge-fault-bench`, summarised by
 `tools/charge-fault-summary.py`); and `bench/fill-rect`, which alternates the clock face and the
 compass and logs every draw with the count and time of its solid fills (`fill-rect-bench`,
 `fill-rect-scene` for the draw times alone, `fill-rect-off` with the framebuffer's fill skipped,
-summarised by `tools/fill-rect-summary.py`), and on the host groups every fill that reaches the
+summarised by `tools/fill-rect-summary.py`; `round-scene` instead replays the start-up and
+drags the settings panel between its pages, with `round-restore` putting back the removed circular
+clip, summarised by `tools/round-summary.py`), and on the host groups every fill that reaches the
 framebuffer by the drawing that asked for it (`tests/fill_sources.rs` in `crates/octowhere-ui`).
 
 ## Concurrency
