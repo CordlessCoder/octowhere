@@ -133,6 +133,11 @@ until the feature set is complete, because profiling an incomplete firmware pric
   Mono weights already are, instead of the hand-made ASCII subset under `assets/`. Regular moved
   for the device page's `©`. Subsetting Bold to the glyphs in use would also recover some of the 54 KB it
   added.
+- Bring the self-test's parts up concurrently (owner, 2026-09-28). `bring_up` joins the GNSS
+  settle with one future that probes the clock, touch, IMU and magnetometer in turn, so each
+  part's own waits (touch's 100 ms settle, the magnetometer's trim reads) add up. Give each part
+  its own future and join them. The I²C transactions still take turns on the shared bus mutex;
+  the waits between them overlap. Each part keeps its own deadline.
 - Shorten the GNSS time to first fix (owner, 2026-09-28). The command details are in
   `docs/datasheets/LC76G_AGNSS_Application_Note_V1.1.pdf`; none of these is sent today.
   1. Send the RTC's time as reference time, `$PAIR590`, at every GNSS start. The note asks for
