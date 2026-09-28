@@ -40,3 +40,7 @@ Recorded 2026-09-26. These override the hand-off where they differ.
 10. **The hour rail opens over 400 ms** (owner, 2026-09-28), at a steady rate from 240 ms after
     the page settles, rather than with the zone line's 160 ms ease. Eased that fast, most of it
     opened in the first few frames of a swipe. It still closes with the zone line.
+11. **ALWAYS ON sets the face's level** (owner, 2026-09-28). The cell opens a stepper of OFF,
+    DIM and every whole percent from 5 % to 50 %, instead of toggling. DIM, the default, is the
+    level the timeout dims to, so it follows the brightness; a percentage is fixed. The face was
+    at 10 %, too dim though it lights about 8 % of the panel. A setting saved as on reads as DIM.

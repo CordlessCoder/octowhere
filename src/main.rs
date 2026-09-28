@@ -70,6 +70,7 @@ use octowhere::{
     ui::{
         clock::{ClockState, ZoneId, ZoneMode, ZoneState},
         screens::{Battery, DEFAULT_BRIGHTNESS, Gnss, PeripheralState},
+        second::choice_label,
         stage::{Input as StageInput, Motion, Sensors, Stage, Store as Choice, Touch},
         startup::{Outcome, Part, Report},
     },
@@ -1286,7 +1287,7 @@ async fn async_main(spawner: Spawner) {
         saved.automatic_zone.map(|zone| DATABASE.zone(zone).name),
         saved.brightness,
         saved.timeout.map(|timeout| timeout.label()),
-        saved.always_on,
+        saved.always_on.map(choice_label),
     );
     spawner.spawn(settings_task(store).unwrap());
 
@@ -1296,7 +1297,7 @@ async fn async_main(spawner: Spawner) {
     let stage = Stage::starting(PeripheralState {
         brightness: saved.brightness.unwrap_or(DEFAULT_BRIGHTNESS),
         timeout: saved.timeout.unwrap_or_default(),
-        always_on: saved.always_on.unwrap_or(false),
+        always_on: saved.always_on.unwrap_or_default(),
         firmware: env!("CARGO_PKG_VERSION"),
         ..PeripheralState::default()
     });

@@ -17,7 +17,7 @@ use super::{
     pager::Pager,
     panel::{self, Cell},
     picker::Picker,
-    rest::{self, Fade, Rest, Timeout},
+    rest::{self, AlwaysOn, Fade, Rest, Timeout},
     scatter,
     screens::{self, Battery, DEFAULT_BRIGHTNESS, Gnss, PeripheralState, Screen},
     second::{self, Effects, Next, Page},
@@ -752,11 +752,11 @@ impl Stage {
                 return false;
             }
             Rest::Dimmed { since } if now.saturating_sub(since) >= rest::DIM_HOLD => {
-                if self.peripherals.always_on {
+                if self.peripherals.always_on.is_on() {
                     self.rest = Rest::AlwaysOn;
                     self.drawn_always_on = None;
                     self.fade = None;
-                    update.brightness = Some(rest::always_on_level(self.level));
+                    update.brightness = Some(self.peripherals.always_on.level(self.level));
                 } else {
                     self.rest = Rest::Darkening { since: now };
                     self.fade_to(0, rest::OFF_FADE, now);
@@ -1156,10 +1156,7 @@ impl Stage {
             }
             Cell::Timeout => Page::Timeout(second::TimeoutChooser::new(self.peripherals.timeout)),
             Cell::AlwaysOn => {
-                let on = !self.peripherals.always_on;
-                self.peripherals.always_on = on;
-                update.store = Some(Store::AlwaysOn(on));
-                return;
+                Page::AlwaysOn(second::AlwaysOnChooser::new(self.peripherals.always_on))
             }
             Cell::Gnss | Cell::Battery | Cell::Device => Page::Device(second::Device::default()),
             Cell::Compass => {
@@ -1202,11 +1199,11 @@ impl Stage {
             }
             Store::AutomaticZone => zone.mode = ZoneMode::Automatic,
             Store::Timeout(timeout) => self.peripherals.timeout = timeout,
-            Store::AlwaysOn(on) => self.peripherals.always_on = on,
+            Store::AlwaysOn(choice) => self.peripherals.always_on = choice,
             Store::Clear => {
                 zone.mode = ZoneMode::Automatic;
                 self.peripherals.timeout = Timeout::default();
-                self.peripherals.always_on = false;
+                self.peripherals.always_on = AlwaysOn::Off;
                 self.peripherals.brightness = DEFAULT_BRIGHTNESS;
                 self.level = DEFAULT_BRIGHTNESS;
                 update.brightness = Some(DEFAULT_BRIGHTNESS);

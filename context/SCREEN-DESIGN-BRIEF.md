@@ -115,7 +115,9 @@ the panel. Touch targets are no smaller than about 10 mm.
 - **Settings panel:** S1's eight indexed rows on two pages, four rows per page. A horizontal
   drag switches the whole page. Page 1 is ZONE, BRIGHTNESS, TIMEOUT, ALWAYS ON; page 2 is
   COMPASS, GNSS, BATTERY, DEVICE. ZONE opens the picker, BRIGHTNESS the editor and TIMEOUT the
-  timeout screen. A tap on ALWAYS ON toggles and stores it. COMPASS restarts calibration and closes to the compass. GNSS, BATTERY
+  timeout screen. ALWAYS ON opens a screen on the timeout screen's stepper, with OFF, DIM and
+  each level from 5 % to 50 %, a choice every 8 px of drag counted from where the drag starts;
+  the cell reads `OFF`, or `ON` with `DIM` or the level. COMPASS restarts calibration and closes to the compass. GNSS, BATTERY
   and DEVICE open the device page, which ends with the attribution, `CLEAR SETTINGS` and
   `REPLAY START-UP`, which opens a chooser: the identity and logo card again, or a marked
   demonstration of one part failing. The inner screens use D3's violet active fields and
@@ -131,7 +133,7 @@ the panel. Touch targets are no smaller than about 10 mm.
   selected one.
 
 Captures drawn by the firmware's own code come from `crates/octowhere-ui/examples/render.rs`.
-It draws the faces' stills and `panel-rest`, `panel-always-on`, `panel-end`,
+It draws the faces' stills and `panel-rest`, `settings-always-on`, `panel-end`,
 `panel-scrolling`, `panel-pulling`, `panel-device`, `panel-device-end`, `settings-brightness`,
 `settings-timeout`, `settings-clear`, `picker-offset` and
 `picker-zone`, and the start-up's `startup-selftest-*`, `startup-frame-*` and `startup-fault-*`;
@@ -373,7 +375,8 @@ show it with a 15 s timeout. Where the build differs from the spec or interprets
   heading at the last restart. It does not run during the start-up or a replay, and restarts
   when the clock face takes over.
 - **The levels.** The dim is 30 % of the level that shows, at least 8 (3 % of 255) and never
-  above the level itself. The always-on face is at 26 (10 %), or the set level if lower. With
+  above the level itself. The always-on face is at the level ALWAYS ON sets: DIM, the default, is the dim level, so it
+  follows the brightness; a percentage is fixed whatever the brightness. With
   the brightness editor open, the dim is taken from the level being previewed. A wake from the
   panel discards the preview and fades up to the stored level.
 - **The always-on face** is the hand-off's H2b: regular-weight digits, dim blue blocks where

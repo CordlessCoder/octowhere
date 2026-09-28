@@ -14,7 +14,7 @@ use super::{
     icon::{Glyph, Tile},
     panel,
     picker::Picker,
-    rest::Timeout,
+    rest::{AlwaysOn, Timeout},
     reveal::{Reveal, draw_revealed},
     screens::PeripheralState,
     startup::Replay,
@@ -49,7 +49,7 @@ pub enum Store {
     ManualZone(super::clock::ZoneId),
     AutomaticZone,
     Timeout(Timeout),
-    AlwaysOn(bool),
+    AlwaysOn(AlwaysOn),
     /// Erase every stored setting and go back to the defaults.
     Clear,
 }
@@ -69,7 +69,7 @@ impl defmt::Format for Store {
             }
             Self::AutomaticZone => defmt::write!(f, "AutomaticZone"),
             Self::Timeout(timeout) => defmt::write!(f, "Timeout({=str})", timeout.label()),
-            Self::AlwaysOn(on) => defmt::write!(f, "AlwaysOn({})", on),
+            Self::AlwaysOn(choice) => defmt::write!(f, "AlwaysOn({=str})", &*choice_label(*choice)),
             Self::Clear => defmt::write!(f, "Clear"),
         }
     }
@@ -101,6 +101,7 @@ pub enum Page {
     Picker(Picker),
     Replay(ReplayChooser),
     Timeout(TimeoutChooser),
+    AlwaysOn(AlwaysOnChooser),
 }
 
 /// How far a second-level screen's icon and hint have come in since it opened.
@@ -140,6 +141,7 @@ impl Page {
             Self::Clear(confirm) => confirm.handle(event, effects),
             Self::Replay(chooser) => chooser.handle(event),
             Self::Timeout(chooser) => chooser.handle(event, effects),
+            Self::AlwaysOn(chooser) => chooser.handle(event, effects),
             Self::Picker(picker) => picker.handle(event, peripherals, effects),
         }
     }
@@ -172,6 +174,7 @@ impl Page {
             Self::Clear(confirm) => confirm.draw(accents, font, target),
             Self::Replay(chooser) => chooser.draw(accents, font, target),
             Self::Timeout(chooser) => chooser.draw(accents, font, target),
+            Self::AlwaysOn(chooser) => chooser.draw(accents, font, target),
             Self::Picker(picker) => picker.draw(peripherals, accents, font, target),
         }
     }
@@ -364,7 +367,7 @@ impl Brightness {
     /// The display's level for `percent` of full.
     #[must_use]
     pub fn level_of(percent: i32) -> u8 {
-        ((255 * percent + 50) / 100) as u8
+        super::rest::level_of(percent as u8)
     }
 
     /// The percentage under column `x`: the track runs from nothing at its left end to full at
@@ -745,8 +748,8 @@ impl Device {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct Stepper {
     index: usize,
-    /// The index when the current drag started.
-    grabbed: Option<usize>,
+    /// The index when the current drag started, and how far the finger had already moved.
+    grabbed: Option<(usize, i32)>,
 }
 
 /// What a gesture did to a [`Stepper`].
@@ -759,20 +762,23 @@ enum Step {
 #[derive(Clone, Copy)]
 enum StepperKind {
     Replay,
-    Timeout,
+    /// A setting kept by a tap.
+    Keep,
 }
 
 impl StepperKind {
     fn footer(self) -> &'static str {
         match self {
             Self::Replay => "DRAG TO CHOOSE / TAP TO REPLAY",
-            Self::Timeout => "DRAG TO CHOOSE / TAP TO KEEP",
+            Self::Keep => "DRAG TO CHOOSE / TAP TO KEEP",
         }
     }
 }
 
 /// Travel per step of the choices, as the zone picker's.
 const CHOICE_TRAVEL: f32 = 40.0;
+/// Travel per step of the always-on levels, finer so one drag across the field covers them.
+const LEVEL_TRAVEL: f32 = 8.0;
 const CHOICE_MIDDLE: f32 = 242.0;
 const CHOICE_NEIGHBOURS: [f32; 2] = [166.0, 307.0];
 
@@ -784,20 +790,34 @@ impl Stepper {
         }
     }
 
-    fn stepped(from: usize, travel: i32, len: usize) -> usize {
-        let steps = libm::truncf(-travel as f32 / CHOICE_TRAVEL) as isize;
+    fn stepped(from: usize, travel: i32, per_step: f32, len: usize) -> usize {
+        let steps = libm::truncf(-travel as f32 / per_step) as isize;
         (from as isize + steps).clamp(0, len as isize - 1) as usize
     }
 
     fn handle(&mut self, event: &GestureEvent, len: usize) -> Step {
+        self.handle_by(event, len, CHOICE_TRAVEL, false)
+    }
+
+    /// As [`handle`](Self::handle), `per_step` pixels a choice. `from_drag` counts the travel
+    /// from where the drag began rather than the touch, for steps finer than the tap slop,
+    /// which would otherwise skip the first choices.
+    fn handle_by(
+        &mut self,
+        event: &GestureEvent,
+        len: usize,
+        per_step: f32,
+        from_drag: bool,
+    ) -> Step {
         match *event {
             GestureEvent::DragStart(drag) => {
-                self.grabbed = Some(self.index);
-                self.index = Self::stepped(self.index, drag.offset().y, len);
+                let before = if from_drag { drag.offset().y } else { 0 };
+                self.grabbed = Some((self.index, before));
+                self.index = Self::stepped(self.index, drag.offset().y - before, per_step, len);
             }
             GestureEvent::DragMove(drag) | GestureEvent::DragEnd(drag) => {
-                if let Some(from) = self.grabbed {
-                    self.index = Self::stepped(from, drag.offset().y, len);
+                if let Some((from, before)) = self.grabbed {
+                    self.index = Self::stepped(from, drag.offset().y - before, per_step, len);
                 }
                 if matches!(event, GestureEvent::DragEnd(_)) {
                     self.grabbed = None;
@@ -814,7 +834,7 @@ impl Stepper {
     fn draw<D: CoverageTarget<Color = Color>>(
         &self,
         len: usize,
-        label: impl Fn(usize) -> &'static str,
+        label: impl Fn(usize) -> String<16>,
         kind: StepperKind,
         accents: Accents,
         font: &FontdueRenderer<'static, Color>,
@@ -913,14 +933,14 @@ impl Stepper {
 
     fn display_label(
         index: usize,
-        label: &impl Fn(usize) -> &'static str,
+        label: &impl Fn(usize) -> String<16>,
         replay: bool,
     ) -> String<24> {
         let mut text = String::new();
         if replay && index > 0 {
             _ = write!(text, "{:02} ", index);
         }
-        _ = text.push_str(label(index));
+        _ = text.push_str(&label(index));
         text
     }
 }
@@ -966,7 +986,7 @@ impl ReplayChooser {
         }
         self.stepper.draw(
             Replay::ALL.len(),
-            |index| Replay::ALL[index].label(),
+            |index| fixed(Replay::ALL[index].label()),
             StepperKind::Replay,
             accents,
             font,
@@ -1021,8 +1041,79 @@ impl TimeoutChooser {
         )?;
         self.stepper.draw(
             Timeout::ALL.len(),
-            |index| Timeout::ALL[index].label(),
-            StepperKind::Timeout,
+            |index| fixed(Timeout::ALL[index].label()),
+            StepperKind::Keep,
+            accents,
+            font,
+            target,
+        )
+    }
+}
+
+fn fixed(label: &str) -> String<16> {
+    String::try_from(label).unwrap_or_default()
+}
+
+/// How the always-on setting reads, on its screen and in the panel.
+#[must_use]
+pub fn choice_label(choice: AlwaysOn) -> String<16> {
+    let mut text = String::new();
+    match choice {
+        AlwaysOn::Off => _ = text.push_str("OFF"),
+        AlwaysOn::Dim => _ = text.push_str("DIM"),
+        AlwaysOn::Percent(percent) => _ = write!(text, "{percent}%"),
+    }
+    text
+}
+
+/// The always-on screen: off, the dim level, or a fixed level, kept by a tap below the top
+/// cap.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AlwaysOnChooser {
+    stepper: Stepper,
+}
+
+impl AlwaysOnChooser {
+    #[must_use]
+    pub fn new(choice: AlwaysOn) -> Self {
+        Self {
+            stepper: Stepper::at(choice.index()),
+        }
+    }
+
+    fn handle(&mut self, event: &GestureEvent, effects: &mut Effects) -> Next {
+        match self
+            .stepper
+            .handle_by(event, AlwaysOn::CHOICES, LEVEL_TRAVEL, true)
+        {
+            Step::Stay => Next::Stay,
+            Step::Cancel => Next::Panel,
+            Step::Choose(index) => {
+                effects.store = Some(Store::AlwaysOn(AlwaysOn::choice(index)));
+                Next::Panel
+            }
+        }
+    }
+
+    fn draw<D: CoverageTarget<Color = Color>>(
+        &self,
+        accents: Accents,
+        font: &FontdueRenderer<'static, Color>,
+        target: &mut D,
+    ) -> Result<(), D::Error> {
+        draw_cap(
+            "ALWAYS ON / 04",
+            "CANCEL",
+            &panel::ALWAYS_ON,
+            chrome::VIOLET,
+            accents,
+            font,
+            target,
+        )?;
+        self.stepper.draw(
+            AlwaysOn::CHOICES,
+            |index| choice_label(AlwaysOn::choice(index)),
+            StepperKind::Keep,
             accents,
             font,
             target,

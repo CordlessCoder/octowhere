@@ -100,11 +100,80 @@ pub fn dim_level(set: u8) -> u8 {
     dimmed.max(FLOOR).min(u16::from(set)) as u8
 }
 
-/// 10 % of full, or the set level if that is lower.
+/// The display's level for `percent` of full.
 #[must_use]
-pub fn always_on_level(set: u8) -> u8 {
-    const LEVEL: u8 = 26;
-    LEVEL.min(set)
+pub fn level_of(percent: u8) -> u8 {
+    ((255 * u16::from(percent) + 50) / 100) as u8
+}
+
+/// Whether the screen rests on the always-on face, and how bright it is there.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum AlwaysOn {
+    #[default]
+    Off,
+    /// The level the timeout dims to, so it follows the brightness.
+    Dim,
+    /// A fixed percentage of full, in [`AlwaysOn::PERCENTS`].
+    Percent(u8),
+}
+
+impl AlwaysOn {
+    pub const PERCENTS: core::ops::RangeInclusive<u8> = 5..=50;
+    /// Off, the dim level, then each percentage.
+    pub const CHOICES: usize = 2 + (*Self::PERCENTS.end() - *Self::PERCENTS.start() + 1) as usize;
+
+    #[must_use]
+    pub fn choice(index: usize) -> Self {
+        match index {
+            0 => Self::Off,
+            1 => Self::Dim,
+            _ => Self::Percent(*Self::PERCENTS.start() + (index - 2) as u8),
+        }
+    }
+
+    #[must_use]
+    pub fn index(self) -> usize {
+        match self {
+            Self::Off => 0,
+            Self::Dim => 1,
+            Self::Percent(percent) => 2 + usize::from(percent - *Self::PERCENTS.start()),
+        }
+    }
+
+    #[must_use]
+    pub fn is_on(self) -> bool {
+        self != Self::Off
+    }
+
+    /// The face's level when the screen's is `set`.
+    #[must_use]
+    pub fn level(self, set: u8) -> u8 {
+        match self {
+            Self::Off | Self::Dim => dim_level(set),
+            Self::Percent(percent) => level_of(percent),
+        }
+    }
+
+    /// The stored byte: 0 off, 1 the dim level, or the percentage. Settings saved as on or
+    /// off, before there was a level, read as the dim level or off.
+    #[must_use]
+    pub fn to_byte(self) -> u8 {
+        match self {
+            Self::Off => 0,
+            Self::Dim => 1,
+            Self::Percent(percent) => percent,
+        }
+    }
+
+    #[must_use]
+    pub fn from_byte(byte: u8) -> Option<Self> {
+        match byte {
+            0 => Some(Self::Off),
+            1 => Some(Self::Dim),
+            percent if Self::PERCENTS.contains(&percent) => Some(Self::Percent(percent)),
+            _ => None,
+        }
+    }
 }
 
 /// A change of level spread over a time.

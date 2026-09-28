@@ -21,7 +21,7 @@ use octowhere_ui::{
     ui::{
         clock::{ClockState, DateTime, ZoneMode, ZoneState},
         compass::CompassView,
-        rest::{Rest, Timeout},
+        rest::{AlwaysOn, Rest, Timeout},
         screens::{Battery, Gnss, PeripheralState, Screen},
         script::Driver,
         stage::{Input, Motion, Sensors, Stage, Touch},
@@ -307,7 +307,12 @@ fn settings_frames() -> Vec<(String, Stage)> {
     frames.push(("panel-rest".into(), open().stage));
     let mut always_on = open();
     tap(&mut always_on, 300, 330);
-    frames.push(("panel-always-on".into(), always_on.stage));
+    always_on.stroke(&[
+        Point::new(233, 300),
+        Point::new(233, 280),
+        Point::new(233, 232),
+    ]);
+    frames.push(("settings-always-on".into(), always_on.stage));
     let mut end = open();
     end.swipe(Point::new(380, 250), Point::new(80, 250), 300_000);
     end.settle();
@@ -491,7 +496,7 @@ fn always_on_frames() -> Vec<(String, Stage)> {
         let mut stage = Stage::new(PeripheralState {
             firmware: "0.1.0",
             timeout: Timeout::Seconds15,
-            always_on: true,
+            always_on: AlwaysOn::Dim,
             ..PeripheralState::default()
         });
         stage.show(Screen::Clock);

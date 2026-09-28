@@ -18,7 +18,8 @@ use octowhere_ui::{
     tz::DATABASE,
     ui::{
         clock::{ZoneId, ZoneMode},
-        rest::Timeout,
+        rest::{AlwaysOn, Timeout},
+        second::choice_label,
     },
 };
 
@@ -27,6 +28,7 @@ const PARTITION: &str = "storage";
 const PAGE_SIZE: u32 = ekv::config::PAGE_SIZE as u32;
 
 // Keys, in the order a transaction must write them.
+/// Off, the dim level or a percentage, as `AlwaysOn::to_byte` gives it.
 const KEY_ALWAYS_ON: &[u8] = b"always_on";
 const KEY_AUTOMATIC_ZONE: &[u8] = b"automatic_zone";
 const KEY_BRIGHTNESS: &[u8] = b"brightness";
@@ -49,7 +51,7 @@ pub struct Saved {
     /// The display's level, out of 255.
     pub brightness: Option<u8>,
     pub timeout: Option<Timeout>,
-    pub always_on: Option<bool>,
+    pub always_on: Option<AlwaysOn>,
 }
 
 /// One change to save.
@@ -63,7 +65,7 @@ pub enum Write {
     Automatic,
     Brightness(u8),
     Timeout(Timeout),
-    AlwaysOn(bool),
+    AlwaysOn(AlwaysOn),
     /// Forget every setting.
     Clear,
 }
@@ -81,7 +83,7 @@ impl defmt::Format for Write {
             Self::Automatic => defmt::write!(f, "Automatic"),
             Self::Brightness(level) => defmt::write!(f, "Brightness({})", level),
             Self::Timeout(timeout) => defmt::write!(f, "Timeout({=str})", timeout.label()),
-            Self::AlwaysOn(on) => defmt::write!(f, "AlwaysOn({})", on),
+            Self::AlwaysOn(choice) => defmt::write!(f, "AlwaysOn({=str})", &*choice_label(*choice)),
             Self::Clear => defmt::write!(f, "Clear"),
         }
     }
@@ -212,7 +214,7 @@ impl Store {
             };
             let always_on = value(KEY_ALWAYS_ON)
                 .await
-                .and_then(|on| on.first().map(|&on| on != 0));
+                .and_then(|byte| AlwaysOn::from_byte(*byte.first()?));
             let automatic_zone = zone(value(KEY_AUTOMATIC_ZONE).await);
             let brightness = value(KEY_BRIGHTNESS)
                 .await
@@ -269,7 +271,9 @@ impl Store {
                         .write(KEY_TIMEOUT, &timeout.seconds().to_le_bytes())
                         .await
                 }
-                Write::AlwaysOn(on) => transaction.write(KEY_ALWAYS_ON, &[u8::from(on)]).await,
+                Write::AlwaysOn(choice) => {
+                    transaction.write(KEY_ALWAYS_ON, &[choice.to_byte()]).await
+                }
                 Write::Clear => unreachable!("handled above"),
             };
             written.is_ok() && transaction.commit().await.is_ok()

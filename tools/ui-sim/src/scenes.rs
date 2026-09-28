@@ -9,7 +9,7 @@ use octowhere_ui::ui::{
     compass::CompassView,
     gesture::Micros,
     panel::Cell,
-    rest::Timeout,
+    rest::{AlwaysOn, Timeout},
     screens::PeripheralState,
     screens::{Battery, Gnss, Screen},
     script::Driver,
@@ -606,13 +606,20 @@ fn tour(driver: &mut Driver) {
     say("THE CLOCK NOW SHOWS AMSTERDAM'S TIME, MARKED MANUAL.");
     close_settings(driver);
     driver.wait(HOLD);
-    say("TIMEOUT, SET TO 15 SECONDS, AND ALWAYS ON, SWITCHED ON.");
+    say("TIMEOUT, SET TO 15 SECONDS, AND ALWAYS ON, AT THE DIM LEVEL.");
     open_settings(driver);
     tap_row(driver, Cell::Timeout);
     driver.swipe(Point::new(233, 250), Point::new(233, 360), SLOW);
     driver.wait(ms(1_500));
     slow_tap(driver, 233, 258);
     tap_row(driver, Cell::AlwaysOn);
+    driver.stroke(&[
+        Point::new(233, 300),
+        Point::new(233, 280),
+        Point::new(233, 272),
+    ]);
+    driver.wait(ms(1_000));
+    slow_tap(driver, 233, 258);
     close_settings(driver);
 
     // The idle seconds and the dim's hold play at three times speed; the fade to the always-on
@@ -792,7 +799,11 @@ fn rest(driver: &mut Driver, screen: Screen, always_on: bool) {
     driver.stage = Stage::new(PeripheralState {
         firmware: "0.1.0",
         timeout: Timeout::Seconds15,
-        always_on,
+        always_on: if always_on {
+            AlwaysOn::Dim
+        } else {
+            AlwaysOn::Off
+        },
         ..PeripheralState::default()
     });
     start(driver, screen);

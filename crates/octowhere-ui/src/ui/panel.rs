@@ -73,7 +73,7 @@ const SCATTER_CLEAR: [Rectangle; 2] = [
 pub const ZONE: Glyph = [0b11011, 0b10001, 0b00100, 0b10001, 0b11011];
 pub const BRIGHTNESS: Glyph = [0b00001, 0b00011, 0b00111, 0b01111, 0b11111];
 pub const TIMEOUT: Glyph = [0b11111, 0b01110, 0b00100, 0b01110, 0b11111];
-const ALWAYS_ON: Glyph = [0b00000, 0b01110, 0b11011, 0b01110, 0b00000];
+pub const ALWAYS_ON: Glyph = [0b00000, 0b01110, 0b11011, 0b01110, 0b00000];
 const CALIBRATING: Glyph = [0b01110, 0b10001, 0b10000, 0b10001, 0b01110];
 const GNSS: Glyph = [0b00100, 0b01010, 0b10101, 0b01010, 0b00100];
 const BATTERY: Glyph = [0b01110, 0b11111, 0b10001, 0b11111, 0b11111];
@@ -275,12 +275,12 @@ fn content(cell: Cell, peripherals: &PeripheralState) -> Content {
             &TIMEOUT
         }
         Cell::AlwaysOn => {
-            if peripherals.always_on {
+            if peripherals.always_on.is_on() {
                 tag = Some("ON");
             } else {
-                _ = value.push_str("OFF");
                 value_color = chrome::GRAY;
             }
+            _ = value.push_str(&super::second::choice_label(peripherals.always_on));
             &ALWAYS_ON
         }
         Cell::Compass => {

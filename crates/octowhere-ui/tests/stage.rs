@@ -1735,7 +1735,7 @@ fn demonstration_damage_redraws_what_changed() {
     }
 }
 
-use octowhere_ui::ui::rest::{self, Rest, Timeout};
+use octowhere_ui::ui::rest::{self, AlwaysOn, Rest, Timeout};
 
 /// Settled on `screen` with the clock running, resting after `timeout`.
 fn resting_on(screen: Screen, timeout: Timeout, always_on: bool) -> Driver<'static> {
@@ -1743,7 +1743,11 @@ fn resting_on(screen: Screen, timeout: Timeout, always_on: bool) -> Driver<'stat
     driver.stage = Stage::new(PeripheralState {
         firmware: "0.1.0",
         timeout,
-        always_on,
+        always_on: if always_on {
+            AlwaysOn::Dim
+        } else {
+            AlwaysOn::Off
+        },
         ..PeripheralState::default()
     });
     driver.stage.show(screen);
@@ -1901,7 +1905,7 @@ fn the_always_on_face_shows_after_the_dim_and_redraws_once_a_minute() {
     let updates = wait_until(&mut driver, 22_000_000, |rest| rest == Rest::AlwaysOn);
     assert_eq!(
         updates.last().unwrap().brightness,
-        Some(rest::always_on_level(120))
+        Some(rest::dim_level(120))
     );
     assert!(driver.stage.changed().is_full());
     assert_eq!(tiled_differs(&driver.stage), 0);
@@ -2002,7 +2006,7 @@ fn a_wake_from_the_always_on_face_climbs_from_its_level() {
         .filter_map(|update| update.brightness)
         .collect();
     assert!(
-        levels[0] > rest::always_on_level(120) && levels.is_sorted(),
+        levels[0] > rest::dim_level(120) && levels.is_sorted(),
         "{levels:?}"
     );
     assert_eq!(levels.last(), Some(&120));
@@ -2141,22 +2145,84 @@ fn the_timeout_screen_steps_through_the_five_and_keeps_one_on_a_tap() {
     assert!(driver.stage.page().is_none());
 }
 
+/// Opens ALWAYS ON, drags each of `travels` pixels up past the tap slop, and keeps the choice.
+fn choose_always_on(driver: &mut Driver, travels: &[i32]) -> Vec<Update> {
+    tap_cell(driver, panel::Cell::AlwaysOn);
+    assert!(driver.stage.page().is_some());
+    for &travel in travels {
+        let slop = 20 * travel.signum();
+        let start = Point::new(233, 233 + travel / 2);
+        driver.stroke(&[
+            start,
+            start - Point::new(0, slop),
+            start - Point::new(0, slop + travel),
+        ]);
+    }
+    tap(driver, 233, 258)
+}
+
 #[test]
-fn a_tap_on_always_on_toggles_and_stores_it() {
+fn always_on_steps_from_off_through_the_dim_level_to_each_percent() {
     let mut driver = open_panel(Screen::Clock);
-    let updates = tap_cell(&mut driver, panel::Cell::AlwaysOn);
-    assert_eq!(stored(&updates), Some(Store::AlwaysOn(true)));
-    assert!(driver.stage.peripherals().always_on);
+    let updates = choose_always_on(&mut driver, &[8]);
+    assert_eq!(stored(&updates), Some(Store::AlwaysOn(AlwaysOn::Dim)));
+    assert_eq!(driver.stage.peripherals().always_on, AlwaysOn::Dim);
     assert!(driver.stage.page().is_none());
-    let updates = tap_cell(&mut driver, panel::Cell::AlwaysOn);
-    assert_eq!(stored(&updates), Some(Store::AlwaysOn(false)));
-    assert!(!driver.stage.peripherals().always_on);
+    // Twenty steps on from the dim level.
+    let updates = choose_always_on(&mut driver, &[160]);
+    assert_eq!(
+        stored(&updates),
+        Some(Store::AlwaysOn(AlwaysOn::Percent(24)))
+    );
+    // The far end holds at the last level.
+    let updates = choose_always_on(&mut driver, &[200, 200]);
+    assert_eq!(
+        stored(&updates),
+        Some(Store::AlwaysOn(AlwaysOn::Percent(50)))
+    );
+    let updates = choose_always_on(&mut driver, &[-200, -200]);
+    assert_eq!(stored(&updates), Some(Store::AlwaysOn(AlwaysOn::Off)));
+}
+
+#[test]
+fn the_always_on_face_takes_a_fixed_level_whatever_the_brightness() {
+    for (choice, level) in [
+        (AlwaysOn::Dim, rest::dim_level(120)),
+        (AlwaysOn::Percent(40), rest::level_of(40)),
+    ] {
+        let mut driver = resting_on(Screen::Clock, Timeout::Seconds15, true);
+        driver.stage = Stage::new(PeripheralState {
+            always_on: choice,
+            ..*driver.stage.peripherals()
+        });
+        driver.stage.show(Screen::Clock);
+        let updates = wait_until(&mut driver, 22_000_000, |rest| rest == Rest::AlwaysOn);
+        assert_eq!(
+            updates.iter().rev().find_map(|update| update.brightness),
+            Some(level),
+            "{choice:?}"
+        );
+    }
+}
+
+#[test]
+fn a_stored_always_on_byte_reads_back() {
+    for index in 0..AlwaysOn::CHOICES {
+        let choice = AlwaysOn::choice(index);
+        assert_eq!(choice.index(), index);
+        assert_eq!(AlwaysOn::from_byte(choice.to_byte()), Some(choice));
+    }
+    // Saved as on or off, before there was a level.
+    assert_eq!(AlwaysOn::from_byte(1), Some(AlwaysOn::Dim));
+    assert_eq!(AlwaysOn::from_byte(0), Some(AlwaysOn::Off));
+    assert_eq!(AlwaysOn::from_byte(51), None);
 }
 
 #[test]
 fn clearing_puts_the_timeout_and_always_on_back() {
     let mut driver = open_panel(Screen::Clock);
-    tap_cell(&mut driver, panel::Cell::AlwaysOn);
+    choose_always_on(&mut driver, &[8]);
+    assert!(driver.stage.peripherals().always_on.is_on());
     tap_cell(&mut driver, panel::Cell::Timeout);
     driver.swipe(Point::new(233, 300), Point::new(233, 250), 300_000);
     tap(&mut driver, 233, 258);
@@ -2166,5 +2232,5 @@ fn clearing_puts_the_timeout_and_always_on_back() {
     tap(&mut driver, 233, 342);
     driver.swipe(Point::new(120, 258), Point::new(420, 258), 300_000);
     assert_eq!(driver.stage.peripherals().timeout, Timeout::Minute1);
-    assert!(!driver.stage.peripherals().always_on);
+    assert_eq!(driver.stage.peripherals().always_on, AlwaysOn::Off);
 }

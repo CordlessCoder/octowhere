@@ -8,7 +8,11 @@ use embedded_graphics::{
 };
 
 use super::{
-    clock::ClockView, clock_screen, compass::CompassView, compass_screen, panel, rest::Timeout,
+    clock::ClockView,
+    clock_screen,
+    compass::CompassView,
+    compass_screen, panel,
+    rest::{AlwaysOn, Timeout},
 };
 use crate::{
     board,
@@ -74,8 +78,8 @@ pub struct PeripheralState {
     /// The display's level, out of 255.
     pub brightness: u8,
     pub timeout: Timeout,
-    /// The screen rests on the always-on face rather than going dark.
-    pub always_on: bool,
+    /// Whether the screen rests on the always-on face rather than going dark, and its level.
+    pub always_on: AlwaysOn,
     /// The firmware's version.
     pub firmware: &'static str,
 }
@@ -89,7 +93,7 @@ impl Default for PeripheralState {
             gnss: Gnss::default(),
             brightness: DEFAULT_BRIGHTNESS,
             timeout: Timeout::default(),
-            always_on: false,
+            always_on: AlwaysOn::Off,
             firmware: "",
         }
     }
