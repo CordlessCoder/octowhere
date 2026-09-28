@@ -27,14 +27,15 @@
 - The onboard LC76G GNSS module uses the shared `ESP32_SDA`/`ESP32_SCL` bus and is reset through TCA9554 `EXIO7` (`GPS_RST`). The board reference marks the alternate GPS UART routes as `NC/GPS_TXD` and `NC/GPS_RXD`, so the firmware uses the GNSS I²C interface.
 - The LC76G I²C protocol uses address `0x50` for configuration commands, `0x54` for NMEA reads, and `0x58` for NMEA writes. The module can NACK while its internal buffers change; the Quectel application note specifies 10 ms delays and retries, which the driver implements.
 - The Quectel I²C sample retries each complete protocol step: configuration write, delay, and data transfer. Retrying only the `0x54` read is insufficient because the LC76G transmitter can enter a sleep state when its buffer is not serviced; a new configuration command wakes and re-arms that path. The driver now retries the complete sequence for NMEA reads and writes. A live failure showed GNSS `0x54` address NACKs while PMIC and BMM350 transactions continued to work, ruling out a total shared-bus failure. After the change, the receiver again produced continuous NMEA data and 3D fixes during monitoring.
-- With ALP on and no sky view, the LC76G stops answering reads at `0x54` after about 1 to 5
-  minutes of uptime, although the configuration write at `0x50` is still acknowledged. It stays
-  that way for minutes: backing off for up to 60 s at a time did not bring it back, and neither
-  did a direct write to `0x58`. When it answers again, or after a pulse on `GPS_RST`, it
-  reports nothing pending and sends no NMEA. With ALP off (`gnss-full-power`) it ran 25 minutes
-  without one failure, at a steady 411 bytes/s. Long pauses in reading are not the cause: a
-  backlog of 5 KB after 16 s unread drained without error. `bench/gnss-nack` has the runs
-  (2026-09-28).
+- The LC76G has stopped answering reads at `0x54` twice with ALP on and no sky view, at 56 s
+  and 268 s of uptime, both while the board was being handled; the configuration write at
+  `0x50` was still acknowledged. It stayed that way for minutes: backing off for up to 60 s at
+  a time did not bring it back, and neither did a direct write to `0x58`. When it answered
+  again, or after a pulse on `GPS_RST`, it reported nothing pending and sent no NMEA. Left
+  untouched, it ran 25 minutes without a failure with ALP on, and 25 minutes with ALP off, so
+  ALP alone does not cause it; handling or a discharge through the antenna may. ALP off with
+  handling is not yet tested. Long pauses in reading are not the cause: a backlog of 5 KB after
+  16 s unread drained without error. `bench/gnss-nack` has the runs (2026-09-28).
 - Queried at start-up, the board's LC76G refuses EASY (`$PAIR491`) as unsupported, has EPOC on
   for GPS only (`$PAIR508` gives `1,1`), active interference cancellation on, SBAS off and ALP
   on, with GPS, GLONASS, Galileo, BDS and QZSS searched.
