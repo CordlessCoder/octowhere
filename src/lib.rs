@@ -11,4 +11,4 @@ pub mod peripherals;
 pub mod settings;
 pub mod util;
 
-pub use octowhere_ui::{chrome, fontdue, framebuffer, tz, ui};
+pub use octowhere_ui::{chrome, fontdue, framebuffer, motion, tz, ui};

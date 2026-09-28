@@ -480,7 +480,11 @@ pub fn attitude(accel: Vec3, field: Vec3) -> Option<Attitude> {
     let (east_y, north_y) = (east[1], north[1]);
     let heading_deg = (libm::sqrtf(east_y * east_y + north_y * north_y) > 0.2).then(|| {
         let degrees = libm::atan2f(east_y, north_y).to_degrees();
-        if degrees < 0.0 { degrees + 360.0 } else { degrees }
+        if degrees < 0.0 {
+            degrees + 360.0
+        } else {
+            degrees
+        }
     });
     Some(Attitude {
         heading_deg,
@@ -530,7 +534,13 @@ pub struct Holds {
 }
 
 impl Holds {
-    fn update(&mut self, now_us: u64, attitude: &Attitude, field: Option<Vec3>, calibration: &Calibration) {
+    fn update(
+        &mut self,
+        now_us: u64,
+        attitude: &Attitude,
+        field: Option<Vec3>,
+        calibration: &Calibration,
+    ) {
         if calibration.progress() < 1.0 {
             self.interference = false;
             self.contrary_since = None;
@@ -689,7 +699,8 @@ mod tests {
         }
         assert!((calibration.radius() - 44.0).abs() < 0.05);
         // The midpoint of each range would put z well off: its lowest point is only -20°.
-        let midpoint_z = centre[2] + 44.0 * (libm::sinf(70f32.to_radians()) - libm::sinf(20f32.to_radians())) / 2.0;
+        let midpoint_z = centre[2]
+            + 44.0 * (libm::sinf(70f32.to_radians()) - libm::sinf(20f32.to_radians())) / 2.0;
         assert!((midpoint_z - centre[2]).abs() > 10.0);
     }
 
@@ -713,7 +724,8 @@ mod tests {
         assert_eq!(partial.heading_decidegrees, None);
         calibration.update([40.0; 3]);
         assert_eq!(
-            CompassView::new(level, None, &calibration, &mut Holds::default(), 0).heading_decidegrees,
+            CompassView::new(level, None, &calibration, &mut Holds::default(), 0)
+                .heading_decidegrees,
             Some(0)
         );
     }
@@ -728,16 +740,29 @@ mod tests {
     }
 
     fn held(pitch_deg: f32, heading_deg: Option<f32>) -> Option<Attitude> {
-        Some(Attitude { heading_deg, pitch_deg, roll_deg: 0.0 })
+        Some(Attitude {
+            heading_deg,
+            pitch_deg,
+            roll_deg: 0.0,
+        })
     }
 
     /// Feeds a field `strength` times the calibrated one every 20 ms over `from..to` ms, and
     /// returns whether the view showed interference after each.
-    fn disturbed_over(holds: &mut Holds, calibration: &Calibration, strength: f32, from: u64, to: u64) -> Vec<bool> {
+    fn disturbed_over(
+        holds: &mut Holds,
+        calibration: &Calibration,
+        strength: f32,
+        from: u64,
+        to: u64,
+    ) -> Vec<bool> {
         let field = Some([calibration.radius() * strength, 0.0, 0.0]);
         (from..to)
             .step_by(20)
-            .map(|ms| CompassView::new(held(0.0, Some(10.0)), field, calibration, holds, ms * 1_000).disturbed)
+            .map(|ms| {
+                CompassView::new(held(0.0, Some(10.0)), field, calibration, holds, ms * 1_000)
+                    .disturbed
+            })
             .collect()
     }
 
@@ -746,11 +771,23 @@ mod tests {
         let calibration = fully_calibrated();
         let mut holds = Holds::default();
         let entering = disturbed_over(&mut holds, &calibration, 1.5, 0, 220);
-        assert_eq!(entering.iter().position(|&shown| shown), Some(10), "{entering:?}");
+        assert_eq!(
+            entering.iter().position(|&shown| shown),
+            Some(10),
+            "{entering:?}"
+        );
         // Between the two thresholds it stays.
-        assert!(disturbed_over(&mut holds, &calibration, 1.32, 220, 3_000).iter().all(|&shown| shown));
+        assert!(
+            disturbed_over(&mut holds, &calibration, 1.32, 220, 3_000)
+                .iter()
+                .all(|&shown| shown)
+        );
         let leaving = disturbed_over(&mut holds, &calibration, 1.1, 3_000, 4_100);
-        assert_eq!(leaving.iter().position(|&shown| !shown), Some(50), "{leaving:?}");
+        assert_eq!(
+            leaving.iter().position(|&shown| !shown),
+            Some(50),
+            "{leaving:?}"
+        );
     }
 
     #[test]
@@ -768,11 +805,16 @@ mod tests {
         let calibration = fully_calibrated();
         let mut holds = Holds::default();
         let mut heading = |pitch: f32, heading: Option<f32>| {
-            CompassView::new(held(pitch, heading), None, &calibration, &mut holds, 0).heading_decidegrees
+            CompassView::new(held(pitch, heading), None, &calibration, &mut holds, 0)
+                .heading_decidegrees
         };
         assert_eq!(heading(70.0, Some(10.0)), Some(100));
         assert_eq!(heading(80.0, None), None);
-        assert_eq!(heading(77.0, Some(10.0)), None, "back within 15° of vertical");
+        assert_eq!(
+            heading(77.0, Some(10.0)),
+            None,
+            "back within 15° of vertical"
+        );
         assert_eq!(heading(74.0, Some(10.0)), Some(100));
     }
 

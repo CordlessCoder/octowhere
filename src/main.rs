@@ -64,12 +64,14 @@ use octowhere::{
     tz::{self, DATABASE},
     ui::{
         clock::{ClockState, ZoneId, ZoneMode, ZoneState},
-        compass::{AxisMap, Calibration, CalibrationEvent, CompassView, Holds, Vec3},
-        fusion::Fusion,
-        imu::{accel_micro_ms2, gyro_micro_rad_s},
         screens::{Battery, DEFAULT_BRIGHTNESS, Gnss, PeripheralState},
         stage::{Input as StageInput, Motion, Sensors, Stage, Store as Choice, Touch},
         startup::{Outcome, Part, Report},
+    },
+    motion::{
+        compass::{AxisMap, Calibration, CalibrationEvent, CompassView, Holds, Vec3},
+        fusion::Fusion,
+        imu::{accel_micro_ms2, gyro_micro_rad_s},
     },
     util::{Swap, SwapThread},
 };
@@ -175,13 +177,7 @@ const GNSS_LOW_POWER_MODE: LowPowerMode = LowPowerMode::Adaptive;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct SensorSnapshot {
-    battery_present: bool,
-    battery_mv: Option<u16>,
-    vbus_mv: Option<u16>,
-    vsys_mv: Option<u16>,
-    gnss_bytes: u16,
     gnss: GnssState,
-    lora_irq: u8,
     clock: ClockState,
     zone: ZoneState,
     /// `None` while the power controller does not answer.
@@ -758,10 +754,6 @@ async fn sensor_task(task: SensorTask) {
                 charging: charging.unwrap_or(false),
                 usb: usb.unwrap_or(false),
             });
-            state.battery_present = battery_present;
-            state.battery_mv = battery_present.then_some(battery_mv).flatten();
-            state.vbus_mv = vbus_mv;
-            state.vsys_mv = vsys_mv;
             debug!(
                 "[PMIC] sample battery_present={} VBAT={}mV VBUS={}mV VSYS={}mV",
                 battery_present, battery_mv, vbus_mv, vsys_mv
@@ -771,12 +763,10 @@ async fn sensor_task(task: SensorTask) {
         if let Some(lora) = &mut lora
             && let Ok(irq) = lora.read(IRQ_FLAGS).await
         {
-            state.lora_irq = irq;
             debug!("[LORA] sample IRQ={=u8:#04x}", irq);
         }
         match gnss.read_nmea_chunk(&mut nmea).await {
             Ok(data) => {
-                state.gnss_bytes = data.len() as u16;
                 #[cfg(feature = "gnss-raw-log")]
                 log_raw_nmea(data, &mut raw_nmea_line, &mut raw_nmea_line_len);
                 let mut updates = 0;
@@ -1272,17 +1262,6 @@ async fn bring_up(spawner: Spawner, parts: Parts, zones: ZoneTracker, touch_slot
     .await;
     let mut power = answered.then_some(power);
     let mut initial_sensor_state = SensorSnapshot::default();
-    if let Some(power) = &mut power {
-        Timer::after(Duration::from_millis(100)).await;
-        let battery_present = power.is_battery_present().await.unwrap_or(false);
-        initial_sensor_state.battery_present = battery_present;
-        if battery_present {
-            initial_sensor_state.battery_mv = power.get_battery_voltage().await.ok();
-        }
-        initial_sensor_state.vbus_mv = power.get_vbus_voltage().await.ok();
-        initial_sensor_state.vsys_mv = power.get_system_voltage().await.ok();
-    }
-
     if reset_radios(i2c.clone()).await.is_err() {
         error!("[TCA9554] unavailable; the GNSS and LoRa resets and the RF switch are not driven");
     }

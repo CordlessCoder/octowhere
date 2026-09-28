@@ -16,9 +16,11 @@ initialization or peripheral mappings.
   it.
 - `src/peripherals/` owns the I2C devices: touch, power, RTC, magnetometer, and the shared-bus
   helper. The IMU comes from `ph-qmi8658` rather than a local module.
-- `crates/octowhere-ui/` is everything between the sensors and the pixels, with no board
-  dependency, so it also builds for the host. `src/ui/` there owns dirty tracking, geometry,
-  gestures and paging, IMU unit conversion, the compass maths, the clock and compass screens with
+- `crates/octowhere-motion/` owns compass calibration, sensor fusion, and IMU unit conversion.
+  It has no board or renderer dependency and builds for the host.
+- `crates/octowhere-ui/` owns screen state, drawing and touch handling. It has no board dependency,
+  so it also builds for the host. `src/ui/` there owns dirty tracking, geometry,
+  gestures and paging, the clock and compass screens with
   the icon and cell reveal they share, the settings panel (`panel`, the grid; `sheet`, its
   travel over the faces; `second`, the screens it opens; `picker`, the zone picker; `text`,
   placing text by its ink), `startup`, the self-test, identity, logo card and fault screen that
@@ -27,7 +29,8 @@ initialization or peripheral mappings.
   face the screen rests on, `stage`, which holds the screen state and turns touch and readings into redraws and settings to store, and `script`, which steps a stage on a simulated clock for
   tests and scenes. `src/chrome.rs` is the font and draw-target layer, and `src/framebuffer.rs`
   holds the pixels. The firmware re-exports
-  its `chrome`, `framebuffer` and `ui` modules, so `octowhere::ui::…` paths still resolve.
+  its `chrome`, `framebuffer`, `motion` and `ui` modules. The UI keeps re-exporting the motion
+  modules under `ui::` for existing screen and test paths.
 - `src/main.rs` holds both cores, the bring-up of the parts behind the self-test, the sensor
   and motion tasks, and the frame loop, which feeds the stage and flushes what it draws.
 - `src/board.rs` holds display geometry, the TCA9554 line indices, and the I2C addresses that
@@ -107,6 +110,10 @@ cargo +stable clippy --manifest-path host-tests/Cargo.toml \
 cargo +stable test --manifest-path crates/octowhere-ui/Cargo.toml \
   --target x86_64-unknown-linux-gnu --locked
 cargo +stable clippy --manifest-path crates/octowhere-ui/Cargo.toml \
+  --target x86_64-unknown-linux-gnu --locked --all-targets -- -D warnings
+cargo +stable test --manifest-path crates/octowhere-motion/Cargo.toml \
+  --target x86_64-unknown-linux-gnu --locked
+cargo +stable clippy --manifest-path crates/octowhere-motion/Cargo.toml \
   --target x86_64-unknown-linux-gnu --locked --all-targets -- -D warnings
 cargo +stable test --manifest-path crates/tz/Cargo.toml --target x86_64-unknown-linux-gnu
 cargo +stable clippy --manifest-path crates/tz/Cargo.toml \
@@ -398,9 +405,8 @@ All default off. None belongs in normal firmware behavior.
 
 The active UI uses the compile-time fontdue renderer in
 [`crates/octowhere-ui/src/chrome.rs`](crates/octowhere-ui/src/chrome.rs), with the Marathon Shapiro
-and PPFraktion font data under `assets/`. `embedded-layout` supplies the current
-text alignment helpers. The legacy u8g2 conversion files under `assets/` are not part of the active
-renderer.
+and PPFraktion font data under `assets/`. `embedded-layout` supplies the current text alignment
+helpers.
 
 ## Design language
 
@@ -449,8 +455,9 @@ pin, and the firmware reaches them as `octowhere::fontdue`. `tca9554` is forked 
 atomic register masks with a mutex-guarded cache and a `RawMutex` type parameter, and is a patch
 in the root manifest. Dropping either will not compile.
 
-`octowhere-ui`, `octowhere-tz`, `lc76g`, `sx127x-lora` and `sx127x-common` are local path
-crates. `octowhere-tz` lives in `crates/tz`, and the firmware reaches it as `octowhere::tz`.
+`octowhere-ui`, `octowhere-tz`, `octowhere-motion`, `lc76g`, `sx127x-lora` and `sx127x-common`
+are local path crates. `octowhere-tz` lives in `crates/tz`, and the firmware reaches it as
+`octowhere::tz`.
 `crates/sx127x-lora` publishes the package name `sx127xlora`, so the manifest key and the directory
 differ. Check [`Cargo.toml`](Cargo.toml) before relying on a fork-only API or changing a dependency.
 

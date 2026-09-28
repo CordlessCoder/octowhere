@@ -332,6 +332,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "octowhere-motion"
+version = "0.1.0"
+dependencies = [
+ "defmt",
+ "libm",
+]
+
+[[package]]
 name = "octowhere-tz"
 version = "0.1.0"
 
@@ -349,6 +357,7 @@ dependencies = [
  "fontdue-macros",
  "heapless",
  "libm",
+ "octowhere-motion",
  "octowhere-tz",
  "png",
 ]

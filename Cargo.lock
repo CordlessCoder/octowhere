@@ -1569,7 +1569,6 @@ dependencies = [
  "embedded-hal 1.0.0",
  "embedded-hal-async",
  "embedded-hal-bus",
- "embedded-io-async 0.7.0",
  "embedded-storage",
  "esp-alloc",
  "esp-backtrace",
@@ -1589,6 +1588,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "octowhere-motion"
+version = "0.1.0"
+dependencies = [
+ "defmt 1.1.1",
+ "libm",
+]
+
+[[package]]
 name = "octowhere-tz"
 version = "0.1.0"
 
@@ -1605,6 +1612,7 @@ dependencies = [
  "fontdue-macros",
  "heapless 0.9.3",
  "libm",
+ "octowhere-motion",
  "octowhere-tz",
 ]
 
@@ -1980,7 +1988,6 @@ name = "sx127xlora"
 version = "0.2.0"
 dependencies = [
  "defmt 1.1.1",
- "embedded-hal-async",
  "maybe-async",
  "sx127x-common",
 ]

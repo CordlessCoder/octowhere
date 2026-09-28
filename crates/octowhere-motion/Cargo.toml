@@ -1,0 +1,15 @@
+[package]
+name = "octowhere-motion"
+version = "0.1.0"
+edition = "2024"
+description = "Compass calibration and sensor fusion for octowhere"
+
+[workspace]
+
+[features]
+default = []
+defmt = ["dep:defmt"]
+
+[dependencies]
+defmt = { version = "1.1.1", optional = true }
+libm = "0.2.16"

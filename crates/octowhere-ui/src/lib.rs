@@ -7,6 +7,7 @@
 extern crate alloc;
 
 pub use fontdue;
+pub use octowhere_motion as motion;
 pub use octowhere_tz as tz;
 
 pub mod board;

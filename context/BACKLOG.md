@@ -5,6 +5,14 @@ until the feature set is complete, because profiling an incomplete firmware pric
 
 ## Next
 
+- Apply rustfmt across the entire repository, including standalone crates and host tools, then keep
+  the formatting check clean.
+- Finish the approved architecture cleanup (owner, 2026-09-28): remove the u8g2-era assets,
+  unused dependencies and helpers, and unused sensor snapshot fields; move motion processing into
+  `octowhere-motion`. Those changes are in the current branch. Then move the generic I²C peripheral
+  drivers in `src/peripherals/` into their own crate. `host-tests` currently imports some of these
+  files by path. Move their tests with them and leave board bring-up and shared-bus ownership in
+  the firmware.
 - Build the 2026-09-26 design, [`design/`](design/README.md), which the owner approved in full
   (`design/DECISIONS.md`). One piece at a time, each compared against the hand-off's renders
   (`tools/design-compare.py`), reviewed by the owner in `ui-sim`, and measured on the board

@@ -1,10 +1,10 @@
 //! Orientation from the gyro, corrected toward gravity and magnetic north: a Mahony
 //! complementary filter.
 //!
-//! Vectors are in the screen's frame, as in [`super::compass`]. The orientation is the rotation
+//! Vectors are in the screen's frame, as in [`crate::compass`]. The orientation is the rotation
 //! from that frame to east, north and up.
 
-use super::compass::{Attitude, Vec3};
+use crate::compass::{Attitude, Vec3};
 
 /// Standard gravity, which a still accelerometer reads.
 const GRAVITY: f32 = 9.81;
@@ -230,7 +230,10 @@ impl Fusion {
             && let Some(level) = normalize(add(field, scale(up, -dot(field, up))))
         {
             let north = unrotate(q, [0.0, 1.0, 0.0]);
-            error = add(error, scale(up, HEADING_GAIN * dot(cross(level, north), up)));
+            error = add(
+                error,
+                scale(up, HEADING_GAIN * dot(cross(level, north), up)),
+            );
         }
         if accel.is_some() {
             self.integral = add(self.integral, scale(error, INTEGRAL_GAIN * dt));
@@ -295,7 +298,11 @@ impl Fusion {
         let top = rotate(q, [0.0, 1.0, 0.0]);
         let heading_deg = (libm::sqrtf(top[0] * top[0] + top[1] * top[1]) > 0.2).then(|| {
             let degrees = libm::atan2f(top[0], top[1]).to_degrees();
-            if degrees < 0.0 { degrees + 360.0 } else { degrees }
+            if degrees < 0.0 {
+                degrees + 360.0
+            } else {
+                degrees
+            }
         });
         Some(Attitude {
             heading_deg,
@@ -332,7 +339,13 @@ mod tests {
     fn it_starts_from_gravity_and_the_field() {
         for start in [0.0, 90.0, 200.0] {
             let mut fusion = Fusion::new();
-            fusion.update([0.0; 3], Some(LEVEL), Some(field_at(start)), Some(field_at(start)), DT);
+            fusion.update(
+                [0.0; 3],
+                Some(LEVEL),
+                Some(field_at(start)),
+                Some(field_at(start)),
+                DT,
+            );
             assert!(close(heading(&fusion), start, 0.01), "{start}");
         }
     }
@@ -340,7 +353,13 @@ mod tests {
     #[test]
     fn the_gyro_turns_the_heading_between_corrections() {
         let mut fusion = Fusion::new();
-        fusion.update([0.0; 3], Some(LEVEL), Some(field_at(0.0)), Some(field_at(0.0)), DT);
+        fusion.update(
+            [0.0; 3],
+            Some(LEVEL),
+            Some(field_at(0.0)),
+            Some(field_at(0.0)),
+            DT,
+        );
         // Turning clockwise seen from above is a negative rate about the screen's z, out of the
         // glass, when the screen faces up.
         let rate = -core::f32::consts::FRAC_PI_2;
@@ -357,7 +376,13 @@ mod tests {
         // The first half second drifts on the unmeasured offset; the heading then settles with a
         // time constant of two seconds.
         for _ in 0..400 {
-            fusion.update(offset, Some(LEVEL), Some(field_at(30.0)), Some(field_at(30.0)), DT);
+            fusion.update(
+                offset,
+                Some(LEVEL),
+                Some(field_at(30.0)),
+                Some(field_at(30.0)),
+                DT,
+            );
         }
         let learned = fusion.gyro_offset();
         for axis in 0..3 {
@@ -374,7 +399,13 @@ mod tests {
         let rate = -0.3;
         for step in 0..100 {
             let heading = (-rate * step as f32 * DT).to_degrees();
-            fusion.update([0.0, 0.0, rate], Some(LEVEL), Some(field_at(heading)), None, DT);
+            fusion.update(
+                [0.0, 0.0, rate],
+                Some(LEVEL),
+                Some(field_at(heading)),
+                None,
+                DT,
+            );
         }
         assert_eq!(fusion.gyro_offset(), [0.0; 3]);
     }
@@ -382,9 +413,21 @@ mod tests {
     #[test]
     fn the_field_pulls_a_wrong_heading_back() {
         let mut fusion = Fusion::new();
-        fusion.update([0.0; 3], Some(LEVEL), Some(field_at(40.0)), Some(field_at(40.0)), DT);
+        fusion.update(
+            [0.0; 3],
+            Some(LEVEL),
+            Some(field_at(40.0)),
+            Some(field_at(40.0)),
+            DT,
+        );
         for _ in 0..500 {
-            fusion.update([0.0; 3], Some(LEVEL), Some(field_at(0.0)), Some(field_at(0.0)), DT);
+            fusion.update(
+                [0.0; 3],
+                Some(LEVEL),
+                Some(field_at(0.0)),
+                Some(field_at(0.0)),
+                DT,
+            );
         }
         assert!(close(heading(&fusion), 0.0, 1.0), "{}", heading(&fusion));
     }
@@ -392,9 +435,21 @@ mod tests {
     #[test]
     fn a_shove_does_not_tilt_it() {
         let mut fusion = Fusion::new();
-        fusion.update([0.0; 3], Some(LEVEL), Some(field_at(0.0)), Some(field_at(0.0)), DT);
+        fusion.update(
+            [0.0; 3],
+            Some(LEVEL),
+            Some(field_at(0.0)),
+            Some(field_at(0.0)),
+            DT,
+        );
         for _ in 0..25 {
-            fusion.update([0.0; 3], Some([6.0, 0.0, GRAVITY]), Some(field_at(0.0)), Some(field_at(0.0)), DT);
+            fusion.update(
+                [0.0; 3],
+                Some([6.0, 0.0, GRAVITY]),
+                Some(field_at(0.0)),
+                Some(field_at(0.0)),
+                DT,
+            );
         }
         let attitude = fusion.attitude().unwrap();
         assert!(attitude.roll_deg.abs() < 0.5, "{attitude:?}");
@@ -403,20 +458,41 @@ mod tests {
     #[test]
     fn the_field_does_not_tilt_it() {
         let mut fusion = Fusion::new();
-        fusion.update([0.0; 3], Some(LEVEL), Some(field_at(0.0)), Some(field_at(0.0)), DT);
+        fusion.update(
+            [0.0; 3],
+            Some(LEVEL),
+            Some(field_at(0.0)),
+            Some(field_at(0.0)),
+            DT,
+        );
         for _ in 0..500 {
             // A field that would read as tilted, with no accelerometer to hold the tilt.
-            fusion.update([0.0; 3], None, Some([10.0, 18.0, -40.0]), Some([10.0, 18.0, -40.0]), DT);
+            fusion.update(
+                [0.0; 3],
+                None,
+                Some([10.0, 18.0, -40.0]),
+                Some([10.0, 18.0, -40.0]),
+                DT,
+            );
         }
         let attitude = fusion.attitude().unwrap();
-        assert!(attitude.pitch_deg.abs() < 0.01 && attitude.roll_deg.abs() < 0.01, "{attitude:?}");
+        assert!(
+            attitude.pitch_deg.abs() < 0.01 && attitude.roll_deg.abs() < 0.01,
+            "{attitude:?}"
+        );
     }
 
     #[test]
     fn tilt_follows_gravity() {
         let (sin, cos) = libm::sincosf(30f32.to_radians());
         let mut fusion = Fusion::new();
-        fusion.update([0.0; 3], Some([0.0, sin * GRAVITY, cos * GRAVITY]), None, None, DT);
+        fusion.update(
+            [0.0; 3],
+            Some([0.0, sin * GRAVITY, cos * GRAVITY]),
+            None,
+            None,
+            DT,
+        );
         assert!((fusion.attitude().unwrap().pitch_deg - 30.0).abs() < 0.01);
     }
 }

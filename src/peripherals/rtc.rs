@@ -9,8 +9,6 @@ const PCF85063A_ADDR: u8 = 0x51;
 
 // Registers
 const REG_CTRL1: u8 = 0x00;
-#[expect(unused)]
-const REG_CTRL2: u8 = 0x01;
 const REG_SECONDS: u8 = 0x04;
 const REG_MINUTES: u8 = 0x05;
 const REG_HOURS: u8 = 0x06;
