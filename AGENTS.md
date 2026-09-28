@@ -237,7 +237,11 @@ and at start-up times the scatter, its arithmetic's primitives and small fills a
 (`scatter-bench`); and `bench/charge-fault-draw`, which replays a demonstrated failure every
 30 s and switches a synthetic 87 % battery's charging every 4 s on the clock face, and logs every
 draw with the start-up frame it drew (`charge-fault-bench`, summarised by
-`tools/charge-fault-summary.py`).
+`tools/charge-fault-summary.py`); and `bench/fill-rect`, which alternates the clock face and the
+compass and logs every draw with the count and time of its solid fills (`fill-rect-bench`,
+`fill-rect-scene` for the draw times alone, `fill-rect-off` with the framebuffer's fill skipped,
+summarised by `tools/fill-rect-summary.py`), and on the host groups every fill that reaches the
+framebuffer by the drawing that asked for it (`tests/fill_sources.rs` in `crates/octowhere-ui`).
 
 ## Concurrency
 
@@ -315,8 +319,10 @@ poisons the thread and a later `get()` panics.
   It keeps only two glyphs' coverage, so it takes text drawn left to right through
   `CoverageTarget::begin_glyph`. `FontdueRenderer::draw_outline_on_baseline` draws text's
   outline from its coverage grown by a radius; no screen uses it yet.
-- `screens::render` clears only the round panel's visible circle. The square's corners are
-  never cleared or seen. The clear also leaves the settled compass's slab and the clock's band
+- `screens::render` clears the round panel's visible circle, in runs of rows that may reach
+  `CLEAR_SLACK` columns past it so that each run is one fill; below `Clip`, one fill a row
+  made most of a partial redraw's calls. The rest of the square's corners are never cleared
+  or seen. The clear also leaves the settled compass's slab and the clock's band
   interior, wherever its page is, because those screens paint them solid.
   `a_frame_replaces_everything_under_it` draws over an old frame to catch a hole left unpainted.
 

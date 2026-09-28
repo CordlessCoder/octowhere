@@ -190,9 +190,13 @@ pub fn clear_to<D: DrawTarget<Color = Color>>(
     clear_visible(target, &bounds, None, color)
 }
 
+/// How many columns past the circle, on each side, a run of rows may clear so that the run is
+/// one fill. It trades a few corner pixels written for most of the calls.
+const CLEAR_SLACK: i32 = 8;
+
 /// Clears the part of `area` on the round panel, leaving `painted`, which the caller covers
 /// itself. The corners outside the panel are never seen, and the clear is bound by memory
-/// bandwidth, so skipping them saves in proportion.
+/// bandwidth, so skipping most of them saves in proportion.
 fn clear_visible<D: DrawTarget<Color = Color>>(
     target: &mut D,
     area: &Rectangle,
@@ -200,31 +204,78 @@ fn clear_visible<D: DrawTarget<Color = Color>>(
     color: Color,
 ) -> Result<(), D::Error> {
     const RADIUS: f32 = board::LCD_WIDTH as f32 / 2.0;
+    let chord = |y: i32| {
+        let dy = y as f32 + 0.5 - RADIUS;
+        let half = libm::sqrtf((RADIUS * RADIUS - dy * dy).max(0.0));
+        (
+            libm::floorf(RADIUS - half) as i32,
+            libm::ceilf(RADIUS + half) as i32,
+        )
+    };
     let Some(bottom_right) = area.bottom_right() else {
         return Ok(());
     };
-    for y in area.top_left.y.max(0)..=bottom_right.y.min(board::LCD_HEIGHT as i32 - 1) {
-        let dy = y as f32 + 0.5 - RADIUS;
-        let half = libm::sqrtf((RADIUS * RADIUS - dy * dy).max(0.0));
-        let row = Rectangle::with_corners(
-            Point::new(libm::floorf(RADIUS - half) as i32, y),
-            Point::new(libm::ceilf(RADIUS + half) as i32 - 1, y),
-        );
-        let row = row.intersection(area);
-        let hole = painted
-            .map(|painted| painted.intersection(&row))
-            .filter(|hole| !hole.is_zero_sized());
-        let Some(hole) = hole else {
-            target.fill_solid(&row, color)?;
-            continue;
-        };
-        let right = hole.top_left.x + hole.size.width as i32;
-        let row_right = row.top_left.x + row.size.width as i32;
-        for (from, to) in [(row.top_left.x, hole.top_left.x), (right, row_right)] {
-            if from < to {
-                let part = Rectangle::new(Point::new(from, y), Size::new((to - from) as u32, 1));
-                target.fill_solid(&part, color)?;
+    let bottom = bottom_right.y.min(board::LCD_HEIGHT as i32 - 1);
+    let mut y = area.top_left.y.max(0);
+    while y <= bottom {
+        // The run spans its widest row; `inner` is its narrowest.
+        let (mut left, mut right) = chord(y);
+        let mut inner = (left, right);
+        let mut end = y + 1;
+        while end <= bottom {
+            let (l, r) = chord(end);
+            let (wide_l, wide_r) = (left.min(l), right.max(r));
+            let (narrow_l, narrow_r) = (inner.0.max(l), inner.1.min(r));
+            if narrow_l - wide_l > CLEAR_SLACK || wide_r - narrow_r > CLEAR_SLACK {
+                break;
             }
+            (left, right, inner) = (wide_l, wide_r, (narrow_l, narrow_r));
+            end += 1;
+        }
+        let run = Rectangle::with_corners(Point::new(left, y), Point::new(right - 1, end - 1))
+            .intersection(area);
+        fill_around(target, &run, painted, color)?;
+        y = end;
+    }
+    Ok(())
+}
+
+/// Fills `area` except where it overlaps `hole`.
+fn fill_around<D: DrawTarget<Color = Color>>(
+    target: &mut D,
+    area: &Rectangle,
+    hole: Option<Rectangle>,
+    color: Color,
+) -> Result<(), D::Error> {
+    let hole = hole
+        .map(|hole| hole.intersection(area))
+        .filter(|hole| !hole.is_zero_sized());
+    let Some(hole) = hole else {
+        return if area.is_zero_sized() {
+            Ok(())
+        } else {
+            target.fill_solid(area, color)
+        };
+    };
+    let (left, top) = (area.top_left.x, area.top_left.y);
+    let (right, bottom) = (left + area.size.width as i32, top + area.size.height as i32);
+    let (hole_left, hole_top) = (hole.top_left.x, hole.top_left.y);
+    let (hole_right, hole_bottom) = (
+        hole_left + hole.size.width as i32,
+        hole_top + hole.size.height as i32,
+    );
+    for (x0, y0, x1, y1) in [
+        (left, top, right, hole_top),
+        (left, hole_top, hole_left, hole_bottom),
+        (hole_right, hole_top, right, hole_bottom),
+        (left, hole_bottom, right, bottom),
+    ] {
+        if x0 < x1 && y0 < y1 {
+            let part = Rectangle::new(
+                Point::new(x0, y0),
+                Size::new((x1 - x0) as u32, (y1 - y0) as u32),
+            );
+            target.fill_solid(&part, color)?;
         }
     }
     Ok(())
