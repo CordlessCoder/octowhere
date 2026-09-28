@@ -884,9 +884,7 @@ async fn sensor_task(task: SensorTask) {
         {
             let time = tz::DateTime::from_unix(seconds.into());
             let as_gnss = mode == rtc_inject::AS_GNSS;
-            if !(2000..=2099).contains(&time.year)
-                || !(mode == rtc_inject::AS_RTC || as_gnss)
-            {
+            if !(2000..=2099).contains(&time.year) || !(mode == rtc_inject::AS_RTC || as_gnss) {
                 warn!("[RTC] injection refused: {} mode={}", seconds, mode);
             } else {
                 let rtc_time = RtcDateTime::with_weekday(
