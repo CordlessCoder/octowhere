@@ -36,6 +36,8 @@
   ALP alone does not cause it; handling or a discharge through the antenna may. ALP off with
   handling is not yet tested. Long pauses in reading are not the cause: a backlog of 5 KB after
   16 s unread drained without error. `bench/gnss-nack` has the runs (2026-09-28).
+- A pulse on `GPS_RST` clears the LC76G's time: its clock restarts at 23:59:42 on 1980-01-05, and it asks for time and position (`$PAIR010,1` and `,2`). The firmware therefore resets it at start-up only when it does not answer, and sends the RTC's time (`$PAIR590`) after a reset or when the ESP32 reports a power-on, which the reset button and a debugger reset also give. Without the pulse, the module keeps its time across an ESP32 reset. With a fix, the firmware copies the module's navigation data to its flash (`$PAIR511`) and again every 30 minutes (2026-09-28).
+- The board's LC76G, queried at start-up (`bench/gnss-nack`, `gnss-query`), reports: fix interval 1000 ms, minimum SNR 9 dB-Hz, static navigation threshold 0.0 (off), elevation mask 5°, navigation mode 0 (Normal), EPOC on for GPS with orbits predicted for 11 GPS satellites that survive a reset, DGPS, RTCM output, debug log, RLM, GLP, periodic mode and LOCUS off. FLP's query fails. `$PAIR158,1` (BDS B1C) is accepted, though Quectel lists B1C only for the PA and PB variants with GPS and BDS alone, and this is `LC76GABNR12A05S`.
 - Queried at start-up, the board's LC76G refuses EASY (`$PAIR491`) as unsupported, has EPOC on
   for GPS only (`$PAIR508` gives `1,1`), active interference cancellation on, SBAS off (the firmware now turns it on) and ALP
   on, with GPS, GLONASS, Galileo, BDS and QZSS searched.

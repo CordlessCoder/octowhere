@@ -1381,6 +1381,34 @@ where
             .await
     }
 
+    /// Gives the receiver the current UTC time, which shortens the first fix after it has lost its
+    /// own. Quectel asks for it within 3 s of the true time, and for it again after every
+    /// restart of the receiver.
+    pub async fn set_reference_time(
+        &mut self,
+        time: &GnssDateTime,
+    ) -> Result<(), GnssError<I::Error>> {
+        let mut builder = PairCommandBuilder::new(590).map_err(GnssError::PairCommand)?;
+        for field in [
+            u32::from(time.year),
+            u32::from(time.month),
+            u32::from(time.day),
+            u32::from(time.hours),
+            u32::from(time.minutes),
+            u32::from(time.seconds),
+        ] {
+            builder.field_u32(field).map_err(GnssError::PairCommand)?;
+        }
+        self.send_pair_builder(builder).await
+    }
+
+    /// Saves the receiver's navigation data from its RTC RAM to its flash, so it survives a loss
+    /// of power. Above 1 Hz the receiver must be stopped first; at 1 Hz and below it need not.
+    pub async fn save_navigation_data(&mut self) -> Result<(), GnssError<I::Error>> {
+        self.send_pair_builder(PairCommandBuilder::new(511).map_err(GnssError::PairCommand)?)
+            .await
+    }
+
     /// Enables or disables searching for SBAS satellites, which the receiver does not support in
     /// the Fitness and Swimming navigation modes.
     pub async fn set_sbas(&mut self, enabled: bool) -> Result<(), GnssError<I::Error>> {

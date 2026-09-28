@@ -45,8 +45,8 @@ use esp_hal::{
 };
 use esp_println as _;
 use lc76g::{
-    GnssError, GnssOperation, GnssState, Lc76g, LowPowerMode, NmeaOutputRate, NmeaParser,
-    NmeaSentence, NmeaUpdate, PairCommandBuilder,
+    GnssDateTime, GnssError, GnssOperation, GnssState, Lc76g, LowPowerMode, NmeaOutputRate,
+    NmeaParser, NmeaSentence, NmeaUpdate, PairCommandBuilder,
 };
 use octowhere::{
     board,
@@ -753,6 +753,8 @@ async fn sensor_task(task: SensorTask) {
     } = task;
     // Whether GNSS has set the clock since the firmware started.
     let mut clock_set = false;
+    // When the module last copied its navigation data to its flash.
+    let mut navigation_saved: Option<Instant> = None;
     // Once a time is injected, GNSS no longer sets the clock, so a fix cannot undo it.
     #[cfg(feature = "rtc-inject")]
     let mut injected = false;
@@ -974,6 +976,13 @@ async fn sensor_task(task: SensorTask) {
             stopped: rtc.as_ref().is_some_and(|rtc| rtc.oscillator_stopped()),
         };
 
+        if state.gnss.fix.is_some()
+            && navigation_saved.is_none_or(|at| at.elapsed() >= NAVIGATION_SAVE_INTERVAL)
+        {
+            let saved = gnss.save_navigation_data().await;
+            info!("[GNSS] navigation data saved={}", saved.is_ok());
+            navigation_saved = Some(Instant::now());
+        }
         if let Some(fix) = state.gnss.fix {
             state.position = Some((fix.latitude.get(), fix.longitude.get()));
         }
@@ -1196,7 +1205,13 @@ const CLOCK_DEADLINE: Duration = Duration::from_millis(200);
 const TOUCH_DEADLINE: Duration = Duration::from_millis(600);
 const MOTION_DEADLINE: Duration = Duration::from_millis(500);
 const MAGNET_DEADLINE: Duration = Duration::from_millis(500);
-const GNSS_DEADLINE: Duration = Duration::from_millis(1500);
+/// With a fix, how often the GNSS module copies its navigation data to its flash, so a loss of
+/// power keeps the satellites' orbits and the last position. Its RTC RAM keeps them otherwise.
+const NAVIGATION_SAVE_INTERVAL: Duration = Duration::from_secs(30 * 60);
+/// How long the GNSS gets to answer before it is reset, and in all, a reset and its settle
+/// included.
+const GNSS_ANSWER: Duration = Duration::from_millis(1500);
+const GNSS_DEADLINE: Duration = Duration::from_millis(4500);
 
 /// Each part's outcome as boot decides it, for the self-test.
 static BOOT_REPORTS: Channel<CriticalSectionRawMutex, Report, 6> = Channel::new();
@@ -1366,7 +1381,7 @@ async fn bring_up(
     .await;
     let mut power = answered.then_some(power);
     let mut initial_sensor_state = SensorSnapshot::default();
-    if reset_radios(i2c.clone()).await.is_err() {
+    if reset_lora(i2c.clone()).await.is_err() {
         error!("[TCA9554] unavailable; the GNSS and LoRa resets and the RF switch are not driven");
     }
 
@@ -1484,12 +1499,57 @@ async fn bring_up(
 
     let mut gnss = Lc76g::new(i2c.clone(), embassy_time::Delay);
     let mut nmea_parser = NmeaParser::new();
-    let gnss_ok = probe(
-        Part::Gnss,
-        GNSS_DEADLINE,
-        configure_gnss(&mut gnss, &mut nmea_parser),
-    )
+    // Resetting the module clears its time, so it is reset only when it does not answer: a module
+    // left stuck by the firmware before this one needs it.
+    let mut gnss_reset = false;
+    let gnss_ok = probe(Part::Gnss, GNSS_DEADLINE, async {
+        let answered = with_timeout(GNSS_ANSWER, configure_gnss(&mut gnss, &mut nmea_parser)).await;
+        if matches!(answered, Ok(Ok(()))) {
+            return Ok(());
+        }
+        warn!("[GNSS] no answer; resetting it");
+        gnss_reset = true;
+        pulse_gnss_reset(&mut i2c.clone())
+            .await
+            .map_err(|()| Outcome::NoReply)?;
+        Timer::after(Duration::from_secs(1)).await;
+        configure_gnss(&mut gnss, &mut nmea_parser).await
+    })
     .await;
+    // The module starts without a time after a reset or a power-on. A reset of the chip alone,
+    // by the button or a debugger, reads as a power-on too, since both drive `CHIP_PU`.
+    let powered_on = matches!(
+        esp_hal::system::reset_reason(),
+        Some(esp_hal::rtc_cntl::SocResetReason::ChipPowerOn)
+    );
+    if gnss_ok && rtc_ok && (gnss_reset || powered_on) {
+        match rtc.get_time().await {
+            Ok(time) if !rtc.oscillator_stopped() => {
+                let reference = GnssDateTime {
+                    year: 2000 + u16::from(time.year),
+                    month: time.month,
+                    day: time.day,
+                    weekday: time.weekday,
+                    hours: time.hours,
+                    minutes: time.minutes,
+                    seconds: time.seconds,
+                    milliseconds: 0,
+                };
+                let sent = gnss.set_reference_time(&reference).await;
+                info!(
+                    "[GNSS] reference time 20{:02}-{:02}-{:02} {:02}:{:02}:{:02} sent={}",
+                    time.year,
+                    time.month,
+                    time.day,
+                    time.hours,
+                    time.minutes,
+                    time.seconds,
+                    sent.is_ok()
+                );
+            }
+            _ => info!("[GNSS] no reference time: the RTC has none"),
+        }
+    }
     info!(
         "[BOOT] answered: power={} clock={} touch={} motion={} magnet={} gnss={}",
         power.is_some(),
@@ -1568,12 +1628,9 @@ async fn bring_up(
     );
 }
 
-/// Holds the GNSS module and the radio in reset, then releases them with the radio listening.
-///
-/// The GNSS `RESET_N` is pulled up inside the module to 1.8 V and must be driven open-drain, so
-/// its output bit stays low in every write: it is an output only while held in reset, and it is
-/// released by making it an input again.
-async fn reset_radios(i2c: SharedI2cDevice) -> Result<(), ()> {
+/// Holds the radio in reset, then releases it listening. The GNSS reset is left released, since a
+/// reset clears the module's time; `pulse_gnss_reset` resets it when it has to be.
+async fn reset_lora(i2c: SharedI2cDevice) -> Result<(), ()> {
     let mut exio = Tca9554::new(i2c, tca9554::Address::standard());
     let gps_reset = 1 << board::EXIO_GPS_RESET;
     let lora_reset = 1 << board::EXIO_LORA_RESET;
@@ -1581,11 +1638,12 @@ async fn reset_radios(i2c: SharedI2cDevice) -> Result<(), ()> {
     let lora_tx_switch = 1 << board::EXIO_LORA_TX_SWITCH;
     let fail = |_| ();
     exio.init().await.map_err(fail)?;
-    // Set while every pin is still an input, so no output starts high and then falls.
+    // Set while every pin is still an input, so no output starts high and then falls. The GNSS
+    // reset's bit stays low in every write, for `pulse_gnss_reset`.
     exio.write_output(!(gps_reset | lora_reset | lora_tx_switch))
         .await
         .map_err(fail)?;
-    let output_mask = gps_reset | lora_reset | lora_rx_switch | lora_tx_switch;
+    let output_mask = lora_reset | lora_rx_switch | lora_tx_switch;
     exio.write_direction(!output_mask).await.map_err(fail)?;
     info!("[TCA9554] OK");
     Timer::after(Duration::from_millis(10)).await;
@@ -1596,16 +1654,38 @@ async fn reset_radios(i2c: SharedI2cDevice) -> Result<(), ()> {
     exio.write_output(!(gps_reset | lora_reset | lora_tx_switch))
         .await
         .map_err(fail)?;
-    exio.write_direction(!(lora_reset | lora_rx_switch | lora_tx_switch))
-        .await
-        .map_err(fail)?;
     Timer::after(Duration::from_millis(10)).await;
-    exio.write_output(!(gps_reset | lora_reset | lora_tx_switch))
-        .await
-        .map_err(fail)?;
     let direction = exio.read_direction().await.map_err(fail)?;
     debug!("[TCA9554] direction={=u8:#04x}", direction);
     Ok(())
+}
+
+/// Holds the GNSS module in reset for 10 ms, which also clears its time.
+///
+/// The module's `RESET_N` is pulled up inside it to 1.8 V and must be driven open-drain, so the
+/// pin's output bit stays low and the pin is an output only while it holds the reset.
+async fn pulse_gnss_reset(i2c: &mut SharedI2cDevice) -> Result<(), ()> {
+    const OUTPUT: u8 = 0x01;
+    const DIRECTION: u8 = 0x03;
+    let reset = 1 << board::EXIO_GPS_RESET;
+    let mut direction = [0];
+    i2c.write_read(board::TCA9554_I2C_ADDR, &[DIRECTION], &mut direction)
+        .await
+        .map_err(|_| ())?;
+    let mut output = [0];
+    i2c.write_read(board::TCA9554_I2C_ADDR, &[OUTPUT], &mut output)
+        .await
+        .map_err(|_| ())?;
+    i2c.write(board::TCA9554_I2C_ADDR, &[OUTPUT, output[0] & !reset])
+        .await
+        .map_err(|_| ())?;
+    i2c.write(board::TCA9554_I2C_ADDR, &[DIRECTION, direction[0] & !reset])
+        .await
+        .map_err(|_| ())?;
+    Timer::after(Duration::from_millis(10)).await;
+    i2c.write(board::TCA9554_I2C_ADDR, &[DIRECTION, direction[0] | reset])
+        .await
+        .map_err(|_| ())
 }
 
 /// Sends the receiver its configuration and reads what it has sent. It answers if any command
