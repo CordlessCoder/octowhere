@@ -116,7 +116,7 @@ the panel. Touch targets are no smaller than about 10 mm.
   drag switches the whole page. Page 1 is ZONE, BRIGHTNESS, TIMEOUT, ALWAYS ON; page 2 is
   COMPASS, GNSS, BATTERY, DEVICE. ZONE opens the picker, BRIGHTNESS the editor and TIMEOUT the
   timeout screen. ALWAYS ON opens a screen on the timeout screen's stepper, with OFF, DIM and
-  each level from 5 % to 50 %, a choice every 8 px of drag counted from where the drag starts;
+  each level from 5 % to 50 %, a choice every 20 px of drag counted from where the drag starts;
   the cell reads `OFF`, or `ON` with `DIM` or the level. COMPASS restarts calibration and closes to the compass. GNSS, BATTERY
   and DEVICE open the device page, which ends with the attribution, `CLEAR SETTINGS` and
   `REPLAY START-UP`, which opens a chooser: the identity and logo card again, or a marked

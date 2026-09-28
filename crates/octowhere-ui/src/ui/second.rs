@@ -777,8 +777,8 @@ impl StepperKind {
 
 /// Travel per step of the choices, as the zone picker's.
 const CHOICE_TRAVEL: f32 = 40.0;
-/// Travel per step of the always-on levels, finer so one drag across the field covers them.
-const LEVEL_TRAVEL: f32 = 8.0;
+/// Travel per step of the always-on levels, finer than the other choices' for their number.
+const LEVEL_TRAVEL: f32 = 20.0;
 const CHOICE_MIDDLE: f32 = 242.0;
 const CHOICE_NEIGHBOURS: [f32; 2] = [166.0, 307.0];
 

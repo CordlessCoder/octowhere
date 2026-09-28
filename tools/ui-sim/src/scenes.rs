@@ -616,7 +616,7 @@ fn tour(driver: &mut Driver) {
     driver.stroke(&[
         Point::new(233, 300),
         Point::new(233, 280),
-        Point::new(233, 272),
+        Point::new(233, 255),
     ]);
     driver.wait(ms(1_000));
     slow_tap(driver, 233, 258);

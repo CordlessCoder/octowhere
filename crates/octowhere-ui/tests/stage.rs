@@ -2164,23 +2164,23 @@ fn choose_always_on(driver: &mut Driver, travels: &[i32]) -> Vec<Update> {
 #[test]
 fn always_on_steps_from_off_through_the_dim_level_to_each_percent() {
     let mut driver = open_panel(Screen::Clock);
-    let updates = choose_always_on(&mut driver, &[8]);
+    let updates = choose_always_on(&mut driver, &[25]);
     assert_eq!(stored(&updates), Some(Store::AlwaysOn(AlwaysOn::Dim)));
     assert_eq!(driver.stage.peripherals().always_on, AlwaysOn::Dim);
     assert!(driver.stage.page().is_none());
     // Twenty steps on from the dim level.
-    let updates = choose_always_on(&mut driver, &[160]);
+    let updates = choose_always_on(&mut driver, &[200, 200]);
     assert_eq!(
         stored(&updates),
         Some(Store::AlwaysOn(AlwaysOn::Percent(24)))
     );
     // The far end holds at the last level.
-    let updates = choose_always_on(&mut driver, &[200, 200]);
+    let updates = choose_always_on(&mut driver, &[200, 200, 200]);
     assert_eq!(
         stored(&updates),
         Some(Store::AlwaysOn(AlwaysOn::Percent(50)))
     );
-    let updates = choose_always_on(&mut driver, &[-200, -200]);
+    let updates = choose_always_on(&mut driver, &[-200, -200, -200, -200, -200]);
     assert_eq!(stored(&updates), Some(Store::AlwaysOn(AlwaysOn::Off)));
 }
 
@@ -2221,7 +2221,7 @@ fn a_stored_always_on_byte_reads_back() {
 #[test]
 fn clearing_puts_the_timeout_and_always_on_back() {
     let mut driver = open_panel(Screen::Clock);
-    choose_always_on(&mut driver, &[8]);
+    choose_always_on(&mut driver, &[25]);
     assert!(driver.stage.peripherals().always_on.is_on());
     tap_cell(&mut driver, panel::Cell::Timeout);
     driver.swipe(Point::new(233, 300), Point::new(233, 250), 300_000);
