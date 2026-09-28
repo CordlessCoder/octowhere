@@ -173,7 +173,7 @@ K1 (`design/renderer/concept/family-pass-v1-out/clock-K1-*`) on the round 4 spec
   or back up over them, in 450 ms, or 180 ms below 35 %. The loop runs while the face shows,
   dimmed or not, and redraws the fill alone. NO DATA holds the bands still, as the update's
   renders do.
-- **The rail** opens from its middle outward with the zone's line in the entry, and closes the same way as the page leaves (owner). Its cells are `GRAY` dimmed to 29 %.
+- **The rail** opens from its middle outward, starting with the zone's line in the entry but taking 400 ms, a cell each side at a steady rate, and closes with the zone's line as the page leaves (owner). Its cells are `GRAY` dimmed to 29 %.
 - **The entry** follows the round 4 spec's windows and curves: the icon's rows over 150 ms by
   out-cubic, where the old face landed a row every 30 ms, so it shows no row on its first frame.
 - **Redraws.** Every part redraws in its own region, as before. A token line that changes also

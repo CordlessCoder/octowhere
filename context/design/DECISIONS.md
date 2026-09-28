@@ -37,3 +37,6 @@ Recorded 2026-09-26. These override the hand-off where they differ.
    the dial lies in the screen's plane and stops matching the ground. The state line reads
    `HOLD LEVEL` and the icon is a letter L; the thresholds, hysteresis and 750 ms grace are
    unchanged. This overrides the round 3 spec's TOP EDGE UP and the hand-off's state wording.
+10. **The hour rail opens over 400 ms** (owner, 2026-09-28), at a steady rate from 240 ms after
+    the page settles, rather than with the zone line's 160 ms ease. Eased that fast, most of it
+    opened in the first few frames of a swipe. It still closes with the zone line.

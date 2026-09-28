@@ -146,6 +146,8 @@ pub struct Accents {
     pub label: u8,
     pub plate: u8,
     pub zone: u8,
+    /// The hour rail, which opens with the zone line but for longer.
+    pub rail: u8,
     pub mark: u8,
     pub scatter: u8,
     pub breath: u8,
@@ -162,6 +164,7 @@ impl Accents {
         label: u8::MAX,
         plate: u8::MAX,
         zone: u8::MAX,
+        rail: u8::MAX,
         mark: u8::MAX,
         scatter: u8::MAX,
         breath: u8::MAX,
@@ -176,6 +179,7 @@ impl Accents {
         label: 0,
         plate: 0,
         zone: 0,
+        rail: 0,
         mark: 0,
         scatter: 0,
         breath: u8::MAX,
@@ -194,6 +198,7 @@ impl Accents {
             label: self.label.min(other.label),
             plate: self.plate.min(other.plate),
             zone: self.zone.min(other.zone),
+            rail: self.rail.min(other.rail),
             mark: self.mark.min(other.mark),
             scatter: self.scatter.min(other.scatter),
             breath: self.breath.min(other.breath),
@@ -717,10 +722,10 @@ impl Parts {
             band_lines,
             column,
             lines,
-            rail: (mode != Mode::NoData && accents.zone > 0).then(|| {
+            rail: (mode != Mode::NoData && accents.rail > 0).then(|| {
                 (
                     local.map(|local| local.time.hour),
-                    libm::ceilf(12.0 * out_cubic(accents.zone)).min(12.0) as u8,
+                    libm::ceilf(12.0 * unit(accents.rail)).min(12.0) as u8,
                 )
             }),
             scatter: (mode != Mode::NoData)
