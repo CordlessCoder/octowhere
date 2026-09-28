@@ -21,12 +21,12 @@ use super::{
     clock::ClockView,
     scatter::{Field, Look, Scatter, Shown},
     screens,
-    startup::{self, CARD_MARK, CARD_SCALE, CENTER, Context, Mark, PAGE_RADIUS},
+    startup::{self, CARD_MARK, CARD_SCALE, CENTER, Context, Mark},
     text,
 };
 use crate::chrome::{
     self, Color, CoverageTarget, Dirty, FRAKTION, FontdueRenderer, INTERFERENCE_BOLD, OnBackground,
-    Round, SHAPIRO, Window,
+    SHAPIRO, Window,
 };
 
 /// The identity's frames, then the card's.
@@ -687,18 +687,8 @@ pub fn draw_card<D: CoverageTarget<Color = Color>>(
         }
         3..9 => CARD_MARK.draw(true, true, chrome::BLACK, target)?,
         9..13 => CARD_MARK.draw(true, true, chrome::LIME, target)?,
-        13..17 => scaled.draw(
-            true,
-            true,
-            chrome::LIME,
-            &mut Round::new(&mut *target, CENTER, PAGE_RADIUS),
-        )?,
-        17 => scaled.draw(
-            true,
-            true,
-            chrome::BLACK,
-            &mut Round::new(&mut *target, CENTER, PAGE_RADIUS),
-        )?,
+        13..17 => scaled.draw(true, true, chrome::LIME, target)?,
+        17 => scaled.draw(true, true, chrome::BLACK, target)?,
         _ => {}
     }
     Ok(())

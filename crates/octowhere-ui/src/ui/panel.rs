@@ -17,8 +17,8 @@ use super::{
     text::{self, style},
 };
 use crate::chrome::{
-    self, Color, CoverageTarget, FRAKTION, FRAKTION_BOLD, FontdueRenderer, OnBackground, Round,
-    SHAPIRO, Window,
+    self, Color, CoverageTarget, FRAKTION, FRAKTION_BOLD, FontdueRenderer, OnBackground, SHAPIRO,
+    Window,
 };
 
 /// Distance between the two complete pages during a sideways drag.
@@ -28,7 +28,6 @@ const RULE_TOP: [i32; 4] = [83, 160, 227, 294];
 const RULE_LEFT: [i32; 4] = [83, 57, 57, 83];
 const RULE_RIGHT: [i32; 4] = [383, 409, 409, 383];
 const CENTER: Point = Point::new(233, 233);
-const CLIP_RADIUS: f32 = 232.0;
 const TITLE: &str = "SETTINGS";
 const TITLE_TOP: i32 = 29;
 const MARKERS_TOP: i32 = 387;
@@ -534,9 +533,8 @@ pub fn draw<D: CoverageTarget<Color = Color>>(
 ) -> Result<(), D::Error> {
     draw_scatter(&accents, target)?;
     {
-        let grid = &mut Round::new(&mut *target, CENTER, CLIP_RADIUS);
         let rows = &mut Window::new(
-            grid,
+            &mut *target,
             Point::zero(),
             Rectangle::new(Point::new(0, 83), Size::new(466, 288)),
         );

@@ -733,7 +733,6 @@ pub(super) fn utc_digits(clock: &ClockView) -> Option<[u8; 4]> {
 
 // The mark and the logo card.
 
-pub(super) const PAGE_RADIUS: f32 = 232.0;
 /// The mark on the card: 42 px modules, the icons' frame rule's 11 px strokes, top-left at 128.
 pub(super) const CARD_MARK: Mark = Mark {
     origin: (128.0, 128.0),
