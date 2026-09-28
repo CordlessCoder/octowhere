@@ -1075,22 +1075,6 @@ struct Timings {
     frametime: Duration,
 }
 
-fn draw_if_in_bounds<C, D, T>(target: &mut D, dirty: &mut Dirty, thing: T) -> Result<(), D::Error>
-where
-    T: Drawable<Color = C>,
-    T: Dimensions,
-    D: DrawTarget<Color = C>,
-    D::Error: core::fmt::Debug,
-{
-    let bbox = thing.bounding_box();
-    if bbox.intersection(&target.bounding_box()).is_zero_sized() {
-        return Ok(());
-    }
-    thing.draw(target)?;
-    dirty.add(bbox);
-    Ok(())
-}
-
 /// Marks the one-pixel border of `region`.
 #[cfg(feature = "damage-debug")]
 fn add_outline(damage: &mut Dirty, region: embedded_graphics::primitives::Rectangle) {
