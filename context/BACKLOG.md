@@ -133,6 +133,23 @@ until the feature set is complete, because profiling an incomplete firmware pric
   Mono weights already are, instead of the hand-made ASCII subset under `assets/`. Regular moved
   for the device page's `©`. Subsetting Bold to the glyphs in use would also recover some of the 54 KB it
   added.
+- Shorten the GNSS time to first fix (owner, 2026-09-28). The command details are in
+  `docs/datasheets/LC76G_AGNSS_Application_Note_V1.1.pdf`; none of these is sent today.
+  1. Send the RTC's time as reference time, `$PAIR590`, at every GNSS start. The note asks for
+     UTC within 3 s, and it must be resent after each module restart.
+  2. Keep the last fix in the settings store and send it as reference position, `$PAIR600`,
+     at every start. It need only be within 30 km. A unit with no fix of its own could take a
+     peer's position from the mesh instead (`LORA-PROTOCOL.md`), and a peer's time if its RTC
+     has stopped.
+  3. Send `$PAIR511` now and then after a fix, so the ephemeris survives the reset line the
+     firmware pulses at every boot. Whether that pulse clears the module's RAM is not known.
+  4. Consider EPOC (`$PAIR498`, `$PAIR496`), which predicts orbits for GPS with Galileo or
+     BDS. EASY, on by default, predicts GPS alone. Both predict only from ephemeris the module
+     has received itself.
+
+  Sharing orbit data between units does not work: the module can output its ephemeris as
+  RTCM 3 (`$PAIR436`), but it takes orbit data only as Quectel's EPO (`$PAIR471`), which comes
+  from Quectel's server and has no documented conversion from ephemeris.
 
 ## Deferred, with detail elsewhere
 
