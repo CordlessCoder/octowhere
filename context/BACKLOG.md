@@ -139,22 +139,34 @@ until the feature set is complete, because profiling an incomplete firmware pric
   its own future and join them. The I²C transactions still take turns on the shared bus mutex;
   the waits between them overlap. Each part keeps its own deadline.
 - Shorten the GNSS time to first fix (owner, 2026-09-28). The command details are in
-  `docs/datasheets/LC76G_AGNSS_Application_Note_V1.1.pdf`; none of these is sent today.
-  1. Send the RTC's time as reference time, `$PAIR590`, at every GNSS start. The note asks for
-     UTC within 3 s, and it must be resent after each module restart.
-  2. Keep the last fix in the settings store and send it as reference position, `$PAIR600`,
-     at every start. It need only be within 30 km. A unit with no fix of its own could take a
+  `docs/datasheets/LC76G_AGNSS_Application_Note_V1.1.pdf`. The firmware already sends the RTC's
+  time after a reset or power-on, resets the module only when it does not answer, and saves its
+  navigation data with a fix; the defaults it reports are in `docs/hardware-notes.md`. Left:
+  1. Keep the last fix in the settings store and send it as reference position, `$PAIR600`,
+     at start-up. It need only be within 30 km. A unit with no fix of its own could take a
      peer's position from the mesh instead (`LORA-PROTOCOL.md`), and a peer's time if its RTC
      has stopped.
-  3. Send `$PAIR511` now and then after a fix, so the ephemeris survives the reset line the
-     firmware pulses at every boot. Whether that pulse clears the module's RAM is not known.
-  4. Widen EPOC's prediction to GPS with Galileo or BDS (`$PAIR498`). The board's module has
-     EPOC on for GPS alone and refuses EASY's `$PAIR491` as unsupported (`bench/gnss-nack`,
-     `gnss-query`). EPOC predicts only from ephemeris the module has received itself.
+  2. Widen EPOC's prediction to GPS with Galileo or BDS (`$PAIR498`). It predicts GPS alone
+     now, and only from ephemeris the module has received itself. EASY is unsupported here.
+  3. Set a static navigation threshold (`$PAIR070`, off by default), so a device standing still
+     does not report a drifting position to the mesh.
+  4. Tune the elevation mask (`$PAIR072`, 5°) and minimum SNR (`$PAIR058`, 9 dB-Hz) against
+     field logs, trading multipath error for availability.
+  5. BDS B1C (`$PAIR158`): the module accepts the command, but Quectel lists it only for the PA
+     and PB variants with GPS and BDS alone. Enable it only if a test under the sky shows B1C
+     tracked.
+  6. Measure the time to first fix under the sky before and after each of these, cold and warm.
 
   Sharing orbit data between units does not work: the module can output its ephemeris as
   RTCM 3 (`$PAIR436`), but it takes orbit data only as Quectel's EPO (`$PAIR471`), which comes
   from Quectel's server and has no documented conversion from ephemeris.
+- Recover a stuck GNSS module while running (2026-09-28). Moving the IPEX connector can leave
+  the LC76G refusing reads at `0x54`, or answering with no NMEA, until it is reset; the firmware
+  resets it only at start-up. `bench/gnss-nack` has a recovery to port: on 8 failed reads in a
+  row, or 10 s of reads with nothing in them, pulse the reset open-drain, wait 1 s and configure
+  it again, at most once a minute, and show GNSS as faulted if that keeps failing. A reset
+  clears the module's time, so send the RTC's time after it. Strain relief on the IPEX cable
+  addresses the trigger itself.
 
 ## Deferred, with detail elsewhere
 
