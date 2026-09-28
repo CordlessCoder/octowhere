@@ -1381,6 +1381,22 @@ where
             .await
     }
 
+    /// Enables or disables searching for SBAS satellites, which the receiver does not support in
+    /// the Fitness and Swimming navigation modes.
+    pub async fn set_sbas(&mut self, enabled: bool) -> Result<(), GnssError<I::Error>> {
+        let mut builder = PairCommandBuilder::new(410).map_err(GnssError::PairCommand)?;
+        builder
+            .field_u32(u32::from(enabled))
+            .map_err(GnssError::PairCommand)?;
+        self.send_pair_builder(builder).await
+    }
+
+    /// Requests whether the receiver searches for SBAS satellites.
+    pub async fn query_sbas(&mut self) -> Result<(), GnssError<I::Error>> {
+        self.send_pair_builder(PairCommandBuilder::new(411).map_err(GnssError::PairCommand)?)
+            .await
+    }
+
     /// Sets the receiver's navigation model.
     pub async fn set_navigation_mode(
         &mut self,

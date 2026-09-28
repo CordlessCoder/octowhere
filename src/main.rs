@@ -1626,6 +1626,18 @@ async fn configure_gnss(
             error
         ),
     }
+    for (command, result) in [
+        (410, gnss.set_sbas(true).await),
+        (411, gnss.query_sbas().await),
+    ] {
+        match result {
+            Ok(()) => answered = true,
+            Err(error) => warn!(
+                "[GNSS] STARTUP PAIR_SEND_RESULT command={} status=error error={}",
+                command, error
+            ),
+        }
+    }
     // GLL and VTG repeat what GGA and RMC carry, and nothing reads them.
     for (sentence, rate) in [
         (NmeaSentence::Gsa, GNSS_SATELLITE_RATE),

@@ -37,7 +37,7 @@
   handling is not yet tested. Long pauses in reading are not the cause: a backlog of 5 KB after
   16 s unread drained without error. `bench/gnss-nack` has the runs (2026-09-28).
 - Queried at start-up, the board's LC76G refuses EASY (`$PAIR491`) as unsupported, has EPOC on
-  for GPS only (`$PAIR508` gives `1,1`), active interference cancellation on, SBAS off and ALP
+  for GPS only (`$PAIR508` gives `1,1`), active interference cancellation on, SBAS off (the firmware now turns it on) and ALP
   on, with GPS, GLONASS, Galileo, BDS and QZSS searched.
 - LoRa link-test builds had accidentally skipped the one-second LC76G startup settle delay. Their first configuration write reached `0x50` about 23 ms after reset release and was NACKed, while the other I²C devices remained responsive. The settle delay now applies to every build; subsequent LoRa transmitter and receiver runs produced NMEA data without GNSS I²C failures.
 - The `lc76g` crate provides a bounded checksummed `PairCommandBuilder` and generic `PairMessage` response events, so commands not yet given a typed convenience method remain configurable without hand-written checksum or buffer code.
