@@ -1626,11 +1626,14 @@ async fn configure_gnss(
             error
         ),
     }
-    for sentence in [NmeaSentence::Gsa, NmeaSentence::Gsv] {
-        match gnss
-            .set_nmea_output_rate(sentence, GNSS_SATELLITE_RATE)
-            .await
-        {
+    // GLL and VTG repeat what GGA and RMC carry, and nothing reads them.
+    for (sentence, rate) in [
+        (NmeaSentence::Gsa, GNSS_SATELLITE_RATE),
+        (NmeaSentence::Gsv, GNSS_SATELLITE_RATE),
+        (NmeaSentence::Gll, NmeaOutputRate::DISABLED),
+        (NmeaSentence::Vtg, NmeaOutputRate::DISABLED),
+    ] {
+        match gnss.set_nmea_output_rate(sentence, rate).await {
             Ok(()) => answered = true,
             Err(error) => warn!(
                 "[GNSS] STARTUP PAIR_SEND_RESULT command=062 status=error error={}",
