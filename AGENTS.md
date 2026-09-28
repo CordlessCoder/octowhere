@@ -403,6 +403,9 @@ All default off. None belongs in normal firmware behavior.
 
 - `damage-debug`, `timing-log` visualize or log dirty regions and frame timings.
 - `gnss-raw-log` dumps raw NMEA; `gnss-full-power` skips the low-power GNSS configuration.
+- `rtc-inject` lets `tools/rtc-inject.py` set the RTC over the USB JTAG with probe-rs, either as
+  though GNSS set it or as the RTC's own unconfirmed time, without a reset. After one, GNSS no
+  longer sets the clock until the firmware restarts.
 - `lora-link-tx` and `lora-link-rx` build the two ends of a link test. They are mutually exclusive
   and `main.rs` refuses both with a `compile_error!`.
 - `fontdue-target-bench` diverts `async_main` into the on-target font benchmark, which never

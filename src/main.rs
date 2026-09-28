@@ -151,6 +151,30 @@ impl LoraPath {
 
 static I2C_BUS: StaticCell<Mutex<NoopRawMutex, I2cBus>> = StaticCell::new();
 static SENSOR_STATE: Signal<CriticalSectionRawMutex, SensorSnapshot> = Signal::new();
+
+/// A time a debugger writes for `sensor_task` to set the RTC to; `tools/rtc-inject.py` does.
+#[cfg(feature = "rtc-inject")]
+mod rtc_inject {
+    use core::sync::atomic::{AtomicU32, Ordering};
+
+    /// UTC seconds since 1970.
+    #[unsafe(no_mangle)]
+    static OCTOWHERE_RTC_INJECT_TIME: AtomicU32 = AtomicU32::new(0);
+    /// 0 when none is pending, [`AS_RTC`] or [`AS_GNSS`]. The debugger writes it after the time.
+    #[unsafe(no_mangle)]
+    static OCTOWHERE_RTC_INJECT_MODE: AtomicU32 = AtomicU32::new(0);
+
+    /// As though the RTC had kept the time: the clock shows it unconfirmed.
+    pub const AS_RTC: u32 = 1;
+    /// As though GNSS had just set it.
+    pub const AS_GNSS: u32 = 2;
+
+    /// Takes a pending time and its mode.
+    pub fn take() -> Option<(u32, u32)> {
+        let mode = OCTOWHERE_RTC_INJECT_MODE.swap(0, Ordering::Acquire);
+        (mode != 0).then(|| (OCTOWHERE_RTC_INJECT_TIME.load(Ordering::Relaxed), mode))
+    }
+}
 static MOTION_STATE: Signal<CriticalSectionRawMutex, Motion> = Signal::new();
 /// Set by the frame loop while the compass screen shows; `motion_task` then samples fast.
 static COMPASS_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -722,6 +746,11 @@ async fn sensor_task(task: SensorTask) {
     } = task;
     // Whether GNSS has set the clock since the firmware started.
     let mut clock_set = false;
+    // Once a time is injected, GNSS no longer sets the clock, so a fix cannot undo it.
+    #[cfg(feature = "rtc-inject")]
+    let mut injected = false;
+    #[cfg(not(feature = "rtc-inject"))]
+    let injected = false;
     #[cfg(feature = "gnss-raw-log")]
     let mut raw_nmea_line = [0; 256];
     #[cfg(feature = "gnss-raw-log")]
@@ -842,9 +871,49 @@ async fn sensor_task(task: SensorTask) {
             Err(GnssError::BufferTooSmall { .. }) => warn!("[GNSS] NMEA_BUFFER_TOO_SMALL"),
             Err(GnssError::PairCommand(_)) => warn!("[GNSS] PAIR_COMMAND_BUILD_FAILED"),
         }
+        #[cfg(feature = "rtc-inject")]
+        if let Some((seconds, mode)) = rtc_inject::take()
+            && let Some(rtc) = &mut rtc
+        {
+            let time = tz::DateTime::from_unix(seconds.into());
+            let as_gnss = mode == rtc_inject::AS_GNSS;
+            if !(2000..=2099).contains(&time.year)
+                || !(mode == rtc_inject::AS_RTC || as_gnss)
+            {
+                warn!("[RTC] injection refused: {} mode={}", seconds, mode);
+            } else {
+                let rtc_time = RtcDateTime::with_weekday(
+                    (time.year % 100) as u8,
+                    time.month,
+                    time.day,
+                    time.weekday(),
+                    time.hour,
+                    time.minute,
+                    time.second,
+                );
+                match rtc.set_time(&rtc_time).await {
+                    Ok(()) => {
+                        clock_set = as_gnss;
+                        injected = true;
+                        info!(
+                            "[RTC] injected {:04}-{:02}-{:02} {:02}:{:02}:{:02} as {}",
+                            time.year,
+                            time.month,
+                            time.day,
+                            time.hour,
+                            time.minute,
+                            time.second,
+                            if as_gnss { "GNSS" } else { "RTC" },
+                        );
+                    }
+                    Err(_) => warn!("[RTC] injection failed"),
+                }
+            }
+        }
         if state.gnss.utc.is_none() {
             rtc_sync_pending = true;
         } else if rtc_sync_pending
+            && !injected
             && let Some(utc) = state.gnss.utc
             && let Some(rtc) = &mut rtc
         {

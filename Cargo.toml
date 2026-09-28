@@ -48,6 +48,8 @@ fontdue-target-bench = []
 fontdue-target-bench-gcc = ["fontdue-target-bench"]
 lora-link-tx = []
 lora-link-rx = []
+# Lets a debugger set the RTC, as GNSS or as the RTC's own time; see `tools/rtc-inject.py`.
+rtc-inject = []
 
 [patch.crates-io]
 tca9554 = { git = "https://github.com/CordlessCoder/tca9554-rs", rev = "dd76e69" }
