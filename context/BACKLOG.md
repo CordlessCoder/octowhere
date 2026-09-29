@@ -167,6 +167,11 @@ until the feature set is complete, because profiling an incomplete firmware pric
   it again, at most once a minute, and show GNSS as faulted if that keeps failing. A reset
   clears the module's time, so send the RTC's time after it. Strain relief on the IPEX cable
   addresses the trigger itself.
+- Benchmark touch-to-frame latency (owner, 2026-09-29). Touch reads now go through `touch_task`
+  on `BUS_EXECUTOR`, and the frame loop asks for one through `TOUCH_POLL` while a contact is held.
+  Time each stage from the controller's interrupt: the read, the stage step that takes it, the draw,
+  and the flush that puts the frame on the panel. Report the spread as well as the median, at rest,
+  during a drag and while the compass samples fast, on a `bench/touch-latency` branch.
 
 ## Deferred, with detail elsewhere
 
