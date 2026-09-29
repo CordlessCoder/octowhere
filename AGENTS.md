@@ -26,7 +26,7 @@ initialization or peripheral mappings.
   placing text by its ink), `startup`, the self-test, identity, logo card and fault screen that
   open the firmware, `scatter`, the identity's halftone scatter, kept apart for other screens
   to use, `rest`, the screen timeout, the dim and the fades between levels, `always_on`, the
-  face the screen rests on, `stage`, which holds the screen state and turns touch and readings into redraws and settings to store, and `script`, which steps a stage on a simulated clock for
+  face the screen rests on, `power_off`, the power key's confirmation, `stage`, which holds the screen state and turns touch and readings into redraws and settings to store, and `script`, which steps a stage on a simulated clock for
   tests and scenes. `src/chrome.rs` is the font and draw-target layer, and `src/framebuffer.rs`
   holds the pixels. The firmware re-exports
   its `chrome`, `framebuffer`, `motion` and `ui` modules. The UI keeps re-exporting the motion
@@ -261,7 +261,11 @@ core 1 owns the display SPI/DMA path.
 - `sensor_task`, also on core 0, owns the PMIC, RTC, GNSS and LoRa. It publishes a whole
   `SensorSnapshot` through the `SENSOR_STATE` signal. In automatic zone mode it looks the zone
   up again whenever a fix moves about a kilometre, a zone at a time with a yield between, and
-  queues a new zone for `settings_task`.
+  queues a new zone for `settings_task`. It passes the PMIC's power key presses to the frame
+  loop through `KEY_PRESSES`. When the frame loop sets `POWER_OFF`, once the panel is off, it
+  saves the GNSS module's navigation data, waits for `SETTINGS_DONE` to reach
+  `SETTINGS_QUEUED`, and has the PMIC power the board off. Every settings write goes through
+  `queue_write`, which keeps that count.
 - `settings_task`, also on core 0, owns the flash and saves what `SETTINGS_WRITES` queues.
 - `motion_task`, also on core 0, owns the IMU and magnetometer, the compass calibration and the
   sensor fusion. It samples every 250 ms, or every 20 ms while the frame loop sets

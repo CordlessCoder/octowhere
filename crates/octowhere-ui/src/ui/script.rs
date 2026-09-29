@@ -9,7 +9,7 @@ use embedded_graphics::prelude::Point;
 use super::{
     gesture::{LIFT_SAMPLES, Micros},
     screens::{PeripheralState, Screen},
-    stage::{Input, Motion, Sensors, Stage, Touch, Update},
+    stage::{Input, Key, Motion, Sensors, Stage, Touch, Update},
     startup::{Outcome, Part, Report},
 };
 
@@ -144,6 +144,14 @@ impl<'a> Driver<'a> {
     pub fn sensors(&mut self, sensors: Sensors) -> Update {
         self.step(Input {
             sensors: Some(sensors),
+            ..Input::default()
+        })
+    }
+
+    /// Presses the power key.
+    pub fn key(&mut self, key: Key) -> Update {
+        self.step(Input {
+            key: Some(key),
             ..Input::default()
         })
     }

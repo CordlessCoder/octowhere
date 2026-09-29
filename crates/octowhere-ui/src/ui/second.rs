@@ -331,7 +331,7 @@ pub fn draw_slab<D: CoverageTarget<Color = Color>>(
     )
 }
 
-fn in_top_cap(point: Point) -> bool {
+pub fn in_top_cap(point: Point) -> bool {
     point.y < TOP_CAP
 }
 
@@ -1121,9 +1121,9 @@ impl AlwaysOnChooser {
     }
 }
 
-/// The clear confirm: a handle dragged across to a target erases the settings.
+/// A handle dragged along a rail to a target at its far end, which confirms what a screen asks.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct Clear {
+pub struct Slide {
     /// The handle's left edge past its start, while a drag that started on it holds it.
     dragged: Option<i32>,
 }
@@ -1134,13 +1134,8 @@ const RAIL_LEFT: i32 = 62;
 const RAIL_RIGHT: i32 = 404;
 const TARGET_LEFT: i32 = RAIL_RIGHT - HANDLE;
 const TRAVEL: i32 = TARGET_LEFT - RAIL_LEFT;
-const WARNING: [&str; 3] = [
-    "ERASES ZONE, LAST FIX ZONE,",
-    "BRIGHTNESS, TIMEOUT",
-    "AND ALWAYS ON",
-];
 
-impl Clear {
+impl Slide {
     fn handle_at(travel: i32) -> Rectangle {
         Rectangle::new(
             Point::new(RAIL_LEFT + travel, HANDLE_TOP),
@@ -1148,7 +1143,8 @@ impl Clear {
         )
     }
 
-    fn handle(&mut self, event: &GestureEvent, effects: &mut Effects) -> Next {
+    /// Follows a drag that starts on the handle, and returns whether it let go at the target.
+    pub fn handle(&mut self, event: &GestureEvent) -> bool {
         match *event {
             GestureEvent::DragStart(drag) if Self::handle_at(0).contains(drag.start) => {
                 self.dragged = Some(drag.offset().x.clamp(0, TRAVEL));
@@ -1159,35 +1155,23 @@ impl Clear {
             GestureEvent::DragEnd(drag) if self.dragged.is_some() => {
                 self.dragged = None;
                 // The handle's middle over the target counts as reaching it.
-                if drag.offset().x.clamp(0, TRAVEL) + HANDLE / 2 >= TRAVEL {
-                    effects.store = Some(Store::Clear);
-                    return Next::Panel;
-                }
-            }
-            GestureEvent::Tap(point) if in_top_cap(point) => {
-                return Next::Open(Page::Device(Device::default()));
+                return drag.offset().x.clamp(0, TRAVEL) + HANDLE / 2 >= TRAVEL;
             }
             _ => {}
         }
-        Next::Stay
+        false
     }
 
-    fn draw<D: CoverageTarget<Color = Color>>(
+    /// Shows the handle at the target, for a screen that has been confirmed.
+    pub fn arrive(&mut self) {
+        self.dragged = Some(TRAVEL);
+    }
+
+    pub fn draw<D: CoverageTarget<Color = Color>>(
         &self,
-        accents: Accents,
-        font: &FontdueRenderer<'static, Color>,
+        color: Color,
         target: &mut D,
     ) -> Result<(), D::Error> {
-        draw_cap(
-            "CLEAR / 08",
-            "CANCEL",
-            &CLEAR,
-            chrome::ORANGE,
-            accents,
-            font,
-            target,
-        )?;
-        draw_field(target)?;
         let middle = HANDLE_TOP + HANDLE / 2;
         target.fill_solid(
             &Rectangle::new(
@@ -1206,9 +1190,9 @@ impl Clear {
                 Point::new(RAIL_LEFT, HANDLE_TOP),
                 Point::new(handle.top_left.x + HANDLE - 1, HANDLE_TOP + HANDLE - 1),
             );
-            target.fill_solid(&swept, chrome::ORANGE)?;
+            target.fill_solid(&swept, color)?;
         }
-        target.fill_solid(&handle, chrome::ORANGE)?;
+        target.fill_solid(&handle, color)?;
         let arrow = handle.top_left + Point::new(16, HANDLE / 2);
         target.fill_solid(
             &Rectangle::new(arrow - Point::new(0, 3), Size::new(26, 6)),
@@ -1221,6 +1205,53 @@ impl Clear {
             );
             target.fill_solid(&chevron, chrome::BLACK)?;
         }
+        Ok(())
+    }
+}
+
+/// The clear confirm: the slide erases the settings.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Clear {
+    slide: Slide,
+}
+
+const WARNING: [&str; 3] = [
+    "ERASES ZONE, LAST FIX ZONE,",
+    "BRIGHTNESS, TIMEOUT",
+    "AND ALWAYS ON",
+];
+
+impl Clear {
+    fn handle(&mut self, event: &GestureEvent, effects: &mut Effects) -> Next {
+        if self.slide.handle(event) {
+            effects.store = Some(Store::Clear);
+            return Next::Panel;
+        }
+        match *event {
+            GestureEvent::Tap(point) if in_top_cap(point) => {
+                Next::Open(Page::Device(Device::default()))
+            }
+            _ => Next::Stay,
+        }
+    }
+
+    fn draw<D: CoverageTarget<Color = Color>>(
+        &self,
+        accents: Accents,
+        font: &FontdueRenderer<'static, Color>,
+        target: &mut D,
+    ) -> Result<(), D::Error> {
+        draw_cap(
+            "CLEAR / 08",
+            "CANCEL",
+            &CLEAR,
+            chrome::ORANGE,
+            accents,
+            font,
+            target,
+        )?;
+        draw_field(target)?;
+        self.slide.draw(chrome::ORANGE, target)?;
         let small = hint_style(font);
         let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
         for (line, top) in WARNING.into_iter().zip([338, 356, 374]) {

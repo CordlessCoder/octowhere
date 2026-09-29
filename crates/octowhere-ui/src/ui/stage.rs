@@ -17,6 +17,7 @@ use super::{
     pager::Pager,
     panel::{self, Cell},
     picker::Picker,
+    power_off::{self, Answer, PowerOff},
     rest::{self, AlwaysOn, Fade, Rest, Timeout},
     scatter,
     screens::{self, Battery, DEFAULT_BRIGHTNESS, Gnss, PeripheralState, Screen},
@@ -53,6 +54,13 @@ pub enum Touch {
     Contacts([Option<Point>; 2]),
     /// The controller recognised a hand covering the screen.
     Cover,
+}
+
+/// A press of the power key, as the power controller told it apart.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Key {
+    Short,
+    Long,
 }
 
 /// When each of the compass's accents starts after the page settles, and how long each takes.
@@ -179,6 +187,8 @@ pub struct Input {
     pub sensors: Option<Sensors>,
     /// A part boot brought up, or gave up on, while the start-up sequence shows.
     pub boot: Option<Report>,
+    /// A press of the power key. The start-up sequence ignores it.
+    pub key: Option<Key>,
 }
 
 /// What the frame loop owes after a step. [`Stage::changed`] holds the pixels it changed.
@@ -195,6 +205,8 @@ pub struct Update {
     /// Switch the display on before this frame goes out, or off, after setting any level, once
     /// it has.
     pub display_on: Option<bool>,
+    /// Power the board off. It comes once, with the display dark and switching off.
+    pub power_off: bool,
 }
 
 /// Where the drag in progress goes, decided when it leaves the tap slop.
@@ -318,6 +330,10 @@ pub struct Stage {
     /// The battery the always-on face shows, taken again only when it redraws for a minute, and
     /// the stage's minute when it was, for a face whose time stands still.
     shown_battery: (Option<Battery>, Micros),
+    /// The power-off confirmation, over whatever showed when the key opened it.
+    power_off: Option<PowerOff>,
+    /// [`Update::power_off`] has gone out.
+    powered_off: bool,
 }
 
 impl Stage {
@@ -384,6 +400,8 @@ impl Stage {
             entry_from: 0,
             drawn_always_on: None,
             shown_battery: (None, 0),
+            power_off: None,
+            powered_off: false,
             peripherals,
         }
     }
@@ -408,7 +426,23 @@ impl Stage {
             Rest::Darkening { since } => Some(since + rest::OFF_FADE),
             _ => None,
         };
-        [self.startup_due, rest].into_iter().flatten().min()
+        let power_off = self
+            .power_off
+            .as_ref()
+            .and_then(|power_off| match power_off.confirmed() {
+                Some(confirmed) => (!self.powered_off).then_some(confirmed + power_off::FADE),
+                None => power_off.deadline(),
+            });
+        [self.startup_due, rest, power_off]
+            .into_iter()
+            .flatten()
+            .min()
+    }
+
+    /// The power-off confirmation, while it shows.
+    #[must_use]
+    pub fn power_off(&self) -> Option<&PowerOff> {
+        self.power_off.as_ref()
     }
 
     /// Where the screen is on its way to rest.
@@ -552,6 +586,7 @@ impl Stage {
             motion,
             sensors,
             boot,
+            key,
         } = input;
         self.changed.clear();
         self.fading = false;
@@ -590,6 +625,13 @@ impl Stage {
                 return update;
             }
         }
+        if let Some(key) = key {
+            self.press(key, now, &mut update);
+        }
+        if self.power_off.is_some() {
+            self.step_power_off(now, touch, &mut update);
+            return update;
+        }
         let contact = touch.is_some() && self.raw_touch[0].is_some();
         let mut touch = touch;
         if self.step_rest(now, contact, &mut touch, &mut update) {
@@ -614,23 +656,10 @@ impl Stage {
         let mut effects = Effects::default();
         self.route_event(&event, now, &mut effects, &mut update);
 
-        if let Some(touch) = touch {
-            let cover = touch == Touch::Cover;
-            let fresh = self
-                .covered_at
-                .is_none_or(|at| now.saturating_sub(at) >= COVER_REARM);
-            if cover && fresh {
-                self.go_home(now, &mut effects);
-            }
-            match touch {
-                Touch::Cover => self.covered_at = Some(now),
-                // A finger means the hand has gone. A report without one does not: the controller
-                // sends unreadable reports while a hand is held, and those arrive as no contacts.
-                Touch::Contacts(contacts) if contacts.iter().any(Option::is_some) => {
-                    self.covered_at = None;
-                }
-                Touch::Contacts(_) => {}
-            }
+        if let Some(touch) = touch
+            && self.new_cover(touch, now)
+        {
+            self.go_home(now, &mut effects);
         }
         self.apply(effects, &mut update);
 
@@ -707,6 +736,138 @@ impl Stage {
             self.fade_to(rest::dim_level(self.level), rest::DIM_FADE, now);
         }
         update
+    }
+
+    /// Whether `touch` is a hand newly covering the screen, rather than one still held there.
+    fn new_cover(&mut self, touch: Touch, now: Micros) -> bool {
+        let fresh = self
+            .covered_at
+            .is_none_or(|at| now.saturating_sub(at) >= COVER_REARM);
+        match touch {
+            Touch::Cover => self.covered_at = Some(now),
+            // A finger means the hand has gone. A report without one does not: the controller
+            // sends unreadable reports while a hand is held, and those arrive as no contacts.
+            Touch::Contacts(contacts) if contacts.iter().any(Option::is_some) => {
+                self.covered_at = None;
+            }
+            Touch::Contacts(_) => {}
+        }
+        touch == Touch::Cover && fresh
+    }
+
+    /// Acts on the power key. A short press rests the screen, or wakes it, and cancels the
+    /// power-off confirmation; a long one wakes the screen onto the confirmation.
+    fn press(&mut self, key: Key, now: Micros, update: &mut Update) {
+        if self
+            .power_off
+            .as_ref()
+            .is_some_and(|power_off| power_off.confirmed().is_some())
+        {
+            return;
+        }
+        let resting = self.rest != Rest::Awake;
+        if resting {
+            self.wake_by_key(now, update);
+        }
+        match key {
+            Key::Short => {
+                if self.power_off.take().is_some() {
+                    self.forget_drawn();
+                }
+                if !resting {
+                    self.sleep(update);
+                }
+            }
+            Key::Long if self.power_off.is_none() => {
+                self.route = None;
+                self.power_off = Some(PowerOff::new(now));
+                self.changed.make_full();
+            }
+            Key::Long => {}
+        }
+    }
+
+    /// Wakes a screen on its way to rest, or resting, as a contact would.
+    fn wake_by_key(&mut self, now: Micros, update: &mut Update) {
+        match self.rest {
+            Rest::Awake => {}
+            Rest::Dimmed { .. } | Rest::Darkening { .. } => {
+                self.rest = Rest::Awake;
+                self.fade_to(self.level, rest::WAKE_FADE, now);
+            }
+            Rest::AlwaysOn | Rest::Off => self.wake(now, update),
+        }
+    }
+
+    /// Rests the screen at once, on the always-on face or off, without the timeout's dim.
+    fn sleep(&mut self, update: &mut Update) {
+        self.route = None;
+        self.fade = None;
+        self.level = self.peripherals.brightness;
+        if self.peripherals.always_on.is_on() {
+            self.rest = Rest::AlwaysOn;
+            self.drawn_always_on = None;
+            update.brightness = Some(self.peripherals.always_on.level(self.level));
+        } else {
+            self.rest = Rest::Off;
+            update.brightness = Some(0);
+            update.display_on = Some(false);
+        }
+    }
+
+    /// Steps the power-off confirmation, which takes every touch while it shows and holds the
+    /// timeout.
+    fn step_power_off(&mut self, now: Micros, touch: Option<Touch>, update: &mut Update) {
+        self.restart(now);
+        self.step_fade(now, update);
+        if self.raw_touch[0].is_none() {
+            self.swallowed = false;
+        }
+        let event = if touch.is_some() && !self.swallowed {
+            self.gesture.update(self.raw_touch[0], now)
+        } else {
+            GestureEvent::None
+        };
+        let cover = touch.is_some_and(|touch| self.new_cover(touch, now));
+        let powered_off = self.powered_off;
+        let Some(power_off) = &mut self.power_off else {
+            return;
+        };
+        if let Some(confirmed) = power_off.confirmed() {
+            if !powered_off && now >= confirmed + power_off::FADE {
+                self.powered_off = true;
+                update.power_off = true;
+                update.display_on = Some(false);
+            }
+            return;
+        }
+        let before = power_off.clone();
+        let answer = if cover || power_off.deadline().is_some_and(|deadline| now >= deadline) {
+            Answer::Cancel
+        } else {
+            power_off.handle(&event, now)
+        };
+        let changed = *power_off != before;
+        match answer {
+            Answer::Stay => {}
+            Answer::Cancel => {
+                self.power_off = None;
+                self.forget_drawn();
+            }
+            Answer::Confirm => self.fade_to(0, power_off::FADE, now),
+        }
+        if changed || answer != Answer::Stay {
+            self.changed.make_full();
+        }
+    }
+
+    /// Forgets what each screen showed, so the next step redraws in full.
+    fn forget_drawn(&mut self) {
+        self.drawn_compass = None;
+        self.drawn_clock = None;
+        self.drawn_panel = None;
+        self.drawn_page = None;
+        self.changed.make_full();
     }
 
     /// Restarts the timeout timer.
@@ -1543,6 +1704,13 @@ impl Stage {
             };
             startup::draw(view, startup, &context, &self.renderer, target)
                 .expect("drawing the start-up failed");
+            return;
+        }
+        if let Some(power_off) = &self.power_off {
+            screens::clear(target).expect("clearing the panel failed");
+            power_off
+                .draw(&self.renderer, target)
+                .expect("drawing the power-off confirmation failed");
             return;
         }
         if let (Rest::AlwaysOn, Some(view)) = (self.rest, &self.drawn_always_on) {

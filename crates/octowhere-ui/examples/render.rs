@@ -24,7 +24,7 @@ use octowhere_ui::{
         rest::{AlwaysOn, Rest, Timeout},
         screens::{Battery, Gnss, PeripheralState, Screen},
         script::Driver,
-        stage::{Input, Motion, Sensors, Stage, Touch},
+        stage::{Input, Key, Motion, Sensors, Stage, Touch},
         startup::{Outcome, Part, Report},
     },
 };
@@ -342,6 +342,20 @@ fn settings_frames() -> Vec<(String, Stage)> {
     clear.swipe(Point::new(233, 440), Point::new(233, 80), 300_000);
     tap(&mut clear, 233, 342);
     frames.push(("settings-clear".into(), clear.stage));
+    let mut power_off = start();
+    power_off.key(Key::Long);
+    power_off.wait(300_000);
+    frames.push(("power-off".into(), power_off.stage));
+    let mut sliding = start();
+    sliding.key(Key::Long);
+    for x in (90..=250).step_by(20) {
+        sliding.touch(Some(Point::new(x, 258)));
+    }
+    frames.push(("power-off-sliding".into(), sliding.stage));
+    let mut confirmed = start();
+    confirmed.key(Key::Long);
+    confirmed.swipe(Point::new(90, 258), Point::new(420, 258), 300_000);
+    frames.push(("power-off-confirmed".into(), confirmed.stage));
     let chooser = |steps: i32| {
         let mut driver = open();
         open_device(&mut driver);

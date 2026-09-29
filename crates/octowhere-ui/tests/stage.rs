@@ -2234,3 +2234,111 @@ fn clearing_puts_the_timeout_and_always_on_back() {
     assert_eq!(driver.stage.peripherals().timeout, Timeout::Minute1);
     assert_eq!(driver.stage.peripherals().always_on, AlwaysOn::Off);
 }
+
+use octowhere_ui::ui::{power_off, stage::Key};
+
+/// The slide on the power-off confirmation, from its handle to its target.
+fn slide_to_power_off(driver: &mut Driver) -> Vec<Update> {
+    driver.swipe(Point::new(90, 258), Point::new(420, 258), 300_000)
+}
+
+#[test]
+fn a_long_press_asks_and_the_slide_powers_off_once_dark() {
+    let mut driver = resting_on(Screen::Compass, Timeout::Seconds15, false);
+    driver.key(Key::Long);
+    assert!(driver.stage.power_off().is_some());
+    assert!(driver.stage.changed().is_full());
+    let mut updates = slide_to_power_off(&mut driver);
+    assert!(updates.iter().all(|update| !update.power_off));
+    updates.extend((0..30).map(|_| driver.step(Input::default())));
+    let off: Vec<_> = updates.iter().filter(|update| update.power_off).collect();
+    assert_eq!(off.len(), 1, "power off goes out once");
+    assert_eq!(off[0].display_on, Some(false));
+    assert_eq!(driver.stage.shown_level(), 0);
+    // Nothing takes it back once it is on its way.
+    driver.key(Key::Short);
+    driver.cover();
+    assert!(
+        driver
+            .stage
+            .power_off()
+            .is_some_and(|p| p.confirmed().is_some())
+    );
+}
+
+#[test]
+fn the_power_off_confirmation_cancels_by_its_button_a_cover_or_waiting() {
+    let mut driver = resting_on(Screen::Compass, Timeout::Seconds15, false);
+    driver.key(Key::Long);
+    tap(&mut driver, 133, 118);
+    assert!(driver.stage.power_off().is_none());
+    assert_eq!(driver.stage.screen(), Screen::Compass);
+
+    driver.key(Key::Long);
+    driver.wait(100_000);
+    driver.cover();
+    assert!(driver.stage.power_off().is_none());
+    // The cover only cancels; it does not also send the pages home.
+    driver.settle();
+    assert_eq!(driver.stage.screen(), Screen::Compass);
+
+    driver.wait(300_000);
+    driver.key(Key::Long);
+    let opened = driver.now();
+    while driver.stage.power_off().is_some() {
+        assert!(driver.now() < opened + power_off::TIMEOUT + 100_000);
+        driver.step(Input::default());
+    }
+    assert!(driver.now() >= opened + power_off::TIMEOUT);
+    // The timeout of 15 s did not dim the screen under it.
+    assert_eq!(driver.stage.rest(), Rest::Awake);
+}
+
+#[test]
+fn a_short_press_rests_the_screen_at_once_and_another_wakes_it() {
+    let mut driver = resting_on(Screen::Compass, Timeout::Seconds15, false);
+    let update = driver.key(Key::Short);
+    assert_eq!(driver.stage.rest(), Rest::Off);
+    assert_eq!(
+        (update.brightness, update.display_on),
+        (Some(0), Some(false))
+    );
+    let update = driver.key(Key::Short);
+    assert_eq!(driver.stage.rest(), Rest::Awake);
+    assert_eq!(update.display_on, Some(true));
+
+    let mut driver = resting_on(Screen::Clock, Timeout::Seconds15, true);
+    let update = driver.key(Key::Short);
+    assert_eq!(driver.stage.rest(), Rest::AlwaysOn);
+    assert_eq!(update.brightness, Some(rest::dim_level(120)));
+    assert!(driver.stage.changed().is_full());
+}
+
+#[test]
+fn a_short_press_cancels_the_confirmation_and_rests() {
+    let mut driver = resting_on(Screen::Clock, Timeout::Seconds15, false);
+    driver.key(Key::Long);
+    driver.key(Key::Short);
+    assert!(driver.stage.power_off().is_none());
+    assert_eq!(driver.stage.rest(), Rest::Off);
+}
+
+#[test]
+fn a_long_press_from_off_wakes_onto_the_confirmation() {
+    let mut driver = resting_on(Screen::Clock, Timeout::Seconds15, false);
+    wait_until(&mut driver, 22_000_000, |rest| rest == Rest::Off);
+    let update = driver.key(Key::Long);
+    assert_eq!(update.display_on, Some(true));
+    assert_eq!(driver.stage.rest(), Rest::Awake);
+    assert!(driver.stage.power_off().is_some());
+}
+
+#[test]
+fn the_start_up_ignores_the_power_key() {
+    let mut driver = Driver::starting();
+    driver.key(Key::Long);
+    driver.key(Key::Short);
+    assert!(driver.stage.starting_up());
+    assert!(driver.stage.power_off().is_none());
+    assert_eq!(driver.stage.rest(), Rest::Awake);
+}

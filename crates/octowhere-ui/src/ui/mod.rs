@@ -13,6 +13,7 @@ pub use octowhere_motion::{compass, fusion, imu};
 pub mod pager;
 pub mod panel;
 pub mod picker;
+pub mod power_off;
 pub mod rest;
 pub mod reveal;
 pub mod scatter;

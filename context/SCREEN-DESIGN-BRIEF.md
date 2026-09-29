@@ -64,7 +64,7 @@ The device is a round 1.75-inch touch module: a Waveshare ESP32-S3-Touch-AMOLED-
 | Brightness | Set from the stored setting at boot (10–100 %, default 120 of 255). Changes apply at once, and the firmware can step it every frame at no draw cost. No ambient light sensor |
 | Sleep | The panel's display-off and sleep, used by the screen timeout. Touch still reports while it sleeps |
 | Touch | CST9217 capacitive, in the same 466 × 466 coordinates. Two contacts, plus a recognised "hand covers the screen" report. No hover, no pressure. A held finger stays held however still it is |
-| Buttons | A boot and a power button, on GPIO0 and GPIO10 according to the vendor's pin list, not verified on this board. The firmware reads neither |
+| Buttons | A power key, read through the power controller as a short or a long press (1 s), up to about 250 ms late. A 512 ms hold powers the board on. A boot button, which the firmware does not read |
 | Sensors | 6-axis IMU (QMI8658), magnetometer (BMM350), GNSS receiver (LC76G), real-time clock (PCF85063A), battery and USB power (AXP2101) |
 | Radio | LoRa (SX1272). The location mesh that will use it is designed but not built |
 | Not driven | Audio codec, SD card slot. No speaker, buzzer or vibration motor is in use |
@@ -135,8 +135,8 @@ the panel. Touch targets are no smaller than about 10 mm.
 Captures drawn by the firmware's own code come from `crates/octowhere-ui/examples/render.rs`.
 It draws the faces' stills and `panel-rest`, `settings-always-on`, `panel-end`,
 `panel-scrolling`, `panel-pulling`, `panel-device`, `panel-device-end`, `settings-brightness`,
-`settings-timeout`, `settings-clear`, `picker-offset` and
-`picker-zone`, and the start-up's `startup-selftest-*`, `startup-frame-*` and `startup-fault-*`;
+`settings-timeout`, `settings-clear`, `picker-offset`,
+`picker-zone`, `power-off`, `power-off-sliding` and `power-off-confirmed`, and the start-up's `startup-selftest-*`, `startup-frame-*` and `startup-fault-*`;
 `examples/outline.rs` draws the outline samples, which `context/screen-captures/` keeps as
 `outline-shapiro-40`, `outline-fraktion-bold-136` and `outline-fraktion-16`;
 `context/screen-captures/` keeps `startup-selftest`, `startup-selftest-failed`,
@@ -354,6 +354,21 @@ interpreted them:
   has `SELF TEST 5/6`. Beyond the spec, `REPLAY START-UP` opens a chooser of a good start-up
   or a demonstration of one part failing (settings spec decision 12). Its chooser uses D3's
   violet GOOD choice and orange marked demonstration.
+
+## Power key as built
+
+The power key has no approved design yet. Its confirmation is a placeholder.
+
+- **A short press** rests the screen at once, on the always-on face if ALWAYS ON is on and
+  dark otherwise, without the dim. On a resting screen it wakes it, as a touch would.
+- **A long press** wakes the screen if it rests and shows `POWER OFF` over whatever showed. It
+  has the clear screen's orange slide, a `CANCEL` button in the top cap and two hint lines. The
+  slide powers off: the handle stays at the target, `POWERING OFF` replaces the hints, and the
+  level fades to dark over 300 ms before the panel goes off and the board powers down. The
+  button, a cover, a short press or 10 s untouched cancel it; a short press also rests the
+  screen. While it shows, the screen timeout holds.
+- **The start-up ignores the key**, so the press that powers the board on does nothing more.
+- Captures: `power-off.png`, `power-off-sliding.png` and `power-off-confirmed.png`.
 
 ## Timeout and rest as built
 

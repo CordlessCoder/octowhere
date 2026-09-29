@@ -8,6 +8,11 @@ const AXP2101_ADDR: u8 = 0x34;
 const REG_STATUS1: u8 = 0x00;
 const REG_STATUS2: u8 = 0x01;
 const REG_IC_TYPE: u8 = 0x03;
+const REG_COMMON: u8 = 0x10;
+const REG_POWER_ON_SOURCE: u8 = 0x20;
+const REG_POWER_OFF_SOURCE: u8 = 0x21;
+const REG_POWER_OFF_ENABLE: u8 = 0x22;
+const REG_KEY_LEVELS: u8 = 0x27;
 const REG_VBAT_H: u8 = 0x34;
 const REG_VBAT_L: u8 = 0x35;
 const REG_TS_H: u8 = 0x36;
@@ -36,6 +41,38 @@ const ADC_TS: u8 = 1 << 1;
 const ADC_VBUS: u8 = 1 << 2;
 const ADC_VSYS: u8 = 1 << 3;
 const ADC_DIE_TEMPERATURE: u8 = 1 << 4;
+
+/// `REG_COMMON`: power every output off but the RTC LDO.
+const SOFT_POWER_OFF: u8 = 1 << 0;
+/// `REG_POWER_OFF_ENABLE`: holding the key past OFFLEVEL powers off, and does not restart.
+const KEY_POWER_OFF: u8 = 1 << 1;
+const KEY_RESTARTS: u8 = 1 << 0;
+/// `REG_IRQ_ENABLE1` and `REG_IRQ_STATUS1`: the key's short and long press.
+const SHORT_PRESS: u8 = 1 << 3;
+const LONG_PRESS: u8 = 1 << 2;
+/// `REG_KEY_LEVELS`: a long press is 1 s (IRQLEVEL), and powering on takes 512 ms (ONLEVEL).
+/// OFFLEVEL, the forced power-off, is left as found.
+const IRQ_LEVEL_MASK: u8 = 0b11 << 4;
+const IRQ_LEVEL_1S: u8 = 0b00 << 4;
+const ON_LEVEL_MASK: u8 = 0b11;
+const ON_LEVEL_512MS: u8 = 0b01;
+
+/// A press of the power key, as the PMIC tells it apart.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(target_os = "none", derive(defmt::Format))]
+pub enum PowerKey {
+    Short,
+    Long,
+}
+
+/// What powered the PMIC on, and what last powered it off, from `REG_POWER_ON_SOURCE` and
+/// `REG_POWER_OFF_SOURCE`.
+#[derive(Clone, Copy, Debug)]
+#[cfg_attr(target_os = "none", derive(defmt::Format))]
+pub struct PowerSources {
+    pub on: u8,
+    pub off: u8,
+}
 
 #[derive(Debug)]
 pub enum Axp2101Error<E> {
@@ -71,7 +108,7 @@ impl<I: I2c> Axp2101Power<I> {
         self.write_reg(REG_IRQ_ENABLE0, 0x00)
             .await
             .map_err(Axp2101Error::I2c)?;
-        self.write_reg(REG_IRQ_ENABLE1, 0x00)
+        self.write_reg(REG_IRQ_ENABLE1, SHORT_PRESS | LONG_PRESS)
             .await
             .map_err(Axp2101Error::I2c)?;
         self.write_reg(REG_IRQ_ENABLE2, 0x00)
@@ -96,6 +133,56 @@ impl<I: I2c> Axp2101Power<I> {
         .map_err(Axp2101Error::I2c)?;
 
         Ok(())
+    }
+
+    /// Sets the key's long press and power-on times, and has a hold past OFFLEVEL power off, so
+    /// the board can be switched off when the firmware does not answer.
+    pub async fn configure_power_key(&mut self) -> Result<(), I::Error> {
+        let levels = self.read_reg(REG_KEY_LEVELS).await?;
+        self.write_reg(
+            REG_KEY_LEVELS,
+            levels & !(IRQ_LEVEL_MASK | ON_LEVEL_MASK) | IRQ_LEVEL_1S | ON_LEVEL_512MS,
+        )
+        .await?;
+        let enable = self.read_reg(REG_POWER_OFF_ENABLE).await?;
+        self.write_reg(REG_POWER_OFF_ENABLE, enable & !KEY_RESTARTS | KEY_POWER_OFF)
+            .await
+    }
+
+    pub async fn power_sources(&mut self) -> Result<PowerSources, I::Error> {
+        Ok(PowerSources {
+            on: self.read_reg(REG_POWER_ON_SOURCE).await?,
+            off: self.read_reg(REG_POWER_OFF_SOURCE).await?,
+        })
+    }
+
+    /// Takes the key press latched since the last call. Two presses between calls give the
+    /// long one.
+    pub async fn take_key_press(&mut self) -> Result<Option<PowerKey>, I::Error> {
+        let status = self.read_reg(REG_IRQ_STATUS1).await? & (SHORT_PRESS | LONG_PRESS);
+        if status == 0 {
+            return Ok(None);
+        }
+        self.write_reg(REG_IRQ_STATUS1, status).await?;
+        Ok(Some(if status & LONG_PRESS != 0 {
+            PowerKey::Long
+        } else {
+            PowerKey::Short
+        }))
+    }
+
+    /// Powers every output off but the RTC LDO; the key powers the board on again. The
+    /// interrupts go first, since the PMIC can be set to power on while its IRQ pin is low.
+    /// Returns only if a write fails.
+    pub async fn power_off(&mut self) -> Result<(), I::Error> {
+        for enable in [REG_IRQ_ENABLE0, REG_IRQ_ENABLE1, REG_IRQ_ENABLE2] {
+            self.write_reg(enable, 0x00).await?;
+        }
+        for status in [REG_IRQ_STATUS0, REG_IRQ_STATUS1, REG_IRQ_STATUS2] {
+            self.write_reg(status, 0xFF).await?;
+        }
+        let common = self.read_reg(REG_COMMON).await?;
+        self.write_reg(REG_COMMON, common | SOFT_POWER_OFF).await
     }
 
     /// Read battery voltage in millivolts.

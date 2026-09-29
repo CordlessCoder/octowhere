@@ -16,7 +16,7 @@ use alloc::{alloc::Allocator, boxed::Box};
 use core::{
     cell::Cell,
     future::Future,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicU32, Ordering},
 };
 use defmt::{debug, error, info, warn};
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
@@ -61,7 +61,7 @@ use octowhere::{
     },
     peripherals::{
         magnetometer::{Bmm350, MagnetometerError},
-        power::{Axp2101Error, Axp2101Power},
+        power::{Axp2101Error, Axp2101Power, PowerKey},
         rtc::{DateTime as RtcDateTime, Pcf85063aRtc, RtcError},
         touch::{Cst9217, Cst9217Config, Cst9217Error, TouchData},
     },
@@ -71,7 +71,9 @@ use octowhere::{
         clock::{ClockState, ZoneId, ZoneMode, ZoneState},
         screens::{Battery, DEFAULT_BRIGHTNESS, Gnss, PeripheralState},
         second::choice_label,
-        stage::{Input as StageInput, Motion, Sensors, Stage, Store as Choice, Touch},
+        stage::{
+            Input as StageInput, Key as StageKey, Motion, Sensors, Stage, Store as Choice, Touch,
+        },
         startup::{Outcome, Part, Report},
     },
     util::{Swap, SwapThread},
@@ -183,6 +185,17 @@ static COMPASS_RECALIBRATE: AtomicBool = AtomicBool::new(false);
 /// Settings for `settings_task` to save. A full queue drops the newest, which the next change of
 /// the same setting supersedes.
 static SETTINGS_WRITES: Channel<CriticalSectionRawMutex, settings::Write, 4> = Channel::new();
+/// How many writes went into `SETTINGS_WRITES`, and how many `settings_task` has finished,
+/// saved or not. Equal, nothing queued is left to save.
+static SETTINGS_QUEUED: AtomicU32 = AtomicU32::new(0);
+static SETTINGS_DONE: AtomicU32 = AtomicU32::new(0);
+/// Power key presses, from `sensor_task`, which owns the PMIC, for the frame loop.
+static KEY_PRESSES: Channel<CriticalSectionRawMutex, PowerKey, 2> = Channel::new();
+/// Set by the frame loop once the panel is off after the power-off confirmation, for
+/// `sensor_task` to power the board off.
+static POWER_OFF: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+/// How long powering off waits for the settings queued before it to be saved.
+const SETTINGS_SETTLE: Duration = Duration::from_secs(3);
 /// A zone choice from the settings panel, for `sensor_task`, which owns the zone.
 static ZONE_CHOICE: Signal<CriticalSectionRawMutex, ZoneChoice> = Signal::new();
 
@@ -727,6 +740,7 @@ async fn settings_task(mut store: Store) {
         let write = SETTINGS_WRITES.receive().await;
         let started = Instant::now();
         let saved = settings::with_display_core_held(|| store.save(write)).await;
+        SETTINGS_DONE.fetch_add(1, Ordering::Release);
         let took = started.elapsed().as_micros();
         if saved {
             info!("[SETTINGS] {} saved in {}us", write, took);
@@ -783,7 +797,22 @@ async fn sensor_task(task: SensorTask) {
         if let Some(choice) = ZONE_CHOICE.try_take() {
             zones.choose(choice);
         }
+        if POWER_OFF.try_take().is_some()
+            && let Some(power) = &mut power
+        {
+            power_off(power, &mut gnss, navigation_saved.is_some()).await;
+        }
         if let Some(power) = &mut power {
+            match power.take_key_press().await {
+                Ok(Some(key)) => {
+                    info!("[PMIC] power key {}", key);
+                    if KEY_PRESSES.try_send(key).is_err() {
+                        warn!("[PMIC] key queue full, {} dropped", key);
+                    }
+                }
+                Ok(None) => {}
+                Err(_) => warn!("[PMIC] key read failed"),
+            }
             let present = power.is_battery_present().await.ok();
             let battery_present = present.unwrap_or(false);
             let battery_mv = power.get_battery_voltage().await.ok();
@@ -988,11 +1017,8 @@ async fn sensor_task(task: SensorTask) {
         }
         if let Some(fix) = state.gnss.fix
             && let Some(zone) = zones.follow(fix.latitude.get(), fix.longitude.get()).await
-            && SETTINGS_WRITES
-                .try_send(settings::Write::AutomaticZone(zone))
-                .is_err()
         {
-            warn!("[SETTINGS] queue full, automatic zone not saved");
+            queue_write(settings::Write::AutomaticZone(zone));
         }
         state.zone = zones.state();
 
@@ -1376,9 +1402,19 @@ async fn bring_up(
         power.init().await.map_err(|error| match error {
             Axp2101Error::I2c(_) => Outcome::NoReply,
             Axp2101Error::WrongChipId(_) => Outcome::BadReply,
-        })
+        })?;
+        power
+            .configure_power_key()
+            .await
+            .map_err(|_| Outcome::NoReply)
     })
     .await;
+    if answered && let Ok(sources) = power.power_sources().await {
+        info!(
+            "[PMIC] powered on by {=u8:#04x}, last off by {=u8:#04x}",
+            sources.on, sources.off
+        );
+    }
     let mut power = answered.then_some(power);
     let mut initial_sensor_state = SensorSnapshot::default();
     if reset_lora(i2c.clone()).await.is_err() {
@@ -1840,6 +1876,9 @@ async fn frame_loop(
     // freezes while it runs: core 1 has flushed a frame once the swap after the one that
     // handed it over completes.
     let mut pending_write: Option<(settings::Write, u8)> = None;
+    // Swaps left until the frame that switched the panel off has reached core 1, and the board
+    // can power off.
+    let mut power_off_after: Option<u8> = None;
     loop {
         if touch.is_none() {
             touch = touch_slot.take();
@@ -1879,19 +1918,24 @@ async fn frame_loop(
                     None => core::future::pending().await,
                 }
             };
-            let (touch_ready, sensor_state, motion_state, boot) = match select4(
+            let (touch_ready, sensor_state, motion_state, boot, key) = match select4(
                 touch_wait,
-                select(SENSOR_STATE.wait(), BOOT_REPORTS.receive()),
+                select3(
+                    SENSOR_STATE.wait(),
+                    BOOT_REPORTS.receive(),
+                    KEY_PRESSES.receive(),
+                ),
                 MOTION_STATE.wait(),
                 Timer::after(wait_timeout),
             )
             .await
             {
-                Either4::First(ready) => (ready, None, None, None),
-                Either4::Second(Either::First(state)) => (false, Some(state), None, None),
-                Either4::Second(Either::Second(report)) => (false, None, None, Some(report)),
-                Either4::Third(state) => (false, None, Some(state), None),
-                Either4::Fourth(()) => (touch_repoll_due, None, None, None),
+                Either4::First(ready) => (ready, None, None, None, None),
+                Either4::Second(Either3::First(state)) => (false, Some(state), None, None, None),
+                Either4::Second(Either3::Second(report)) => (false, None, None, Some(report), None),
+                Either4::Second(Either3::Third(key)) => (false, None, None, None, Some(key)),
+                Either4::Third(state) => (false, None, Some(state), None, None),
+                Either4::Fourth(()) => (touch_repoll_due, None, None, None, None),
             };
             let touch_ready = touch_ready
                 && match touch.as_mut().map(|touch| touch.read_touch_data()) {
@@ -1945,6 +1989,10 @@ async fn frame_loop(
                     }
                 }),
                 boot,
+                key: key.map(|key| match key {
+                    PowerKey::Short => StageKey::Short,
+                    PowerKey::Long => StageKey::Long,
+                }),
             });
             if update.recalibrate {
                 info!("[COMPASS] recalibrating on request");
@@ -1977,6 +2025,13 @@ async fn frame_loop(
                 if let Some((earlier, _)) = pending_write.replace((write, 2)) {
                     queue_write(earlier);
                 }
+            }
+            if update.power_off {
+                // Nothing more will show, so a write need not wait for its frame.
+                if let Some((write, _)) = pending_write.take() {
+                    queue_write(write);
+                }
+                power_off_after = Some(2);
             }
             COMPASS_ACTIVE.store(update.samples_fast, Ordering::Relaxed);
             let changed = stage.changed();
@@ -2028,11 +2083,49 @@ async fn frame_loop(
                 queue_write(write);
             }
         }
+        match power_off_after {
+            Some(swaps) if swaps > 1 => power_off_after = Some(swaps - 1),
+            Some(_) => {
+                POWER_OFF.signal(());
+                power_off_after = None;
+            }
+            None => {}
+        }
     }
 }
 
 fn queue_write(write: settings::Write) {
-    if SETTINGS_WRITES.try_send(write).is_err() {
+    if SETTINGS_WRITES.try_send(write).is_ok() {
+        SETTINGS_QUEUED.fetch_add(1, Ordering::Relaxed);
+    } else {
         warn!("[SETTINGS] queue full, {} not saved", write);
+    }
+}
+
+/// Powers the board off once the settings queued before it are saved. The GNSS module copies
+/// its navigation data to its flash first when it has had a fix, for a hot start.
+async fn power_off(
+    power: &mut Axp2101Power<SharedI2cDevice>,
+    gnss: &mut Lc76g<SharedI2cDevice, embassy_time::Delay>,
+    fixed: bool,
+) {
+    if fixed {
+        let saved = gnss.save_navigation_data().await;
+        info!("[GNSS] navigation data saved={}", saved.is_ok());
+    }
+    let settled = with_timeout(SETTINGS_SETTLE, async {
+        while SETTINGS_DONE.load(Ordering::Acquire) != SETTINGS_QUEUED.load(Ordering::Relaxed) {
+            Timer::after(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    if settled.is_err() {
+        warn!("[SETTINGS] still saving; powering off anyway");
+    }
+    info!("[POWER] powering off");
+    // The log line gets out before the rails drop.
+    Timer::after(Duration::from_millis(50)).await;
+    if power.power_off().await.is_err() {
+        error!("[POWER] power off failed");
     }
 }
