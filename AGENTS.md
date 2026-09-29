@@ -252,41 +252,50 @@ frame's draw by part and the internal heap in use (`startup-bench`, summarised b
 
 ## Concurrency
 
-Four parties run concurrently. Core 0 runs the frame loop, the sensor task and the motion task;
-core 1 owns the display SPI/DMA path.
+Core 0 runs two executors. The thread-mode one runs `async_main`, the frame loop and the tasks
+that never use the I2C bus. `BUS_EXECUTOR` runs every task that does, from the `FROM_CPU_INTR2`
+software interrupt at level 1, so they preempt thread mode instead of waiting for it to yield.
+Core 1 owns the display SPI/DMA path.
 
-- `async_main` on core 0 loads the settings, starts core 1, then runs `bring_up` and
+- `async_main`, in thread mode, loads the settings, starts core 1, then runs `bring_up` and
   `frame_loop` together. `bring_up` brings each part up against its deadline, reports each
-  outcome to the start-up's self-test through `BOOT_REPORTS`, then spawns the sensor and
-  motion tasks with the parts that answered and hands the touch controller to the frame loop.
-  A part that fails is left out, and its owner runs without it; there is no motion task
-  without the IMU. `frame_loop` owns touch and drawing. It reads touch directly, takes the
-  latest sensor values from `SENSOR_STATE` and `MOTION_STATE`, draws into its current
-  framebuffer, records `dirty` and the display level to set, and hands the state to core 1.
-- `sensor_task`, also on core 0, owns the PMIC and RTC, and takes the GNSS state from
-  `GNSS_STATE`. It publishes a whole `SensorSnapshot` through the `SENSOR_STATE` signal every
-  250 ms. In automatic zone mode it looks the zone up again whenever a fix moves about a
-  kilometre, a zone at a time with a yield between, and queues a new zone for `settings_task`.
-  It passes the PMIC's power key presses to the frame loop through `KEY_PRESSES`. Once
+  outcome to the start-up's self-test through `BOOT_REPORTS`, then spawns the tasks below with
+  the parts that answered, the bus tasks through `start_bus_tasks`. A part that fails is left
+  out, and its owner runs without it; there is no motion task without the IMU. `frame_loop`
+  owns drawing. It takes touch reads from `TOUCH_READS`, asking for one through `TOUCH_POLL`
+  while a contact is held, and the latest sensor values from `SENSOR_STATE` and
+  `MOTION_STATE`, draws into its current framebuffer, records `dirty` and the display level to
+  set, and hands the state to core 1.
+- `sensor_task`, on `BUS_EXECUTOR`, owns the PMIC and RTC, and takes the GNSS state from
+  `GNSS_STATE` and the zone from `ZONE_STATE`. It publishes a whole `SensorSnapshot` through the
+  `SENSOR_STATE` signal every 250 ms, and passes each fix to `zone_task` through `ZONE_FIX`. It
+  passes the PMIC's power key presses to the frame loop through `KEY_PRESSES`. Once
   `GNSS_PARKED` is set, it waits for `SETTINGS_DONE` to reach `SETTINGS_QUEUED` and has the PMIC
   power the board off. Every settings write goes through `queue_write`, which keeps that count.
-- `gnss_task`, also on core 0, owns the GNSS module. The module sends a burst of NMEA each
+- `gnss_task`, on `BUS_EXECUTOR`, owns the GNSS module. The module sends a burst of NMEA each
   second, and the task reads it only from 100 ms before the burst is due until it has drained,
   leaving the bus alone between. It publishes the parsed state through `GNSS_STATE` and times
   UTC on the local timer from each fix's burst (`gnss_time`, read with `gps_utc`). When the
   frame loop sets `POWER_OFF`, once the panel is off, it saves the module's navigation data and
   sets `GNSS_PARKED`.
-- `radio_task`, also on core 0, owns the LoRa radio, its `DIO0` line and the RF switch. It
+- `motion_task`, on `BUS_EXECUTOR`, owns the IMU and magnetometer, the compass calibration and
+  the sensor fusion. It samples every 250 ms, or every 20 ms while the frame loop sets
+  `COMPASS_ACTIVE`, and publishes a `MotionSnapshot` through `MOTION_STATE`.
+- `touch_task`, on `BUS_EXECUTOR`, owns the touch controller. It reads it when the controller
+  signals a report or the frame loop asks, and sends each read through `TOUCH_READS`, which
+  holds one, so it reads no faster than the frame loop takes them.
+- `radio_task`, on `BUS_EXECUTOR`, owns the LoRa radio, its `DIO0` line and the RF switch. It
   runs the link test when a `lora-link-*` feature is on, and otherwise holds the radio idle. It
   is spawned only when the radio answered at boot.
-- `settings_task`, also on core 0, owns the flash and saves what `SETTINGS_WRITES` queues.
-- `boot_key_task`, also on core 0, owns GPIO0 and passes the BOOT key's short and long presses
+- `zone_task`, in thread mode, looks the zone up again whenever a fix moves about a kilometre
+  in automatic mode, a zone at a time with a yield between, takes the settings panel's choice
+  from `ZONE_CHOICE`, publishes the zone through `ZONE_STATE`, and queues a new zone for
+  `settings_task`. It stays out of `BUS_EXECUTOR` because a yield there polls the task again at
+  once, which would hold off the frame loop for the whole lookup.
+- `settings_task`, in thread mode, owns the flash and saves what `SETTINGS_WRITES` queues.
+- `boot_key_task`, in thread mode, owns GPIO0 and passes the BOOT key's short and long presses
   to the frame loop through `BOOT_KEY_PRESSES`. The stage takes them as `Input::boot_key` and
   does nothing with them yet.
-- `motion_task`, also on core 0, owns the IMU and magnetometer, the compass calibration and the
-  sensor fusion. It samples every 250 ms, or every 20 ms while the frame loop sets
-  `COMPASS_ACTIVE`, and publishes a `MotionSnapshot` through `MOTION_STATE`. The frame loop
-  never touches these devices.
 - `second_core` on core 1 waits for display TE with a timeout, flushes the handed-off regions
   through `Co5300Display`, sets the display level a frame carries before flushing it, and
   returns the other framebuffer. A frame can also switch the panel out of sleep before it goes
@@ -305,11 +314,20 @@ that touches flash at run time goes through the same pair. Loading at boot happe
 starts.
 
 The I2C bus is an `embassy_sync` `Mutex<CriticalSectionRawMutex, _>`, shared through
-`I2cDevice` clones, so it excludes across cores. Every user is on core 0 today. The bus went async
-on core 0, which binds its interrupt there, and a user on core 1 has not been tried. A transaction
-holds the bus for its length, and a 512-byte GNSS read takes about 12 ms at 400 kHz. The lock has no
+`I2cDevice` clones. After `bring_up` spawns the bus tasks, nothing in thread mode may use it. The
+mutex keeps one waiter's waker, and registering a second wakes the first, so two waiters on
+`BUS_EXECUTOR` wake each other in turn at interrupt level. A thread-mode holder then never runs
+to release the bus, and core 0 stops; it did, within seconds, with only the GNSS and radio tasks
+there. The bus went async on core 0, which binds its interrupt there. A transaction holds the
+bus for its length, and a 512-byte GNSS read takes about 12 ms at 400 kHz. The lock has no
 priority; the owner chose a plain mutex over a bus-owning task, and a priority-aware mutex is the
 route if the radio needs one.
+
+Every lock esp-hal and esp-rtos take raises the interrupt level to 5, so `BUS_EXECUTOR` never runs
+inside one. esp-hal saves the FPU registers across interrupts (`float-save-restore`), so the bus
+tasks may use floats. esp-hal's async drivers are not `Send`, since each binds its interrupt to
+the core that made it, so `start_bus_tasks` takes them in `OnCore0`, which asserts they stay on
+core 0.
 
 The two cores exchange two PSRAM framebuffers through `util::Swap`, which is lock-free and carries
 `unsafe impl Send/Sync`. A started `SwapThreadFuture` must be allowed to complete; dropping it

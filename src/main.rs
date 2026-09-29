@@ -108,6 +108,11 @@ struct SecondCore<A: Allocator + 'static = alloc::alloc::Global> {
 
 static mut CORE1_STACK: esp_hal::system::Stack<8192> = esp_hal::system::Stack::new();
 static CORE1_EXECUTOR: StaticCell<esp_rtos::embassy::Executor> = StaticCell::new();
+/// Runs every task that uses the I2C bus on core 0 from a software interrupt, so the GNSS and
+/// radio timing preempts the frame loop instead of waiting for it to yield. Once `bring_up` has
+/// spawned them, nothing in thread mode may take the bus: two tasks here waiting on it wake each
+/// other in turn and never let a thread-mode holder run to release it.
+static BUS_EXECUTOR: StaticCell<esp_rtos::embassy::InterruptExecutor<2>> = StaticCell::new();
 static SWAP: StaticCell<Swap<SwapState<&esp_alloc::EspHeap>>> = StaticCell::new();
 type I2cBus = I2c<'static, esp_hal::Async>;
 type SharedI2cDevice = I2cDevice<'static, CriticalSectionRawMutex, I2cBus>;
@@ -228,8 +233,20 @@ fn gps_utc() -> Option<(i64, Instant)> {
 }
 /// How long powering off waits for the settings queued before it to be saved.
 const SETTINGS_SETTLE: Duration = Duration::from_secs(3);
-/// A zone choice from the settings panel, for `sensor_task`, which owns the zone.
+/// A zone choice from the settings panel, for `zone_task`, which owns the zone.
 static ZONE_CHOICE: Signal<CriticalSectionRawMutex, ZoneChoice> = Signal::new();
+/// The latest fix's latitude and longitude, from `sensor_task` for `zone_task`.
+static ZONE_FIX: Signal<CriticalSectionRawMutex, (i32, i32)> = Signal::new();
+/// The zone the clocks show, from `zone_task` for `sensor_task`.
+static ZONE_STATE: BlockingMutex<CriticalSectionRawMutex, Cell<ZoneState>> =
+    BlockingMutex::new(Cell::new(ZoneState {
+        mode: ZoneMode::Automatic,
+        zone: None,
+    }));
+/// Asks `touch_task` to read the controller without waiting for its report.
+static TOUCH_POLL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+/// Each read of the touch controller, for the frame loop, which takes one a step.
+static TOUCH_READS: Channel<CriticalSectionRawMutex, Result<TouchData, ()>, 1> = Channel::new();
 
 #[derive(Clone, Copy)]
 enum ZoneChoice {
@@ -267,7 +284,6 @@ struct SensorTask {
     rtc: Option<Pcf85063aRtc<SharedI2cDevice>>,
     state: SensorSnapshot,
     rtc_sync_pending: bool,
-    zones: ZoneTracker,
 }
 
 /// Moving this far from where the zone was last looked up, in 1e-7 degrees on either axis, looks
@@ -815,7 +831,6 @@ async fn sensor_task(task: SensorTask) {
         mut rtc,
         mut state,
         mut rtc_sync_pending,
-        mut zones,
     } = task;
     // Whether GNSS has set the clock since the firmware started.
     let mut clock_set = false;
@@ -828,9 +843,6 @@ async fn sensor_task(task: SensorTask) {
     loop {
         Timer::after(Duration::from_millis(250)).await;
 
-        if let Some(choice) = ZONE_CHOICE.try_take() {
-            zones.choose(choice);
-        }
         if GNSS_PARKED.try_take().is_some()
             && let Some(power) = &mut power
         {
@@ -969,13 +981,9 @@ async fn sensor_task(task: SensorTask) {
 
         if let Some(fix) = state.gnss.fix {
             state.position = Some((fix.latitude.get(), fix.longitude.get()));
+            ZONE_FIX.signal((fix.latitude.get(), fix.longitude.get()));
         }
-        if let Some(fix) = state.gnss.fix
-            && let Some(zone) = zones.follow(fix.latitude.get(), fix.longitude.get()).await
-        {
-            queue_write(settings::Write::AutomaticZone(zone));
-        }
-        state.zone = zones.state();
+        state.zone = ZONE_STATE.lock(Cell::get);
 
         SENSOR_STATE.signal(state);
     }
@@ -983,14 +991,17 @@ async fn sensor_task(task: SensorTask) {
 
 /// How often the receiver fixes, which start-up leaves at the module's default.
 const FIX_PERIOD: Duration = Duration::from_secs(1);
-/// How long before a burst is due the reads start. Bursts come up to about 15 ms either side of
-/// a second after the last, and a read takes 11 to 17 ms, longer while other tasks hold the core.
+/// How long before a burst is due the reads start. Bursts come up to about 30 ms either side of
+/// a second after the last.
 const BURST_EARLY: Duration = Duration::from_millis(100);
 /// Each burst's reads start this much later than the last one's, over [`DITHER_STEPS`] bursts,
-/// which together span a read's usual length. A burst is seen at the first read after it
+/// which together span one read and [`POLL_GAP`]. A burst is seen at the first read after it
 /// arrives, so a grid that kept its phase to the second would see every burst equally late.
-const DITHER_STEP: Duration = Duration::from_millis(2);
+const DITHER_STEP: Duration = Duration::from_micros(1_600);
 const DITHER_STEPS: u32 = 8;
+/// The pause after a read that found nothing. Straight after a read, the module refuses the
+/// next and the driver's retry waits 10 ms.
+const POLL_GAP: Duration = Duration::from_millis(2);
 
 struct GnssTask {
     gnss: Lc76g<SharedI2cDevice, embassy_time::Delay>,
@@ -1010,6 +1021,8 @@ async fn gnss_task(task: GnssTask) {
     // When the last burst was seen, which times the reads before a fix.
     let mut last_burst: Option<Instant> = None;
     let mut bursts = 0u32;
+    // The last burst was found waiting, so the reads start too late to see the next one arrive.
+    let mut missed = true;
     // When the module last copied its navigation data to its flash.
     let mut navigation_saved: Option<Instant> = None;
     #[cfg(feature = "gnss-raw-log")]
@@ -1025,7 +1038,7 @@ async fn gnss_task(task: GnssTask) {
             )
             .map(Instant::from_micros)
             .or_else(|| last_burst.map(|seen| seen + FIX_PERIOD));
-        if let Some(due) = due {
+        if let Some(due) = due.filter(|_| !missed) {
             let start = due - BURST_EARLY + DITHER_STEP * (bursts % DITHER_STEPS);
             if let Either::Second(()) = select(Timer::at(start), POWER_OFF.wait()).await {
                 park_gnss(&mut gnss, navigation_saved.is_some()).await;
@@ -1036,14 +1049,19 @@ async fn gnss_task(task: GnssTask) {
         // from the last one are not taken for the next.
         let mut emptied = false;
         let mut empty_reads = 0u32;
+        let mut slowest_read = Duration::MIN;
         let (seen, mut available) = loop {
             if POWER_OFF.try_take().is_some() {
                 park_gnss(&mut gnss, navigation_saved.is_some()).await;
             }
-            match gnss.nmea_length().await {
+            let read_started = Instant::now();
+            let length = gnss.nmea_length().await;
+            slowest_read = slowest_read.max(read_started.elapsed());
+            match length {
                 Ok(0) => {
                     emptied = true;
                     empty_reads += 1;
+                    Timer::after(POLL_GAP).await;
                 }
                 Ok(available) => break (emptied.then(Instant::now), available),
                 Err(error) => {
@@ -1100,13 +1118,17 @@ async fn gnss_task(task: GnssTask) {
 
         let state = nmea_parser.state();
         GNSS_STATE.signal(state);
-        // A burst found waiting was not seen when it arrived, but still times the next reads.
-        let previous = last_burst.replace(seen.unwrap_or_else(Instant::now));
+        // A burst found waiting says nothing of when bursts arrive: the reads run on until one
+        // is seen, at most a period later.
+        missed = seen.is_none();
+        let previous = last_burst;
         if let Some(seen) = seen {
+            last_burst = Some(seen);
             debug!(
-                "[GNSS] burst after {}us, {} empty reads before it",
+                "[GNSS] burst after {}us, {} empty reads before it, slowest {}us",
                 previous.map(|last| (seen - last).as_micros()),
-                empty_reads
+                empty_reads,
+                slowest_read.as_micros()
             );
             bursts = bursts.wrapping_add(1);
             // Only a valid RMC sets the time, so a new one names this burst's fix.
@@ -1202,6 +1224,83 @@ async fn park_gnss(gnss: &mut Lc76g<SharedI2cDevice, embassy_time::Delay>, fixed
     }
     GNSS_PARKED.signal(());
     core::future::pending().await
+}
+
+/// Follows the zone under each fix, and the zone chosen in the settings panel. It stays in thread
+/// mode: a lookup yields between its steps, and a yield on `BUS_EXECUTOR` would run it again at
+/// once, starving the frame loop for the whole lookup.
+#[embassy_executor::task]
+async fn zone_task(mut zones: ZoneTracker) {
+    loop {
+        match select(ZONE_FIX.wait(), ZONE_CHOICE.wait()).await {
+            Either::First((latitude, longitude)) => {
+                if let Some(zone) = zones.follow(latitude, longitude).await {
+                    queue_write(settings::Write::AutomaticZone(zone));
+                }
+            }
+            Either::Second(choice) => zones.choose(choice),
+        }
+        ZONE_STATE.lock(|state| state.set(zones.state()));
+    }
+}
+
+/// Reads the touch controller when it signals a report, or when the frame loop asks through
+/// `TOUCH_POLL`, and hands each read to the frame loop, one at a time.
+#[embassy_executor::task]
+async fn touch_task(mut touch: TouchDriver) {
+    loop {
+        if let Either::First(Err(_)) = select(touch.wait_for_touch(), TOUCH_POLL.wait()).await {
+            continue;
+        }
+        let read = touch.read_touch_data().await.map_err(|_| ());
+        // A poll asked for while this read ran is answered by it.
+        TOUCH_POLL.reset();
+        TOUCH_READS.send(read).await;
+    }
+}
+
+/// Moves a value to another executor on core 0. esp-hal's async drivers are not `Send`, since
+/// each binds its interrupt to the core that made it, but a move between executors on the same
+/// core keeps that binding.
+struct OnCore0<T>(T);
+
+// SAFETY: an `OnCore0` is only sent to `BUS_EXECUTOR`, which runs on core 0, where every
+// value it carries was made.
+unsafe impl<T> Send for OnCore0<T> {}
+
+/// The tasks that use the I2C bus, for `BUS_EXECUTOR`.
+struct BusTasks {
+    sensor: SensorTask,
+    gnss: GnssTask,
+    motion: Option<MotionTask>,
+    touch: Option<TouchDriver>,
+    radio: Option<RadioTask>,
+}
+
+/// Spawns the bus tasks from inside `BUS_EXECUTOR`, whose own spawner takes tasks that are not
+/// `Send`.
+#[embassy_executor::task]
+async fn start_bus_tasks(tasks: OnCore0<BusTasks>) {
+    // SAFETY: this runs as an embassy task, polled with the executor's own context.
+    let spawner = unsafe { Spawner::for_current_executor() }.await;
+    let OnCore0(BusTasks {
+        sensor,
+        gnss,
+        motion,
+        touch,
+        radio,
+    }) = tasks;
+    spawner.spawn(sensor_task(sensor).unwrap());
+    spawner.spawn(gnss_task(gnss).unwrap());
+    if let Some(motion) = motion {
+        spawner.spawn(motion_task(motion).unwrap());
+    }
+    if let Some(touch) = touch {
+        spawner.spawn(touch_task(touch).unwrap());
+    }
+    if let Some(radio) = radio {
+        spawner.spawn(radio_task(radio).unwrap());
+    }
 }
 
 struct RadioTask {
@@ -1473,6 +1572,7 @@ struct Parts {
     touch_rst: peripherals::GPIO40<'static>,
     touch_int: peripherals::GPIO11<'static>,
     imu_int2: peripherals::GPIO21<'static>,
+    bus_interrupt: peripherals::FROM_CPU_INTR2<'static>,
 }
 
 #[embassy_executor::task]
@@ -1557,6 +1657,7 @@ async fn async_main(spawner: Spawner) {
         touch_rst: peripherals.GPIO40,
         touch_int: peripherals.GPIO11,
         imu_int2: peripherals.GPIO21,
+        bus_interrupt: peripherals.FROM_CPU_INTR2,
     };
     let zones = ZoneTracker {
         mode: saved.zone_mode,
@@ -1564,23 +1665,19 @@ async fn async_main(spawner: Spawner) {
         automatic: saved.automatic_zone,
         looked_up_at: None,
     };
-    let touch = Cell::new(None);
-    join(
-        bring_up(spawner, parts, zones, &touch),
-        frame_loop(stage, fb_st, &touch),
-    )
-    .await;
+    join(bring_up(spawner, parts, zones), frame_loop(stage, fb_st)).await;
 }
 
 /// Brings up every part behind the self-test, each against its deadline, then starts the tasks
 /// that own them and hands the touch controller to the frame loop. A part that fails is left
 /// out, and its owner runs without it.
-async fn bring_up(
-    spawner: Spawner,
-    parts: Parts,
-    zones: ZoneTracker,
-    touch_slot: &Cell<Option<TouchDriver>>,
-) {
+async fn bring_up(spawner: Spawner, parts: Parts, zones: ZoneTracker) {
+    let bus = BUS_EXECUTOR
+        .init(esp_rtos::embassy::InterruptExecutor::new(
+            parts.bus_interrupt,
+        ))
+        .start(esp_hal::interrupt::Priority::Priority1);
+
     // The I²C pull-ups share VCC3V3 with the secondary board.
     Timer::after(Duration::from_millis(board::I2C_POWER_SETTLE_MS)).await;
 
@@ -1803,21 +1900,16 @@ async fn bring_up(
         parts.lora_cs,
     )
     .await;
-    if let Some(lora) = lora {
-        spawner.spawn(
-            radio_task(RadioTask {
-                lora,
-                dio0: Input::new(parts.lora_dio0, InputConfig::default()),
-                path: LoraPath::new(
-                    i2c.clone(),
-                    !((1 << board::EXIO_GPS_RESET)
-                        | (1 << board::EXIO_LORA_RESET)
-                        | (1 << board::EXIO_LORA_TX_SWITCH)),
-                ),
-            })
-            .unwrap(),
-        );
-    }
+    let radio = lora.map(|lora| RadioTask {
+        lora,
+        dio0: Input::new(parts.lora_dio0, InputConfig::default()),
+        path: LoraPath::new(
+            i2c.clone(),
+            !((1 << board::EXIO_GPS_RESET)
+                | (1 << board::EXIO_LORA_RESET)
+                | (1 << board::EXIO_LORA_TX_SWITCH)),
+        ),
+    });
 
     if touch_ok {
         touch.set_config(Cst9217Config {
@@ -1832,32 +1924,32 @@ async fn bring_up(
             "[TOUCH] OK resolution={}x{} firmware={=u32:#x} checksum={=u32:#x}",
             resolution.width, resolution.height, firmware, checksum
         );
-        touch_slot.set(Some(touch));
     }
 
-    spawner.spawn(gnss_task(GnssTask { gnss, nmea_parser }).unwrap());
-    spawner.spawn(
-        sensor_task(SensorTask {
-            power,
-            rtc: rtc_ok.then_some(rtc),
-            state: initial_sensor_state,
-            rtc_sync_pending: true,
-            zones,
-        })
-        .unwrap(),
-    );
-    // The compass needs the IMU for its tilt. Without it, it shows NO DATA.
-    if imu_ok {
-        spawner.spawn(
-            motion_task(MotionTask {
+    ZONE_STATE.lock(|state| state.set(zones.state()));
+    spawner.spawn(zone_task(zones).unwrap());
+    // From here on the bus belongs to `BUS_EXECUTOR`'s tasks.
+    bus.spawn(
+        start_bus_tasks(OnCore0(BusTasks {
+            sensor: SensorTask {
+                power,
+                rtc: rtc_ok.then_some(rtc),
+                state: initial_sensor_state,
+                rtc_sync_pending: true,
+            },
+            gnss: GnssTask { gnss, nmea_parser },
+            // The compass needs the IMU for its tilt. Without it, it shows NO DATA.
+            motion: imu_ok.then(|| MotionTask {
                 magnetometer: magnetometer_ok.then_some(magnetometer),
                 imu,
                 accel_lsb_per_g: ph_qmi8658::accel_lsb_per_g(accel_range),
                 gyro_lsb_per_dps: ph_qmi8658::gyro_lsb_per_dps(gyro_range),
-            })
-            .unwrap(),
-        );
-    }
+            }),
+            touch: touch_ok.then_some(touch),
+            radio,
+        }))
+        .unwrap(),
+    );
     info!(
         "[MEM] internal_used={} psram_used={}",
         esp_alloc::HEAP.used(),
@@ -2055,9 +2147,7 @@ async fn start_lora(
 async fn frame_loop(
     mut stage: Stage,
     mut fb_st: SwapThread<'static, SwapState<&'static esp_alloc::EspHeap>>,
-    touch_slot: &Cell<Option<TouchDriver>>,
 ) {
-    let mut touch: Option<TouchDriver> = None;
     // The last report the controller wrote, which a stale read repeats.
     let mut touch_data = TouchData::default();
     let mut last_report = Instant::now();
@@ -2081,9 +2171,6 @@ async fn frame_loop(
     // can power off.
     let mut power_off_after: Option<u8> = None;
     loop {
-        if touch.is_none() {
-            touch = touch_slot.take();
-        }
         let start = Instant::now();
         {
             let state = fb_st.get();
@@ -2100,9 +2187,10 @@ async fn frame_loop(
             let fb = &mut **fb;
             // Keep reading while either tracker holds a contact, or neither sees it lift.
             let in_contact = stage.in_contact();
-            let touch_repoll_due =
-                touch.is_some() && in_contact && last_touch_poll.elapsed() >= TOUCH_REPOLL;
-            let mut wait_timeout = if touch_repoll_due || stage.is_animating() {
+            if in_contact && last_touch_poll.elapsed() >= TOUCH_REPOLL {
+                TOUCH_POLL.signal(());
+            }
+            let mut wait_timeout = if stage.is_animating() {
                 Duration::from_micros(0)
             } else if in_contact {
                 TOUCH_REPOLL
@@ -2113,14 +2201,8 @@ async fn frame_loop(
                 let until = Duration::from_micros(due.saturating_sub(Instant::now().as_micros()));
                 wait_timeout = wait_timeout.min(until);
             }
-            let touch_wait = async {
-                match touch.as_mut() {
-                    Some(touch) => touch.wait_for_touch().await.is_ok(),
-                    None => core::future::pending().await,
-                }
-            };
-            let (touch_ready, sensor_state, motion_state, boot, key, boot_key) = match select4(
-                touch_wait,
+            let (touch_read, sensor_state, motion_state, boot, key, boot_key) = match select4(
+                TOUCH_READS.receive(),
                 select4(
                     SENSOR_STATE.wait(),
                     BOOT_REPORTS.receive(),
@@ -2132,38 +2214,35 @@ async fn frame_loop(
             )
             .await
             {
-                Either4::First(ready) => (ready, None, None, None, None, None),
+                Either4::First(read) => (Some(read), None, None, None, None, None),
                 Either4::Second(Either4::First(state)) => {
-                    (false, Some(state), None, None, None, None)
+                    (None, Some(state), None, None, None, None)
                 }
                 Either4::Second(Either4::Second(report)) => {
-                    (false, None, None, Some(report), None, None)
+                    (None, None, None, Some(report), None, None)
                 }
-                Either4::Second(Either4::Third(key)) => (false, None, None, None, Some(key), None),
-                Either4::Second(Either4::Fourth(key)) => (false, None, None, None, None, Some(key)),
-                Either4::Third(state) => (false, None, Some(state), None, None, None),
-                Either4::Fourth(()) => (touch_repoll_due, None, None, None, None, None),
+                Either4::Second(Either4::Third(key)) => (None, None, None, None, Some(key), None),
+                Either4::Second(Either4::Fourth(key)) => (None, None, None, None, None, Some(key)),
+                Either4::Third(state) => (None, None, Some(state), None, None, None),
+                Either4::Fourth(()) => (None, None, None, None, None, None),
             };
-            let touch_ready = touch_ready
-                && match touch.as_mut().map(|touch| touch.read_touch_data()) {
-                    Some(read) => match read.await {
-                        Ok(TouchData::Stale) if last_report.elapsed() < LIFT_WITHOUT_REPORT => true,
-                        Ok(TouchData::Stale) => {
-                            touch_data = TouchData::default();
-                            true
-                        }
-                        Ok(fresh) => {
-                            touch_data = fresh;
-                            last_report = Instant::now();
-                            true
-                        }
-                        Err(_) => {
-                            warn!("[TOUCH] read failed");
-                            false
-                        }
-                    },
-                    None => false,
-                };
+            let touch_ready = match touch_read {
+                Some(Ok(TouchData::Stale)) if last_report.elapsed() < LIFT_WITHOUT_REPORT => true,
+                Some(Ok(TouchData::Stale)) => {
+                    touch_data = TouchData::default();
+                    true
+                }
+                Some(Ok(fresh)) => {
+                    touch_data = fresh;
+                    last_report = Instant::now();
+                    true
+                }
+                Some(Err(())) => {
+                    warn!("[TOUCH] read failed");
+                    false
+                }
+                None => false,
+            };
             if touch_ready {
                 last_touch_poll = Instant::now();
             }
