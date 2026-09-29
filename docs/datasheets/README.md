@@ -6,6 +6,7 @@ for revisions before designing new hardware around a component.
 
 | File | Component | Source |
 | --- | --- | --- |
+| `ESP32-S3.pdf` | Espressif ESP32-S3 Series Datasheet v2.2 | [Espressif](https://www.espressif.com/sites/default/files/documentation/esp32-s3_datasheet_en.pdf) |
 | `CO5300_Datasheet_V0.00.pdf` | Chipone CO5300 AMOLED controller | [Espressif mirror](https://dl.espressif.com/AE/esp-iot-solution/CO5300_Datasheet_V0.00.pdf) |
 | `QMI8658C.pdf` | QST QMI8658C IMU | [Waveshare mirror](https://files.waveshare.com/wiki/common/QMI8658C.pdf) |
 | `PCF85063A.pdf` | NXP PCF85063A RTC | [Waveshare mirror](https://files.waveshare.com/wiki/common/PCF85063A.pdf) |
