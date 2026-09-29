@@ -41,6 +41,8 @@ initialization or peripheral mappings.
   crate's test vectors from timezone-boundary-builder's boundaries and the IANA rules; its header
   has the command. The boundaries are ODbL, and `crates/tz/data/NOTICE.md` carries the
   attribution the licence asks for.
+- `src/gnss_time.rs` estimates when each UTC second begins on the local timer, from when the
+  GNSS module's bursts arrive. It has no board dependency, and `host-tests` tests it.
 - `src/settings.rs` keeps settings in flash across restarts, in an ekv database: the time zone
   mode, the manually chosen zone, the zone GNSS last placed the device in, the display's
   brightness, the screen timeout, and whether the screen rests on the always-on face. `partitions.csv` is the flash layout, and the cargo runner flashes it.
@@ -261,14 +263,19 @@ core 1 owns the display SPI/DMA path.
   without the IMU. `frame_loop` owns touch and drawing. It reads touch directly, takes the
   latest sensor values from `SENSOR_STATE` and `MOTION_STATE`, draws into its current
   framebuffer, records `dirty` and the display level to set, and hands the state to core 1.
-- `sensor_task`, also on core 0, owns the PMIC, RTC and GNSS. It publishes a whole
-  `SensorSnapshot` through the `SENSOR_STATE` signal. In automatic zone mode it looks the zone
-  up again whenever a fix moves about a kilometre, a zone at a time with a yield between, and
-  queues a new zone for `settings_task`. It passes the PMIC's power key presses to the frame
-  loop through `KEY_PRESSES`. When the frame loop sets `POWER_OFF`, once the panel is off, it
-  saves the GNSS module's navigation data, waits for `SETTINGS_DONE` to reach
-  `SETTINGS_QUEUED`, and has the PMIC power the board off. Every settings write goes through
-  `queue_write`, which keeps that count.
+- `sensor_task`, also on core 0, owns the PMIC and RTC, and takes the GNSS state from
+  `GNSS_STATE`. It publishes a whole `SensorSnapshot` through the `SENSOR_STATE` signal every
+  250 ms. In automatic zone mode it looks the zone up again whenever a fix moves about a
+  kilometre, a zone at a time with a yield between, and queues a new zone for `settings_task`.
+  It passes the PMIC's power key presses to the frame loop through `KEY_PRESSES`. Once
+  `GNSS_PARKED` is set, it waits for `SETTINGS_DONE` to reach `SETTINGS_QUEUED` and has the PMIC
+  power the board off. Every settings write goes through `queue_write`, which keeps that count.
+- `gnss_task`, also on core 0, owns the GNSS module. The module sends a burst of NMEA each
+  second, and the task reads it only from 100 ms before the burst is due until it has drained,
+  leaving the bus alone between. It publishes the parsed state through `GNSS_STATE` and times
+  UTC on the local timer from each fix's burst (`gnss_time`, read with `gps_utc`). When the
+  frame loop sets `POWER_OFF`, once the panel is off, it saves the module's navigation data and
+  sets `GNSS_PARKED`.
 - `radio_task`, also on core 0, owns the LoRa radio, its `DIO0` line and the RF switch. It
   runs the link test when a `lora-link-*` feature is on, and otherwise holds the radio idle. It
   is spawned only when the radio answered at boot.

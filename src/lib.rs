@@ -7,6 +7,7 @@ extern crate alloc;
 
 pub mod board;
 pub mod drivers;
+pub mod gnss_time;
 pub mod peripherals;
 pub mod settings;
 pub mod util;

@@ -115,8 +115,10 @@ measurement. What limits it is how late the firmware learns that a UTC second be
   marks each second's start never reaches the ESP32. Only NMEA says which second it is.
 - **NMEA latency.** The module writes RMC after computing the fix. How long after the second that
   is on the LC76G is unmeasured, and the adaptive low-power mode may vary it.
-- **Polling.** `sensor_task` sleeps 250 ms each loop before reading GNSS, so a sentence can wait up
-  to about that long. This is probably the largest term, and it is the firmware's own.
+- **Polling.** `sensor_task` used to read GNSS once every 250 ms, so a sentence could wait up to
+  about that long. `gnss_task` now reads continuously around each expected burst (below). A read
+  takes 11 to 17 ms, since the module's protocol puts a 10 ms wait inside it, and longer while
+  other core-0 tasks hold the executor, so one sighting is late by up to a read or more.
 - **RTC resolution.** The PCF85063A counts whole seconds. Phase within a second between fixes has
   to come from a CPU timer anchored to a sentence's arrival.
 
@@ -125,12 +127,23 @@ nodes should disagree by less than either one's worst case.
 
 Ways to tighten it, none of which needs a PPS:
 
-- Read the module often around the expected second instead of every 250 ms. That removes most of
-  the polling term.
+- Read the module often around the expected second instead of every 250 ms. Built: reads start
+  100 ms before the burst is due and repeat until it shows.
 - Timestamp each RMC's arrival and keep the earliest over many fixes. Arrival jitter only adds
-  delay, so the minimum sits closest to the true edge.
+  delay, so the minimum sits closest to the true edge. Built: the earliest of the last 16 fixes,
+  with each burst's reads starting 2 ms later than the last over 8 bursts, so the read grid does
+  not see every burst equally late. A burst counts only after a read found the buffer empty.
 - Once a neighbour is heard, align to the group from the `DIO0` arrival times of its packets. That
-  is what slots need, and what CAD depends on.
+  is what slots need, and what CAD depends on. Not built; it needs the protocol.
+
+Indoors without a fix, bursts arrived 940 to 1080 ms apart as the task saw them, most within 20 ms
+of a second, so the module's own timing varies by tens of milliseconds before a fix. With a fix it
+is unmeasured, and the UTC estimate has only been exercised on the host.
+
+Two further terms are open. The frame loop, the sensor and motion tasks and `gnss_task` share one
+cooperative executor on core 0, so a long draw delays a sighting; a higher-priority executor for
+`gnss_task` would remove that. And the local timer drifts from UTC by its crystal's error between
+fixes, which the estimate does not correct.
 
 Two measurements settle how tight it gets, and with it the floor (see "CAD is required at this
 size"): RMC's arrival after the second on one board, with its spread, from a fast GNSS read; and

@@ -1523,6 +1523,19 @@ where
         Ok(&buffer[..available])
     }
 
+    /// How many bytes of NMEA the receiver holds. It is read at the end of the call, one command
+    /// delay after it starts.
+    pub async fn nmea_length(&mut self) -> Result<usize, GnssError<I::Error>> {
+        self.read_nmea_length().await
+    }
+
+    /// Reads exactly `buffer.len()` bytes of buffered NMEA, which must not be more than
+    /// [`Self::nmea_length`] last reported.
+    pub async fn read_buffered_nmea(&mut self, buffer: &mut [u8]) -> Result<(), GnssError<I::Error>> {
+        self.read_after_config(CONFIG_READ_DATA, buffer, GnssOperation::ReadData)
+            .await
+    }
+
     /// Reads at most `buffer.len()` bytes of currently buffered NMEA data.
     pub async fn read_nmea_chunk<'a>(
         &mut self,

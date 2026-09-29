@@ -26,7 +26,10 @@ use embassy_futures::{
     select::{Either, Either3, Either4, select, select3, select4},
 };
 use embassy_sync::{
-    blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel, mutex::Mutex, signal::Signal,
+    blocking_mutex::{Mutex as BlockingMutex, raw::CriticalSectionRawMutex},
+    channel::Channel,
+    mutex::Mutex,
+    signal::Signal,
 };
 use embassy_time::{Duration, Instant, TimeoutError, Timer, with_timeout};
 use embedded_graphics::prelude::*;
@@ -51,6 +54,7 @@ use octowhere::{
     drivers::{co5300::Co5300Display, framebuffer::Flush as _, qspi_bus::QspiBus},
     fontdue,
     framebuffer::Framebuffer,
+    gnss_time::SecondEstimator,
     motion::{
         compass::{AxisMap, Calibration, CalibrationEvent, CompassView, Holds, Vec3},
         fusion::Fusion,
@@ -195,8 +199,33 @@ const BOOT_KEY_LONG: Duration = Duration::from_secs(1);
 /// How long the BOOT key's level must hold before a press or a release counts.
 const BOOT_KEY_SETTLE: Duration = Duration::from_millis(20);
 /// Set by the frame loop once the panel is off after the power-off confirmation, for
-/// `sensor_task` to power the board off.
+/// `gnss_task` to park the GNSS module.
 static POWER_OFF: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+/// Set by `gnss_task` once the GNSS module is parked, for `sensor_task` to power the board off.
+static GNSS_PARKED: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+/// The receiver's state after each burst of NMEA, from `gnss_task` for `sensor_task`.
+static GNSS_STATE: Signal<CriticalSectionRawMutex, GnssState> = Signal::new();
+/// The local timer minus UTC, from `gnss_task`: see [`gps_utc`].
+static GPS_TIME: BlockingMutex<CriticalSectionRawMutex, Cell<Option<GpsTime>>> =
+    BlockingMutex::new(Cell::new(None));
+
+#[derive(Clone, Copy)]
+struct GpsTime {
+    /// The local timer minus UTC, in microseconds.
+    offset: i64,
+    /// When a fix last refined it. The local timer drifts from UTC by its crystal's error after.
+    updated: Instant,
+}
+
+/// UTC in microseconds now, and when the fixes it comes from last refined it. It is late by the
+/// receiver's own latency, which is the same on every board.
+fn gps_utc() -> Option<(i64, Instant)> {
+    let time = GPS_TIME.lock(Cell::get)?;
+    Some((
+        Instant::now().as_micros() as i64 - time.offset,
+        time.updated,
+    ))
+}
 /// How long powering off waits for the settings queued before it to be saved.
 const SETTINGS_SETTLE: Duration = Duration::from_secs(3);
 /// A zone choice from the settings panel, for `sensor_task`, which owns the zone.
@@ -235,9 +264,6 @@ struct SensorSnapshot {
 
 struct SensorTask {
     power: Option<Axp2101Power<SharedI2cDevice>>,
-    gnss: Lc76g<SharedI2cDevice, embassy_time::Delay>,
-    nmea: [u8; 512],
-    nmea_parser: NmeaParser,
     rtc: Option<Pcf85063aRtc<SharedI2cDevice>>,
     state: SensorSnapshot,
     rtc_sync_pending: bool,
@@ -786,9 +812,6 @@ async fn settings_task(mut store: Store) {
 async fn sensor_task(task: SensorTask) {
     let SensorTask {
         mut power,
-        mut gnss,
-        mut nmea,
-        mut nmea_parser,
         mut rtc,
         mut state,
         mut rtc_sync_pending,
@@ -796,17 +819,11 @@ async fn sensor_task(task: SensorTask) {
     } = task;
     // Whether GNSS has set the clock since the firmware started.
     let mut clock_set = false;
-    // When the module last copied its navigation data to its flash.
-    let mut navigation_saved: Option<Instant> = None;
     // Once a time is injected, GNSS no longer sets the clock, so a fix cannot undo it.
     #[cfg(feature = "rtc-inject")]
     let mut injected = false;
     #[cfg(not(feature = "rtc-inject"))]
     let injected = false;
-    #[cfg(feature = "gnss-raw-log")]
-    let mut raw_nmea_line = [0; 256];
-    #[cfg(feature = "gnss-raw-log")]
-    let mut raw_nmea_line_len = 0;
 
     loop {
         Timer::after(Duration::from_millis(250)).await;
@@ -814,10 +831,10 @@ async fn sensor_task(task: SensorTask) {
         if let Some(choice) = ZONE_CHOICE.try_take() {
             zones.choose(choice);
         }
-        if POWER_OFF.try_take().is_some()
+        if GNSS_PARKED.try_take().is_some()
             && let Some(power) = &mut power
         {
-            power_off(power, &mut gnss, navigation_saved.is_some()).await;
+            power_off(power).await;
         }
         if let Some(power) = &mut power {
             match power.take_key_press().await {
@@ -851,75 +868,8 @@ async fn sensor_task(task: SensorTask) {
             );
         }
 
-        match gnss.read_nmea_chunk(&mut nmea).await {
-            Ok(data) => {
-                #[cfg(feature = "gnss-raw-log")]
-                log_raw_nmea(data, &mut raw_nmea_line, &mut raw_nmea_line_len);
-                let mut updates = 0;
-                for &byte in data.iter() {
-                    match nmea_parser.push(byte) {
-                        Ok(Some(NmeaUpdate::PairAck(ack))) => {
-                            updates += 1;
-                            debug!(
-                                "[GNSS] PAIR_ACK command={} status={}",
-                                ack.command, ack.status
-                            );
-                        }
-                        Ok(Some(NmeaUpdate::NmeaOutputRate { sentence, rate })) => {
-                            updates += 1;
-                            debug!(
-                                "[GNSS] NMEA_OUTPUT_RATE sentence={} rate={}",
-                                sentence, rate
-                            );
-                        }
-                        Ok(Some(NmeaUpdate::Pair(message))) => {
-                            updates += 1;
-                            debug!(
-                                "[GNSS] PAIR_RESPONSE command={} fields={=[u8]:a}",
-                                message.command(),
-                                message.fields()
-                            );
-                        }
-                        Ok(Some(_)) => updates += 1,
-                        Ok(None) => {}
-                        Err(error) => warn!("[GNSS] NMEA_PARSE_ERROR {=str}", error),
-                    }
-                }
-                state.gnss = nmea_parser.state();
-                let signal = state.gnss.signal;
-                debug!(
-                    "[GNSS] acquisition in_view={} with_signal={} used={} strongest_snr_db={} fix_type={} hdop_milli={}",
-                    signal.satellites_in_view.get(),
-                    signal.satellites_with_signal.get(),
-                    signal.satellites_used.get(),
-                    signal.strongest_snr.map(|value| value.get()),
-                    signal.fix_type,
-                    signal.hdop.map(|value| value.get()),
-                );
-                if let Some(fix) = state.gnss.fix {
-                    debug!(
-                        "[GNSS] sample bytes={} updates={} lat={} lon={} alt_mm={} sats={} hdop_milli={}",
-                        data.len(),
-                        updates,
-                        fix.latitude.get(),
-                        fix.longitude.get(),
-                        fix.altitude.map(|value| value.get()),
-                        fix.satellites,
-                        fix.hdop.map(|value| value.get()),
-                    );
-                } else {
-                    debug!(
-                        "[GNSS] sample bytes={} updates={} no_fix",
-                        data.len(),
-                        updates
-                    );
-                }
-            }
-            Err(GnssError::I2c { operation, error }) => {
-                warn!("[GNSS] I2C_FAILED operation={} error={}", operation, error);
-            }
-            Err(GnssError::BufferTooSmall { .. }) => warn!("[GNSS] NMEA_BUFFER_TOO_SMALL"),
-            Err(GnssError::PairCommand(_)) => warn!("[GNSS] PAIR_COMMAND_BUILD_FAILED"),
+        if let Some(gnss) = GNSS_STATE.try_take() {
+            state.gnss = gnss;
         }
         #[cfg(feature = "rtc-inject")]
         if let Some((seconds, mode)) = rtc_inject::take()
@@ -1017,13 +967,6 @@ async fn sensor_task(task: SensorTask) {
             stopped: rtc.as_ref().is_some_and(|rtc| rtc.oscillator_stopped()),
         };
 
-        if state.gnss.fix.is_some()
-            && navigation_saved.is_none_or(|at| at.elapsed() >= NAVIGATION_SAVE_INTERVAL)
-        {
-            let saved = gnss.save_navigation_data().await;
-            info!("[GNSS] navigation data saved={}", saved.is_ok());
-            navigation_saved = Some(Instant::now());
-        }
         if let Some(fix) = state.gnss.fix {
             state.position = Some((fix.latitude.get(), fix.longitude.get()));
         }
@@ -1036,6 +979,229 @@ async fn sensor_task(task: SensorTask) {
 
         SENSOR_STATE.signal(state);
     }
+}
+
+/// How often the receiver fixes, which start-up leaves at the module's default.
+const FIX_PERIOD: Duration = Duration::from_secs(1);
+/// How long before a burst is due the reads start. Bursts come up to about 15 ms either side of
+/// a second after the last, and a read takes 11 to 17 ms, longer while other tasks hold the core.
+const BURST_EARLY: Duration = Duration::from_millis(100);
+/// Each burst's reads start this much later than the last one's, over [`DITHER_STEPS`] bursts,
+/// which together span a read's usual length. A burst is seen at the first read after it
+/// arrives, so a grid that kept its phase to the second would see every burst equally late.
+const DITHER_STEP: Duration = Duration::from_millis(2);
+const DITHER_STEPS: u32 = 8;
+
+struct GnssTask {
+    gnss: Lc76g<SharedI2cDevice, embassy_time::Delay>,
+    nmea_parser: NmeaParser,
+}
+
+/// Reads the GNSS module around each second's burst of NMEA, publishes its state, and times
+/// UTC from when each burst is first seen. Between bursts it leaves the bus alone.
+#[embassy_executor::task]
+async fn gnss_task(task: GnssTask) {
+    let GnssTask {
+        mut gnss,
+        mut nmea_parser,
+    } = task;
+    let mut nmea = [0u8; 512];
+    let mut seconds = SecondEstimator::new();
+    // When the last burst was seen, which times the reads before a fix.
+    let mut last_burst: Option<Instant> = None;
+    let mut bursts = 0u32;
+    // When the module last copied its navigation data to its flash.
+    let mut navigation_saved: Option<Instant> = None;
+    #[cfg(feature = "gnss-raw-log")]
+    let mut raw_nmea_line = [0; 256];
+    #[cfg(feature = "gnss-raw-log")]
+    let mut raw_nmea_line_len = 0;
+
+    loop {
+        let due = seconds
+            .next_burst(
+                (Instant::now() + BURST_EARLY).as_micros(),
+                FIX_PERIOD.as_micros(),
+            )
+            .map(Instant::from_micros)
+            .or_else(|| last_burst.map(|seen| seen + FIX_PERIOD));
+        if let Some(due) = due {
+            let start = due - BURST_EARLY + DITHER_STEP * (bursts % DITHER_STEPS);
+            if let Either::Second(()) = select(Timer::at(start), POWER_OFF.wait()).await {
+                park_gnss(&mut gnss, navigation_saved.is_some()).await;
+            }
+        }
+
+        // A burst counts as seen only after a read found the buffer empty, so bytes left over
+        // from the last one are not taken for the next.
+        let mut emptied = false;
+        let mut empty_reads = 0u32;
+        let (seen, mut available) = loop {
+            if POWER_OFF.try_take().is_some() {
+                park_gnss(&mut gnss, navigation_saved.is_some()).await;
+            }
+            match gnss.nmea_length().await {
+                Ok(0) => {
+                    emptied = true;
+                    empty_reads += 1;
+                }
+                Ok(available) => break (emptied.then(Instant::now), available),
+                Err(error) => {
+                    log_gnss_error(error);
+                    emptied = false;
+                    Timer::after(Duration::from_millis(250)).await;
+                }
+            }
+        };
+
+        let before = nmea_parser.state().utc;
+        let mut bytes = 0;
+        let mut updates = 0;
+        while available > 0 {
+            let chunk = &mut nmea[..available.min(512)];
+            if let Err(error) = gnss.read_buffered_nmea(chunk).await {
+                log_gnss_error(error);
+                break;
+            }
+            bytes += chunk.len();
+            #[cfg(feature = "gnss-raw-log")]
+            log_raw_nmea(chunk, &mut raw_nmea_line, &mut raw_nmea_line_len);
+            for &byte in chunk.iter() {
+                match nmea_parser.push(byte) {
+                    Ok(Some(NmeaUpdate::PairAck(ack))) => {
+                        updates += 1;
+                        debug!(
+                            "[GNSS] PAIR_ACK command={} status={}",
+                            ack.command, ack.status
+                        );
+                    }
+                    Ok(Some(NmeaUpdate::NmeaOutputRate { sentence, rate })) => {
+                        updates += 1;
+                        debug!(
+                            "[GNSS] NMEA_OUTPUT_RATE sentence={} rate={}",
+                            sentence, rate
+                        );
+                    }
+                    Ok(Some(NmeaUpdate::Pair(message))) => {
+                        updates += 1;
+                        debug!(
+                            "[GNSS] PAIR_RESPONSE command={} fields={=[u8]:a}",
+                            message.command(),
+                            message.fields()
+                        );
+                    }
+                    Ok(Some(_)) => updates += 1,
+                    Ok(None) => {}
+                    Err(error) => warn!("[GNSS] NMEA_PARSE_ERROR {=str}", error),
+                }
+            }
+            available = gnss.nmea_length().await.unwrap_or(0);
+        }
+
+        let state = nmea_parser.state();
+        GNSS_STATE.signal(state);
+        // A burst found waiting was not seen when it arrived, but still times the next reads.
+        let previous = last_burst.replace(seen.unwrap_or_else(Instant::now));
+        if let Some(seen) = seen {
+            debug!(
+                "[GNSS] burst after {}us, {} empty reads before it",
+                previous.map(|last| (seen - last).as_micros()),
+                empty_reads
+            );
+            bursts = bursts.wrapping_add(1);
+            // Only a valid RMC sets the time, so a new one names this burst's fix.
+            if let Some(utc) = state.utc
+                && state.utc != before
+            {
+                let fix = unix_micros(utc);
+                let offset = seconds.add(seen.as_micros(), fix);
+                GPS_TIME.lock(|time| {
+                    time.set(Some(GpsTime {
+                        offset,
+                        updated: seen,
+                    }))
+                });
+                let late = seen.as_micros() as i64 - fix - offset;
+                if seconds.samples() == 1 {
+                    info!("[GNSS] UTC anchored to a burst");
+                }
+                debug!(
+                    "[GNSS] burst late={}us over {} fixes",
+                    late,
+                    seconds.samples()
+                );
+            }
+        }
+        let signal = state.signal;
+        debug!(
+            "[GNSS] acquisition in_view={} with_signal={} used={} strongest_snr_db={} fix_type={} hdop_milli={}",
+            signal.satellites_in_view.get(),
+            signal.satellites_with_signal.get(),
+            signal.satellites_used.get(),
+            signal.strongest_snr.map(|value| value.get()),
+            signal.fix_type,
+            signal.hdop.map(|value| value.get()),
+        );
+        if let Some(fix) = state.fix {
+            debug!(
+                "[GNSS] sample bytes={} updates={} lat={} lon={} alt_mm={} sats={} hdop_milli={}",
+                bytes,
+                updates,
+                fix.latitude.get(),
+                fix.longitude.get(),
+                fix.altitude.map(|value| value.get()),
+                fix.satellites,
+                fix.hdop.map(|value| value.get()),
+            );
+        } else {
+            debug!("[GNSS] sample bytes={} updates={} no_fix", bytes, updates);
+        }
+
+        if state.fix.is_some()
+            && navigation_saved.is_none_or(|at| at.elapsed() >= NAVIGATION_SAVE_INTERVAL)
+        {
+            let saved = gnss.save_navigation_data().await;
+            info!("[GNSS] navigation data saved={}", saved.is_ok());
+            navigation_saved = Some(Instant::now());
+        }
+    }
+}
+
+fn log_gnss_error(
+    error: GnssError<embassy_embedded_hal::shared_bus::I2cDeviceError<esp_hal::i2c::master::Error>>,
+) {
+    match error {
+        GnssError::I2c { operation, error } => {
+            warn!("[GNSS] I2C_FAILED operation={} error={}", operation, error)
+        }
+        GnssError::BufferTooSmall { .. } => warn!("[GNSS] NMEA_BUFFER_TOO_SMALL"),
+        GnssError::PairCommand(_) => warn!("[GNSS] PAIR_COMMAND_BUILD_FAILED"),
+    }
+}
+
+/// A receiver time in microseconds since 1970.
+fn unix_micros(utc: GnssDateTime) -> i64 {
+    let seconds = tz::DateTime {
+        year: i32::from(utc.year),
+        month: utc.month,
+        day: utc.day,
+        hour: utc.hours,
+        minute: utc.minutes,
+        second: utc.seconds,
+    }
+    .to_unix();
+    seconds * 1_000_000 + i64::from(utc.milliseconds) * 1_000
+}
+
+/// Has the GNSS module copy its navigation data to its flash when it has had a fix, for a hot
+/// start, then tells `sensor_task` to power off. The module is not read again.
+async fn park_gnss(gnss: &mut Lc76g<SharedI2cDevice, embassy_time::Delay>, fixed: bool) -> ! {
+    if fixed {
+        let saved = gnss.save_navigation_data().await;
+        info!("[GNSS] navigation data saved={}", saved.is_ok());
+    }
+    GNSS_PARKED.signal(());
+    core::future::pending().await
 }
 
 struct RadioTask {
@@ -1669,12 +1835,10 @@ async fn bring_up(
         touch_slot.set(Some(touch));
     }
 
+    spawner.spawn(gnss_task(GnssTask { gnss, nmea_parser }).unwrap());
     spawner.spawn(
         sensor_task(SensorTask {
             power,
-            gnss,
-            nmea: [0; 512],
-            nmea_parser,
             rtc: rtc_ok.then_some(rtc),
             state: initial_sensor_state,
             rtc_sync_pending: true,
@@ -2146,17 +2310,9 @@ fn queue_write(write: settings::Write) {
     }
 }
 
-/// Powers the board off once the settings queued before it are saved. The GNSS module copies
-/// its navigation data to its flash first when it has had a fix, for a hot start.
-async fn power_off(
-    power: &mut Axp2101Power<SharedI2cDevice>,
-    gnss: &mut Lc76g<SharedI2cDevice, embassy_time::Delay>,
-    fixed: bool,
-) {
-    if fixed {
-        let saved = gnss.save_navigation_data().await;
-        info!("[GNSS] navigation data saved={}", saved.is_ok());
-    }
+/// Powers the board off once the settings queued before it are saved. `gnss_task` has parked
+/// the GNSS module first.
+async fn power_off(power: &mut Axp2101Power<SharedI2cDevice>) {
     let settled = with_timeout(SETTINGS_SETTLE, async {
         while SETTINGS_DONE.load(Ordering::Acquire) != SETTINGS_QUEUED.load(Ordering::Relaxed) {
             Timer::after(Duration::from_millis(10)).await;
