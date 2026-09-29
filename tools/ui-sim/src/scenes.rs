@@ -95,6 +95,12 @@ pub const SCENES: &[Scene] = &[
         captioned: false,
     },
     Scene {
+        name: "power-off-dim-cancel",
+        about: "a 15 s timeout dims the clock, the power key opens the confirmation over the dim, and a cancel lets it dim and go dark",
+        run: power_off_dim_cancel,
+        captioned: false,
+    },
+    Scene {
         name: "tour",
         about: "every screen and state, slowly: the start-up, the clock, the battery, the compass, settings, the always-on face and a demonstrated failure",
         run: tour,
@@ -848,6 +854,20 @@ fn power_off(driver: &mut Driver) {
     driver.wait(ms(1_200));
     driver.swipe(Point::new(113, 258), Point::new(400, 258), ms(800));
     driver.wait(ms(1_000));
+}
+
+fn power_off_dim_cancel(driver: &mut Driver) {
+    driver.stage = Stage::new(PeripheralState {
+        firmware: "0.1.0",
+        timeout: Timeout::Seconds15,
+        ..PeripheralState::default()
+    });
+    start(driver, Screen::Clock);
+    driver.wait(ms(16_000));
+    driver.key(Key::Long);
+    driver.wait(ms(1_500));
+    tap(driver, 133, 118);
+    driver.wait(ms(6_500));
 }
 
 /// Settles on `screen` with a 15 s timeout, and waits out the timeout and the dim.

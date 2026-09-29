@@ -63,3 +63,9 @@ Recorded 2026-09-26. These override the hand-off where they differ.
     `context/octowhere-poweroff-implementation-handoff-2026-09-29/`, approved and built. It
     takes the settings cap and the CLEAR slide's gesture, in orange. A cancel returns the
     screen to the rest the key woke it from, and the 10 s restarts on every touch.
+15. **The design's reply to responses 2 and 3** (design, 2026-09-29), in
+    `handoffs/IMPLEMENTATION-REPLY-2026-09-29-2-AND-3.md`. The pin stays at (437, 175). The
+    battery's slices keep the 0.1.0 barcode's widths whatever version runs. The settings hint
+    style stays 14 px everywhere. A cancel onto a dimming screen must not brighten it or flash
+    the page; it now turns the fade back from the level that shows. The reply asks for the
+    charging and power-off recordings, and a panel check, before it signs off the motion.

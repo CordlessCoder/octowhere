@@ -392,8 +392,8 @@ interpreted them:
 ## Power key as built
 
 The confirmation follows the power-off hand-off of 2026-09-29. Captures: `power-off.png`,
-`power-off-sliding.png`, `power-off-confirmed.png` and `power-off.mp4`, which is
-`--record power-off`.
+`power-off-sliding.png`, `power-off-confirmed.png`, `power-off.mp4` (`--record power-off`) and
+`power-off-dim-cancel.mp4` (`--record power-off-dim-cancel`).
 
 - **A short press** rests the screen at once, on the always-on face if ALWAYS ON is on and
   dark otherwise, without the dim. On a resting screen it wakes it, as a touch would.
@@ -414,7 +414,8 @@ The confirmation follows the power-off hand-off of 2026-09-29. Captures: `power-
 - **Cancelling.** The top cap, a cover, or 10 s untouched cancels. Every touch restarts the
   10 s, and after a wake from rest they count from when the screen is fully up. A cancel puts
   the screen back as it rested before the key woke it: dimmed, darkening, on the always-on
-  face or off. A dim or darkening one restarts its step. A short press cancels and rests the
+  face or off. A dim or darkening one restarts its step, from the level that shows, so it
+  never brightens (`power-off-dim-cancel.mp4`). A short press cancels and rests the
   screen. While the confirmation shows, the screen timeout holds.
 - **The start-up ignores the key**, so the press that powers the board on does nothing more.
 

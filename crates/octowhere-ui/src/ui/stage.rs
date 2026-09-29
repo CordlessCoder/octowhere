@@ -822,7 +822,12 @@ impl Stage {
     /// timeout.
     fn step_power_off(&mut self, now: Micros, touch: Option<Touch>, update: &mut Update) {
         self.restart(now);
+        // After the answer, so that a cancel turns a fade back before it moves on.
+        self.answer_power_off(now, touch, update);
         self.step_fade(now, update);
+    }
+
+    fn answer_power_off(&mut self, now: Micros, touch: Option<Touch>, update: &mut Update) {
         if self.raw_touch[0].is_none() {
             self.swallowed = false;
         }

@@ -2476,3 +2476,41 @@ fn the_power_off_slide_takes_a_drag_started_near_the_handle() {
         );
     }
 }
+
+/// Cancelling onto a dimming or darkening screen carries on down from the level that shows.
+#[test]
+fn a_cancel_onto_a_dimming_screen_never_brightens_it() {
+    for darkening in [false, true] {
+        for wait in [100_000, 1_000_000] {
+            let mut driver = resting_on(Screen::Clock, Timeout::Seconds15, false);
+            if darkening {
+                wait_until(&mut driver, 22_000_000, |rest| {
+                    matches!(rest, Rest::Darkening { .. })
+                });
+            } else {
+                wait_until(&mut driver, 16_000_000, is_dimmed);
+            }
+            driver.key(Key::Long);
+            driver.wait(wait);
+            let mut shown = driver.stage.shown_level();
+            let mut sent = vec![shown];
+            let cancel = driver.cover();
+            assert!(driver.stage.power_off().is_none());
+            let later =
+                (0..frames_in(rest::DIM_HOLD + 2_000_000)).map(|_| driver.step(Input::default()));
+            for level in core::iter::once(cancel)
+                .chain(later)
+                .filter_map(|update| update.brightness)
+            {
+                assert!(level <= shown, "{darkening}, {wait}: {sent:?} then {level}");
+                shown = level;
+                sent.push(level);
+            }
+            assert_eq!(
+                driver.stage.rest(),
+                Rest::Off,
+                "{darkening}, {wait}: {sent:?}"
+            );
+        }
+    }
+}
