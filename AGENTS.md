@@ -86,8 +86,8 @@ initialization or peripheral mappings.
 - [`context/IMPLEMENTATION.md`](context/IMPLEMENTATION.md) is a finished multi-agent brief kept as
   a record. Its partition is historical.
 - [`context/LORA-PROTOCOL.md`](context/LORA-PROTOCOL.md) is the agreed design for the location
-  mesh: gossip digest, GPS-anchored TDMA, packet layout, crypto and pairing. Nothing in it is
-  implemented yet.
+  mesh of up to 32 nodes: band and radio settings, gossip digest, GPS-anchored TDMA, packet
+  layout, messages, crypto and pairing. Nothing in it is implemented yet.
 - [`context/palette-reference.md`](context/palette-reference.md) records the colour values from the
   reference board and the role each one plays in `chrome.rs`.
 
@@ -378,8 +378,8 @@ settles medium access, packet layout, freshness, crypto and pairing, and it name
 changes it depends on: the radio moves to its own task, and I2C gets a single owning task.
 
 The driver has more than the link test uses: channel activity detection, RSSI and SNR per packet,
-frequency error, and a hardware random source. Channel activity detection is the one the protocol
-has a planned use for, as a receive-power optimisation once slot timing is tight enough.
+frequency error, and a hardware random source. The protocol needs channel activity detection to
+keep receive power down at 32 nodes, once slot timing is good to milliseconds.
 
 Radio hardware findings, including the RF switch requirement, the pin correction and the SX1272
 errata workaround, are in [`docs/hardware-notes.md`](docs/hardware-notes.md).

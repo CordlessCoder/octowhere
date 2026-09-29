@@ -92,8 +92,9 @@ until the feature set is complete, because profiling an incomplete firmware pric
   The datasheet (`docs/datasheets/CO5300_Datasheet_V0.00.pdf`) also has TE modes and the scan
   line as proper settings, reading the current scan line (45h), partial and scroll areas, idle
   mode, deep standby, and high-brightness and contrast controls.
-- Build the protocol in [`LORA-PROTOCOL.md`](LORA-PROTOCOL.md). Its "Firmware structure" section
-  comes first: the radio moves into its own task, and I2C gets a single owning task.
+- Build the protocol in [`LORA-PROTOCOL.md`](LORA-PROTOCOL.md), in its "Build order". The
+  "Firmware structure" section comes first: the radio moves into its own task, and I2C gets a
+  single owning task.
 
 - Make the partial flush cheaper. With the compass redrawing only what changed, a one-degree turn
   flushes about 28,000 pixels in about 42 regions and takes about 10 ms, against 14.8 ms for the
@@ -208,8 +209,9 @@ until the feature set is complete, because profiling an incomplete firmware pric
 - The partial-flush hardware check, in [`HARDWARE-VERIFICATION.md`](HARDWARE-VERIFICATION.md).
   Partial flushing is the default. The owner has checked the compass by eye; the rest of the
   check has not been run.
-- CAD, flash encryption, delta coordinates and temperature-compensated RTC calibration, in the
-  "Deferred" section of [`LORA-PROTOCOL.md`](LORA-PROTOCOL.md).
+- Flash encryption, delta coordinates, temperature-compensated RTC calibration, moving a group to
+  its fallback band and messages longer than a packet, in the "Deferred" section of
+  [`LORA-PROTOCOL.md`](LORA-PROTOCOL.md).
 - `panic = "immediate-abort"`, in the "Binary size" section of [`AGENTS.md`](../AGENTS.md).
 - fontdue's opt-in 16-byte `Line` (`compact-lines`), designed in
   `~/git/fontdue/DESIGN-compact-lines.md`. Once it lands, it will ask octowhere to confirm that the
