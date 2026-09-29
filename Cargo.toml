@@ -7,7 +7,12 @@ edition = "2024"
 esp-hal = { version = "1.2.2", features = ["defmt", "esp32s3", "requires-unstable", "unstable"] }
 esp-rtos = { version = "0.4.0", features = ["esp32s3", "embassy", "esp-alloc", "defmt"] }
 esp-alloc = { version = "0.11.0", features = ["nightly"] }
-esp-println = { version = "0.18.0", features = ["esp32s3", "defmt-espflash"] }
+esp-println = { version = "0.18.0", default-features = false, features = [
+    "esp32s3",
+    "defmt-espflash",
+    "jtag-serial",
+    "critical-section",
+] }
 esp-backtrace = { version = "0.20.0", features = ["esp32s3", "panic-handler", "defmt"] }
 esp-bootloader-esp-idf = { version = "0.6.0", features = ["embedded-storage", "esp32s3"] }
 defmt = "1.1.1"
