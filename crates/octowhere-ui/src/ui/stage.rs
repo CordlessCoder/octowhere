@@ -872,6 +872,7 @@ impl Stage {
                 self.power_off = None;
                 self.forget_drawn();
                 self.rest_again(prior, now, update);
+                self.step_always_on(now);
             }
             Answer::Confirm => {
                 self.fade_to(0, power_off::FADE, now);
@@ -990,25 +991,32 @@ impl Stage {
             }
             Rest::AlwaysOn | Rest::Off => {}
         }
-        if self.rest == Rest::AlwaysOn {
-            // The battery moves with the minute's redraw rather than waking the panel on its own.
-            // A stopped or unreadable clock has no minute to redraw on, so the stage's clock
-            // marks its minutes instead.
-            let clock = &self.peripherals.clock;
-            let (battery, taken) = self.shown_battery;
-            let minute = now / MINUTE;
-            let held = always_on::View::of(clock, battery);
-            let redraw = self.drawn_always_on.as_ref() != Some(&held);
-            if redraw || (held.is_still() && taken / MINUTE != minute) {
-                self.shown_battery = (self.peripherals.battery, now);
-                let view = always_on::View::of(clock, self.peripherals.battery);
-                if self.drawn_always_on.as_ref() != Some(&view) {
-                    self.drawn_always_on = Some(view);
-                    self.changed.make_full();
-                }
+        self.step_always_on(now);
+        true
+    }
+
+    /// Works out what the always-on face shows, while the screen rests on it. It must run in
+    /// every step that leaves the screen there, or that step draws the face under it.
+    fn step_always_on(&mut self, now: Micros) {
+        if self.rest != Rest::AlwaysOn {
+            return;
+        }
+        // The battery moves with the minute's redraw rather than waking the panel on its own.
+        // A stopped or unreadable clock has no minute to redraw on, so the stage's clock marks
+        // its minutes instead.
+        let clock = &self.peripherals.clock;
+        let (battery, taken) = self.shown_battery;
+        let minute = now / MINUTE;
+        let held = always_on::View::of(clock, battery);
+        let redraw = self.drawn_always_on.as_ref() != Some(&held);
+        if redraw || (held.is_still() && taken / MINUTE != minute) {
+            self.shown_battery = (self.peripherals.battery, now);
+            let view = always_on::View::of(clock, self.peripherals.battery);
+            if self.drawn_always_on.as_ref() != Some(&view) {
+                self.drawn_always_on = Some(view);
+                self.changed.make_full();
             }
         }
-        true
     }
 
     /// Wakes from the always-on face or from off, onto the face that showed, which runs its

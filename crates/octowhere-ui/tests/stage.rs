@@ -2566,3 +2566,22 @@ fn the_charging_wipe_runs_along_the_fill_from_its_end() {
         "the slices reach the start"
     );
 }
+
+/// The step that cancels onto the always-on face draws that face, not the page under it.
+#[test]
+fn a_cancel_onto_the_always_on_face_draws_it_at_once() {
+    let mut driver = resting_on(Screen::Clock, Timeout::Seconds15, true);
+    wait_until(&mut driver, 22_000_000, |rest| rest == Rest::AlwaysOn);
+    let resting = render(&driver.stage);
+    driver.key(Key::Long);
+    driver.wait(400_000);
+    driver.touch(Some(Point::new(133, 118)));
+    // The tap lands as the finger lifts; the reports without one are what the stage steps on.
+    while driver.stage.power_off().is_some() {
+        assert!(driver.now() < 30_000_000, "the tap did not cancel");
+        driver.touch(None);
+    }
+    assert_eq!(driver.stage.rest(), Rest::AlwaysOn);
+    let wrong = differing(&render(&driver.stage), &resting);
+    assert_eq!(wrong, 0, "{wrong} pixels differ from the always-on face");
+}
