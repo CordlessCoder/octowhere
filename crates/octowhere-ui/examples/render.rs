@@ -446,8 +446,8 @@ fn startup_frames() -> Vec<(String, Stage)> {
     ];
     // The identity's frames 0–119, then the card's 120–138, then the clock.
     for n in [
-        0, 3, 6, 12, 13, 20, 24, 30, 38, 42, 45, 51, 53, 56, 66, 77, 119, 120, 123, 129, 133, 137,
-        138, 139,
+        0, 3, 6, 12, 13, 20, 24, 30, 38, 42, 45, 51, 53, 56, 66, 77, 82, 97, 119, 120, 123, 129,
+        133, 137, 138, 139,
     ] {
         frames.push((format!("startup-frame-{n:02}"), boot(&[], 6, frame(n))));
     }

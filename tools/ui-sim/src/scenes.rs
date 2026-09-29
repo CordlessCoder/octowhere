@@ -47,6 +47,12 @@ pub const SCENES: &[Scene] = &[
         captioned: false,
     },
     Scene {
+        name: "clock-charging",
+        about: "the clock's battery: plugged in, the slices' loop, unplugged, and a plug-in cut short",
+        run: clock_charging,
+        captioned: false,
+    },
+    Scene {
         name: "swipe-to-compass",
         about: "from the clock to the compass, a turn, and back",
         run: swipe_to_compass,
@@ -213,6 +219,34 @@ fn page_right(driver: &mut Driver) {
 fn clock_entry(driver: &mut Driver) {
     start(driver, Screen::Clock);
     driver.wait(ms(3_000));
+}
+
+/// The battery at `percent`, on USB and charging or not.
+fn on_battery(driver: &mut Driver, percent: u8, charging: bool) {
+    let mut sensors = dublin_now(driver);
+    sensors.battery = Some(Battery {
+        present: true,
+        percent,
+        millivolts: 3_900,
+        charging,
+        usb: charging,
+    });
+    driver.sensors(sensors);
+}
+
+fn clock_charging(driver: &mut Driver) {
+    start(driver, Screen::Clock);
+    on_battery(driver, 87, false);
+    driver.wait(ms(1_500));
+    on_battery(driver, 87, true);
+    driver.wait(ms(3_000));
+    on_battery(driver, 87, false);
+    driver.wait(ms(1_500));
+    // Unplugged again halfway through the wipe: the solid turns back from where it is.
+    on_battery(driver, 87, true);
+    driver.wait(ms(220));
+    on_battery(driver, 87, false);
+    driver.wait(ms(1_500));
 }
 
 fn swipe_to_compass(driver: &mut Driver) {
@@ -505,7 +539,7 @@ fn tour(driver: &mut Driver) {
     };
     show(
         driver,
-        "THE BATTERY, RIGHT OF THE MINUTES. OFF USB, THE FILL GOES SOLID.",
+        "THE BATTERY, UNDER THE BAND'S LINES. OFF USB, THE FILL GOES SOLID.",
         |s| {
             s.battery = battery(87, false);
         },
@@ -515,7 +549,7 @@ fn tour(driver: &mut Driver) {
     driver.wait(HOLD);
     show(
         driver,
-        "PLUGGED IN. THE FILL DRAINS AWAY TO UNEVEN BANDS, WHICH GATHER AND REGROUP, THEN REST FOR FOUR SECONDS.",
+        "PLUGGED IN. THE SOLID DRAINS DOWN TO SLICES LIKE THE IDENTITY'S BARCODE, WHICH GATHER AND REGROUP, THEN REST FOR FOUR SECONDS.",
         |s| {
             s.battery = battery(64, true);
         },
@@ -523,18 +557,16 @@ fn tour(driver: &mut Driver) {
     driver.wait(ms(2_500));
     show(
         driver,
-        "UNPLUGGED. THE FILL RISES BACK OVER THE BANDS.",
+        "UNPLUGGED. THE SOLID RISES BACK OVER THE SLICES.",
         |s| s.battery = battery(64, false),
     );
     say("LOW BATTERY, AT 15% OR LESS.");
     drain(driver, 64, 12, false);
     driver.wait(HOLD);
-    show(
-        driver,
-        "LOW AND CHARGING: FEWER BANDS, AND A SHORTER WIPE.",
-        |s| s.battery = battery(12, true),
-    );
-    show(driver, "NO BATTERY READING. NO FILL, ONLY DASHES.", |s| {
+    show(driver, "LOW AND CHARGING: FEWER SLICES.", |s| {
+        s.battery = battery(12, true)
+    });
+    show(driver, "NO BATTERY READING. NO FILL, A GRAY HATCH.", |s| {
         s.battery = None
     });
     show(driver, "BACK ON USB, CHARGING.", |_| {});

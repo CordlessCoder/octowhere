@@ -107,7 +107,6 @@ const CLOCK_ENTRY: ClockTimes<Micros> = ClockTimes {
     label: 100_000,
     plate: 160_000,
     zone: 240_000,
-    mark: 300_000,
     scatter: 0,
     battery: 160_000,
 };
@@ -120,7 +119,6 @@ const CLOCK_PLATE_REVEAL: Micros = 120_000;
 const CLOCK_ZONE_REVEAL: Micros = 160_000;
 /// The hour rail opens with the zone line, a cell each side at a steady rate.
 const CLOCK_RAIL_REVEAL: Micros = 400_000;
-const CLOCK_MARK_REVEAL: Micros = 160_000;
 /// A time that a fix or a zone change replaces, rather than one that ticks, types in again:
 /// the hours, minutes and seconds over the first duration, and the date line after a delay.
 const CLOCK_TIME_REVEAL: Micros = 180_000;
@@ -147,7 +145,6 @@ struct ClockTimes<T = Option<Micros>> {
     label: T,
     plate: T,
     zone: T,
-    mark: T,
     scatter: T,
     battery: T,
 }
@@ -1558,7 +1555,6 @@ impl Stage {
                     label: start(CLOCK_ENTRY.label),
                     plate: start(CLOCK_ENTRY.plate),
                     zone: start(CLOCK_ENTRY.zone),
-                    mark: start(CLOCK_ENTRY.mark),
                     scatter: start(CLOCK_ENTRY.scatter),
                     battery: start(CLOCK_ENTRY.battery),
                 };
@@ -1645,7 +1641,6 @@ impl Stage {
             plate: progress(now, times.plate, CLOCK_PLATE_REVEAL),
             zone: progress(now, times.zone, CLOCK_ZONE_REVEAL),
             rail: progress(now, times.zone, CLOCK_RAIL_REVEAL),
-            mark: progress(now, times.mark, CLOCK_MARK_REVEAL),
             scatter: progress(now, times.scatter, CLOCK_SCATTER_BLOOM),
             battery: progress(now, times.battery, CLOCK_BATTERY_RISE),
             time: progress(now, retyped, CLOCK_TIME_REVEAL),
@@ -1678,7 +1673,6 @@ impl Stage {
             plate: leaving(p, 0.1, 0.3),
             zone: leaving(p, 0.0, 0.2),
             rail: leaving(p, 0.0, 0.2),
-            mark: leaving(p, 0.05, 0.2),
             // The scatter thins as it moves with the page, the entry's bloom reversed.
             scatter: leaving(p, 0.0, 0.5),
             battery: leaving(p, 0.1, 0.3),

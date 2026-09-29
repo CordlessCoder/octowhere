@@ -243,3 +243,95 @@ pub fn polygon_quarters<D: CoverageTarget>(
         }
     }
 }
+
+/// How much of pixel `p` the span `[from, to)` covers, from 0 to 1.
+fn overlap(p: i32, from: f32, to: f32) -> f32 {
+    (to.min(p as f32 + 1.0) - from.max(p as f32)).clamp(0.0, 1.0)
+}
+
+/// Fills `[x0, x1) × [y0, y1)` in continuous pixels, blending the pixels its edges cut.
+pub fn rect<D: CoverageTarget>(
+    target: &mut D,
+    (x0, y0): (f32, f32),
+    (x1, y1): (f32, f32),
+    color: D::Color,
+) -> Result<(), D::Error> {
+    let (left, right) = (libm::floorf(x0) as i32, libm::ceilf(x1) as i32);
+    let (solid_left, solid_right) = (libm::ceilf(x0) as i32, libm::floorf(x1) as i32);
+    for y in bounded_rows(target, libm::floorf(y0) as i32..libm::ceilf(y1) as i32) {
+        let down = overlap(y, y0, y1);
+        let cover = |x: i32| (overlap(x, x0, x1) * down * 255.0 + 0.5) as u8;
+        if down < 1.0 || solid_right <= solid_left {
+            for x in left..right {
+                target.blend_pixel(Point::new(x, y), cover(x), color);
+            }
+            continue;
+        }
+        target.fill_solid(
+            &Rectangle::new(
+                Point::new(solid_left, y),
+                Size::new((solid_right - solid_left) as u32, 1),
+            ),
+            color,
+        )?;
+        if left < solid_left {
+            target.blend_pixel(Point::new(left, y), cover(left), color);
+        }
+        if solid_right < right {
+            target.blend_pixel(Point::new(solid_right, y), cover(solid_right), color);
+        }
+    }
+    Ok(())
+}
+
+/// The most pixels [`contours`] rasterizes at once, so a large shape costs a band of rows of
+/// scratch rather than its whole box.
+const BAND_PIXELS: usize = 8192;
+
+/// Fills the closed contours by the even-odd rule, so a contour inside another cuts a hole.
+/// `raster` and `coverage` are scratch, reused across calls.
+pub fn contours<D: CoverageTarget>(
+    target: &mut D,
+    raster: &mut Raster<'static>,
+    coverage: &mut Vec<u8>,
+    contours: &[&[(f32, f32)]],
+    color: D::Color,
+) {
+    let points = || contours.iter().flat_map(|contour| contour.iter());
+    let bound = |pick: fn(f32, f32) -> f32, axis: fn(&(f32, f32)) -> f32| {
+        points().map(axis).reduce(pick).unwrap_or(0.0)
+    };
+    let left = libm::floorf(bound(f32::min, |p| p.0)) as i32;
+    let top = libm::floorf(bound(f32::min, |p| p.1)) as i32;
+    let width = (libm::ceilf(bound(f32::max, |p| p.0)) as i32 - left).max(0) as usize;
+    let bottom = libm::ceilf(bound(f32::max, |p| p.1)) as i32;
+    if width == 0 || bottom <= top {
+        return;
+    }
+    let band = (BAND_PIXELS / width).max(1) as i32;
+    for y in bounded_rows(target, top..bottom).step_by(band as usize) {
+        let rows = band.min(bottom - y);
+        if !target.visible(&Rectangle::new(
+            Point::new(left, y),
+            Size::new(width as u32, rows as u32),
+        )) {
+            continue;
+        }
+        raster.resize(width, rows as usize);
+        let path = contours.iter().flat_map(|contour| {
+            contour.iter().enumerate().map(|(index, &(x, y))| {
+                if index == 0 {
+                    PathEvent::MoveTo([x, y])
+                } else {
+                    PathEvent::LineTo([x, y])
+                }
+            })
+        });
+        rasterize_path_clipped(raster, path, Transform::IDENTITY, (-left as f32, -y as f32));
+        coverage.clear();
+        coverage.extend(raster.get_bitmap_iter_even_odd());
+        for (row, pixels) in coverage.chunks_exact(width).enumerate() {
+            target.blend_row(left, y + row as i32, pixels, color);
+        }
+    }
+}

@@ -1,13 +1,13 @@
 //! The clock face: hours on the field, minutes and seconds knocked out of a band across the
-//! circle in the state's colour, a status symbol, UTC and the battery in the band beside a
-//! battery gauge, the date and the zone as two lines of tokens, a 24-hour rail, and two
-//! quiet scatter fields behind. It is K1 of `context/design/`, on the round 4 spec
-//! (`context/design/specs/CLOCK-FACE-ROUND4-SPEC.md`) and the clock face spec before it.
+//! circle in the state's colour, a status symbol, UTC and the battery in the band over a wide
+//! battery well, the date and the zone as two lines of tokens, a 24-hour rail, and two quiet
+//! scatter fields behind. It is K1 of `context/design/`, on the round 4 spec
+//! (`context/design/specs/CLOCK-FACE-ROUND4-SPEC.md`) and the clock face spec before it, with
+//! the battery of the 29 September implementation update.
 
 use core::fmt::Write as _;
 
 use embedded_graphics::{
-    draw_target::DrawTarget as _,
     prelude::{Point, Size},
     primitives::Rectangle,
 };
@@ -24,14 +24,13 @@ use super::{
 };
 use crate::chrome::{
     self, Color, CoverageTarget, FRAKTION, FRAKTION_BOLD, FontdueRenderer, OnBackground, SHAPIRO,
-    Window,
 };
 
 const CENTER: Point = Point::new(233, 233);
 const DIGITS_PX: u32 = 136;
 const HOURS: Point = Point::new(62, 184);
 const MINUTES: Point = Point::new(62, 305);
-const SECONDS: Point = Point::new(260, 305);
+const SECONDS: Point = Point::new(388, 244);
 const SECONDS_PX: u32 = 40;
 const LABEL: Point = Point::new(261, 225);
 const TILE: Tile = Tile {
@@ -49,10 +48,9 @@ const BAND: Rectangle = Rectangle::new(Point::new(0, 198), Size::new(466, 120));
 /// `each_line_stays_in_its_region` checks every character each line can hold.
 const HOURS_INK: Rectangle = Rectangle::new(Point::new(62, 88), Size::new(166, 99));
 const MINUTES_INK: Rectangle = Rectangle::new(Point::new(62, 209), Size::new(166, 99));
-const SECONDS_INK: Rectangle = Rectangle::new(Point::new(260, 276), Size::new(50, 31));
+const SECONDS_INK: Rectangle = Rectangle::new(Point::new(388, 215), Size::new(50, 31));
 const LABEL_INK: Rectangle = Rectangle::new(Point::new(260, 211), Size::new(70, 19));
 const NO_DATA_INK: Rectangle = Rectangle::new(Point::new(70, 245), Size::new(163, 24));
-const MARK_INK: Rectangle = Rectangle::new(Point::new(363, 0), Size::new(25, 466));
 /// `NO DATA`'s ink starts on the digits' ink column, centred on this row.
 const NO_DATA_LEFT: i32 = 71;
 const NO_DATA_MIDDLE_TWICE: i32 = 515;
@@ -61,16 +59,16 @@ const NO_DATA_MIDDLE_TWICE: i32 = 515;
 const BAND_LINES: [i32; 2] = [238, 256];
 const BAND_LINE_LEFT: i32 = 262;
 const BAND_LINES_INK: Rectangle = Rectangle::new(Point::new(260, 234), Size::new(104, 36));
-/// The battery gauge at the band's right end: a black window, its edge inset a pixel, and the
-/// fill inset three, from the bottom.
-const WINDOW: Rectangle = Rectangle::new(Point::new(394, 206), Size::new(46, 105));
-const EDGE: Rectangle = Rectangle::new(Point::new(395, 207), Size::new(44, 103));
-const FILL: Rectangle = Rectangle::new(Point::new(397, 209), Size::new(40, 99));
-/// The two dashes of an unknown level.
-const UNKNOWN_DASHES: [Rectangle; 2] = [
-    Rectangle::new(Point::new(402, 255), Size::new(11, 3)),
-    Rectangle::new(Point::new(422, 255), Size::new(11, 3)),
-];
+/// The battery gauge under the band lines: a black well, and the fill inset three, from the
+/// left. No outline: the black keeps a fill in the band's colour apart from the band.
+const WELL: Rectangle = Rectangle::new(Point::new(262, 281), Size::new(178, 30));
+const FILL: Rectangle = Rectangle::new(Point::new(265, 284), Size::new(172, 24));
+/// With no level, the fill holds static stripes at 45°, each `HATCH_BAND` px of every
+/// `HATCH_PITCH` along a row, falling a pixel left each row down, from this column on the top
+/// row.
+const HATCH_START: i32 = 238;
+const HATCH_BAND: i32 = 15;
+const HATCH_PITCH: i32 = 35;
 const LOW: u8 = 15;
 /// The token lines by their caps' tops, their sizes, and the widest the zone's line may be
 /// before its name moves to a line of its own.
@@ -107,14 +105,6 @@ const LOWER_LOOK: Look = Look {
     density: 0.28,
 };
 const SCATTER_LEVEL: u8 = 125;
-const MARK: &str = "OCTOWHERE";
-const MARK_PX: u32 = 26;
-/// The caps' baseline column. A round letter's overshoot reaches just left of it.
-const MARK_BASELINE: i32 = 366;
-/// The mark's first letters sit on the field and the rest on the band, and the gap between the
-/// two halves is centred on the band's top row. No cell crosses that row.
-const MARK_ON_FIELD: usize = 4;
-
 const GNSS: Glyph = [0b00100, 0b01010, 0b10101, 0b01010, 0b00100];
 const RTC: Glyph = [0b11111, 0b10001, 0b10101, 0b10001, 0b11111];
 const STOPPED: Glyph = [0b01010, 0b01010, 0b01010, 0b01010, 0b01010];
@@ -133,12 +123,11 @@ pub fn solid_band() -> Rectangle {
 }
 
 /// How far each of the face's accents has come in, 0 to 255 along each one's own window: the
-/// band label and lines, the first token line, the zone's lines, the wordmark,
-/// the scatter's bloom, its breath and the battery fill's rise; how many rows of the icon's modules show, 0
-/// to 5. Also the reveals of the time, across hours, minutes and seconds, and of the date line,
+/// band label and lines, the first token line, the zone's lines, the scatter's bloom, its
+/// breath and the battery fill's growth; how many rows of the icon's modules show, 0 to 5. Also the reveals of the time, across hours, minutes and seconds, and of the date line,
 /// which run only when a fix or a zone change replaces the time. The face applies each part's
-/// curve. `bands` is the charging bands' phase in their loop, and `exposed` how far they show
-/// through the solid fill, from 0, covered, to 255.
+/// curve. `bands` is the charging slices' phase in their loop, and `exposed` how far they
+/// show through the solid fill, from 0, covered, to 255.
 /// The time and date are centre content, so a page's entry and exit leave them whole.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Accents {
@@ -148,7 +137,6 @@ pub struct Accents {
     pub zone: u8,
     /// The hour rail, which opens with the zone line but for longer.
     pub rail: u8,
-    pub mark: u8,
     pub scatter: u8,
     pub breath: u8,
     pub battery: u8,
@@ -165,7 +153,6 @@ impl Accents {
         plate: u8::MAX,
         zone: u8::MAX,
         rail: u8::MAX,
-        mark: u8::MAX,
         scatter: u8::MAX,
         breath: u8::MAX,
         battery: u8::MAX,
@@ -180,7 +167,6 @@ impl Accents {
         plate: 0,
         zone: 0,
         rail: 0,
-        mark: 0,
         scatter: 0,
         breath: u8::MAX,
         battery: 0,
@@ -199,7 +185,6 @@ impl Accents {
             plate: self.plate.min(other.plate),
             zone: self.zone.min(other.zone),
             rail: self.rail.min(other.rail),
-            mark: self.mark.min(other.mark),
             scatter: self.scatter.min(other.scatter),
             breath: self.breath.min(other.breath),
             battery: self.battery.min(other.battery),
@@ -236,14 +221,6 @@ fn out_back(progress: u8) -> f32 {
 
 fn in_quad(progress: u8) -> f32 {
     unit(progress) * unit(progress)
-}
-
-fn in_expo(progress: u8) -> f32 {
-    match progress {
-        0 => 0.0,
-        u8::MAX => 1.0,
-        _ => libm::powf(2.0, 10.0 * unit(progress) - 10.0),
-    }
 }
 
 /// A curve's value back as progress for a reveal, 0 to 255.
@@ -391,7 +368,7 @@ struct Parts {
     time: Reveal,
     /// UTC and the battery in the band, with no reading none.
     band_lines: Option<[(String<16>, Reveal); 2]>,
-    column: Column,
+    gauge: Gauge,
     /// Each token line, its reveal, and everything it can cover.
     lines: heapless::Vec<(Tokens, Reveal, Rectangle), 3>,
     /// The rail: the local hour its marker is on if the face knows one, and how many cells
@@ -399,19 +376,18 @@ struct Parts {
     rail: Option<(Option<u8>, u8)>,
     /// How far the scatter has bloomed, with no reading none.
     scatter: Option<u8>,
-    mark: Reveal,
 }
 
-/// The battery gauge: its colour, how many rows up its fill reaches, the charging bands' phase,
-/// and how many rows of the fill, from its top, show the bands rather than solid. With no level
-/// it shows dashes.
+/// The battery gauge: its colour, how many columns its fill reaches, the charging slices'
+/// phase, and how many rows of the fill, from its top, show the slices rather than solid. With
+/// no level it shows the hatch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct Column {
+struct Gauge {
     color: Color,
-    rows: u32,
+    length: u32,
     phase: u8,
     exposed: u32,
-    dashes: bool,
+    hatched: bool,
 }
 
 /// A line of runs in one colour and size, Regular or Bold, centred as a group on one baseline.
@@ -623,23 +599,27 @@ impl Parts {
                 (battery_line.clone(), reveal(&battery_line)),
             ]
         });
-        let rise = out_back(accents.battery);
-        let rows = charge.map_or(0, |level| {
-            (libm::roundf(FILL.size.height as f32 * f32::from(level) / 100.0 * rise) as u32)
-                .min(FILL.size.height)
+        let grow = out_back(accents.battery);
+        let length = charge.map_or(0, |level| {
+            (libm::roundf(FILL.size.width as f32 * f32::from(level) / 100.0 * grow) as u32)
+                .min(FILL.size.width)
         });
-        let exposed = libm::roundf(rows as f32 * f32::from(accents.exposed) / 255.0) as u32;
-        let column = Column {
+        let exposed = if length == 0 {
+            0
+        } else {
+            libm::roundf(FILL.size.height as f32 * f32::from(accents.exposed) / 255.0) as u32
+        };
+        let gauge = Gauge {
             color: gauge,
-            rows,
-            // A clock fault keeps its bands still, and covered bands have no phase to show.
+            length,
+            // A clock fault keeps its slices still, and covered slices have no phase to show.
             phase: match () {
                 () if exposed == 0 => 0,
                 () if mode == Mode::NoData => charging::ASSEMBLED_PHASE,
                 () => accents.bands,
             },
             exposed,
-            dashes: charge.is_none(),
+            hatched: charge.is_none(),
         };
 
         let mut lines = heapless::Vec::new();
@@ -720,7 +700,7 @@ impl Parts {
             seconds,
             time: Reveal::of(accents.time, TIME_CELLS),
             band_lines,
-            column,
+            gauge,
             lines,
             rail: (mode != Mode::NoData && accents.rail > 0).then(|| {
                 (
@@ -730,16 +710,14 @@ impl Parts {
             }),
             scatter: (mode != Mode::NoData)
                 .then(|| level(in_quad(accents.scatter) * unit(accents.breath))),
-            mark: Reveal::of(level(in_expo(accents.mark)), MARK.len()),
         }
     }
 
     /// The boxes the scatter keeps clear of: every element on the field, grown by the halo.
-    fn clear(&self, font: &FontdueRenderer<'static, Color>) -> heapless::Vec<Rectangle, 8> {
+    fn clear(&self) -> heapless::Vec<Rectangle, 8> {
         let mut clear = heapless::Vec::new();
         _ = clear.push(HOURS_INK);
         _ = clear.push(TILE.bounds());
-        _ = clear.push(mark_layout(font).span(0, MARK_ON_FIELD));
         for (_, _, bounds) in &self.lines {
             _ = clear.push(*bounds);
         }
@@ -813,115 +791,6 @@ pub(crate) fn no_data_origin(font: &FontdueRenderer<'static, Color>) -> Point {
     Point::new(NO_DATA_LEFT - ink.top_left.x, top - ink.top_left.y)
 }
 
-fn mark_style(
-    font: &FontdueRenderer<'static, Color>,
-    color: Color,
-) -> FontdueRenderer<'static, Color> {
-    style(font, color, MARK_PX, SHAPIRO)
-}
-
-/// The wordmark's layout, worked out once: it depends only on the font, and laying it out reads
-/// glyph metrics from flash.
-fn mark_layout(font: &FontdueRenderer<'static, Color>) -> &'static MarkLayout {
-    static LAYOUT: embassy_sync::once_lock::OnceLock<MarkLayout> =
-        embassy_sync::once_lock::OnceLock::new();
-    LAYOUT.get_or_init(|| MarkLayout::of(font))
-}
-
-/// Where the mark sits along the column: the rows each letter's cell spans, and how far either
-/// side of the baseline its caps and its ink reach.
-struct MarkLayout {
-    pens: [f32; MARK.len() + 1],
-    cap: f32,
-    below: f32,
-    above: f32,
-}
-
-impl MarkLayout {
-    fn of(font: &FontdueRenderer<'static, Color>) -> Self {
-        let style = mark_style(font, chrome::WHITE);
-        let mut pens = [0.0; MARK.len() + 1];
-        let (mut below, mut above, mut cap) = (0.0_f32, 0.0_f32, 0.0_f32);
-        let (mut field_end, mut band_start) = (0.0, 0.0);
-        for (i, (_, offset, metrics)) in style.pens(MARK).enumerate() {
-            let bounds = metrics.bounds;
-            pens[i] = offset;
-            below = below.min(bounds.ymin);
-            above = above.max(bounds.ymin + bounds.height);
-            if bounds.ymin == 0.0 {
-                cap = cap.max(bounds.height);
-            }
-            if i + 1 == MARK_ON_FIELD {
-                field_end = offset + bounds.xmin + bounds.width;
-            } else if i == MARK_ON_FIELD {
-                band_start = offset + bounds.xmin;
-            }
-        }
-        pens[MARK.len()] = style.advance(MARK);
-        let top = BAND_ROWS.start as f32 - (field_end + band_start) / 2.0;
-        Self {
-            pens: pens.map(|pen| top + pen),
-            cap,
-            below,
-            above,
-        }
-    }
-
-    /// Letter `index`'s advance along the column less a pixel at each end, across the caps.
-    fn cell(&self, index: usize) -> Rectangle {
-        let (top, bottom) = (self.pens[index] + 1.0, self.pens[index + 1] - 1.0);
-        let round = |value: f32| libm::roundf(value) as i32;
-        Rectangle::with_corners(
-            Point::new(MARK_BASELINE, round(top)),
-            Point::new(MARK_BASELINE + round(self.cap) - 1, round(bottom) - 1),
-        )
-    }
-
-    /// Everything letters `from..to` or their cells can cover.
-    fn span(&self, from: usize, to: usize) -> Rectangle {
-        let floor = |value: f32| libm::floorf(value) as i32;
-        Rectangle::with_corners(
-            Point::new(
-                MARK_BASELINE + floor(self.below) - 1,
-                floor(self.pens[from]) - 1,
-            ),
-            Point::new(
-                MARK_BASELINE + floor(self.above) + 1,
-                floor(self.pens[to]) + 1,
-            ),
-        )
-    }
-}
-
-/// The wordmark: its letters on the field in the band's colour, and on the band black.
-fn draw_mark<D: CoverageTarget<Color = Color>>(
-    font: &FontdueRenderer<'static, Color>,
-    reveal: Reveal,
-    band: Color,
-    target: &mut D,
-) -> Result<(), D::Error> {
-    let layout = mark_layout(font);
-    let whole = layout.span(0, reveal.cells());
-    let text = &MARK[..reveal.glyphs()];
-    let block = (reveal.cells() > reveal.glyphs()).then(|| layout.cell(reveal.glyphs()));
-    for (rows, color, background) in [
-        (0..BAND_ROWS.start, band, chrome::BLACK),
-        (BAND_ROWS, chrome::BLACK, band),
-    ] {
-        let clip = Rectangle::new(Point::new(0, rows.start), Size::new(466, rows.len() as u32));
-        let window = &mut Window::new(&mut *target, Point::zero(), clip);
-        if !window.visible(&whole) {
-            continue;
-        }
-        let on = &mut OnBackground::new(window, background);
-        mark_style(font, color).draw_turned(text, (MARK_BASELINE as f32, layout.pens[0]), on)?;
-        if let Some(block) = block {
-            on.fill_solid(&block, color)?;
-        }
-    }
-    Ok(())
-}
-
 pub fn draw<D>(
     view: &ClockView,
     supply: Option<Battery>,
@@ -934,7 +803,7 @@ where
 {
     let parts = parts(&(*view, supply, accents), font);
     if let Some(bloom) = parts.scatter {
-        scatter().draw_clear_of(&looks(bloom), &parts.clear(font), target)?;
+        scatter().draw_clear_of(&looks(bloom), &parts.clear(), target)?;
     }
     if let Some(hours) = parts.hours.as_ref().filter(|_| target.visible(&HOURS_INK)) {
         let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
@@ -998,11 +867,8 @@ where
             }
         }
     }
-    if target.visible(&WINDOW) {
-        draw_column(parts.column, target)?;
-    }
-    if target.visible(&MARK_INK) {
-        draw_mark(font, parts.mark, parts.band, target)?;
+    if target.visible(&WELL) {
+        draw_gauge(parts.gauge, target)?;
     }
     for (tokens, reveal, bounds) in &parts.lines {
         if target.visible(bounds) {
@@ -1027,50 +893,56 @@ fn band_line_pen(style: &FontdueRenderer<'static, Color>, top: i32) -> Point {
     Point::new(BAND_LINE_LEFT, top + text::cap(style))
 }
 
-fn draw_column<D: CoverageTarget<Color = Color>>(
-    column: Column,
+fn draw_gauge<D: CoverageTarget<Color = Color>>(
+    gauge: Gauge,
     target: &mut D,
 ) -> Result<(), D::Error> {
-    target.fill_solid(&WINDOW, chrome::BLACK)?;
-    let (left, top) = (EDGE.top_left.x, EDGE.top_left.y);
-    let (right, bottom) = (
-        left + EDGE.size.width as i32 - 1,
-        top + EDGE.size.height as i32 - 1,
-    );
-    for edge in [
-        Rectangle::with_corners(Point::new(left, top), Point::new(right, top)),
-        Rectangle::with_corners(Point::new(left, bottom), Point::new(right, bottom)),
-        Rectangle::with_corners(Point::new(left, top), Point::new(left, bottom)),
-        Rectangle::with_corners(Point::new(right, top), Point::new(right, bottom)),
-    ] {
-        target.fill_solid(&edge, column.color)?;
+    target.fill_solid(&WELL, chrome::BLACK)?;
+    let (left, top) = (FILL.top_left.x, FILL.top_left.y);
+    if gauge.hatched {
+        draw_hatch(gauge.color, &mut OnBackground::new(target, chrome::BLACK));
+        return Ok(());
     }
-    if column.dashes {
-        for dash in UNKNOWN_DASHES {
-            target.fill_solid(&dash, column.color)?;
-        }
-    }
-    let top = FILL.top_left.y + (FILL.size.height - column.rows) as i32;
-    let rows = |from: u32, count: u32| {
+    let columns = |from: u32, width: u32, rows: core::ops::Range<u32>| {
         Rectangle::new(
-            Point::new(FILL.top_left.x, top + from as i32),
-            Size::new(FILL.size.width, count),
+            Point::new(left + from as i32, top + rows.start as i32),
+            Size::new(width, rows.len() as u32),
         )
     };
-    // The bands lie over a solid layer whose top edge is `exposed` rows down the fill.
+    // The slices lie over a solid layer whose top edge is `exposed` rows down the fill.
     target.fill_solid(
-        &rows(column.exposed, column.rows - column.exposed),
-        column.color,
+        &columns(0, gauge.length, gauge.exposed..FILL.size.height),
+        gauge.color,
     )?;
-    if column.exposed > 0 {
-        for (from, count) in charging::bands(column.rows, column.phase) {
-            target.fill_solid(
-                &rows(from, count.min(column.exposed.saturating_sub(from))),
-                column.color,
-            )?;
+    if gauge.exposed > 0 {
+        for (from, width) in charging::slices(gauge.length, gauge.phase) {
+            target.fill_solid(&columns(from, width, 0..gauge.exposed), gauge.color)?;
         }
     }
     Ok(())
+}
+
+/// The hatch across the whole fill, its stripes' edges antialiased.
+fn draw_hatch<D: CoverageTarget<Color = Color>>(color: Color, target: &mut D) {
+    // How much of a pixel lies where x + y, from its corner, is below `c`.
+    let below = |c: f32| match c {
+        ..0.0 => 0.0,
+        ..1.0 => c * c / 2.0,
+        ..2.0 => 1.0 - (2.0 - c) * (2.0 - c) / 2.0,
+        _ => 1.0,
+    };
+    let mut coverage = [0u8; FILL.size.width as usize];
+    for row in 0..FILL.size.height as i32 {
+        for (column, cover) in coverage.iter_mut().enumerate() {
+            let along =
+                (FILL.top_left.x + column as i32 + row - HATCH_START).rem_euclid(HATCH_PITCH);
+            let lit = below((HATCH_BAND - along) as f32) - below(-along as f32)
+                + below((HATCH_PITCH + HATCH_BAND - along) as f32)
+                - below((HATCH_PITCH - along) as f32);
+            *cover = libm::roundf(lit * 255.0) as u8;
+        }
+        target.blend_row(FILL.top_left.x, FILL.top_left.y + row, &coverage, color);
+    }
 }
 
 fn moved(area: Rectangle, x: i32) -> Rectangle {
@@ -1167,10 +1039,7 @@ pub fn damage(
         return;
     }
     if old.band != new.band {
-        // The band's colour also shows through the mark and the text on it, and colours the
-        // mark's letters off it.
         damage.add(BAND);
-        damage.add(MARK_INK);
     }
     let white = digits(font, chrome::WHITE);
     digit_damage(
@@ -1222,19 +1091,8 @@ pub fn damage(
             }
         }
     }
-    if old.column != new.column {
-        damage.add(
-            if (old.column.color, old.column.dashes) == (new.column.color, new.column.dashes) {
-                FILL
-            } else {
-                WINDOW
-            },
-        );
-    }
-    if old.mark != new.mark {
-        let from = old.mark.glyphs().min(new.mark.glyphs());
-        let to = old.mark.cells().max(new.mark.cells());
-        damage.add(mark_layout(font).span(from, to));
+    if old.gauge != new.gauge {
+        damage.add(FILL);
     }
     if old.lines != new.lines {
         for (_, _, bounds) in old.lines.iter().chain(&new.lines) {
@@ -1244,7 +1102,7 @@ pub fn damage(
     if old.rail != new.rail {
         damage.add(RAIL);
     }
-    let (old_clear, new_clear) = (old.clear(font), new.clear(font));
+    let (old_clear, new_clear) = (old.clear(), new.clear());
     if (old.scatter, &old_clear) != (new.scatter, &new_clear) {
         let scatter = scatter();
         let shown = |bloom: Option<u8>, clear: &[Rectangle]| {
@@ -1308,37 +1166,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_mark_splits_between_field_and_band_on_the_band_edge() {
-        let font = FontdueRenderer::new(
-            chrome::FontdueRendererCtx::new_rc(),
-            20,
-            chrome::WHITE,
-            chrome::FONTS,
-        );
-        let layout = MarkLayout::of(&font);
-        for index in 0..MARK.len() {
-            let cell = layout.cell(index);
-            let bottom = cell.bottom_right().unwrap().y;
-            if index < MARK_ON_FIELD {
-                assert!(
-                    bottom < BAND_ROWS.start,
-                    "cell {index} ends on row {bottom}"
-                );
-            } else {
-                assert!(
-                    cell.top_left.y >= BAND_ROWS.start,
-                    "cell {index} starts on row {}",
-                    cell.top_left.y
-                );
-                assert!(bottom < BAND_ROWS.end, "cell {index} ends on row {bottom}");
-            }
-        }
-        let ink = mark_style(&font, chrome::WHITE).baseline_bounds("OCTOWHERE", Point::zero());
-        let last = layout.pens[0] + ink.bottom_right().unwrap().x as f32;
-        assert!(last < BAND_ROWS.end as f32, "the ink ends on row {last}");
-    }
-
     fn inside(outer: Rectangle, inner: Rectangle) -> bool {
         inner.is_zero_sized() || outer.intersection(&inner) == inner
     }
@@ -1400,12 +1227,14 @@ mod tests {
         }
         let no_data = no_data_style(&font).baseline_bounds("NO DATA", no_data_origin(&font));
         assert!(inside(NO_DATA_INK, no_data), "NO DATA at {no_data:?}");
-        let mark = MarkLayout::of(&font).span(0, MARK.len());
-        assert!(inside(MARK_INK, mark), "the mark at {mark:?}");
-        // The band lines stop short of the wordmark, and the battery window of the glass.
-        assert!(BAND_LINES_INK.bottom_right().unwrap().x < mark.top_left.x);
-        let corner = WINDOW.bottom_right().unwrap() - CENTER;
+        // The band lines stop above the well and short of the seconds, and the well stays in
+        // the band.
+        assert!(BAND_LINES_INK.bottom_right().unwrap().y < WELL.top_left.y);
+        assert!(BAND_LINES_INK.bottom_right().unwrap().x < SECONDS_INK.top_left.x);
+        assert!(SECONDS_INK.bottom_right().unwrap().y < WELL.top_left.y);
+        let corner = WELL.bottom_right().unwrap() - CENTER;
         assert!(corner.x * corner.x + corner.y * corner.y < 226 * 226);
+        assert!(WELL.bottom_right().unwrap().y < BAND_ROWS.end);
     }
 
     #[test]

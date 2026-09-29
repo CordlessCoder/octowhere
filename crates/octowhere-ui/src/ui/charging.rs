@@ -1,6 +1,8 @@
-//! The clock's battery gauge while charging: the level split into uneven bands that gather and
-//! regroup on a loop, and the solid layer under them that retreats as charging starts and covers
-//! them again as it stops. The 27 September implementation update is its design.
+//! The clock's battery gauge while charging: the level split into upright slices in the identity
+//! barcode's proportions, whose gaps gather and regroup on a loop, and the solid layer under them
+//! that retreats down the well as charging starts and covers them again as it stops. The 27
+//! September implementation update designed the loop and the wipe, and the 29 September one
+//! the slices.
 
 use super::{gesture::Micros, screens::Battery};
 
@@ -12,14 +14,11 @@ const FRAME: Micros = 1_000_000 / 30;
 /// A phase in the loop's assembled hold: the wipes hold it, and a loop entered by one starts
 /// from it.
 pub const ASSEMBLED_PHASE: u8 = 27;
-/// How long a whole wipe takes, for a level at or above `SHORT_BELOW` and for one below it.
+/// How long a whole wipe takes. It crosses the well's height whatever the level.
 const WIPE: Micros = 450_000;
-const SHORT_WIPE: Micros = 180_000;
-const SHORT_BELOW: u8 = 35;
 
-/// The 87% motif's band heights, and its gaps at the loop's three rests: dispersed, assembled
-/// and paired. Each set of gaps sums to `GAP_SUM`.
-const HEIGHTS: [f64; 11] = [2.0, 3.0, 2.0, 10.0, 7.0, 3.0, 11.0, 2.0, 9.0, 4.0, 8.0];
+/// The motif's gaps at the loop's three rests: dispersed, assembled and paired. Each set sums
+/// to `GAP_SUM`.
 const SCATTER: [f64; 10] = [5.0, 1.0, 2.0, 5.0, 1.0, 4.0, 1.0, 4.0, 1.0, 1.0];
 const ASSEMBLED: [f64; 10] = [1.0, 1.0, 5.0, 2.0, 4.0, 1.0, 5.0, 1.0, 3.0, 2.0];
 const PAIRED: [f64; 10] = [1.0, 3.0, 6.0, 1.0, 3.0, 2.0, 1.0, 5.0, 1.0, 2.0];
@@ -27,9 +26,18 @@ const GAP_SUM: u32 = 25;
 /// The order each gap starts its move in, gathering and then pairing.
 const BUILD_ORDER: [u8; 10] = [0, 4, 2, 8, 1, 6, 9, 3, 7, 5];
 const PAIR_ORDER: [u8; 10] = [8, 0, 5, 2, 9, 4, 1, 7, 3, 6];
-/// The motif's filled height: its level is where the counts and gap share are set.
-const MOTIF: u32 = 86;
-const MAX_BANDS: usize = 13;
+/// The identity barcode's bars for version 0.1.0, in units: a one bit is two, a zero one. Its
+/// bars and its two-unit gaps between them set the slices' widths and their share of the level.
+const BARCODE: [f64; 20] = [
+    1.0, 1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0, 1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 1.0, 1.0, 1.0,
+    1.0,
+];
+/// The slices at `MOTIF_LENGTH` px, the 87% level, and the most there can be.
+const MOTIF_SLICES: f64 = 20.0;
+const MOTIF_LENGTH: f64 = 150.0;
+pub const MAX_SLICES: usize = 23;
+/// How far the loop's gaps move the slices' otherwise even spacing.
+const BEAT: f64 = 0.35;
 
 fn smoothstep(t: f64) -> f64 {
     let t = t.clamp(0.0, 1.0);
@@ -82,7 +90,7 @@ fn gaps(phase: u8) -> [f64; 10] {
 }
 
 /// `weights` interpolated to `count` entries, keeping their unevenness.
-fn resample(weights: &[f64], count: usize, out: &mut heapless::Vec<f64, MAX_BANDS>) {
+fn resample(weights: &[f64], count: usize, out: &mut heapless::Vec<f64, MAX_SLICES>) {
     out.clear();
     if count == 1 {
         _ = out.push(weights[weights.len() / 2]);
@@ -97,68 +105,61 @@ fn resample(weights: &[f64], count: usize, out: &mut heapless::Vec<f64, MAX_BAND
     }
 }
 
-/// `total` split in proportion to `weights`, each part at least 1.
-fn apportion(weights: &[f64], total: u32, out: &mut heapless::Vec<u32, MAX_BANDS>) {
-    let free = (total - weights.len() as u32) as f64;
-    let excess_sum: f64 = weights.iter().map(|w| (w - 1.0).max(0.0)).sum();
-    let basis = |w: f64| {
-        if excess_sum > 0.0 {
-            (w - 1.0).max(0.0)
-        } else {
-            w
-        }
-    };
-    let basis_sum: f64 = weights.iter().map(|&w| basis(w)).sum();
-    let fractions: heapless::Vec<f64, MAX_BANDS> = weights
+/// `total` split in proportion to `weights`, the parts rounded down and the pixels left over
+/// given to the largest remainders.
+fn apportion(weights: &[f64], total: u32, out: &mut heapless::Vec<u32, MAX_SLICES>) {
+    let sum: f64 = weights.iter().sum();
+    let raw: heapless::Vec<f64, MAX_SLICES> = weights
         .iter()
-        .map(|&w| free * basis(w) / basis_sum)
+        .map(|&w| f64::from(total) * w / sum)
         .collect();
     out.clear();
-    out.extend(fractions.iter().map(|&f| 1 + libm::floor(f) as u32));
+    out.extend(raw.iter().map(|&v| libm::floor(v) as u32));
     let short = total - out.iter().sum::<u32>();
-    let mut order = heapless::Vec::<usize, MAX_BANDS>::new();
-    by_remainder(&fractions, &mut order);
+    let mut order = heapless::Vec::<usize, MAX_SLICES>::new();
+    by_remainder(&raw, &mut order);
     for &i in order.iter().take(short as usize) {
         out[i] += 1;
     }
 }
 
-/// `n / d` rounded, a half to even.
-fn round_half_even(n: u32, d: u32) -> u32 {
-    let (quotient, twice) = (n / d, 2 * (n % d));
-    quotient + u32::from(twice > d || (twice == d && quotient % 2 == 1))
-}
-
-/// A filled height of `height` rows split into bands at `phase` in the loop: each band's first
-/// row and row count, from the top of the fill. The bands grow in number with the height, and
-/// the gaps between them take about the share of it they take at the motif's.
+/// A fill `length` px long split into slices at `phase` in the loop: each slice's first column
+/// and width, from the fill's left end. The slices grow in number with the length, keep the
+/// barcode's narrow and broad widths, and the gaps take about the barcode's share of it.
 #[must_use]
-pub fn bands(height: u32, phase: u8) -> heapless::Vec<(u32, u32), MAX_BANDS> {
+pub fn slices(length: u32, phase: u8) -> heapless::Vec<(u32, u32), MAX_SLICES> {
     let mut out = heapless::Vec::new();
-    if height == 0 {
+    if length == 0 {
         return out;
     }
-    let count = ((22 * height + MOTIF) / (2 * MOTIF)).clamp(1, MAX_BANDS as u32) as usize;
+    let count = libm::rint(f64::from(length) * MOTIF_SLICES / MOTIF_LENGTH)
+        .clamp(1.0, MAX_SLICES as f64) as usize;
     if count == 1 {
-        _ = out.push((0, height));
+        _ = out.push((0, length));
         return out;
     }
-    let gap_total = round_half_even(height * GAP_SUM, MOTIF)
-        .min(height - count as u32)
-        .max(count as u32 - 1);
-    let (mut weights, mut heights, mut spaces) = (
+    let (mut weights, mut widths, mut spaces) = (
         heapless::Vec::new(),
         heapless::Vec::new(),
         heapless::Vec::new(),
     );
-    resample(&HEIGHTS, count, &mut weights);
-    apportion(&weights, height - gap_total, &mut heights);
+    resample(&BARCODE, count, &mut weights);
+    let between = 2.0 * (count - 1) as f64;
+    let share = between / (weights.iter().sum::<f64>() + between);
+    let gap_total = (libm::rint(f64::from(length) * share) as u32)
+        .min(length - count as u32)
+        .max(count as u32 - 1);
+    apportion(&weights, length - gap_total, &mut widths);
     resample(&gaps(phase), count - 1, &mut weights);
+    let mean = weights.iter().sum::<f64>() / weights.len() as f64;
+    for weight in &mut weights {
+        *weight = 1.0 + BEAT * (*weight / mean - 1.0);
+    }
     apportion(&weights, gap_total, &mut spaces);
-    let mut top = 0;
-    for (i, &rows) in heights.iter().enumerate() {
-        _ = out.push((top, rows));
-        top += rows + spaces.get(i).copied().unwrap_or(0);
+    let mut left = 0;
+    for (i, &width) in widths.iter().enumerate() {
+        _ = out.push((left, width));
+        left += width + spaces.get(i).copied().unwrap_or(0);
     }
     out
 }
@@ -215,12 +216,7 @@ impl Charge {
         let exposed = self.exposed(now);
         match level {
             Some(level) if level > 0 && before.is_some() => {
-                let whole = if level >= SHORT_BELOW {
-                    WIPE
-                } else {
-                    SHORT_WIPE
-                };
-                let length = libm::roundf(whole as f32 * (to - exposed).abs()) as Micros;
+                let length = libm::roundf(WIPE as f32 * (to - exposed).abs()) as Micros;
                 if charging {
                     // Bands that are still partly showing keep their layout; covered ones
                     // come back assembled.
@@ -295,32 +291,73 @@ mod tests {
         })
     }
 
-    fn rows(height: u32, phase: u8) -> (u32, u32, usize) {
-        let bands = bands(height, phase);
-        let lit = bands.iter().map(|&(_, rows)| rows).sum();
-        let &(top, rows) = bands.last().unwrap();
-        (lit, top + rows, bands.len())
+    fn widths(
+        length: u32,
+        phase: u8,
+    ) -> (
+        heapless::Vec<u32, MAX_SLICES>,
+        heapless::Vec<u32, MAX_SLICES>,
+    ) {
+        let slices = slices(length, phase);
+        let widths = slices.iter().map(|&(_, width)| width).collect();
+        let gaps = slices
+            .windows(2)
+            .map(|pair| pair[1].0 - pair[0].0 - pair[0].1)
+            .collect();
+        (widths, gaps)
     }
 
     #[test]
-    fn the_motif_level_has_eleven_bands_and_twenty_five_rows_of_gap() {
-        for phase in 0..LOOP_FRAMES {
-            assert_eq!(rows(86, phase), (61, 86, 11), "phase {phase}");
+    fn the_slices_match_the_design_study() {
+        // From the 29 September study's `title_pattern`.
+        let cases: [(u32, u8, &[u32], &[u32]); 6] = [
+            (
+                150,
+                27,
+                &[3, 2, 2, 2, 2, 5, 5, 5, 5, 2, 2, 2, 2, 5, 5, 5, 2, 2, 2, 2],
+                &[4, 4, 4, 5, 6, 5, 4, 5, 5, 5, 4, 5, 6, 5, 4, 4, 5, 4, 4],
+            ),
+            (
+                150,
+                46,
+                &[3, 2, 2, 2, 2, 5, 5, 5, 5, 2, 2, 2, 2, 5, 5, 5, 2, 2, 2, 2],
+                &[4, 4, 4, 6, 7, 5, 4, 5, 5, 5, 4, 5, 5, 5, 4, 4, 4, 4, 4],
+            ),
+            (21, 27, &[3, 3, 3], &[5, 7]),
+            (
+                172,
+                0,
+                &[
+                    2, 2, 2, 2, 2, 3, 5, 5, 5, 5, 3, 2, 2, 2, 3, 5, 5, 5, 3, 2, 2, 2, 2,
+                ],
+                &[
+                    6, 5, 4, 4, 4, 5, 5, 6, 5, 4, 4, 5, 5, 5, 4, 4, 5, 5, 4, 4, 4, 4,
+                ],
+            ),
+            (40, 60, &[3, 5, 3, 5, 2], &[5, 5, 5, 7]),
+            (5, 10, &[5], &[]),
+        ];
+        for (length, phase, bars, gaps) in cases {
+            let (widths, spaces) = widths(length, phase);
+            assert_eq!(
+                (widths.as_slice(), spaces.as_slice()),
+                (bars, gaps),
+                "{length} {phase}"
+            );
         }
-        assert_eq!(rows(12, 0).2, 2);
-        assert_eq!(bands(1, 0).as_slice(), &[(0, 1)]);
     }
 
     #[test]
-    fn every_level_fills_its_height_with_no_closed_gap() {
-        for height in 1..=99 {
+    fn every_length_fills_to_its_end_with_no_closed_gap() {
+        for length in 1..=172 {
             for phase in 0..LOOP_FRAMES {
-                let bands = bands(height, phase);
-                assert_eq!(bands[0].0, 0);
-                let &(top, rows) = bands.last().unwrap();
-                assert_eq!(top + rows, height, "height {height} phase {phase}");
+                let slices = slices(length, phase);
+                assert_eq!(slices[0].0, 0);
+                let &(left, width) = slices.last().unwrap();
+                assert_eq!(left + width, length, "length {length} phase {phase}");
+                assert!(slices.iter().all(|&(_, width)| width > 0));
                 assert!(
-                    bands
+                    slices
                         .windows(2)
                         .all(|pair| pair[1].0 > pair[0].0 + pair[0].1)
                 );
@@ -370,6 +407,6 @@ mod tests {
         let mut low = Charge::default();
         low.read(battery(12, false), 0);
         low.read(battery(12, true), 0);
-        assert_eq!(low.exposed(SHORT_WIPE), 1.0);
+        assert_eq!(low.exposed(WIPE), 1.0);
     }
 }

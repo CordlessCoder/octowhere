@@ -162,7 +162,7 @@ Weigh that cost before adding one.
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 1,135,552 bytes, 7.25% of the 15,663,104-byte app partition that
+The image is currently 1,218,832 bytes, 7.78% of the 15,663,104-byte app partition that
 `partitions.csv` gives it. Measure with `espflash save-image --chip esp32s3 --flash-size 16mb
 --partition-table partitions.csv <elf> <out>`; without those two options it assumes 4 MB of flash
 and the default table. The time zone
@@ -420,7 +420,8 @@ All default off. None belongs in normal firmware behavior.
 
 The active UI uses the compile-time fontdue renderer in
 [`crates/octowhere-ui/src/chrome.rs`](crates/octowhere-ui/src/chrome.rs), with the Marathon Shapiro
-and PPFraktion font data under `assets/`. `embedded-layout` supplies the current text alignment
+and PPFraktion font data under `assets/`. Maratype sets the identity's title and nothing else:
+the owner rejected it on every other screen. `embedded-layout` supplies the current text alignment
 helpers.
 
 ## Design language

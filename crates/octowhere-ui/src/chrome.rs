@@ -751,18 +751,28 @@ fontdue_macros::fontdue_font_from_file!(
     chars: "BOT"
 );
 
+// Only the identity's title is set in it.
+fontdue_macros::fontdue_font_from_file!(
+    MaratypeFont,
+    "../../../assets/Maratype.otf",
+    scale: 24.0,
+    chars: "CEHORTW"
+);
+
 /// The fonts a `FontdueRenderer` indexes with `font_index`.
 pub const FONTS: &[&dyn FontRepr] = &[
     &MarathonShapiroFont,
     &FraktionMonoRegularFont,
     &FraktionMonoBoldFont,
     &InterferenceBoldFont,
+    &MaratypeFont,
 ];
 /// Indices into [`FONTS`].
 pub const SHAPIRO: usize = 0;
 pub const FRAKTION: usize = 1;
 pub const FRAKTION_BOLD: usize = 2;
 pub const INTERFERENCE_BOLD: usize = 3;
+pub const MARATYPE: usize = 4;
 
 const fn color_from_rgb(r: u8, g: u8, b: u8) -> Color {
     Color::new(

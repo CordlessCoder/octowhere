@@ -25,6 +25,13 @@ until the feature set is complete, because profiling an incomplete firmware pric
   The owner approved its `ui-sim` preview, and its on-target draw times are in
   `docs/logs/display/compass-c1-draw-2026-09-26.md`. C1 still needs a physical-panel
   legibility and touch check.
+- Bring the V11 start-up back inside its 33 ms frames (2026-09-29). Measured with `timing-log`
+  on the build that added it: the identity's frames while the title types and flickers take
+  about 48 ms, from about 30 ms, and the card's frames with the pin at 1.9× about 97 ms, from
+  at most 38 ms, so those frames drop. The likely costs are the 112 px Maratype glyphs, which
+  are rasterized every frame of that stretch, and the grown pin's even-odd fill over a
+  400 × 460 box. The owner's rule is to finish the features first, so this waits with the
+  other optimisation.
 - Shorten settings saves, ahead of other work that touches settings (design response,
   2026-09-24). Settings are in ekv now, and each write transaction starts a new file that
   erases a whole 4 KiB page first, so every save erases. The first saved brightness took

@@ -247,7 +247,7 @@ impl Mode {
             Self::Interference(_) => &INTERFERENCE,
             Self::Heading(_) => &ARROW,
             Self::Calibrating(_) => &OPEN_LOOP,
-            Self::HoldLevel => &LETTER_L,
+            Self::HoldLevel => &HORIZON,
         }
     }
 
@@ -409,7 +409,7 @@ impl Default for Accents {
 const ARROW: Glyph = [0b00100, 0b01110, 0b10101, 0b00100, 0b00100];
 const OPEN_LOOP: Glyph = [0b01110, 0b10001, 0b10000, 0b10001, 0b01110];
 const INTERFERENCE: Glyph = [0b10101, 0b01110, 0b11011, 0b01110, 0b10101];
-const LETTER_L: Glyph = [0b10000, 0b10000, 0b10000, 0b10000, 0b11111];
+const HORIZON: Glyph = [0b00000, 0b00100, 0b11111, 0b00100, 0b00000];
 
 /// The dial's marks sit every 10°, so the letters share bearings with ticks.
 const MARKS: u8 = 36;

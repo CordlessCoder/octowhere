@@ -49,3 +49,13 @@ Recorded 2026-09-26. These override the hand-off where they differ.
     confirmation over whatever showed: a swipe confirms; a cancel button, a cover, a short press
     or 10 s untouched cancels. The board powers on with a 512 ms hold. The confirmation is a
     placeholder until a design round.
+13. **The 2026-09-29 implementation update** (owner, 2026-09-29), in
+    `context/octowhere-implementation-update-2026-09-29/`, approved in full and built. The
+    identity takes V11: a Maratype title at 112 px, a full-width subtitle row, a map pin for
+    the small logo and the card's mark, corner pluses for the ticks, and a square dot pulsing
+    once a second. HOLD LEVEL's icon becomes a centred horizon, overriding entry 9's letter L.
+    The clock loses its wordmark, moves its seconds right, and puts the battery in a wide
+    outline-free well under the band lines: a solid fill, barcode slices while charging, and a
+    static gray hatch with no level. Maratype stays on the identity's title only; the owner
+    rejected it everywhere else. The owner cleared the font's redistribution for the public
+    repository.

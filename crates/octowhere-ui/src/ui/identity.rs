@@ -20,13 +20,13 @@ use embedded_graphics::{
 use super::{
     clock::ClockView,
     scatter::{Field, Look, Scatter, Shown},
-    screens,
-    startup::{self, CARD_MARK, CARD_SCALE, CENTER, Context, Mark},
+    screens, smooth,
+    startup::{self, CENTER, Context},
     text,
 };
 use crate::chrome::{
-    self, Color, CoverageTarget, Dirty, FRAKTION, FontdueRenderer, INTERFERENCE_BOLD, OnBackground,
-    SHAPIRO, Window,
+    self, Color, CoverageTarget, Dirty, FRAKTION, FontdueRenderer, INTERFERENCE_BOLD, MARATYPE,
+    OnBackground, Window,
 };
 
 /// The identity's frames, then the card's.
@@ -66,44 +66,32 @@ const BOOT_DIM: u8 = 140;
 // After the opening.
 
 const WORD: &str = "OCTOWHERE";
-const WORD_PX: u32 = 49;
+/// Maratype at its natural proportions, its ink over `(33, 177)..(433, 289)`.
+const WORD_PX: u32 = 112;
 /// The title's outline, and the glyphs' type-in: each glyph's outline fades up over `RISE` ms,
 /// a glyph every `INTERVAL` ms from `TYPE_FROM` ms.
 const HOLLOW: u8 = 2;
 const TYPE_FROM: f32 = 430.0;
 const INTERVAL: f32 = 68.0;
 const RISE: f32 = 55.0;
-/// The outlined title and the ticks before they light: LIME at this level.
+/// The outlined title and the pluses before they light: LIME at this level.
 const DIM: u8 = 87;
 const PARTIAL: u8 = 148;
 /// Where the title shows only slices of its fill, as fractions of its ink's width.
 const SLICES: [f32; 8] = [0.055, 0.15, 0.29, 0.42, 0.55, 0.69, 0.82, 0.95];
 const SLICE: u32 = 2;
 const FLICKER_FROM: u32 = 42;
-const LOGO_FROM: u32 = 56;
-const TICKS_FROM: u32 = 36;
-const TICKS: [i32; 2] = [23, 443];
-const LOGO_CORNER: Point = Point::new(407, 180);
-/// The small logo's module, in tenths of a pixel.
-const LOGO_MODULE: i32 = 13;
-/// The mark as the microtext row and the small logo draw it, 15 × 15.
-const MARK_ROWS: [u16; 15] = [
-    0b111000111000111,
-    0b100000000000001,
-    0b100000000000001,
-    0b000111111111000,
-    0b000100000001000,
-    0b000100000001000,
-    0b100100000001001,
-    0b100100000001001,
-    0b100100000001001,
-    0b000100000001000,
-    0b000100000001000,
-    0b000111111111000,
-    0b100000000000001,
-    0b100000000000001,
-    0b111000111000111,
-];
+const PIN_FROM: u32 = 56;
+const PLUSES_FROM: u32 = 36;
+/// The pluses' centres, 10 px out from the title ink's corners on the diagonal. Each arm reaches
+/// 3 px from the centre pixel.
+const PLUSES: [Point; 2] = [Point::new(23, 167), Point::new(442, 298)];
+/// The small pin's top-left, just off the title ink's top-right corner, and its unit.
+const PIN_CORNER: (f32, f32) = (437.0, 175.0);
+const PIN_UNIT: f32 = 1.17;
+/// While the pin flickers partly on, three upright stems of it show: each unit's column, top
+/// row and height.
+const PIN_STEMS: [(f32, f32, f32); 3] = [(0.0, 3.0, 4.0), (6.0, 3.0, 6.0), (11.0, 3.0, 4.0)];
 
 // The registration marks, one per corner, 145 px out from the centre on each axis.
 
@@ -127,19 +115,40 @@ const ARMS_UNTIL: u32 = 64;
 const MARK_LEVEL: u8 = 82;
 const HAIR_LEVEL: u8 = 64;
 
-// The microtext row, under the title.
+// The row under the title: barcode, square, digits, GNSS and two lines of copy, each 25 px
+// high and 8 px apart, together as wide as the title's ink.
 
 const ROW_FROM: u32 = 21;
-const MICRO_TOP: i32 = 268;
-const BARCODE_LEFT: i32 = 70;
-const MICRO_MARK_LEFT: i32 = 147;
-const DIGITS_LEFT: i32 = 173;
-const MICRO_GNSS_LEFT: i32 = 237;
-const MICRO_TEXT_LEFT: i32 = 263;
-const MICRO_TEXT_TOPS: [i32; 2] = [266, 282];
-const MICRO_MODULE: i32 = 3;
-const IDENTITY_DIGITS: Rectangle =
-    Rectangle::new(Point::new(DIGITS_LEFT, MICRO_TOP), Size::new(51, 15));
+const ROW_TOP: i32 = 311;
+const ROW_HEIGHT: f32 = 25.0;
+const ROW_LEFT: f32 = 33.0;
+const ROW_GAP: f32 = 8.0;
+/// The version barcode, its 67 px of bars and spaces widened to this.
+const BARCODE_WIDTH: f32 = 113.625;
+const SQUARE_LEFT: i32 = 155;
+const SQUARE: i32 = 25;
+const DIGITS_LEFT: f32 = ROW_LEFT + BARCODE_WIDTH + ROW_GAP + SQUARE as f32 + ROW_GAP;
+/// The digits' modules, and the step from one digit to the next, with twice the gap between
+/// the hours and the minutes.
+const DIGIT_MODULE: (f32, f32) = (4.0, 5.0);
+const DIGIT_STEP: f32 = 16.0;
+const GNSS_LEFT: f32 = DIGITS_LEFT + 4.0 * DIGIT_STEP + 8.0 + ROW_GAP;
+const GNSS_MODULE: f32 = 5.0;
+const COPY_LEFT: i32 = 300;
+const COPY_TOPS: [i32; 2] = [309, 325];
+/// Past the minutes' last module.
+const DIGITS_RIGHT: f32 = DIGITS_LEFT + 3.0 * DIGIT_STEP + 8.0 + 3.0 * DIGIT_MODULE.0;
+const IDENTITY_DIGITS: Rectangle = Rectangle::new(
+    Point::new(DIGITS_LEFT as i32, ROW_TOP),
+    Size::new(
+        DIGITS_RIGHT as u32 + 1 - DIGITS_LEFT as u32,
+        ROW_HEIGHT as u32,
+    ),
+);
+/// The square's dot pulses from dark on this frame, over `DOT_PERIOD` frames.
+const DOT_FROM: u32 = ROW_FROM + 1;
+const DOT_PERIOD: u32 = 30;
+const DOT: Rectangle = Rectangle::new(Point::new(SQUARE_LEFT + 10, ROW_TOP + 10), Size::new(5, 5));
 
 // The scatter: an upper field that turns a step on five late frames, and a lower one that
 // holds still, from the end of the opening.
@@ -170,7 +179,7 @@ const SCATTER_LEVEL: u8 = 69;
 
 /// From this frame only the scatter's turns and the clock's digits change. Before it, a frame
 /// redraws everything.
-const SETTLED: u32 = LOGO_FROM + 11;
+const SETTLED: u32 = PIN_FROM + 11;
 const _: () = assert!(
     ARMS_UNTIL <= SETTLED
         && FLICKER_FROM + 11 <= SETTLED
@@ -201,7 +210,7 @@ fn lit(frame: u32, from: u32) -> Lit {
 fn scatter() -> Scatter {
     Scatter {
         origin: Point::new(12, -2),
-        gap: Some((197..=317, 2)),
+        gap: Some((162..=340, 2)),
         color: chrome::shade(chrome::PURPLE, SCATTER_LEVEL),
         fields: &[UPPER, LOWER],
     }
@@ -240,6 +249,9 @@ impl IdentityMarks {
         }
         if before == after {
             return;
+        }
+        if dot_level(before) != dot_level(after) {
+            changed.add(DOT);
         }
         if before.min(after) < SETTLED {
             changed.make_full();
@@ -287,57 +299,106 @@ pub fn draw_identity<D: CoverageTarget<Color = Color>>(
         Lit::Partial => chrome::shade(chrome::LIME, PARTIAL),
         Lit::Before | Lit::Off => chrome::shade(chrome::LIME, DIM),
     };
-    if frame >= TICKS_FROM {
+    if frame >= PLUSES_FROM {
         let lit = lit(frame, FLICKER_FROM);
-        for x in TICKS {
+        for centre in PLUSES {
             field.fill_solid(
-                &Rectangle::new(Point::new(x - 5, 232), Size::new(11, 2)),
+                &Rectangle::new(centre - Point::new(3, 0), Size::new(7, 1)),
                 lime(lit),
             )?;
             if lit != Lit::Partial {
                 field.fill_solid(
-                    &Rectangle::new(Point::new(x, 228), Size::new(2, 10)),
+                    &Rectangle::new(centre - Point::new(0, 3), Size::new(1, 7)),
                     lime(lit),
                 )?;
             }
         }
     }
-    let logo = lit(frame, LOGO_FROM);
-    if matches!(logo, Lit::On | Lit::Partial) {
-        // Each pixel takes the area of it the lit modules cover, in tenths of a pixel each way,
-        // so the 1.3 px modules keep their proportions instead of rounding to 1 or 2 px.
-        let overlap = |module: i32, pixel: i32| {
-            (((module + 1) * LOGO_MODULE).min(pixel * 10 + 10)
-                - (module * LOGO_MODULE).max(pixel * 10))
-            .max(0)
-        };
-        let lit = |i: i32, j: i32| {
-            MARK_ROWS[j as usize] & (1 << (14 - i)) != 0
-                && (logo == Lit::On || [0, 7, 14].contains(&i))
-        };
-        let side = (15 * LOGO_MODULE + 9) / 10;
-        let mut coverage = [0u8; 20];
-        for y in 0..side {
-            for (x, cover) in (0..side).zip(&mut coverage) {
-                let mut area = 0;
-                for j in (y * 10 / LOGO_MODULE)..=((y * 10 + 9) / LOGO_MODULE).min(14) {
-                    for i in (x * 10 / LOGO_MODULE)..=((x * 10 + 9) / LOGO_MODULE).min(14) {
-                        if lit(i, j) {
-                            area += overlap(i, x) * overlap(j, y);
-                        }
-                    }
-                }
-                *cover = (area * 255 / 100).min(255) as u8;
-            }
-            field.blend_row(
-                LOGO_CORNER.x,
-                LOGO_CORNER.y + y,
-                &coverage[..side as usize],
-                chrome::LIME,
-            );
+    let (x, y) = PIN_CORNER;
+    match lit(frame, PIN_FROM) {
+        Lit::On => Pin {
+            corner: PIN_CORNER,
+            unit: PIN_UNIT,
         }
+        .draw(chrome::LIME, field),
+        Lit::Partial => {
+            for (column, row, height) in PIN_STEMS {
+                let left = x + column * PIN_UNIT;
+                smooth::rect(
+                    field,
+                    (left, y + row * PIN_UNIT),
+                    (left + 1.0, y + (row + height) * PIN_UNIT),
+                    chrome::LIME,
+                )?;
+            }
+        }
+        Lit::Before | Lit::Off => {}
     }
     Ok(())
+}
+
+/// The map pin: a round head over a point, 12 units wide and 14 high, with an octagonal hole
+/// centred in the head.
+#[derive(Clone, Copy, Debug)]
+struct Pin {
+    corner: (f32, f32),
+    unit: f32,
+}
+
+impl Pin {
+    /// Points on the head's upper half-circle, left to right.
+    const ARC: usize = 33;
+    const HOLE: [(f32, f32); 8] = [
+        (5.0, 3.0),
+        (7.0, 3.0),
+        (9.0, 5.0),
+        (9.0, 7.0),
+        (7.0, 9.0),
+        (5.0, 9.0),
+        (3.0, 7.0),
+        (3.0, 5.0),
+    ];
+
+    /// The pin as large as the impact frames show it, `scale` times over, about the centre.
+    fn impact(scale: f32) -> Self {
+        let unit = 17.5 * scale;
+        Self {
+            corner: (CENTER.x as f32 - 6.0 * unit, CENTER.y as f32 - 7.0 * unit),
+            unit,
+        }
+    }
+
+    fn draw<D: CoverageTarget<Color = Color>>(self, color: Color, target: &mut D) {
+        let place =
+            |(x, y): (f32, f32)| (self.corner.0 + x * self.unit, self.corner.1 + y * self.unit);
+        let mut outline: heapless::Vec<(f32, f32), { Self::ARC + 3 }> = (0..Self::ARC)
+            .map(|i| {
+                let angle = core::f32::consts::PI * (1.0 + i as f32 / (Self::ARC - 1) as f32);
+                place((6.0 + 6.0 * libm::cosf(angle), 6.0 + 6.0 * libm::sinf(angle)))
+            })
+            .collect();
+        for point in [(12.0, 8.0), (6.0, 14.0), (0.0, 8.0)] {
+            let _ = outline.push(place(point));
+        }
+        let hole = Self::HOLE.map(place);
+        smooth::contours(
+            target,
+            &mut fontdue::raster::Raster::empty(),
+            &mut alloc::vec::Vec::new(),
+            &[&outline, &hole],
+            color,
+        );
+    }
+}
+
+/// How bright the square's dot is on `frame`, of 255: dark on its first frame, full half a
+/// period later.
+fn dot_level(frame: u32) -> u8 {
+    let Some(since) = frame.checked_sub(DOT_FROM) else {
+        return 0;
+    };
+    let phase = (since % DOT_PERIOD) as f32 / DOT_PERIOD as f32;
+    libm::roundf(127.5 * (1.0 - libm::cosf(core::f32::consts::TAU * phase))) as u8
 }
 
 /// A fixed sequence of numbers for the backdrop, the same every time.
@@ -491,12 +552,12 @@ fn draw_title<D: CoverageTarget<Color = Color>>(
     font: &FontdueRenderer<'static, Color>,
     target: &mut D,
 ) -> Result<(), D::Error> {
-    let filled = style(font, chrome::LIME, WORD_PX, SHAPIRO);
+    let filled = style(font, chrome::LIME, WORD_PX, MARATYPE);
     let pen = Point::new(
         text::pen_x_for_ink_centre(&filled, WORD, CENTER.x as f32),
         text::baseline_for_ink_middle(&filled, WORD, CENTER.y as f32),
     );
-    let hollow = |level: u8| style(font, chrome::shade(chrome::LIME, level), WORD_PX, SHAPIRO);
+    let hollow = |level: u8| style(font, chrome::shade(chrome::LIME, level), WORD_PX, MARATYPE);
     match lit(frame, FLICKER_FROM) {
         Lit::Before => {
             let ms = frame as f32 * FRAME_MS;
@@ -544,25 +605,67 @@ fn draw_row<D: CoverageTarget<Color = Color>>(
     target: &mut D,
 ) -> Result<(), D::Error> {
     let shown = |element: u32| frame >= ROW_FROM + element;
+    let (top, bottom) = (ROW_TOP as f32, ROW_TOP as f32 + ROW_HEIGHT);
     if shown(0) {
-        startup::barcode(
-            context.firmware,
-            BARCODE_LEFT,
-            MICRO_TOP,
-            15,
-            chrome::LIME,
-            target,
-        )?;
+        let scale = BARCODE_WIDTH / startup::bars_advance(context.firmware) as f32;
+        for (at, width) in startup::bars(context.firmware) {
+            let left = ROW_LEFT + at as f32 * scale;
+            smooth::rect(
+                target,
+                (left, top),
+                (left + width as f32 * scale, bottom),
+                chrome::LIME,
+            )?;
+        }
     }
     if shown(1) {
-        let origin = (MICRO_MARK_LEFT as f32, MICRO_TOP as f32);
-        Mark {
-            origin,
-            module: 3.0,
-            stroke: 1.0,
+        let (x, y) = (SQUARE_LEFT as f32, top);
+        let side = SQUARE as f32;
+        let square = [(x, y), (x + side, y), (x + side, y + side), (x, y + side)];
+        let octagon = [
+            (8.0, 3.0),
+            (17.0, 3.0),
+            (22.0, 8.0),
+            (22.0, 17.0),
+            (17.0, 22.0),
+            (8.0, 22.0),
+            (3.0, 17.0),
+            (3.0, 8.0),
+        ]
+        .map(|(dx, dy)| (x + dx, y + dy));
+        smooth::contours(
+            target,
+            &mut fontdue::raster::Raster::empty(),
+            &mut alloc::vec::Vec::new(),
+            &[&square, &octagon],
+            chrome::LIME,
+        );
+        let level = dot_level(frame);
+        if level > 0 {
+            target.fill_solid(&DOT, chrome::shade(chrome::LIME, level))?;
         }
-        .draw(true, false, chrome::LIME, target)?;
     }
+    let modules = |target: &mut D, rows: &[u8], columns: u32, left: f32, (w, h): (f32, f32)| {
+        // Each run of set modules is one span, since two blended edges meeting mid-pixel would
+        // leave a seam.
+        for (row, bits) in rows.iter().enumerate() {
+            let set = |column: u32| column < columns && bits & (1 << (columns - 1 - column)) != 0;
+            let y = top + row as f32 * h;
+            let mut column = 0;
+            while column < columns {
+                let start = column;
+                while set(column) {
+                    column += 1;
+                }
+                if column > start {
+                    let x = |column: u32| left + column as f32 * w;
+                    smooth::rect(target, (x(start), y), (x(column), y + h), chrome::LIME)?;
+                }
+                column += 1;
+            }
+        }
+        Ok(())
+    };
     if shown(2) {
         let digits = startup::utc_digits(context.clock);
         for i in 0..4 {
@@ -570,25 +673,17 @@ fn draw_row<D: CoverageTarget<Color = Color>>(
                 &startup::PIXEL_DIGITS[usize::from(digits[i])]
             });
             // A space between the hours and the minutes.
-            let left = DIGITS_LEFT + 12 * i as i32 + if i >= 2 { 6 } else { 0 };
-            startup::modules(
-                rows,
-                3,
-                Point::new(left, MICRO_TOP),
-                MICRO_MODULE,
-                chrome::LIME,
-                target,
-            )?;
+            let left = DIGITS_LEFT + DIGIT_STEP * i as f32 + if i >= 2 { 8.0 } else { 0.0 };
+            modules(target, rows, 3, left, DIGIT_MODULE)?;
         }
     }
     if shown(3) {
-        startup::modules(
+        modules(
+            target,
             &startup::GNSS,
             5,
-            Point::new(MICRO_GNSS_LEFT, MICRO_TOP),
-            MICRO_MODULE,
-            chrome::LIME,
-            target,
+            GNSS_LEFT,
+            (GNSS_MODULE, GNSS_MODULE),
         )?;
     }
     if shown(4) {
@@ -599,10 +694,10 @@ fn draw_row<D: CoverageTarget<Color = Color>>(
         let _ = write!(count, "SELF TEST {answered}/6 OK");
         for (line, top) in [version.as_str(), count.as_str()]
             .into_iter()
-            .zip(MICRO_TEXT_TOPS)
+            .zip(COPY_TOPS)
         {
             let pen = Point::new(
-                text::pen_x_for_ink_left(&style, line, MICRO_TEXT_LEFT),
+                text::pen_x_for_ink_left(&style, line, COPY_LEFT),
                 text::baseline_for_ink_top(&style, line, top),
             );
             style.draw_on_baseline(line, pen, target)?;
@@ -613,11 +708,11 @@ fn draw_row<D: CoverageTarget<Color = Color>>(
 
 // The card.
 
-/// The columns the card's opening frames show the mark through: one in every five.
+/// The columns the card's opening frames show the pin through: one in every five.
 const STRIPE_PITCH: i32 = 5;
 const STRIPE_PHASE: i32 = CENTER.x % STRIPE_PITCH;
-/// On those frames the tile is a thick frame: its outline and the hatch's margin.
-const TILE_FRAME: (i32, i32) = (170, 195);
+/// The pin grows to this for the card's last frames.
+const CARD_SCALE: f32 = 1.9;
 
 /// A view of `parent` that draws only on the card's stripe columns.
 struct Stripes<'a, T>(&'a mut T);
@@ -642,19 +737,24 @@ impl<T: DrawTarget> DrawTarget for Stripes<'_, T> {
                 .filter(|Pixel(point, _)| point.x.rem_euclid(STRIPE_PITCH) == STRIPE_PHASE),
         )
     }
+}
 
-    fn fill_solid(&mut self, area: &Rectangle, color: Self::Color) -> Result<(), Self::Error> {
-        let first = area.top_left.x + (STRIPE_PHASE - area.top_left.x).rem_euclid(STRIPE_PITCH);
-        for x in (first..area.top_left.x + area.size.width as i32).step_by(STRIPE_PITCH as usize) {
-            self.0.fill_solid(
-                &Rectangle::new(
-                    Point::new(x, area.top_left.y),
-                    Size::new(1, area.size.height),
-                ),
-                color,
-            )?;
+impl<T: CoverageTarget> CoverageTarget for Stripes<'_, T> {
+    fn blend_row(&mut self, x: i32, y: i32, coverage: &[u8], color: Self::Color) {
+        let first = (STRIPE_PHASE - x).rem_euclid(STRIPE_PITCH) as usize;
+        for (i, &cover) in coverage
+            .iter()
+            .enumerate()
+            .skip(first)
+            .step_by(STRIPE_PITCH as usize)
+        {
+            self.0
+                .blend_pixel(Point::new(x + i as i32, y), cover, color);
         }
-        Ok(())
+    }
+
+    fn visible(&self, area: &Rectangle) -> bool {
+        self.0.visible(area)
     }
 }
 
@@ -665,30 +765,13 @@ pub fn draw_card<D: CoverageTarget<Color = Color>>(
     // The lime frames clear to the page's colour rather than painting it over black.
     let page = matches!(frame, 0..9 | 17);
     screens::clear_to(target, if page { chrome::LIME } else { chrome::BLACK })?;
-    let scaled = CARD_MARK.scaled(CARD_SCALE);
+    let (pin, scaled) = (Pin::impact(1.0), Pin::impact(CARD_SCALE));
     match frame {
-        0..3 => {
-            let stripes = &mut Stripes(&mut *target);
-            CARD_MARK.draw(true, false, chrome::BLACK, stripes)?;
-            let (outer, inner) = TILE_FRAME;
-            let far = 2 * CENTER.x - outer;
-            let near = 2 * CENTER.x - inner;
-            for (x0, y0, x1, y1) in [
-                (outer, outer, far, inner),
-                (outer, near, far, far),
-                (outer, inner, inner, near),
-                (near, inner, far, near),
-            ] {
-                stripes.fill_solid(
-                    &Rectangle::with_corners(Point::new(x0, y0), Point::new(x1 - 1, y1 - 1)),
-                    chrome::BLACK,
-                )?;
-            }
-        }
-        3..9 => CARD_MARK.draw(true, true, chrome::BLACK, target)?,
-        9..13 => CARD_MARK.draw(true, true, chrome::LIME, target)?,
-        13..17 => scaled.draw(true, true, chrome::LIME, target)?,
-        17 => scaled.draw(true, true, chrome::BLACK, target)?,
+        0..3 => pin.draw(chrome::BLACK, &mut Stripes(&mut *target)),
+        3..9 => pin.draw(chrome::BLACK, target),
+        9..13 => pin.draw(chrome::LIME, target),
+        13..17 => scaled.draw(chrome::LIME, target),
+        17 => scaled.draw(chrome::BLACK, target),
         _ => {}
     }
     Ok(())

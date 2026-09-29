@@ -645,8 +645,25 @@ pub(super) fn modules<D: DrawTarget<Color = Color>>(
     Ok(())
 }
 
-/// Draws the version as bars from `left`, each character's four low bits least first: 2 px
-/// for a one, 1 px for a zero, 2 px apart. Returns the column past the last bar.
+/// The version's bars, each character's four low bits least first: 2 px for a one, 1 px for a
+/// zero, 2 px apart. Each is its column from the first bar's and its width.
+pub(super) fn bars(version: &str) -> impl Iterator<Item = (i32, u32)> + '_ {
+    version
+        .bytes()
+        .flat_map(|byte| (0..4).map(move |bit| if byte & (1 << bit) != 0 { 2 } else { 1 }))
+        .scan(0, |at, width| {
+            let bar = (*at, width);
+            *at += width as i32 + 2;
+            Some(bar)
+        })
+}
+
+/// How far the version's bars reach, with the space after the last.
+pub(super) fn bars_advance(version: &str) -> i32 {
+    bars(version).map(|(_, width)| width as i32 + 2).sum()
+}
+
+/// Draws the version as bars from `left`. Returns the column past the last bar.
 pub(super) fn barcode<D: DrawTarget<Color = Color>>(
     version: &str,
     left: i32,
@@ -655,18 +672,13 @@ pub(super) fn barcode<D: DrawTarget<Color = Color>>(
     color: Color,
     target: &mut D,
 ) -> Result<i32, D::Error> {
-    let mut x = left;
-    for byte in version.bytes() {
-        for bit in 0..4 {
-            let width = if byte & (1 << bit) != 0 { 2 } else { 1 };
-            target.fill_solid(
-                &Rectangle::new(Point::new(x, top), Size::new(width, height)),
-                color,
-            )?;
-            x += width as i32 + 2;
-        }
+    for (at, width) in bars(version) {
+        target.fill_solid(
+            &Rectangle::new(Point::new(left + at, top), Size::new(width, height)),
+            color,
+        )?;
     }
-    Ok(x - 2)
+    Ok(left + bars_advance(version) - 2)
 }
 
 /// Stripes at 45°, rising to the right, `width` px of every `pitch` along each row of `area`,
@@ -731,17 +743,16 @@ pub(super) fn utc_digits(clock: &ClockView) -> Option<[u8; 4]> {
     Some([hours / 10, hours % 10, minutes / 10, minutes % 10])
 }
 
-// The mark and the logo card.
+// The mark, which the replay screen's icon draws.
 
-/// The mark on the card: 42 px modules, the icons' frame rule's 11 px strokes, top-left at 128.
+/// The mark as the logo card drew it before the pin: 42 px modules, the icons' frame rule's
+/// 11 px strokes, top-left at 128. The hatch is sized against it.
 pub(super) const CARD_MARK: Mark = Mark {
     origin: (128.0, 128.0),
     module: 42.0,
     stroke: 11.0,
 };
-/// The card's mark scaled about the centre for the scaled and impact frames.
-pub(super) const CARD_SCALE: f32 = 1.9;
-/// The hatch on the card at 1×: inset 5 px inside the tile's outline, 5 px stripes on a 12 px
+/// The hatch at `CARD_MARK`'s size: inset 5 px inside the tile's outline, 5 px stripes on a 12 px
 /// pitch, all measured across the stripes. They scale with the mark.
 const HATCH_INSET: f32 = 5.0;
 const HATCH_STRIPE: f32 = 5.0;
@@ -758,18 +769,6 @@ pub(super) struct Mark {
 }
 
 impl Mark {
-    pub(super) fn scaled(self, scale: f32) -> Self {
-        let about = |v: f32, c: i32| c as f32 + (v - c as f32) * scale;
-        Self {
-            origin: (
-                about(self.origin.0, CENTER.x),
-                about(self.origin.1, CENTER.y),
-            ),
-            module: self.module * scale,
-            stroke: self.stroke * scale,
-        }
-    }
-
     /// Half-open spans `[x0, x1) × [y0, y1)` from the origin, for the tile's outline, then
     /// for the corners and edge lines.
     fn tile(self) -> [(f32, f32, f32, f32); 4] {
@@ -1510,7 +1509,6 @@ mod tests {
     fn the_hatch_lights_the_pixels_the_stripe_test_does() {
         for mark in [
             CARD_MARK,
-            CARD_MARK.scaled(CARD_SCALE),
             Mark {
                 origin: (100.0, 50.0),
                 module: 13.0,

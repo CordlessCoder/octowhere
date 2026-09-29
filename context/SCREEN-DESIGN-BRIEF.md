@@ -17,7 +17,9 @@ what data and settings exist. Read it with:
 - [`design/specs/COMPASS-ANIMATION-ADDENDUM.md`](design/specs/COMPASS-ANIMATION-ADDENDUM.md):
   the compass's motion.
 - [`design/specs/CLOCK-WORDMARK-ADDENDUM.md`](design/specs/CLOCK-WORDMARK-ADDENDUM.md): the
-  OCTOWHERE wordmark on the clock face.
+  OCTOWHERE wordmark on the clock face, which the 2026-09-29 update removed.
+- [`octowhere-implementation-update-2026-09-29/`](octowhere-implementation-update-2026-09-29/AGENTS.md):
+  the V11 identity, the HOLD LEVEL horizon and the clock's wide battery well, all built.
 - [`design/specs/SETTINGS-PANEL-SPEC.md`](design/specs/SETTINGS-PANEL-SPEC.md): the settings
   panel and its second-level screens.
 - [`design/specs/IMPLEMENTATION-RESPONSE.md`](design/specs/IMPLEMENTATION-RESPONSE.md) and
@@ -93,14 +95,16 @@ the panel. Touch targets are no smaller than about 10 mm.
 | Before the pager | Start-up: the self-test, then the identity and the logo card, or the fault screen |
 
 - **Start-up:** the 2026-09-26 hand-off's S1 self-test, G19 identity with G17's opening and
-  marks, and G17's card, with round 3's section 2 for the behaviour they keep. "Start-up as
+  marks, and G17's card, with round 3's section 2 for the behaviour they keep. The 2026-09-29
+  update's V11 replaces the identity's title, its subtitle row, the small logo and the ticks,
+  and the card's mark: a Maratype title, a full-width row, a map pin and two corner pluses. "Start-up as
   built" below has where the build interpreted them.
 - **Timeout, dimming and the always-on face:** as section 3 of the round 3 spec describes,
   except that the level fades rather than steps (owner). "Timeout and rest as built" below
   has the details.
 - **Clock face:** the hand-off's K1, on the round 4 spec: the band `LIME` while the time is
   local, `ORANGE` stopped, `WHITE` without a zone and `RED` without data, with UTC and the
-  battery in it beside a battery gauge; the date and zone as token lines; a 24-hour
+  battery in it over a wide battery well and the seconds to their right; the date and zone as token lines; a 24-hour
   rail with a lime marker on a known local hour; and two dim `PURPLE` scatter fields. "Clock
   face as built" below has where the build interpreted it. A time that a fix or zone change
   replaces types in again by cell reveal: the hours, minutes and seconds over 180 ms, and the
@@ -140,11 +144,11 @@ It draws the faces' stills and `panel-rest`, `settings-always-on`, `panel-end`,
 `examples/outline.rs` draws the outline samples, which `context/screen-captures/` keeps as
 `outline-shapiro-40`, `outline-fraktion-bold-136` and `outline-fraktion-16`;
 `context/screen-captures/` keeps `startup-selftest`, `startup-selftest-failed`,
-`startup-identity` (frame 77), `startup-card` (its frame 3) and `startup-fault`. It also draws the
+`startup-identity` (frame 97), `startup-card` (its frame 3) and `startup-fault`. It also draws the
 always-on face's `always-on-local`, `always-on-stopped`, `always-on-no-zone` and
 `always-on-no-data`, which `context/screen-captures/` keeps. `tools/ui-sim` records scenes as
 GIF or MP4 at 20 ms per frame, with the finger marked: `--record compass-states`, `--record
-startup`, `--record startup-failed`, `--record settings`, `--record rest-always-on`, `--record
+startup`, `--record clock-charging`, `--record startup-failed`, `--record settings`, `--record rest-always-on`, `--record
 rest-off` and `--record tour`, which walks every screen and state slowly for a viewer new to
 the device, in about three and a half minutes, with a caption for each step in a column beside
 the panel; `--scenes` lists the rest. The simulator shows the display's
@@ -154,27 +158,35 @@ pitch +05, roll −12, calibration 54 %. None of it is a reading.
 ## Clock face as built
 
 K1 (`design/renderer/concept/family-pass-v1-out/clock-K1-*`) on the round 4 spec
-(`design/specs/CLOCK-FACE-ROUND4-SPEC.md`). The captures `clock*`, `clock-charging`,
+(`design/specs/CLOCK-FACE-ROUND4-SPEC.md`), without the wordmark and with the battery of the
+2026-09-29 update. The captures `clock*`, `clock-charging`,
 `clock-battery-low` and `clock-battery-unknown` show it. Where the build interpreted them:
 
 - **The halo.** The scatter leaves out every mark within 2 px of an element's box (the hours,
-  the icon, the wordmark's letters off the band, each token line and the rail), where the
+  the icon, each token line and the rail), where the
   design grows each element's ink by 2 px in black. Marks the design lets sit between letters
   do not show. The elements then draw on known black, and a changed hour moves no mark.
 - **The scatter** is the firmware's generator with K1's two fields, facings and densities, in
   `PURPLE` dimmed to 49 %, clear of the band's rows by about 4 px. NO DATA has none.
-- **The seconds** show `--` while the time is withheld, as K1 has them.
+- **The seconds** sit at the band's right, pen at (388, 244), and show `--` while the time is
+  withheld, as K1 has them.
 - **The battery line** reads `BAT 87%`, `BAT 87% CHG` while charging, `USB` with USB and no
-  battery, and `BAT --` while unknown. With no known level the gauge is `GRAY` with two dashes
-  and no fill.
-- **The gauge** follows the implementation update of 2026-09-27
-  (`context/octowhere-implementation-update-2026-09-27/`): a solid fill, split while charging
-  into uneven full-width bands that gather and regroup in a 2.4 s pass, then rest 4 s on the pass's dispersed layout (owner) (`ui/charging.rs`,
-  which matches the update's `render_fill.py` at every height and phase). A change of the
-  charging flag between two readings of a known level wipes a solid layer down off the bands
-  or back up over them, in 450 ms, or 180 ms below 35 %. The loop runs while the face shows,
-  dimmed or not, and redraws the fill alone. NO DATA holds the bands still, as the update's
-  renders do.
+  battery, and `BAT --` while unknown. With no known level the well holds a static `GRAY` hatch at
+  45°, 15 px bands and 20 px gaps along a row, each band a pixel further left each row down,
+  across the whole fill, in every state. A known 0 % leaves the well empty.
+- **The gauge** is the 2026-09-29 update's: a black well at x 262–439, y 281–310, with no
+  outline, and the fill inset 3 px, 172 × 24, growing from the left to
+  round(172 × level / 100) px. The entry grows it from the left, out-back over 80 ms. While
+  charging, that length splits into upright slices in the identity barcode's narrow and broad
+  widths, 20 at 87 %, their gaps taking the barcode's share and moved by the 2026-09-27
+  update's loop: a 2.4 s pass, then 4 s at rest on its dispersed layout (owner). The endpoint
+  never moves (`ui/charging.rs`, which matches the update's `title_pattern` at every checked
+  length and phase). A change of the charging flag between two readings of a known level
+  wipes the solid layer down off the slices or back up over them across the well's 24 rows in
+  450 ms; the older 180 ms wipe for a short fill is gone, since every wipe now crosses the same
+  height. The design has no render of this horizontal wipe; `ui-sim --record clock-charging`
+  shows it. The loop runs while the face shows, dimmed or not, and redraws the fill alone.
+  NO DATA holds the slices still, as the update's renders do.
 - **The rail** opens from its middle outward, starting with the zone's line in the entry but taking 400 ms, a cell each side at a steady rate, and closes with the zone's line as the page leaves (owner). Its cells are `GRAY` dimmed to 29 %.
 - **The entry** follows the round 4 spec's windows and curves: the icon's rows over 150 ms by
   out-cubic, where the old face landed a row every 30 ms, so it shows no row on its first frame.
@@ -221,7 +233,7 @@ Listed in precedence order: the first whose condition holds is shown.
 | INTERFERENCE | a heading, and the field is disturbed | turned to the heading | interference glyph, `ORANGE` | `MAGNETIC`, `GRAY` | `INTERFERENCE`, Mono Bold 24 px `ORANGE` | `ORANGE` | degrees | shown |
 | HEADING | a heading | turned to the heading | arrow, `BLUE` | `MAGNETIC`, `GRAY` | none | `WHITE` | degrees | shown |
 | CALIBRATING | no heading, calibration under 100 % | none | open loop, `ORANGE` | `CALIBRATION`, `ORANGE` | `TURN ALL WAYS`, Mono Regular 19 px `GRAY` | `ORANGE` | percent | shown |
-| HOLD LEVEL | no heading, calibrated | none | letter L, `WHITE` | `MAGNETIC`, `GRAY` | `HOLD LEVEL`, Mono Regular 20 px `GRAY` | `WHITE` | `---` | shown |
+| HOLD LEVEL | no heading, calibrated | none | centred horizon, `WHITE` | `MAGNETIC`, `GRAY` | `HOLD LEVEL`, Mono Regular 20 px `GRAY` | `WHITE` | `---` | shown |
 
 The slab, icon and caption never move or resize. The state line's space is kept when it is
 empty.
@@ -305,27 +317,43 @@ interpreted them:
   has it (owner). Only its three letters are embedded.
 - **The opening's backdrop** of 185 dim blocks comes from a fixed sequence of the firmware's
   own, not Python's generator, so the blocks sit elsewhere at the same density.
-- **The title's outline** is 2 px inside each glyph's edge, where the design's is 1.55 px. A
-  glyph types in by its outline's shade rising over 55 ms, which at 30 fps is one frame at part
-  shade. Its partly lit frames show 2 px slices of the filled word.
+- **The title** is Maratype at 112 px (2026-09-29 update), its pen on whole pixels, so its ink
+  sits about a quarter pixel right of the design's `(33, 177)..(433, 289)`. Only its seven
+  letters are embedded. Its outline is 2 px inside each glyph's edge, where the design's is
+  1.55 px. A glyph types in by its outline's shade rising over 55 ms, which at 30 fps is one
+  frame at part shade. Its partly lit frames show 2 px slices of the filled word.
+- **The subtitle row** is V11's, as wide as the title's ink: the barcode's 20 bars widened to
+  113.625 px, the square with its octagonal hole and a dot that pulses once a second from dark
+  on frame 22, the digits in 4 × 5 px modules, the GNSS symbol in 5 px modules, and the two
+  lines of copy with their ink from x 300 at tops 309 and 325. Its fractional edges are blended
+  rather than rounded, and each row of set modules is one span, so no seam shows between them.
+- **The pluses** replace the ticks: 7 px arms, 1 px thick, 10 px out from the title's ink
+  corners, at (23, 167) and (442, 298), with the ticks' flicker.
+- **The scatter's gap** runs from row 163 to 340, clear of the taller title and row.
 - **The registration marks' centres** are 2 × 2 squares, where the design has a 4 px diamond.
-- **The small logo** draws the mark's 15 × 15 rows at 1.3 px modules rounded to whole pixels,
-  so its strokes are one or two pixels wide.
+- **The pin** replaces the small logo: V11's round head, point and octagonal hole, at 1.17 px
+  a unit from (437, 175), antialiased by an even-odd fill. The update's text puts its origin
+  at (437, 212), but its renders and script place it at (437, 175), and the build follows them.
+  Partly lit, it shows three 1 px stems, as the script has it.
 - **The scatter** uses the firmware's generator, not the design's Python surrogate, with the
   design's two fields, facings, densities and turns. The scatter is its own module
   (`ui::scatter`), with its grid origin, the band it stops short of and its colour as
   parameters, and one or more fields on that grid, each a circle and a seed with its own
   facing and density. Where fields overlap, the first to show a point gives its mark. A mark
   shows only if it lies wholly inside the glass. The owner wants it on more pages later.
-- **Redraws.** Every identity frame before frame 67, when the small logo settles, redraws in
-  full. From then on a frame redraws only the scatter marks its turns move and the UTC digits
-  when the minute changes.
+- **Redraws.** Every identity frame before frame 67, when the pin settles, redraws in full.
+  From then on a frame redraws only the scatter marks its turns move, the square's dot, and
+  the UTC digits when the minute changes.
+- **The card** shows the pin in place of the mark, 17.5 px a unit about the centre and 1.9 times
+  that from frame 13, with the mark's cadence: striped, dark, lit, grown, then dark on lime. It
+  has no tile frame or hatch. Its fill is rasterized in bands of 8,192 pixels, since the grown
+  pin's whole box would need about 736 KB.
 - **The card's lime page** runs to the glass's edge, where the design's stops at radius 232,
   since the frame clears straight to lime rather than painting a disc over black.
 - **The UTC digits** show dashes (`000 000 111 000 000`) when the clock has no time or its
   oscillator stopped, since a time it cannot vouch for is not data.
-- **The mark** is rectangles and a stripe test, drawn at any size from one description. In the
-  microtext row it has no hatch. The replay chooser shows it as `GOOD`'s icon.
+- **The mark** is rectangles and a stripe test, drawn at any size from one description. Since
+  the pin replaced it on the start-up, only the replay chooser shows it, as `GOOD`'s icon.
 - **The ticker** on the fault screen follows the 2026-09-27 update: one line, 4 px a frame,
   turning every 36 frames (1.2 s, owner; the update asked for 12) between the failed parts' names in `FAULT_BLUE` and `FAULT_FAULT_` in
   `FAULT_YELLOW`, both moving while hidden. With more than one failure the count and the first
@@ -517,7 +545,7 @@ target that takes antialiased coverage a row at a time and blends it with what i
   240 KiB internal heap. Past that it is drawn at half size with each pixel doubled, as the
   fault screen's giant name.
 - **Quarter-turned text:** a transpose and a flip of the upright raster. It costs about what
-  upright text costs. The wordmark uses it.
+  upright text costs. The start-up's BOOT uses it.
 - **Rotated text at any angle:** a string centred on a point, as the compass's `N E S W`. It is
   the costliest text.
 - **Outlined text:** upright text drawn as a ring just outside each glyph's edge, 1 or 2 px wide
@@ -584,6 +612,9 @@ that changed redraw. Measured on the device, per frame:
 | Start-up identity, a frame while its title and marks build | about 23 ms, at most 31 ms |
 | Start-up identity, once settled | nothing but the scatter's turns and the digits |
 | Start-up card, a frame | about 12 ms, at most 22 ms |
+| V11 identity, a frame while its title and marks build, by `timing-log` | about 48 ms, at most 51 ms, from about 30 ms before V11 |
+| V11 card, a frame with the pin at 1×, by `timing-log` | 34–38 ms, from 32–33 ms |
+| V11 card, a frame with the pin at 1.9×, by `timing-log` | about 97 ms, from at most 38 ms |
 | Start-up fault screen, a frame | 24.1 ms median, at most 26.6 ms |
 | Start-up fault screen's exit, a frame | 28.2 ms median, at most 30.1 ms |
 | Clock's charging gauge, a redraw of the fill alone | 2.5 ms median, at most 5.8 ms |
@@ -605,7 +636,7 @@ C1's settled states, entry points and a swipe frame were measured in
   separate region sent to the panel costs about as much as 1,000 more pixels.
 - A new screen redraws in full on every change until its own change tracking is written. The
   design should say which elements change and how often, as the specs' change tables do.
-- The flash image is 1,135,552 bytes, 7.25 % of the app partition. Flash is not a constraint.
+- The flash image is 1,218,832 bytes, 7.78 % of the app partition. Flash is not a constraint.
 
 ## Owner decisions that bind later screens
 
