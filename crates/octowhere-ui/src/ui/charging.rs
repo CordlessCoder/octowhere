@@ -1,8 +1,8 @@
 //! The clock's battery gauge while charging: the level split into upright slices in the identity
 //! barcode's proportions, whose gaps gather and regroup on a loop, and the solid layer under them
-//! that retreats down the well as charging starts and covers them again as it stops. The 27
-//! September implementation update designed the loop and the wipe, and the 29 September one
-//! the slices.
+//! that retreats from the fill's end to its start as charging starts and covers them again as it
+//! stops. The 27 September implementation update designed the loop and the wipe, and the 29
+//! September one the slices.
 
 use super::{gesture::Micros, screens::Battery};
 
@@ -14,7 +14,7 @@ const FRAME: Micros = 1_000_000 / 30;
 /// A phase in the loop's assembled hold: the wipes hold it, and a loop entered by one starts
 /// from it.
 pub const ASSEMBLED_PHASE: u8 = 27;
-/// How long a whole wipe takes. It crosses the well's height whatever the level.
+/// How long a whole wipe takes, whatever the level.
 const WIPE: Micros = 450_000;
 
 /// The motif's gaps at the loop's three rests: dispersed, assembled and paired. Each set sums

@@ -379,8 +379,8 @@ struct Parts {
 }
 
 /// The battery gauge: its colour, how many columns its fill reaches, the charging slices'
-/// phase, and how many rows of the fill, from its top, show the slices rather than solid. With
-/// no level it shows the hatch.
+/// phase, and how many columns of the fill, back from its end, show the slices rather than
+/// solid. With no level it shows the hatch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Gauge {
     color: Color,
@@ -607,7 +607,7 @@ impl Parts {
         let exposed = if length == 0 {
             0
         } else {
-            libm::roundf(FILL.size.height as f32 * f32::from(accents.exposed) / 255.0) as u32
+            libm::roundf(length as f32 * f32::from(accents.exposed) / 255.0) as u32
         };
         let gauge = Gauge {
             color: gauge,
@@ -909,14 +909,16 @@ fn draw_gauge<D: CoverageTarget<Color = Color>>(
             Size::new(width, rows.len() as u32),
         )
     };
-    // The slices lie over a solid layer whose top edge is `exposed` rows down the fill.
-    target.fill_solid(
-        &columns(0, gauge.length, gauge.exposed..FILL.size.height),
-        gauge.color,
-    )?;
+    // The slices lie over a solid layer whose end is `exposed` columns back from the fill's.
+    let solid = gauge.length - gauge.exposed;
+    let rows = 0..FILL.size.height;
+    target.fill_solid(&columns(0, solid, rows.clone()), gauge.color)?;
     if gauge.exposed > 0 {
         for (from, width) in charging::slices(gauge.length, gauge.phase) {
-            target.fill_solid(&columns(from, width, 0..gauge.exposed), gauge.color)?;
+            let start = from.max(solid);
+            if let Some(width) = (from + width).checked_sub(start).filter(|&width| width > 0) {
+                target.fill_solid(&columns(start, width, rows.clone()), gauge.color)?;
+            }
         }
     }
     Ok(())

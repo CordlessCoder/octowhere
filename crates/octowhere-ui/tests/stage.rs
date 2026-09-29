@@ -2514,3 +2514,46 @@ fn a_cancel_onto_a_dimming_screen_never_brightens_it() {
         }
     }
 }
+
+/// Plugged in, the solid layer draws back along the fill from its end, so the slices show from
+/// the end first.
+#[test]
+fn the_charging_wipe_runs_along_the_fill_from_its_end() {
+    let mut driver = Driver::on(Screen::Clock);
+    let reading = |charging| Sensors {
+        clock: clock_at(12, 8, 5),
+        zone: zone("Europe/Dublin", ZoneMode::Automatic),
+        battery: Some(Battery {
+            present: true,
+            percent: 87,
+            millivolts: 3900,
+            charging,
+            usb: charging,
+        }),
+        ..Sensors::default()
+    };
+    driver.sensors(reading(false));
+    driver.wait(1_000_000);
+    driver.sensors(reading(true));
+    driver.wait(200_000);
+    // The fill runs from x 265 to 415 at 87 %, on rows 284 to 307.
+    let dark = |fb: &FB, xs: core::ops::Range<i32>| {
+        xs.filter(|&x| fb.pixel(Point::new(x, 295)) == Some(chrome::BLACK))
+            .count()
+    };
+    let halfway = render(&driver.stage);
+    assert_eq!(dark(&halfway, 265..320), 0, "the start is still solid");
+    assert!(dark(&halfway, 360..415) > 0, "the end shows slices");
+    for row in 284..308 {
+        assert_eq!(
+            halfway.pixel(Point::new(400, row)),
+            halfway.pixel(Point::new(400, 295)),
+            "every row of a column shows the same"
+        );
+    }
+    driver.wait(400_000);
+    assert!(
+        dark(&render(&driver.stage), 265..320) > 0,
+        "the slices reach the start"
+    );
+}
