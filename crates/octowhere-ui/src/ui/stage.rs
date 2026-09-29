@@ -675,9 +675,12 @@ impl Stage {
         if let Some((page, _)) = &mut self.page {
             self.fading |= page.step(now);
         }
-        if self.sheet.is_open() && !was_open || self.sheet.is_open() && self.panel_settled.is_none()
-        {
+        // A panel that springs back without closing keeps its entry: the accents it faded on the
+        // way out come back with its offset.
+        if self.sheet.is_open() && self.panel_settled.is_none() {
             self.panel_settled = Some(now);
+        }
+        if self.sheet.is_open() && !was_open {
             // The face under the panel starts its entry again when the panel leaves it.
             self.compass_settled = None;
             self.clock_settled = None;

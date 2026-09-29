@@ -1101,6 +1101,25 @@ fn the_panel_arrives_with_its_accents_hidden_and_builds_them_once_open() {
 }
 
 #[test]
+fn a_drag_that_springs_back_open_does_not_replay_the_panel_entry() {
+    let mut driver = open_panel(Screen::Clock);
+    driver.swipe(Point::new(233, 420), Point::new(233, 360), 150_000);
+    assert!(driver.stage.panel_offset() < HEIGHT);
+    while driver.stage.panel_offset() < HEIGHT {
+        driver.wait(0);
+    }
+    // The offset rounds to the top before the settle ends, so watch past that.
+    for _ in 0..30 {
+        assert_eq!(
+            panel_accents(&driver),
+            PanelAccents::FULL,
+            "the entry replayed"
+        );
+        driver.wait(0);
+    }
+}
+
+#[test]
 fn an_upward_drag_closes_the_panel_to_the_face_it_came_from() {
     let mut driver = open_panel(Screen::Compass);
     driver.swipe(Point::new(233, 420), Point::new(233, 100), 250_000);
