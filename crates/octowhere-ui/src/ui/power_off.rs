@@ -1,5 +1,5 @@
 //! The confirmation the power key's long press opens, and what shows while the board powers
-//! off. A placeholder until the screen has a design round.
+//! off.
 
 use embedded_graphics::{
     prelude::{Point, Size},
@@ -8,10 +8,15 @@ use embedded_graphics::{
 
 use super::{
     gesture::{GestureEvent, Micros},
-    second::{self, Slide},
+    icon::Glyph,
+    rest::Rest,
+    second::{self, Rail, Slide},
+    smooth,
     text::{self, style},
 };
-use crate::chrome::{self, Color, CoverageTarget, FontdueRenderer, OnBackground};
+use crate::chrome::{
+    self, Color, CoverageTarget, FRAKTION, FRAKTION_BOLD, FontdueRenderer, OnBackground,
+};
 
 /// Left untouched this long, the confirmation cancels itself.
 pub const TIMEOUT: Micros = 10_000_000;
@@ -19,6 +24,18 @@ pub const TIMEOUT: Micros = 10_000_000;
 pub const FADE: Micros = 300_000;
 
 const CENTER_X: f32 = 233.0;
+const POWER: Glyph = [0b00100, 0b00100, 0b10001, 0b10001, 0b01110];
+const RAIL: Rail = Rail {
+    handle: Rectangle::new(Point::new(83, 225), Size::new(60, 64)),
+    travel: 240,
+};
+/// The slide's rows, all a drag redraws.
+pub const SLIDER: Rectangle = Rectangle::new(Point::new(83, 225), Size::new(300, 64));
+const GUIDE: Rectangle = Rectangle::new(Point::new(83, 256), Size::new(300, 3));
+const HELP: [(&str, i32); 2] = [
+    ("RELEASE IN TARGET TO CONFIRM", 323),
+    ("HOLD KEY TO WAKE", 346),
+];
 
 /// What a step of the confirmation decided.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -31,17 +48,22 @@ pub enum Answer {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PowerOff {
     slide: Slide,
-    opened: Micros,
+    /// The last touch, or when the confirmation came fully into view, whichever is later.
+    since: Micros,
     confirmed: Option<Micros>,
+    /// How the screen rested before the key woke it, to go back to on a cancel.
+    prior: Rest,
 }
 
 impl PowerOff {
+    /// Opens over a screen that rested as `prior`, fully in view from `shown`.
     #[must_use]
-    pub fn new(now: Micros) -> Self {
+    pub fn new(shown: Micros, prior: Rest) -> Self {
         Self {
             slide: Slide::default(),
-            opened: now,
+            since: shown,
             confirmed: None,
+            prior,
         }
     }
 
@@ -50,8 +72,8 @@ impl PowerOff {
         if self.confirmed.is_some() {
             return Answer::Stay;
         }
-        if self.slide.handle(event) {
-            self.slide.arrive();
+        if self.slide.handle(&RAIL, event) {
+            self.slide.arrive(&RAIL);
             self.confirmed = Some(now);
             return Answer::Confirm;
         }
@@ -61,10 +83,15 @@ impl PowerOff {
         }
     }
 
+    /// Restarts the time left before the confirmation cancels itself.
+    pub fn touched(&mut self, now: Micros) {
+        self.since = self.since.max(now);
+    }
+
     /// When the confirmation cancels itself, while it has not been confirmed.
     #[must_use]
     pub fn deadline(&self) -> Option<Micros> {
-        self.confirmed.is_none().then_some(self.opened + TIMEOUT)
+        self.confirmed.is_none().then_some(self.since + TIMEOUT)
     }
 
     /// When the slide confirmed it.
@@ -73,42 +100,100 @@ impl PowerOff {
         self.confirmed
     }
 
+    #[must_use]
+    pub fn prior(&self) -> Rest {
+        self.prior
+    }
+
     pub fn draw<D: CoverageTarget<Color = Color>>(
         &self,
         font: &FontdueRenderer<'static, Color>,
         target: &mut D,
     ) -> Result<(), D::Error> {
-        let title = style(font, chrome::WHITE, 27, chrome::SHAPIRO);
-        let pen = Point::new(
-            text::pen_x_for_ink_centre(&title, "POWER OFF", CENTER_X),
-            text::baseline_for_ink_top(&title, "POWER OFF", 29),
-        );
-        title.draw_on_baseline(
-            "POWER OFF",
-            pen,
-            &mut OnBackground::new(&mut *target, chrome::BLACK),
-        )?;
-        for y in [83, 145] {
-            target.fill_solid(
-                &Rectangle::new(Point::new(83, y), Size::new(300, 1)),
-                chrome::shade(chrome::GRAY, 145),
+        second::draw_heading("POWER OFF", "SYSTEM / POWER", font, target)?;
+        second::ICON.draw(&POWER, chrome::ORANGE, 5, target)?;
+        let confirmed = self.confirmed.is_some();
+        if !confirmed {
+            second::draw_button("CANCEL", second::BUTTON, false, font, target)?;
+            let action = style(font, chrome::ORANGE, 14, FRAKTION);
+            let line = "SLIDE TO POWER OFF";
+            let pen = Point::new(
+                text::pen_x_for_ink_left(&action, line, 91),
+                text::baseline_for_ink_top(&action, line, 164),
+            );
+            action.draw_on_baseline(
+                line,
+                pen,
+                &mut OnBackground::new(&mut *target, chrome::BLACK),
             )?;
         }
-        let lines: &[&str] = if self.confirmed.is_some() {
-            &["POWERING OFF"]
-        } else {
-            second::draw_button("CANCEL", second::BUTTON, false, font, target)?;
-            &["SLIDE TO POWER OFF", "HOLD THE KEY TO WAKE"]
-        };
-        self.slide.draw(chrome::ORANGE, target)?;
-        let small = second::hint_style(font);
-        let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
-        for (line, top) in lines.iter().zip([338, 356]) {
+        self.draw_slider(target)?;
+        if confirmed {
+            let status = style(font, chrome::WHITE, 23, FRAKTION_BOLD);
+            let line = "POWERING OFF";
             let pen = Point::new(
-                text::pen_x_for_ink_centre(&small, line, CENTER_X),
-                text::baseline_for_ink_top(&small, line, top),
+                text::pen_x_for_ink_centre(&status, line, CENTER_X),
+                text::baseline_for_ink_top(&status, line, 327),
             );
-            small.draw_on_baseline(line, pen, field)?;
+            return status.draw_on_baseline(
+                line,
+                pen,
+                &mut OnBackground::new(&mut *target, chrome::BLACK),
+            );
+        }
+        let help = style(font, chrome::GRAY, 13, FRAKTION);
+        for (line, top) in HELP {
+            let pen = Point::new(
+                text::pen_x_for_ink_centre(&help, line, CENTER_X),
+                text::baseline_for_ink_top(&help, line, top),
+            );
+            help.draw_on_baseline(
+                line,
+                pen,
+                &mut OnBackground::new(&mut *target, chrome::BLACK),
+            )?;
+        }
+        second::draw_footer("AUTO CANCEL / 10 S", second::Accents::FULL, font, target)
+    }
+
+    /// The guide, the target, and the orange track to the handle with its arrow.
+    fn draw_slider<D: CoverageTarget<Color = Color>>(
+        &self,
+        target: &mut D,
+    ) -> Result<(), D::Error> {
+        target.fill_solid(&SLIDER, chrome::BLACK)?;
+        target.fill_solid(&GUIDE, chrome::shade(chrome::GRAY, 145))?;
+        let goal = RAIL.target();
+        target.fill_solid(&goal, chrome::ORANGE)?;
+        target.fill_solid(&goal.offset(-1), chrome::BLACK)?;
+        let handle = RAIL.handle_at(self.slide.travel());
+        let track = Rectangle::with_corners(
+            RAIL.handle.top_left,
+            handle.bottom_right().unwrap_or(handle.top_left),
+        );
+        target.fill_solid(&track, chrome::ORANGE)?;
+        let (x, y) = (handle.center().x as f32, 257.0);
+        let arrow = &mut OnBackground::new(&mut *target, chrome::ORANGE);
+        smooth::rect(
+            arrow,
+            (x - 19.0, y - 4.0),
+            (x + 11.0, y + 4.0),
+            chrome::BLACK,
+        )?;
+        // The head narrows by a pixel a row either side of its middle, to a point 14 px on.
+        for row in -14..14 {
+            let off_middle = if row < 0 {
+                -row as f32 - 0.5
+            } else {
+                row as f32 + 0.5
+            };
+            let top = y + row as f32;
+            smooth::rect(
+                arrow,
+                (x + 9.0, top),
+                (x + 23.0 - off_middle, top + 1.0),
+                chrome::BLACK,
+            )?;
         }
         Ok(())
     }

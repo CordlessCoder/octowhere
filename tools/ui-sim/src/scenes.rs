@@ -15,7 +15,7 @@ use octowhere_ui::ui::{
     script::Driver,
     second::Store,
     stage::Stage,
-    stage::{Motion, Sensors},
+    stage::{Key, Motion, Sensors},
     startup::{Outcome, Part},
 };
 
@@ -86,6 +86,12 @@ pub const SCENES: &[Scene] = &[
         name: "rest-off",
         about: "a 15 s timeout on the compass: the dim, the panel off, and a touch back",
         run: rest_off,
+        captioned: false,
+    },
+    Scene {
+        name: "power-off",
+        about: "the power key's confirmation: a slide let go short, a cancel, a wake from dark onto it, and a slide that powers off",
+        run: power_off,
         captioned: false,
     },
     Scene {
@@ -824,6 +830,24 @@ fn startup_failed(driver: &mut Driver) {
         ],
     );
     driver.wait(ms(5_200));
+}
+
+fn power_off(driver: &mut Driver) {
+    start(driver, Screen::Clock);
+    driver.wait(ms(1_000));
+    driver.key(Key::Long);
+    driver.wait(ms(1_000));
+    // Let go short of the target: the handle goes back to its start.
+    driver.swipe(Point::new(113, 258), Point::new(290, 258), ms(700));
+    driver.wait(ms(1_000));
+    tap(driver, 133, 118);
+    driver.wait(ms(1_000));
+    driver.key(Key::Short);
+    driver.wait(ms(1_000));
+    driver.key(Key::Long);
+    driver.wait(ms(1_200));
+    driver.swipe(Point::new(113, 258), Point::new(400, 258), ms(800));
+    driver.wait(ms(1_000));
 }
 
 /// Settles on `screen` with a 15 s timeout, and waits out the timeout and the dim.

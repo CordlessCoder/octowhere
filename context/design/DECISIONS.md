@@ -47,8 +47,8 @@ Recorded 2026-09-26. These override the hand-off where they differ.
 12. **The power key** (owner, 2026-09-29). A short press rests the screen at once, on the
     always-on face or dark, and wakes a resting one. A long press (1 s) opens a power-off
     confirmation over whatever showed: a swipe confirms; a cancel button, a cover, a short press
-    or 10 s untouched cancels. The board powers on with a 512 ms hold. The confirmation is a
-    placeholder until a design round.
+    or 10 s untouched cancels. The board powers on with a 512 ms hold. Entry 14 replaced the
+    placeholder confirmation.
 13. **The 2026-09-29 implementation update** (owner, 2026-09-29), in
     `context/octowhere-implementation-update-2026-09-29/`, approved in full and built. The
     identity takes V11: a Maratype title at 112 px, a full-width subtitle row, a map pin for
@@ -59,3 +59,7 @@ Recorded 2026-09-26. These override the hand-off where they differ.
     static gray hatch with no level. Maratype stays on the identity's title only; the owner
     rejected it everywhere else. The owner cleared the font's redistribution for the public
     repository.
+14. **The power-off confirmation** (owner, 2026-09-29), in
+    `context/octowhere-poweroff-implementation-handoff-2026-09-29/`, approved and built. It
+    takes the settings cap and the CLEAR slide's gesture, in orange. A cancel returns the
+    screen to the rest the key woke it from, and the 10 s restarts on every touch.

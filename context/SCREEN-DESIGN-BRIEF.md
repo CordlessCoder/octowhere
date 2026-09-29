@@ -20,6 +20,8 @@ what data and settings exist. Read it with:
   OCTOWHERE wordmark on the clock face, which the 2026-09-29 update removed.
 - [`octowhere-implementation-update-2026-09-29/`](octowhere-implementation-update-2026-09-29/AGENTS.md):
   the V11 identity, the HOLD LEVEL horizon and the clock's wide battery well, all built.
+- [`octowhere-poweroff-implementation-handoff-2026-09-29/`](octowhere-poweroff-implementation-handoff-2026-09-29/AGENTS.md):
+  the power key's confirmation, built.
 - [`design/specs/SETTINGS-PANEL-SPEC.md`](design/specs/SETTINGS-PANEL-SPEC.md): the settings
   panel and its second-level screens.
 - [`design/specs/IMPLEMENTATION-RESPONSE.md`](design/specs/IMPLEMENTATION-RESPONSE.md) and
@@ -389,18 +391,32 @@ interpreted them:
 
 ## Power key as built
 
-The power key has no approved design yet. Its confirmation is a placeholder.
+The confirmation follows the power-off hand-off of 2026-09-29. Captures: `power-off.png`,
+`power-off-sliding.png`, `power-off-confirmed.png` and `power-off.mp4`, which is
+`--record power-off`.
 
 - **A short press** rests the screen at once, on the always-on face if ALWAYS ON is on and
   dark otherwise, without the dim. On a resting screen it wakes it, as a touch would.
-- **A long press** wakes the screen if it rests and shows `POWER OFF` over whatever showed. It
-  has the clear screen's orange slide, a `CANCEL` button in the top cap and two hint lines. The
-  slide powers off: the handle stays at the target, `POWERING OFF` replaces the hints, and the
-  level fades to dark over 300 ms before the panel goes off and the board powers down. The
-  button, a cover, a short press or 10 s untouched cancel it; a short press also rests the
-  screen. While it shows, the screen timeout holds.
+- **A long press** cuts to the confirmation from any face or settings screen. On a resting
+  screen it fades up onto it over the 250 ms wake, with no clock frame first. The screen
+  keeps what showed under it, and a cancel returns to it.
+- **The layout** is the settings cap titled `POWER OFF`, with the section `SYSTEM / POWER`, a
+  `CANCEL` button and an orange power icon. Under it are the orange `SLIDE TO POWER OFF`, a
+  60 × 64 px handle that travels 240 px to an orange-outlined target, two gray help lines, and
+  `AUTO CANCEL / 10 S` under the footer rule. The breadcrumb and footer use the settings
+  pages' 14 px hint style, where the study has 12 px. There is no perimeter ring (`DECISIONS.md` 4b).
+- **The slide** follows the finger and confirms only when let go with the handle's middle
+  over the target. Let go short, it springs back. A tap does nothing. A drag redraws only the
+  slider's rows.
+- **Once confirmed**, the handle stays at the target, `CANCEL` and the hints go, and
+  `POWERING OFF` shows. The level fades to dark over 300 ms before the panel goes off and the
+  board powers down. Nothing takes it back.
+- **Cancelling.** The top cap, a cover, or 10 s untouched cancels. Every touch restarts the
+  10 s, and after a wake from rest they count from when the screen is fully up. A cancel puts
+  the screen back as it rested before the key woke it: dimmed, darkening, on the always-on
+  face or off. A dim or darkening one restarts its step. A short press cancels and rests the
+  screen. While the confirmation shows, the screen timeout holds.
 - **The start-up ignores the key**, so the press that powers the board on does nothing more.
-- Captures: `power-off.png`, `power-off-sliding.png` and `power-off-confirmed.png`.
 
 ## Timeout and rest as built
 

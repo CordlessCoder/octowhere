@@ -762,7 +762,8 @@ impl Stage {
         {
             return;
         }
-        let resting = self.rest != Rest::Awake;
+        let prior = self.rest;
+        let resting = prior != Rest::Awake;
         if resting {
             self.wake_by_key(now, update);
         }
@@ -777,7 +778,12 @@ impl Stage {
             }
             Key::Long if self.power_off.is_none() => {
                 self.route = None;
-                self.power_off = Some(PowerOff::new(now));
+                let shown = match prior {
+                    Rest::AlwaysOn | Rest::Off => self.entry_from + rest::WAKE_FADE,
+                    Rest::Dimmed { .. } | Rest::Darkening { .. } => now + rest::WAKE_FADE,
+                    Rest::Awake => now,
+                };
+                self.power_off = Some(PowerOff::new(shown, prior));
                 self.changed.make_full();
             }
             Key::Long => {}
@@ -838,6 +844,9 @@ impl Stage {
             }
             return;
         }
+        if self.raw_touch[0].is_some() {
+            power_off.touched(now);
+        }
         let before = power_off.clone();
         let answer = if cover || power_off.deadline().is_some_and(|deadline| now >= deadline) {
             Answer::Cancel
@@ -845,16 +854,35 @@ impl Stage {
             power_off.handle(&event, now)
         };
         let changed = *power_off != before;
+        let prior = power_off.prior();
         match answer {
+            Answer::Stay if changed => self.changed.add(power_off::SLIDER),
             Answer::Stay => {}
             Answer::Cancel => {
                 self.power_off = None;
                 self.forget_drawn();
+                self.rest_again(prior, now, update);
             }
-            Answer::Confirm => self.fade_to(0, power_off::FADE, now),
+            Answer::Confirm => {
+                self.fade_to(0, power_off::FADE, now);
+                self.changed.make_full();
+            }
         }
-        if changed || answer != Answer::Stay {
-            self.changed.make_full();
+    }
+
+    /// Puts the screen back the way it rested before the power key woke it.
+    fn rest_again(&mut self, prior: Rest, now: Micros, update: &mut Update) {
+        match prior {
+            Rest::Awake => {}
+            Rest::Dimmed { .. } => {
+                self.rest = Rest::Dimmed { since: now };
+                self.fade_to(rest::dim_level(self.level), rest::DIM_FADE, now);
+            }
+            Rest::Darkening { .. } => {
+                self.rest = Rest::Darkening { since: now };
+                self.fade_to(0, rest::OFF_FADE, now);
+            }
+            Rest::AlwaysOn | Rest::Off => self.sleep(update),
         }
     }
 

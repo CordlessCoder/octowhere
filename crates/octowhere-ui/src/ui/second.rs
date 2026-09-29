@@ -205,14 +205,25 @@ pub fn draw_cap_around_icon<D: CoverageTarget<Color = Color>>(
     font: &FontdueRenderer<'static, Color>,
     target: &mut D,
 ) -> Result<(), D::Error> {
+    draw_heading("SETTINGS", section, font, target)?;
+    draw_button(button, BUTTON, false, font, target)
+}
+
+/// The scatter, the title, the section under it and the cap's rules.
+pub fn draw_heading<D: CoverageTarget<Color = Color>>(
+    title: &str,
+    section: &str,
+    font: &FontdueRenderer<'static, Color>,
+    target: &mut D,
+) -> Result<(), D::Error> {
     panel::draw_scatter(&panel::Accents::FULL, target)?;
     let style = style(font, chrome::WHITE, 27, crate::chrome::SHAPIRO);
     let pen = Point::new(
-        text::pen_x_for_ink_centre(&style, "SETTINGS", CENTER.x as f32),
-        text::baseline_for_ink_top(&style, "SETTINGS", 29),
+        text::pen_x_for_ink_centre(&style, title, CENTER.x as f32),
+        text::baseline_for_ink_top(&style, title, 29),
     );
     style.draw_on_baseline(
-        "SETTINGS",
+        title,
         pen,
         &mut OnBackground::new(&mut *target, chrome::BLACK),
     )?;
@@ -232,7 +243,7 @@ pub fn draw_cap_around_icon<D: CoverageTarget<Color = Color>>(
             chrome::shade(chrome::GRAY, 145),
         )?;
     }
-    draw_button(button, BUTTON, false, font, target)
+    Ok(())
 }
 
 pub fn draw_footer<D: CoverageTarget<Color = Color>>(
@@ -1128,34 +1139,50 @@ pub struct Slide {
     dragged: Option<i32>,
 }
 
-const HANDLE: i32 = 64;
-const HANDLE_TOP: i32 = 226;
-const RAIL_LEFT: i32 = 62;
-const RAIL_RIGHT: i32 = 404;
-const TARGET_LEFT: i32 = RAIL_RIGHT - HANDLE;
-const TRAVEL: i32 = TARGET_LEFT - RAIL_LEFT;
+/// Where a [`Slide`]'s handle starts and how far it travels to the target.
+pub struct Rail {
+    pub handle: Rectangle,
+    pub travel: i32,
+}
 
-impl Slide {
-    fn handle_at(travel: i32) -> Rectangle {
+impl Rail {
+    #[must_use]
+    pub fn handle_at(&self, travel: i32) -> Rectangle {
         Rectangle::new(
-            Point::new(RAIL_LEFT + travel, HANDLE_TOP),
-            Size::new_equal(HANDLE as u32),
+            self.handle.top_left + Point::new(travel, 0),
+            self.handle.size,
         )
     }
 
+    #[must_use]
+    pub fn target(&self) -> Rectangle {
+        self.handle_at(self.travel)
+    }
+}
+
+const HANDLE: i32 = 64;
+const RAIL_LEFT: i32 = 62;
+const RAIL_RIGHT: i32 = 404;
+const CLEAR_RAIL: Rail = Rail {
+    handle: Rectangle::new(Point::new(RAIL_LEFT, 226), Size::new_equal(HANDLE as u32)),
+    travel: RAIL_RIGHT - HANDLE - RAIL_LEFT,
+};
+
+impl Slide {
     /// Follows a drag that starts on the handle, and returns whether it let go at the target.
-    pub fn handle(&mut self, event: &GestureEvent) -> bool {
+    pub fn handle(&mut self, rail: &Rail, event: &GestureEvent) -> bool {
         match *event {
-            GestureEvent::DragStart(drag) if Self::handle_at(0).contains(drag.start) => {
-                self.dragged = Some(drag.offset().x.clamp(0, TRAVEL));
+            GestureEvent::DragStart(drag) if rail.handle.contains(drag.start) => {
+                self.dragged = Some(drag.offset().x.clamp(0, rail.travel));
             }
             GestureEvent::DragMove(drag) if self.dragged.is_some() => {
-                self.dragged = Some(drag.offset().x.clamp(0, TRAVEL));
+                self.dragged = Some(drag.offset().x.clamp(0, rail.travel));
             }
             GestureEvent::DragEnd(drag) if self.dragged.is_some() => {
                 self.dragged = None;
                 // The handle's middle over the target counts as reaching it.
-                return drag.offset().x.clamp(0, TRAVEL) + HANDLE / 2 >= TRAVEL;
+                let half = rail.handle.size.width as i32 / 2;
+                return drag.offset().x.clamp(0, rail.travel) + half >= rail.travel;
             }
             _ => {}
         }
@@ -1163,8 +1190,14 @@ impl Slide {
     }
 
     /// Shows the handle at the target, for a screen that has been confirmed.
-    pub fn arrive(&mut self) {
-        self.dragged = Some(TRAVEL);
+    pub fn arrive(&mut self, rail: &Rail) {
+        self.dragged = Some(rail.travel);
+    }
+
+    /// How far the handle is past its start.
+    #[must_use]
+    pub fn travel(&self) -> i32 {
+        self.dragged.unwrap_or(0)
     }
 
     pub fn draw<D: CoverageTarget<Color = Color>>(
@@ -1172,7 +1205,8 @@ impl Slide {
         color: Color,
         target: &mut D,
     ) -> Result<(), D::Error> {
-        let middle = HANDLE_TOP + HANDLE / 2;
+        let top = CLEAR_RAIL.handle.top_left.y;
+        let middle = top + HANDLE / 2;
         target.fill_solid(
             &Rectangle::new(
                 Point::new(RAIL_LEFT, middle - 1),
@@ -1180,15 +1214,15 @@ impl Slide {
             ),
             chrome::GRAY,
         )?;
-        let goal = Self::handle_at(TRAVEL);
+        let goal = CLEAR_RAIL.target();
         target.fill_solid(&goal, chrome::GRAY)?;
         target.fill_solid(&goal.offset(-2), chrome::BLACK)?;
-        let travel = self.dragged.unwrap_or(0);
-        let handle = Self::handle_at(travel);
+        let travel = self.travel();
+        let handle = CLEAR_RAIL.handle_at(travel);
         if travel > 0 {
             let swept = Rectangle::with_corners(
-                Point::new(RAIL_LEFT, HANDLE_TOP),
-                Point::new(handle.top_left.x + HANDLE - 1, HANDLE_TOP + HANDLE - 1),
+                Point::new(RAIL_LEFT, top),
+                Point::new(handle.top_left.x + HANDLE - 1, top + HANDLE - 1),
             );
             target.fill_solid(&swept, color)?;
         }
@@ -1223,7 +1257,7 @@ const WARNING: [&str; 3] = [
 
 impl Clear {
     fn handle(&mut self, event: &GestureEvent, effects: &mut Effects) -> Next {
-        if self.slide.handle(event) {
+        if self.slide.handle(&CLEAR_RAIL, event) {
             effects.store = Some(Store::Clear);
             return Next::Panel;
         }

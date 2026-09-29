@@ -1,7 +1,7 @@
 use embedded_graphics::prelude::{Point, Size};
 use embedded_graphics::primitives::Rectangle;
 use octowhere_ui::{
-    chrome::{Clip, Color, Dirty, FB, Window},
+    chrome::{self, Clip, Color, Dirty, FB, Window},
     tz::DATABASE,
     ui::{
         clock::{ClockState, DateTime, ZoneMode, ZoneState},
@@ -2341,4 +2341,118 @@ fn the_start_up_ignores_the_power_key() {
     assert!(driver.stage.starting_up());
     assert!(driver.stage.power_off().is_none());
     assert_eq!(driver.stage.rest(), Rest::Awake);
+}
+
+#[test]
+fn a_release_short_of_the_target_or_a_tap_on_the_slide_keeps_the_confirmation() {
+    let mut driver = resting_on(Screen::Clock, Timeout::Seconds15, false);
+    driver.key(Key::Long);
+    tap(&mut driver, 113, 257);
+    // The handle's middle stops short of the target's left edge.
+    driver.swipe(Point::new(113, 258), Point::new(320, 258), 300_000);
+    driver.wait(100_000);
+    let power_off = driver.stage.power_off().expect("the confirmation stays");
+    assert_eq!(power_off.confirmed(), None);
+    // Back at its start, the handle leaves the rail beside it black.
+    assert_eq!(
+        render(&driver.stage).pixel(Point::new(150, 240)),
+        Some(chrome::BLACK)
+    );
+}
+
+#[test]
+fn a_drag_on_the_power_off_slide_redraws_only_the_slide() {
+    let mut driver = resting_on(Screen::Clock, Timeout::Seconds15, false);
+    driver.key(Key::Long);
+    let mut buffers = Buffers::new();
+    for _ in 0..2 {
+        buffers.draw(&driver.stage, &Dirty::new_full());
+    }
+    for x in (113..=330).step_by(31) {
+        driver.touch(Some(Point::new(x, 258)));
+        assert!(!driver.stage.changed().is_full(), "at {x}");
+        let partial = buffers.draw(&driver.stage, driver.stage.changed());
+        let wrong = differing(partial, &render(&driver.stage));
+        assert_eq!(wrong, 0, "at {x}: {wrong} pixels differ");
+    }
+}
+
+#[test]
+fn drawing_the_power_off_confirmation_in_tiles_matches_drawing_whole() {
+    let mut rest = resting_on(Screen::Clock, Timeout::Seconds15, false);
+    rest.key(Key::Long);
+    let mut sliding = resting_on(Screen::Clock, Timeout::Seconds15, false);
+    sliding.key(Key::Long);
+    for x in (113..=270).step_by(20) {
+        sliding.touch(Some(Point::new(x, 258)));
+    }
+    let mut confirmed = resting_on(Screen::Clock, Timeout::Seconds15, false);
+    confirmed.key(Key::Long);
+    slide_to_power_off(&mut confirmed);
+    for (name, driver) in [
+        ("rest", rest),
+        ("sliding", sliding),
+        ("confirmed", confirmed),
+    ] {
+        let differing = tiled_differs(&driver.stage);
+        assert_eq!(differing, 0, "{name}: {differing} pixels differ");
+    }
+}
+
+#[test]
+fn a_cancel_puts_back_the_rest_the_key_woke_from() {
+    let mut driver = resting_on(Screen::Clock, Timeout::Seconds15, false);
+    wait_until(&mut driver, 22_000_000, |rest| rest == Rest::Off);
+    driver.key(Key::Long);
+    let updates: Vec<_> = (0..frames_in(power_off::TIMEOUT + 500_000))
+        .map(|_| driver.step(Input::default()))
+        .collect();
+    assert!(driver.stage.power_off().is_none());
+    assert_eq!(driver.stage.rest(), Rest::Off);
+    assert_eq!(updates.last().map(|update| update.display_on), Some(None));
+    assert!(
+        updates
+            .iter()
+            .any(|update| update.display_on == Some(false))
+    );
+
+    let mut driver = resting_on(Screen::Clock, Timeout::Seconds15, true);
+    driver.key(Key::Short);
+    assert_eq!(driver.stage.rest(), Rest::AlwaysOn);
+    driver.key(Key::Long);
+    driver.wait(400_000);
+    tap(&mut driver, 133, 118);
+    assert_eq!(driver.stage.rest(), Rest::AlwaysOn);
+
+    let mut driver = resting_on(Screen::Clock, Timeout::Seconds15, false);
+    wait_until(&mut driver, 16_000_000, is_dimmed);
+    driver.key(Key::Long);
+    driver.cover();
+    assert!(driver.stage.power_off().is_none());
+    assert!(is_dimmed(driver.stage.rest()));
+}
+
+#[test]
+fn the_confirmation_waits_ten_seconds_from_full_view_and_from_the_last_touch() {
+    let mut driver = resting_on(Screen::Clock, Timeout::Seconds15, false);
+    wait_until(&mut driver, 22_000_000, |rest| rest == Rest::Off);
+    driver.key(Key::Long);
+    let opened = driver.now();
+    driver.wait(power_off::TIMEOUT + rest::PANEL_WAKE + rest::WAKE_FADE - 100_000);
+    assert!(
+        driver.stage.power_off().is_some(),
+        "counted from the panel coming up"
+    );
+    driver.wait(200_000);
+    assert!(driver.stage.power_off().is_none());
+    assert!(driver.now() < opened + power_off::TIMEOUT + 1_000_000);
+
+    let mut driver = resting_on(Screen::Clock, Timeout::Seconds15, false);
+    driver.key(Key::Long);
+    driver.wait(6_000_000);
+    tap(&mut driver, 233, 200);
+    driver.wait(6_000_000);
+    assert!(driver.stage.power_off().is_some(), "restarted by the tap");
+    driver.wait(4_500_000);
+    assert!(driver.stage.power_off().is_none());
 }
