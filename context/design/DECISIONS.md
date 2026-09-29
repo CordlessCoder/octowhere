@@ -44,3 +44,8 @@ Recorded 2026-09-26. These override the hand-off where they differ.
     DIM and every whole percent from 5 % to 50 %, instead of toggling. DIM, the default, is the
     level the timeout dims to, so it follows the brightness; a percentage is fixed. The face was
     at 10 %, too dim though it lights about 8 % of the panel. A setting saved as on reads as DIM.
+12. **The power key** (owner, 2026-09-29). A short press rests the screen at once, on the
+    always-on face or dark, and wakes a resting one. A long press (1 s) opens a power-off
+    confirmation over whatever showed: a swipe confirms; a cancel button, a cover, a short press
+    or 10 s untouched cancels. The board powers on with a 512 ms hold. The confirmation is a
+    placeholder until a design round.
