@@ -2477,11 +2477,12 @@ fn the_power_off_slide_takes_a_drag_started_near_the_handle() {
     }
 }
 
-/// Cancelling onto a dimming or darkening screen carries on down from the level that shows.
+/// Cancelling onto a dimming or darkening screen puts back the level it had reached and carries
+/// on with the time it had left, never brightening it.
 #[test]
-fn a_cancel_onto_a_dimming_screen_never_brightens_it() {
+fn a_cancel_onto_a_dimming_screen_resumes_it_where_it_was() {
     for darkening in [false, true] {
-        for wait in [100_000, 1_000_000] {
+        for (before, open) in [(100_000, 100_000), (1_000_000, 1_000_000)] {
             let mut driver = resting_on(Screen::Clock, Timeout::Seconds15, false);
             if darkening {
                 wait_until(&mut driver, 22_000_000, |rest| {
@@ -2490,27 +2491,35 @@ fn a_cancel_onto_a_dimming_screen_never_brightens_it() {
             } else {
                 wait_until(&mut driver, 16_000_000, is_dimmed);
             }
+            let case = format!("darkening {darkening}, {before} µs in");
+            // Darkening lasts less than a second, so it is caught early either way.
+            if !darkening {
+                driver.wait(before);
+            }
+            let (rest, level) = (driver.stage.rest(), driver.stage.shown_level());
             driver.key(Key::Long);
-            driver.wait(wait);
-            let mut shown = driver.stage.shown_level();
-            let mut sent = vec![shown];
+            driver.wait(open);
             let cancel = driver.cover();
             assert!(driver.stage.power_off().is_none());
+            assert_eq!(cancel.brightness, Some(level), "{case}: back at its level");
+            let resumed = match (rest, driver.stage.rest()) {
+                (Rest::Dimmed { since: a }, Rest::Dimmed { since: b })
+                | (Rest::Darkening { since: a }, Rest::Darkening { since: b }) => b - a,
+                other => panic!("{case}: {other:?}"),
+            };
+            // The time the confirmation showed, give or take the key's and the cover's own steps.
+            assert!(
+                resumed.abs_diff(open) <= 2 * script::FRAME,
+                "{case}: shifted {resumed}"
+            );
+            let mut shown = level;
             let later =
                 (0..frames_in(rest::DIM_HOLD + 2_000_000)).map(|_| driver.step(Input::default()));
-            for level in core::iter::once(cancel)
-                .chain(later)
-                .filter_map(|update| update.brightness)
-            {
-                assert!(level <= shown, "{darkening}, {wait}: {sent:?} then {level}");
+            for level in later.filter_map(|update| update.brightness) {
+                assert!(level <= shown, "{case}: {shown} then {level}");
                 shown = level;
-                sent.push(level);
             }
-            assert_eq!(
-                driver.stage.rest(),
-                Rest::Off,
-                "{darkening}, {wait}: {sent:?}"
-            );
+            assert_eq!(driver.stage.rest(), Rest::Off, "{case}");
         }
     }
 }

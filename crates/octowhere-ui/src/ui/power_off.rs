@@ -39,6 +39,16 @@ const HELP: [(&str, i32); 2] = [
     ("HOLD KEY TO WAKE", 346),
 ];
 
+/// How the screen showed when the key opened the confirmation, to go back to on a cancel.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Prior {
+    pub rest: Rest,
+    /// The display's level then.
+    pub level: u8,
+    /// When the key opened it, so that a dim or darkening resumes with the time it had left.
+    pub at: Micros,
+}
+
 /// What a step of the confirmation decided.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Answer {
@@ -53,14 +63,13 @@ pub struct PowerOff {
     /// The last touch, or when the confirmation came fully into view, whichever is later.
     since: Micros,
     confirmed: Option<Micros>,
-    /// How the screen rested before the key woke it, to go back to on a cancel.
-    prior: Rest,
+    prior: Prior,
 }
 
 impl PowerOff {
-    /// Opens over a screen that rested as `prior`, fully in view from `shown`.
+    /// Opens over a screen that showed as `prior`, fully in view from `shown`.
     #[must_use]
-    pub fn new(shown: Micros, prior: Rest) -> Self {
+    pub fn new(shown: Micros, prior: Prior) -> Self {
         Self {
             slide: Slide::default(),
             since: shown,
@@ -103,7 +112,7 @@ impl PowerOff {
     }
 
     #[must_use]
-    pub fn prior(&self) -> Rest {
+    pub fn prior(&self) -> Prior {
         self.prior
     }
 

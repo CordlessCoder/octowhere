@@ -762,7 +762,7 @@ impl Stage {
         {
             return;
         }
-        let prior = self.rest;
+        let (prior, prior_level) = (self.rest, self.shown_level);
         let resting = prior != Rest::Awake;
         if resting {
             self.wake_by_key(now, update);
@@ -778,7 +778,12 @@ impl Stage {
             }
             Key::Long if self.power_off.is_none() => {
                 self.route = None;
-                let shown = match prior {
+                let prior = power_off::Prior {
+                    rest: prior,
+                    level: prior_level,
+                    at: now,
+                };
+                let shown = match prior.rest {
                     Rest::AlwaysOn | Rest::Off => self.entry_from + rest::WAKE_FADE,
                     Rest::Dimmed { .. } | Rest::Darkening { .. } => now + rest::WAKE_FADE,
                     Rest::Awake => now,
@@ -875,19 +880,32 @@ impl Stage {
         }
     }
 
-    /// Puts the screen back the way it rested before the power key woke it.
-    fn rest_again(&mut self, prior: Rest, now: Micros, update: &mut Update) {
-        match prior {
-            Rest::Awake => {}
-            Rest::Dimmed { .. } => {
-                self.rest = Rest::Dimmed { since: now };
-                self.fade_to(rest::dim_level(self.level), rest::DIM_FADE, now);
-            }
-            Rest::Darkening { .. } => {
-                self.rest = Rest::Darkening { since: now };
-                self.fade_to(0, rest::OFF_FADE, now);
-            }
-            Rest::AlwaysOn | Rest::Off => self.sleep(update),
+    /// Puts the screen back the way it showed before the power key woke it. A dim or darkening
+    /// comes back at the level it had reached and carries on with the time it had left.
+    fn rest_again(&mut self, prior: power_off::Prior, now: Micros, update: &mut Update) {
+        let (to, fade, elapsed) = match prior.rest {
+            Rest::Awake => return,
+            Rest::AlwaysOn | Rest::Off => return self.sleep(update),
+            Rest::Dimmed { since } => (
+                rest::dim_level(self.level),
+                rest::DIM_FADE,
+                prior.at - since,
+            ),
+            Rest::Darkening { since } => (0, rest::OFF_FADE, prior.at - since),
+        };
+        self.rest = match prior.rest {
+            Rest::Dimmed { .. } => Rest::Dimmed {
+                since: now - elapsed,
+            },
+            _ => Rest::Darkening {
+                since: now - elapsed,
+            },
+        };
+        self.fade = None;
+        self.shown_level = prior.level;
+        update.brightness = Some(prior.level);
+        if elapsed < fade {
+            self.fade_to(to, fade - elapsed, now);
         }
     }
 
