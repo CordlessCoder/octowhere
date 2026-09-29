@@ -56,7 +56,7 @@ pub enum Touch {
     Cover,
 }
 
-/// A press of the power key, as the power controller told it apart.
+/// A short or long press of the power key or the BOOT key.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Key {
     Short,
@@ -186,6 +186,8 @@ pub struct Input {
     pub boot: Option<Report>,
     /// A press of the power key. The start-up sequence ignores it.
     pub key: Option<Key>,
+    /// A press of the BOOT key. The start-up sequence ignores it.
+    pub boot_key: Option<Key>,
 }
 
 /// What the frame loop owes after a step. [`Stage::changed`] holds the pixels it changed.
@@ -584,6 +586,7 @@ impl Stage {
             sensors,
             boot,
             key,
+            boot_key,
         } = input;
         self.changed.clear();
         self.fading = false;
@@ -624,6 +627,9 @@ impl Stage {
         }
         if let Some(key) = key {
             self.press(key, now, &mut update);
+        }
+        if let Some(key) = boot_key {
+            self.press_boot(key);
         }
         if self.power_off.is_some() {
             self.step_power_off(now, touch, &mut update);
@@ -794,6 +800,10 @@ impl Stage {
             Key::Long => {}
         }
     }
+
+    /// Acts on the BOOT key, which has no behaviour designed yet.
+    #[expect(clippy::unused_self, reason = "the BOOT key's behaviour goes here")]
+    fn press_boot(&self, _key: Key) {}
 
     /// Wakes a screen on its way to rest, or resting, as a contact would.
     fn wake_by_key(&mut self, now: Micros, update: &mut Update) {

@@ -34,6 +34,7 @@
 //!   or none.
 //! - Hold H: a hand covering the screen, which goes to the clock face.
 //! - K: the power key. Released within a second it is a short press; held a second, a long one.
+//!   O: the BOOT key, the same way.
 //! - Drag down from a face for the settings panel, as on the device.
 //! - Tab: next screen without the slide. P: save the window to `ui-sim-<n>.png` in the current
 //!   directory. V: start or stop recording it to `ui-sim-<n>.gif`, or `.mp4` with `--mp4`,
@@ -78,7 +79,30 @@ const HEIGHT: usize = LCD_HEIGHT as usize;
 /// The motion task's sample periods, fast while a compass screen shows.
 const FAST_SAMPLE_US: u64 = 20_000;
 /// How long K is held before it counts as a long press, as the power controller is set to.
-const POWER_KEY_LONG_US: u64 = 1_000_000;
+const KEY_LONG_US: u64 = 1_000_000;
+
+/// A key held down: when it went down, and whether it has already reported a long press.
+#[derive(Default)]
+struct Held(Option<(u64, bool)>);
+
+impl Held {
+    /// The press `down` makes at `now`: long once held a second, short if let go before.
+    fn press(&mut self, down: bool, now: u64) -> Option<PowerKey> {
+        match (down, self.0) {
+            (true, None) => self.0 = Some((now, false)),
+            (true, Some((since, false))) if now - since >= KEY_LONG_US => {
+                self.0 = Some((since, true));
+                return Some(PowerKey::Long);
+            }
+            (false, Some((_, long))) => {
+                self.0 = None;
+                return (!long).then_some(PowerKey::Short);
+            }
+            _ => {}
+        }
+        None
+    }
+}
 const SLOW_SAMPLE_US: u64 = 250_000;
 const SENSOR_PERIOD_US: u64 = 1_000_000;
 /// What the panel's round glass hides is shown in this in the window, so the corners read as
@@ -547,7 +571,7 @@ fn interact(mut window: Window, masked: bool, extension: &str) {
     let mut title_changed = false;
     let mut zone_changed = false;
     // When K went down, and whether it has been held long enough to count as a long press.
-    let mut power_key_down: Option<(u64, bool)> = None;
+    let (mut power_key, mut boot_key) = (Held::default(), Held::default());
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
         let now = start.elapsed().as_micros() as u64 + 1;
@@ -617,21 +641,6 @@ fn interact(mut window: Window, masked: bool, extension: &str) {
             .get_mouse_pos(MouseMode::Discard)
             .filter(|_| window.get_mouse_down(MouseButton::Left))
             .map(|(x, y)| Point::new(x as i32, y as i32));
-        let mut power_key = None;
-        match (window.is_key_down(Key::K), power_key_down) {
-            (true, None) => power_key_down = Some((now, false)),
-            (true, Some((since, false))) if now - since >= POWER_KEY_LONG_US => {
-                power_key = Some(PowerKey::Long);
-                power_key_down = Some((since, true));
-            }
-            (false, Some((_, long))) => {
-                if !long {
-                    power_key = Some(PowerKey::Short);
-                }
-                power_key_down = None;
-            }
-            _ => {}
-        }
         let update = stage.step(Input {
             now,
             touch: Some(if window.is_key_down(Key::H) {
@@ -642,7 +651,8 @@ fn interact(mut window: Window, masked: bool, extension: &str) {
             motion: motion_due.then(|| readings.motion()),
             sensors: sensors_due.then(|| sensors(&readings)),
             boot: None,
-            key: power_key,
+            key: power_key.press(window.is_key_down(Key::K), now),
+            boot_key: boot_key.press(window.is_key_down(Key::O), now),
         });
         samples_fast = update.samples_fast;
         if update.recalibrate {

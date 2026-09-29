@@ -85,14 +85,21 @@ transcribed from the binding sites in `main.rs`, which are the live record.
 | I2C SDA / SCL | GPIO15 / GPIO14 | `with_sda` / `with_scl` |
 | Touch reset / INT | GPIO40 / GPIO11 | `touch_rst` / `touch_int` |
 | IMU INT2 | GPIO21 | `imu_int2` |
+| BOOT key | GPIO0 | `boot_key_task` |
 | LoRa SCLK / MISO / MOSI / NSS / DIO0 | GPIO16 / GPIO17 / GPIO43 / GPIO18 / GPIO44 | LoRa SPI setup |
 
 The IMU has two interrupt lines: INT1 reaches the TCA9554 as `EXIO_QMI_INT1`, INT2 is GPIO21. The
 RTC interrupt is on the expander as `EXIO_RTC_INT`, not a GPIO.
 
 Unbound in firmware, recorded from the Waveshare `pin_config.h` and not verified against this
-board: SD CLK/CMD/DATA GPIO2/GPIO1/GPIO3 with CS GPIO41, boot button GPIO0, and the ES8311 audio
-codec. No firmware drives any of these. The same list puts the power button on GPIO10, but the
-board schematic has GPIO10 as `I2S_ASDOUT`; the power key is the AXP2101's, below.
+board: SD CLK/CMD/DATA GPIO2/GPIO1/GPIO3 with CS GPIO41, and the ES8311 audio codec. No
+firmware drives any of these. The same list puts the power button on GPIO10, but the board
+schematic has GPIO10 as `I2S_ASDOUT`; the power key is the AXP2101's, below.
+
+- The BOOT key (Key1) shorts GPIO0 to ground, with C14, 100 nF, across it. The board has no
+  pull-up on GPIO0, so the firmware turns on the pad's own. GPIO0 is a strapping pin: held
+  through a reset, the key starts the ROM's download mode. `boot_key_task` reads it with a
+  20 ms settle on each edge, and a 1 s hold is a long press, as the power key's is (checked on
+  the board, 2026-09-29).
 - Both motion sensors sit face down and turned against the screen. In the screen's axes (x toward the right edge, y toward the top edge, z out of the glass), the QMI8658 reads screen = (y, x, −z) and the BMM350 reads screen = (−x, −y, z). These come from twelve held poses captured with the axis check screen and fitted by `tools/fit-sensor-axes.py`, both since removed and kept in git history: every other axis mapping fitted at least 40 times worse for the IMU, and at 21.5 µT RMS against 3.2 µT for the magnetometer. The same capture put the board's own field at about (−2.1, −59.5, 4.0) µT in the BMM350's axes, and the field at the capture site at 8.8 µT horizontal and 42.9 µT vertical, indoors.
 - The QMI8658 gyro reads about 0.32 rad/s (18°/s) on its y axis at rest, with under 0.05 rad/s on the other two. It was the same across three sessions, with a sample spread under 0.015 rad/s, so it is an offset rather than noise. `ui::fusion` measures it whenever the board is still and subtracts it. The part reports revision 0x7C, a QMI8658A. Its on-demand calibration (CTRL9 command 0xA2) completes in 1.5 s and reports success, but settles the offset at about (0, 8, 0.5)°/s from (2.6, 18.2, 0.3)°/s, and a reset undoes it. The `ph-qmi8658` driver's `run_on_demand_calibration` waits only 10 ms for the command, so it returns `NotReady` and leaves the sensors disabled. The firmware does not use it; the bench is `bench/gyro-cod`, run with `cargo build --release --features gyro-cod-bench` and flashed with the board still.

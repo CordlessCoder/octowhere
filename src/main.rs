@@ -37,7 +37,7 @@ use embedded_hal_async::i2c::I2c as _;
 use embedded_hal_bus::spi::ExclusiveDevice;
 use esp_hal::{
     dma_tx_buffer,
-    gpio::{Input, InputConfig, Level, Output, OutputConfig},
+    gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull},
     i2c::master::I2c,
     peripherals, spi,
     time::Rate,
@@ -191,6 +191,12 @@ static SETTINGS_QUEUED: AtomicU32 = AtomicU32::new(0);
 static SETTINGS_DONE: AtomicU32 = AtomicU32::new(0);
 /// Power key presses, from `sensor_task`, which owns the PMIC, for the frame loop.
 static KEY_PRESSES: Channel<CriticalSectionRawMutex, PowerKey, 2> = Channel::new();
+/// BOOT key presses, from `boot_key_task`, for the frame loop.
+static BOOT_KEY_PRESSES: Channel<CriticalSectionRawMutex, StageKey, 2> = Channel::new();
+/// A BOOT key held this long is a long press, as the power key's is.
+const BOOT_KEY_LONG: Duration = Duration::from_secs(1);
+/// How long the BOOT key's level must hold before a press or a release counts.
+const BOOT_KEY_SETTLE: Duration = Duration::from_millis(20);
 /// Set by the frame loop once the panel is off after the power-off confirmation, for
 /// `sensor_task` to power the board off.
 static POWER_OFF: Signal<CriticalSectionRawMutex, ()> = Signal::new();
@@ -730,6 +736,38 @@ async fn motion_task(task: MotionTask) {
             );
         }
         MOTION_STATE.signal(Motion { compass });
+    }
+}
+
+/// Reads the BOOT key on GPIO0, which the key pulls to ground, and passes its presses to the
+/// frame loop. A long press goes out as soon as the key has been held for it.
+#[embassy_executor::task]
+async fn boot_key_task(mut key: Input<'static>) {
+    loop {
+        key.wait_for_low().await;
+        Timer::after(BOOT_KEY_SETTLE).await;
+        if key.is_high() {
+            continue;
+        }
+        let press = match select(
+            key.wait_for_high(),
+            Timer::after(BOOT_KEY_LONG - BOOT_KEY_SETTLE),
+        )
+        .await
+        {
+            Either::First(()) => StageKey::Short,
+            Either::Second(()) => StageKey::Long,
+        };
+        let name = match press {
+            StageKey::Short => "Short",
+            StageKey::Long => "Long",
+        };
+        info!("[KEY] BOOT {}", name);
+        if BOOT_KEY_PRESSES.try_send(press).is_err() {
+            warn!("[KEY] BOOT queue full, {} dropped", name);
+        }
+        key.wait_for_high().await;
+        Timer::after(BOOT_KEY_SETTLE).await;
     }
 }
 
@@ -1335,6 +1373,12 @@ async fn async_main(spawner: Spawner) {
         saved.always_on.map(choice_label),
     );
     spawner.spawn(settings_task(store).unwrap());
+    // The board has no pull-up of its own on GPIO0 past reset.
+    let boot_key = Input::new(
+        peripherals.GPIO0,
+        InputConfig::default().with_pull(Pull::Up),
+    );
+    spawner.spawn(boot_key_task(boot_key).unwrap());
 
     // The panel comes up first, so the self-test shows while the parts come up behind it.
     start_display_core!(peripherals, fb_st);
@@ -1918,24 +1962,30 @@ async fn frame_loop(
                     None => core::future::pending().await,
                 }
             };
-            let (touch_ready, sensor_state, motion_state, boot, key) = match select4(
+            let (touch_ready, sensor_state, motion_state, boot, key, boot_key) = match select4(
                 touch_wait,
-                select3(
+                select4(
                     SENSOR_STATE.wait(),
                     BOOT_REPORTS.receive(),
                     KEY_PRESSES.receive(),
+                    BOOT_KEY_PRESSES.receive(),
                 ),
                 MOTION_STATE.wait(),
                 Timer::after(wait_timeout),
             )
             .await
             {
-                Either4::First(ready) => (ready, None, None, None, None),
-                Either4::Second(Either3::First(state)) => (false, Some(state), None, None, None),
-                Either4::Second(Either3::Second(report)) => (false, None, None, Some(report), None),
-                Either4::Second(Either3::Third(key)) => (false, None, None, None, Some(key)),
-                Either4::Third(state) => (false, None, Some(state), None, None),
-                Either4::Fourth(()) => (touch_repoll_due, None, None, None, None),
+                Either4::First(ready) => (ready, None, None, None, None, None),
+                Either4::Second(Either4::First(state)) => {
+                    (false, Some(state), None, None, None, None)
+                }
+                Either4::Second(Either4::Second(report)) => {
+                    (false, None, None, Some(report), None, None)
+                }
+                Either4::Second(Either4::Third(key)) => (false, None, None, None, Some(key), None),
+                Either4::Second(Either4::Fourth(key)) => (false, None, None, None, None, Some(key)),
+                Either4::Third(state) => (false, None, Some(state), None, None, None),
+                Either4::Fourth(()) => (touch_repoll_due, None, None, None, None, None),
             };
             let touch_ready = touch_ready
                 && match touch.as_mut().map(|touch| touch.read_touch_data()) {
@@ -1993,6 +2043,7 @@ async fn frame_loop(
                     PowerKey::Short => StageKey::Short,
                     PowerKey::Long => StageKey::Long,
                 }),
+                boot_key,
             });
             if update.recalibrate {
                 info!("[COMPASS] recalibrating on request");

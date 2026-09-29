@@ -270,6 +270,9 @@ core 1 owns the display SPI/DMA path.
   `SETTINGS_QUEUED`, and has the PMIC power the board off. Every settings write goes through
   `queue_write`, which keeps that count.
 - `settings_task`, also on core 0, owns the flash and saves what `SETTINGS_WRITES` queues.
+- `boot_key_task`, also on core 0, owns GPIO0 and passes the BOOT key's short and long presses
+  to the frame loop through `BOOT_KEY_PRESSES`. The stage takes them as `Input::boot_key` and
+  does nothing with them yet.
 - `motion_task`, also on core 0, owns the IMU and magnetometer, the compass calibration and the
   sensor fusion. It samples every 250 ms, or every 20 ms while the frame loop sets
   `COMPASS_ACTIVE`, and publishes a `MotionSnapshot` through `MOTION_STATE`. The frame loop

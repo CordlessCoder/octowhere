@@ -156,6 +156,14 @@ impl<'a> Driver<'a> {
         })
     }
 
+    /// Presses the BOOT key.
+    pub fn boot_key(&mut self, key: Key) -> Update {
+        self.step(Input {
+            boot_key: Some(key),
+            ..Input::default()
+        })
+    }
+
     /// Reports how boot left `part`.
     pub fn boot(&mut self, part: Part, outcome: Outcome) -> Update {
         self.step(Input {

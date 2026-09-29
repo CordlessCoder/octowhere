@@ -2585,3 +2585,16 @@ fn a_cancel_onto_the_always_on_face_draws_it_at_once() {
     let wrong = differing(&render(&driver.stage), &resting);
     assert_eq!(wrong, 0, "{wrong} pixels differ from the always-on face");
 }
+
+/// The BOOT key reaches the stage, which has no behaviour designed for it yet.
+#[test]
+fn the_boot_key_changes_nothing_yet() {
+    let mut driver = resting_on(Screen::Compass, Timeout::Seconds15, false);
+    for key in [Key::Short, Key::Long] {
+        driver.boot_key(key);
+        assert!(driver.stage.changed().is_empty(), "{key:?}");
+        assert!(driver.stage.power_off().is_none());
+        assert_eq!(driver.stage.rest(), Rest::Awake);
+        assert_eq!(driver.stage.screen(), Screen::Compass);
+    }
+}

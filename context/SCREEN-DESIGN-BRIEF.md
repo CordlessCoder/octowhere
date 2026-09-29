@@ -68,7 +68,7 @@ The device is a round 1.75-inch touch module: a Waveshare ESP32-S3-Touch-AMOLED-
 | Brightness | Set from the stored setting at boot (10–100 %, default 120 of 255). Changes apply at once, and the firmware can step it every frame at no draw cost. No ambient light sensor |
 | Sleep | The panel's display-off and sleep, used by the screen timeout. Touch still reports while it sleeps |
 | Touch | CST9217 capacitive, in the same 466 × 466 coordinates. Two contacts, plus a recognised "hand covers the screen" report. No hover, no pressure. A held finger stays held however still it is |
-| Buttons | A power key, read through the power controller as a short or a long press (1 s), up to about 250 ms late. A 512 ms hold powers the board on. A boot button, which the firmware does not read |
+| Buttons | A power key, read through the power controller as a short or a long press (1 s), up to about 250 ms late. A 512 ms hold powers the board on. A BOOT key, read as a short or a long press (1 s) on its own; the long press is reported once held, and nothing uses either yet |
 | Sensors | 6-axis IMU (QMI8658), magnetometer (BMM350), GNSS receiver (LC76G), real-time clock (PCF85063A), battery and USB power (AXP2101) |
 | Radio | LoRa (SX1272). The location mesh that will use it is designed but not built |
 | Not driven | Audio codec, SD card slot. No speaker, buzzer or vibration motor is in use |
