@@ -79,12 +79,12 @@ differences come from RGB565 and the edge rounding.
 Every part answered at start-up, and the clock face runs. Not yet checked: legibility on the
 physical panel, or the owner's review of the start-up and the charging motion there.
 
-**Some start-up frames take too long to draw.** The frames that type and flicker the title
-take about 48 ms, against a 33 ms frame. The card's frames with the pin at 1.9× take about 97
-ms. So the panel drops frames in those stretches, and the recordings, which don't, look
-smoother than the device. The settled clock face draws within 15 ms. The owner's rule is to
-finish the features before optimising, so this is recorded in `context/BACKLOG.md` rather than
-fixed.
+**Every start-up frame now draws within its 33 ms.** The first build took too long: about
+48 ms for the frames that type and flicker the title, and about 97 ms with the pin at 1.9×.
+The title is now rasterized once per start-up, over the opening, and the pin is drawn as a
+shape with solid spans. Every stretch now draws in 19–29 ms by median, and the worst single
+frame took 30.5 ms. The pixels are the same as before, apart from edge rounding on the grown
+pin. The settled clock face draws within 15 ms.
 
 ## For the design
 

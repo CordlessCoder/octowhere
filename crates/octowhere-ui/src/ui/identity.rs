@@ -8,6 +8,7 @@
 //! frame-by-frame timing is in its `renderer/concept/startup_s1_g17.py` and
 //! `startup-g19-matched/matched_scatter.py`.
 
+use alloc::{vec, vec::Vec};
 use core::fmt::Write as _;
 
 use embedded_graphics::{
@@ -26,7 +27,7 @@ use super::{
 };
 use crate::chrome::{
     self, Color, CoverageTarget, Dirty, FRAKTION, FontdueRenderer, INTERFERENCE_BOLD, MARATYPE,
-    OnBackground, Window,
+    OnBackground,
 };
 
 /// The identity's frames, then the card's.
@@ -134,6 +135,9 @@ const DIGIT_MODULE: (f32, f32) = (4.0, 5.0);
 const DIGIT_STEP: f32 = 16.0;
 const GNSS_LEFT: f32 = DIGITS_LEFT + 4.0 * DIGIT_STEP + 8.0 + ROW_GAP;
 const GNSS_MODULE: f32 = 5.0;
+/// From the row's left to past the GNSS symbol, the columns the barcode, digits and symbol
+/// share.
+const ROW_LINE: usize = (GNSS_LEFT + 5.0 * GNSS_MODULE) as usize + 1 - ROW_LEFT as usize;
 const COPY_LEFT: i32 = 300;
 const COPY_TOPS: [i32; 2] = [309, 325];
 /// Past the minutes' last module.
@@ -286,6 +290,10 @@ pub fn draw_identity<D: CoverageTarget<Color = Color>>(
 ) -> Result<(), D::Error> {
     screens::clear(target)?;
     if frame < OPEN_FRAMES {
+        // The opening costs little, so it builds the title a few pieces a frame for the frames
+        // after it.
+        let pieces = (frame as usize + 1) * TITLE_PIECES / OPEN_FRAMES as usize;
+        Title::take(pieces, font).keep();
         return draw_opening(frame, font, target);
     }
     scatter().draw(&looks(frame), target)?;
@@ -320,7 +328,7 @@ pub fn draw_identity<D: CoverageTarget<Color = Color>>(
             corner: PIN_CORNER,
             unit: PIN_UNIT,
         }
-        .draw(chrome::LIME, field),
+        .draw(chrome::LIME, field)?,
         Lit::Partial => {
             for (column, row, height) in PIN_STEMS {
                 let left = x + column * PIN_UNIT;
@@ -346,19 +354,6 @@ struct Pin {
 }
 
 impl Pin {
-    /// Points on the head's upper half-circle, left to right.
-    const ARC: usize = 33;
-    const HOLE: [(f32, f32); 8] = [
-        (5.0, 3.0),
-        (7.0, 3.0),
-        (9.0, 5.0),
-        (9.0, 7.0),
-        (7.0, 9.0),
-        (5.0, 9.0),
-        (3.0, 7.0),
-        (3.0, 5.0),
-    ];
-
     /// The pin as large as the impact frames show it, `scale` times over, about the centre.
     fn impact(scale: f32) -> Self {
         let unit = 17.5 * scale;
@@ -368,26 +363,29 @@ impl Pin {
         }
     }
 
-    fn draw<D: CoverageTarget<Color = Color>>(self, color: Color, target: &mut D) {
-        let place =
-            |(x, y): (f32, f32)| (self.corner.0 + x * self.unit, self.corner.1 + y * self.unit);
-        let mut outline: heapless::Vec<(f32, f32), { Self::ARC + 3 }> = (0..Self::ARC)
-            .map(|i| {
-                let angle = core::f32::consts::PI * (1.0 + i as f32 / (Self::ARC - 1) as f32);
-                place((6.0 + 6.0 * libm::cosf(angle), 6.0 + 6.0 * libm::sinf(angle)))
-            })
-            .collect();
-        for point in [(12.0, 8.0), (6.0, 14.0), (0.0, 8.0)] {
-            let _ = outline.push(place(point));
-        }
-        let hole = Self::HOLE.map(place);
-        smooth::contours(
-            target,
-            &mut fontdue::raster::Raster::empty(),
-            &mut alloc::vec::Vec::new(),
-            &[&outline, &hole],
-            color,
-        );
+    fn draw<D: CoverageTarget<Color = Color>>(
+        self,
+        color: Color,
+        target: &mut D,
+    ) -> Result<(), D::Error> {
+        let (left, top, unit) = (self.corner.0, self.corner.1, self.unit);
+        // Half-widths about the centre line, in units down from the top: the head's half-circle
+        // to 6, straight sides to 8, then the point at 14; the hole's octagon from 3 to 9.
+        let units = |y: f32| (y - top) / unit;
+        let outer = |y: f32| match units(y) {
+            v if !(0.0..14.0).contains(&v) => 0.0,
+            v if v < 6.0 => unit * libm::sqrtf(36.0 - (6.0 - v) * (6.0 - v)),
+            v if v < 8.0 => 6.0 * unit,
+            v => unit * (14.0 - v),
+        };
+        let hole = |y: f32| match units(y) {
+            v if !(3.0..9.0).contains(&v) => 0.0,
+            v if v < 5.0 => unit * (v - 2.0),
+            v if v < 7.0 => 3.0 * unit,
+            v => unit * (10.0 - v),
+        };
+        let rows = libm::floorf(top) as i32..libm::ceilf(top + 14.0 * unit) as i32;
+        smooth::symmetric(target, left + 6.0 * unit, rows, outer, hole, color)
     }
 }
 
@@ -547,54 +545,226 @@ fn smoothstep(v: f32) -> f32 {
     v * v * (3.0 - 2.0 * v)
 }
 
+/// The title's coverage, filled and hollow, worked out on the first frame that draws it and
+/// kept until the card: rasterizing 112 px glyphs, and hollowing them, every frame cost more
+/// than a frame. The hollow title's glyphs are placed as the type-in places them one at a time.
+struct Title {
+    area: Rectangle,
+    /// The filled word's ink, which the partly lit frames slice.
+    ink: Rectangle,
+    filled: Vec<u8>,
+    hollow: Vec<u8>,
+    /// Each glyph's columns in the hollow title.
+    glyphs: [core::ops::Range<i32>; WORD.len()],
+    /// Where each glyph's pen sits.
+    pens: [Point; WORD.len()],
+    /// How many of the [`TITLE_PIECES`] are drawn into the buffers: each glyph filled, then each
+    /// hollow.
+    built: usize,
+}
+
+/// The pieces of work that build the title: each glyph filled, then each glyph hollow.
+const TITLE_PIECES: usize = 2 * WORD.len();
+
+static TITLE: embassy_sync::blocking_mutex::Mutex<
+    embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex,
+    core::cell::RefCell<Option<Title>>,
+> = embassy_sync::blocking_mutex::Mutex::new(core::cell::RefCell::new(None));
+
+/// A coverage buffer over `area` that text draws into, each layer over the last.
+struct Coverage<'a> {
+    area: Rectangle,
+    cells: &'a mut [u8],
+}
+
+impl Dimensions for Coverage<'_> {
+    fn bounding_box(&self) -> Rectangle {
+        self.area
+    }
+}
+
+impl Coverage<'_> {
+    fn add(&mut self, x: i32, y: i32, cover: u8) {
+        let (dx, dy) = (x - self.area.top_left.x, y - self.area.top_left.y);
+        if (0..self.area.size.width as i32).contains(&dx)
+            && (0..self.area.size.height as i32).contains(&dy)
+        {
+            let cell = &mut self.cells[(dy * self.area.size.width as i32 + dx) as usize];
+            *cell = cell.saturating_add(((255 - u16::from(*cell)) * u16::from(cover) / 255) as u8);
+        }
+    }
+}
+
+impl DrawTarget for Coverage<'_> {
+    type Color = Color;
+    type Error = core::convert::Infallible;
+
+    fn draw_iter<I: IntoIterator<Item = Pixel<Color>>>(
+        &mut self,
+        pixels: I,
+    ) -> Result<(), Self::Error> {
+        for Pixel(point, _) in pixels {
+            self.add(point.x, point.y, u8::MAX);
+        }
+        Ok(())
+    }
+}
+
+impl CoverageTarget for Coverage<'_> {
+    fn blend_row(&mut self, x: i32, y: i32, coverage: &[u8], _: Color) {
+        for (i, &cover) in coverage.iter().enumerate() {
+            self.add(x + i as i32, y, cover);
+        }
+    }
+}
+
+impl Title {
+    fn new(font: &FontdueRenderer<'static, Color>) -> Self {
+        let filled = style(font, chrome::LIME, WORD_PX, MARATYPE);
+        let pen = Point::new(
+            text::pen_x_for_ink_centre(&filled, WORD, CENTER.x as f32),
+            text::baseline_for_ink_middle(&filled, WORD, CENTER.y as f32),
+        );
+        let pens: [Point; WORD.len()] = core::array::from_fn(|i| {
+            pen + Point::new(libm::roundf(filled.advance(&WORD[..i])) as i32, 0)
+        });
+        let area = pens
+            .iter()
+            .enumerate()
+            .fold(filled.baseline_bounds(WORD, pen), |area, (i, &at)| {
+                let glyph = filled.baseline_bounds(&WORD[i..=i], at);
+                let corner = |r: &Rectangle| r.bottom_right().unwrap_or(r.top_left);
+                Rectangle::with_corners(
+                    area.top_left.component_min(glyph.top_left),
+                    corner(&area).component_max(corner(&glyph)),
+                )
+            })
+            .offset(1);
+        let cells = area.size.width as usize * area.size.height as usize;
+        Self {
+            area,
+            ink: filled.baseline_bounds(WORD, pen),
+            filled: vec![0; cells],
+            hollow: vec![0; cells],
+            glyphs: core::array::from_fn(|i| {
+                let ink = filled.baseline_bounds(&WORD[i..=i], pens[i]);
+                ink.top_left.x..ink.top_left.x + ink.size.width as i32
+            }),
+            pens,
+            built: 0,
+        }
+    }
+
+    /// Draws the pieces up to `pieces` into the buffers, if they are not yet.
+    fn build(&mut self, pieces: usize, font: &FontdueRenderer<'static, Color>) {
+        let style = style(font, chrome::LIME, WORD_PX, MARATYPE);
+        while self.built < pieces.min(TITLE_PIECES) {
+            let i = self.built % WORD.len();
+            let (glyph, at) = (&WORD[i..=i], self.pens[i]);
+            if self.built < WORD.len() {
+                let cells = &mut Coverage {
+                    area: self.area,
+                    cells: &mut self.filled,
+                };
+                let _ = style.draw_on_baseline(glyph, at, cells);
+            } else {
+                let cells = &mut Coverage {
+                    area: self.area,
+                    cells: &mut self.hollow,
+                };
+                let _ = style.draw_hollow_on_baseline(glyph, at, HOLLOW, cells);
+            }
+            self.built += 1;
+        }
+    }
+
+    /// Takes the title out of its slot, begun if there was none, and builds it to `pieces`. Put
+    /// it back with [`Title::keep`].
+    fn take(pieces: usize, font: &FontdueRenderer<'static, Color>) -> Self {
+        let mut title = TITLE
+            .lock(|title| title.borrow_mut().take())
+            .unwrap_or_else(|| Self::new(font));
+        title.build(pieces, font);
+        title
+    }
+
+    fn keep(self) {
+        TITLE.lock(|slot| *slot.borrow_mut() = Some(self));
+    }
+
+    /// Blends `columns` of `cells` onto the target in `color`.
+    fn draw<D: CoverageTarget<Color = Color>>(
+        &self,
+        cells: &[u8],
+        columns: core::ops::Range<i32>,
+        color: Color,
+        target: &mut D,
+    ) {
+        let left = self.area.top_left.x;
+        let (from, to) = (
+            columns.start.max(left),
+            columns.end.min(left + self.area.size.width as i32),
+        );
+        if from >= to {
+            return;
+        }
+        let height = self.area.size.height;
+        if !target.visible(&Rectangle::new(
+            Point::new(from, self.area.top_left.y),
+            Size::new((to - from) as u32, height),
+        )) {
+            return;
+        }
+        let width = self.area.size.width as usize;
+        for (row, line) in cells.chunks_exact(width).enumerate() {
+            let line = &line[(from - left) as usize..(to - left) as usize];
+            target.blend_row(from, self.area.top_left.y + row as i32, line, color);
+        }
+    }
+}
+
+/// Lets the title's coverage go, once the identity is over.
+fn forget_title() {
+    TITLE.lock(|title| title.borrow_mut().take());
+}
+
 fn draw_title<D: CoverageTarget<Color = Color>>(
     frame: u32,
     font: &FontdueRenderer<'static, Color>,
     target: &mut D,
 ) -> Result<(), D::Error> {
-    let filled = style(font, chrome::LIME, WORD_PX, MARATYPE);
-    let pen = Point::new(
-        text::pen_x_for_ink_centre(&filled, WORD, CENTER.x as f32),
-        text::baseline_for_ink_middle(&filled, WORD, CENTER.y as f32),
-    );
-    let hollow = |level: u8| style(font, chrome::shade(chrome::LIME, level), WORD_PX, MARATYPE);
+    // Out of the lock while it draws, so drawing holds no critical section.
+    let title = Title::take(TITLE_PIECES, font);
+    let all = i32::MIN..i32::MAX;
     match lit(frame, FLICKER_FROM) {
         Lit::Before => {
             let ms = frame as f32 * FRAME_MS;
-            for (i, _) in WORD.char_indices() {
+            for (i, columns) in title.glyphs.iter().enumerate() {
                 let k = smoothstep((ms - TYPE_FROM - i as f32 * INTERVAL) / RISE);
                 if k <= 0.0 {
                     break;
                 }
-                let at = pen + Point::new(libm::roundf(filled.advance(&WORD[..i])) as i32, 0);
-                hollow(libm::roundf(f32::from(DIM) * k) as u8).draw_hollow_on_baseline(
-                    &WORD[i..=i],
-                    at,
-                    HOLLOW,
-                    target,
-                )?;
+                let color = chrome::shade(chrome::LIME, libm::roundf(f32::from(DIM) * k) as u8);
+                title.draw(&title.hollow, columns.clone(), color, target);
             }
-            Ok(())
         }
-        Lit::Off => hollow(DIM).draw_hollow_on_baseline(WORD, pen, HOLLOW, target),
-        Lit::On => filled.draw_on_baseline(WORD, pen, target),
+        Lit::Off => title.draw(&title.hollow, all, chrome::shade(chrome::LIME, DIM), target),
+        Lit::On => title.draw(&title.filled, all, chrome::LIME, target),
         Lit::Partial => {
-            let ink = filled.baseline_bounds(WORD, pen);
+            let ink = title.ink;
             for fraction in SLICES {
                 let left = ink.top_left.x + libm::roundf(ink.size.width as f32 * fraction) as i32;
-                let slice = Rectangle::new(
-                    Point::new(left, ink.top_left.y),
-                    Size::new(SLICE, ink.size.height),
+                title.draw(
+                    &title.filled,
+                    left..left + SLICE as i32,
+                    chrome::LIME,
+                    target,
                 );
-                filled.draw_on_baseline(
-                    WORD,
-                    pen,
-                    &mut Window::new(&mut *target, Point::zero(), slice),
-                )?;
             }
-            Ok(())
         }
     }
+    title.keep();
+    Ok(())
 }
 
 fn draw_row<D: CoverageTarget<Color = Color>>(
@@ -605,52 +775,32 @@ fn draw_row<D: CoverageTarget<Color = Color>>(
     target: &mut D,
 ) -> Result<(), D::Error> {
     let shown = |element: u32| frame >= ROW_FROM + element;
-    let (top, bottom) = (ROW_TOP as f32, ROW_TOP as f32 + ROW_HEIGHT);
-    if shown(0) {
-        let scale = BARCODE_WIDTH / startup::bars_advance(context.firmware) as f32;
+    if !shown(0) {
+        return Ok(());
+    }
+    // The barcode, digits and GNSS symbol change only every 5 px down, where the modules do, so
+    // each band of five rows is one line of coverage blended five times.
+    let left = ROW_LEFT as i32;
+    let mut line = [0u8; ROW_LINE];
+    let add = |line: &mut [u8; ROW_LINE], from: f32, to: f32| {
+        for x in libm::floorf(from) as i32..libm::ceilf(to) as i32 {
+            let covered = (to.min(x as f32 + 1.0) - from.max(x as f32)).clamp(0.0, 1.0);
+            let cell = &mut line[(x - left) as usize];
+            *cell = cell.saturating_add(libm::roundf(covered * 255.0) as u8);
+        }
+    };
+    let scale = BARCODE_WIDTH / startup::bars_advance(context.firmware) as f32;
+    let digits = startup::utc_digits(context.clock);
+    for band in 0..5 {
+        line.fill(0);
         for (at, width) in startup::bars(context.firmware) {
-            let left = ROW_LEFT + at as f32 * scale;
-            smooth::rect(
-                target,
-                (left, top),
-                (left + width as f32 * scale, bottom),
-                chrome::LIME,
-            )?;
+            let from = ROW_LEFT + at as f32 * scale;
+            add(&mut line, from, from + width as f32 * scale);
         }
-    }
-    if shown(1) {
-        let (x, y) = (SQUARE_LEFT as f32, top);
-        let side = SQUARE as f32;
-        let square = [(x, y), (x + side, y), (x + side, y + side), (x, y + side)];
-        let octagon = [
-            (8.0, 3.0),
-            (17.0, 3.0),
-            (22.0, 8.0),
-            (22.0, 17.0),
-            (17.0, 22.0),
-            (8.0, 22.0),
-            (3.0, 17.0),
-            (3.0, 8.0),
-        ]
-        .map(|(dx, dy)| (x + dx, y + dy));
-        smooth::contours(
-            target,
-            &mut fontdue::raster::Raster::empty(),
-            &mut alloc::vec::Vec::new(),
-            &[&square, &octagon],
-            chrome::LIME,
-        );
-        let level = dot_level(frame);
-        if level > 0 {
-            target.fill_solid(&DOT, chrome::shade(chrome::LIME, level))?;
-        }
-    }
-    let modules = |target: &mut D, rows: &[u8], columns: u32, left: f32, (w, h): (f32, f32)| {
-        // Each run of set modules is one span, since two blended edges meeting mid-pixel would
-        // leave a seam.
-        for (row, bits) in rows.iter().enumerate() {
+        // Each run of set modules is one span, since two edges meeting mid-pixel would leave a
+        // seam.
+        let modules = |line: &mut [u8; ROW_LINE], bits: u8, columns: u32, from: f32, w: f32| {
             let set = |column: u32| column < columns && bits & (1 << (columns - 1 - column)) != 0;
-            let y = top + row as f32 * h;
             let mut column = 0;
             while column < columns {
                 let start = column;
@@ -658,33 +808,51 @@ fn draw_row<D: CoverageTarget<Color = Color>>(
                     column += 1;
                 }
                 if column > start {
-                    let x = |column: u32| left + column as f32 * w;
-                    smooth::rect(target, (x(start), y), (x(column), y + h), chrome::LIME)?;
+                    add(line, from + start as f32 * w, from + column as f32 * w);
                 }
                 column += 1;
             }
+        };
+        if shown(2) {
+            for i in 0..4 {
+                let rows = digits.map_or(&startup::PIXEL_DASH, |digits| {
+                    &startup::PIXEL_DIGITS[usize::from(digits[i])]
+                });
+                // A space between the hours and the minutes.
+                let from = DIGITS_LEFT + DIGIT_STEP * i as f32 + if i >= 2 { 8.0 } else { 0.0 };
+                modules(&mut line, rows[band], 3, from, DIGIT_MODULE.0);
+            }
         }
-        Ok(())
-    };
-    if shown(2) {
-        let digits = startup::utc_digits(context.clock);
-        for i in 0..4 {
-            let rows = digits.map_or(&startup::PIXEL_DASH, |digits| {
-                &startup::PIXEL_DIGITS[usize::from(digits[i])]
-            });
-            // A space between the hours and the minutes.
-            let left = DIGITS_LEFT + DIGIT_STEP * i as f32 + if i >= 2 { 8.0 } else { 0.0 };
-            modules(target, rows, 3, left, DIGIT_MODULE)?;
+        if shown(3) {
+            modules(&mut line, startup::GNSS[band], 5, GNSS_LEFT, GNSS_MODULE);
+        }
+        for y in 0..DIGIT_MODULE.1 as i32 {
+            target.blend_row(left, ROW_TOP + band as i32 * 5 + y, &line, chrome::LIME);
         }
     }
-    if shown(3) {
-        modules(
+    if shown(1) {
+        // The square, less its octagonal hole: 4.5 px either side of the centre on its fourth
+        // row, widening at 45° to 9.5 px by its ninth, straight to its eighteenth, then in again.
+        let top = ROW_TOP as f32;
+        let hole = |y: f32| match y - top {
+            v if !(3.0..22.0).contains(&v) => 0.0,
+            v if v < 8.0 => v + 1.5,
+            v if v < 17.0 => 9.5,
+            v => 26.5 - v,
+        };
+        let half = SQUARE as f32 / 2.0;
+        smooth::symmetric(
             target,
-            &startup::GNSS,
-            5,
-            GNSS_LEFT,
-            (GNSS_MODULE, GNSS_MODULE),
+            SQUARE_LEFT as f32 + half,
+            ROW_TOP..ROW_TOP + SQUARE,
+            |_| half,
+            hole,
+            chrome::LIME,
         )?;
+        let level = dot_level(frame);
+        if level > 0 {
+            target.fill_solid(&DOT, chrome::shade(chrome::LIME, level))?;
+        }
     }
     if shown(4) {
         let style = style(font, chrome::LIME, 14, FRAKTION);
@@ -737,6 +905,20 @@ impl<T: DrawTarget> DrawTarget for Stripes<'_, T> {
                 .filter(|Pixel(point, _)| point.x.rem_euclid(STRIPE_PITCH) == STRIPE_PHASE),
         )
     }
+
+    fn fill_solid(&mut self, area: &Rectangle, color: Self::Color) -> Result<(), Self::Error> {
+        let first = area.top_left.x + (STRIPE_PHASE - area.top_left.x).rem_euclid(STRIPE_PITCH);
+        for x in (first..area.top_left.x + area.size.width as i32).step_by(STRIPE_PITCH as usize) {
+            self.0.fill_solid(
+                &Rectangle::new(
+                    Point::new(x, area.top_left.y),
+                    Size::new(1, area.size.height),
+                ),
+                color,
+            )?;
+        }
+        Ok(())
+    }
 }
 
 impl<T: CoverageTarget> CoverageTarget for Stripes<'_, T> {
@@ -764,14 +946,15 @@ pub fn draw_card<D: CoverageTarget<Color = Color>>(
 ) -> Result<(), D::Error> {
     // The lime frames clear to the page's colour rather than painting it over black.
     let page = matches!(frame, 0..9 | 17);
+    forget_title();
     screens::clear_to(target, if page { chrome::LIME } else { chrome::BLACK })?;
     let (pin, scaled) = (Pin::impact(1.0), Pin::impact(CARD_SCALE));
     match frame {
-        0..3 => pin.draw(chrome::BLACK, &mut Stripes(&mut *target)),
-        3..9 => pin.draw(chrome::BLACK, target),
-        9..13 => pin.draw(chrome::LIME, target),
-        13..17 => scaled.draw(chrome::LIME, target),
-        17 => scaled.draw(chrome::BLACK, target),
+        0..3 => pin.draw(chrome::BLACK, &mut Stripes(&mut *target))?,
+        3..9 => pin.draw(chrome::BLACK, target)?,
+        9..13 => pin.draw(chrome::LIME, target)?,
+        13..17 => scaled.draw(chrome::LIME, target)?,
+        17 => scaled.draw(chrome::BLACK, target)?,
         _ => {}
     }
     Ok(())

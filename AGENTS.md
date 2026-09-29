@@ -243,7 +243,10 @@ compass and logs every draw with the count and time of its solid fills (`fill-re
 summarised by `tools/fill-rect-summary.py`; `round-scene` instead replays the start-up and
 drags the settings panel between its pages, with `round-restore` putting back the removed circular
 clip, summarised by `tools/round-summary.py`), and on the host groups every fill that reaches the
-framebuffer by the drawing that asked for it (`tests/fill_sources.rs` in `crates/octowhere-ui`).
+framebuffer by the drawing that asked for it (`tests/fill_sources.rs` in `crates/octowhere-ui`);
+and `bench/startup-v11`, which replays the V11 start-up for ever and logs each identity and card
+frame's draw by part and the internal heap in use (`startup-bench`, summarised by
+`tools/startup-summary.py`).
 
 ## Concurrency
 

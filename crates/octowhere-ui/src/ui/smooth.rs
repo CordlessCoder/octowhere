@@ -284,54 +284,108 @@ pub fn rect<D: CoverageTarget>(
     Ok(())
 }
 
-/// The most pixels [`contours`] rasterizes at once, so a large shape costs a band of rows of
-/// scratch rather than its whole box.
-const BAND_PIXELS: usize = 8192;
+/// Samples a pixel takes along each axis for [`symmetric`]'s edges.
+const SAMPLES: usize = 4;
 
-/// Fills the closed contours by the even-odd rule, so a contour inside another cuts a hole.
-/// `raster` and `coverage` are scratch, reused across calls.
-pub fn contours<D: CoverageTarget>(
+/// Fills a shape symmetric about the column `center`, in continuous pixels, over `rows`: at
+/// height `y` it spans `outer(y)` either side of the centre, less `hole(y)` either side. A
+/// width of zero or less is empty there. Pixels wholly inside go as solid fills, and only those
+/// an edge crosses are sampled, `SAMPLES` × `SAMPLES` each.
+pub fn symmetric<D: CoverageTarget>(
     target: &mut D,
-    raster: &mut Raster<'static>,
-    coverage: &mut Vec<u8>,
-    contours: &[&[(f32, f32)]],
+    center: f32,
+    rows: core::ops::Range<i32>,
+    outer: impl Fn(f32) -> f32,
+    hole: impl Fn(f32) -> f32,
     color: D::Color,
-) {
-    let points = || contours.iter().flat_map(|contour| contour.iter());
-    let bound = |pick: fn(f32, f32) -> f32, axis: fn(&(f32, f32)) -> f32| {
-        points().map(axis).reduce(pick).unwrap_or(0.0)
-    };
-    let left = libm::floorf(bound(f32::min, |p| p.0)) as i32;
-    let top = libm::floorf(bound(f32::min, |p| p.1)) as i32;
-    let width = (libm::ceilf(bound(f32::max, |p| p.0)) as i32 - left).max(0) as usize;
-    let bottom = libm::ceilf(bound(f32::max, |p| p.1)) as i32;
-    if width == 0 || bottom <= top {
-        return;
-    }
-    let band = (BAND_PIXELS / width).max(1) as i32;
-    for y in bounded_rows(target, top..bottom).step_by(band as usize) {
-        let rows = band.min(bottom - y);
+) -> Result<(), D::Error> {
+    let step = 1.0 / SAMPLES as f32;
+    let mut line = [0u8; crate::chrome::DISPLAY_SIZE.width as usize];
+    for y in bounded_rows(target, rows) {
+        let at = |k: usize| y as f32 + (k as f32 + 0.5) * step;
+        let outers: [f32; SAMPLES] = core::array::from_fn(|k| outer(at(k)));
+        let holes: [f32; SAMPLES] = core::array::from_fn(|k| hole(at(k)).max(0.0));
+        let widest = outers.iter().copied().fold(f32::MIN, f32::max);
+        if widest <= 0.0 {
+            continue;
+        }
+        let narrowest = outers.iter().copied().fold(f32::MAX, f32::min);
+        let (hole_widest, hole_narrowest) = (
+            holes.iter().copied().fold(0.0, f32::max),
+            holes.iter().copied().fold(f32::MAX, f32::min),
+        );
+        let left = libm::floorf(center - widest) as i32;
+        let right = libm::ceilf(center + widest) as i32;
         if !target.visible(&Rectangle::new(
             Point::new(left, y),
-            Size::new(width as u32, rows as u32),
+            Size::new((right - left) as u32, 1),
         )) {
             continue;
         }
-        raster.resize(width, rows as usize);
-        let path = contours.iter().flat_map(|contour| {
-            contour.iter().enumerate().map(|(index, &(x, y))| {
-                if index == 0 {
-                    PathEvent::MoveTo([x, y])
-                } else {
-                    PathEvent::LineTo([x, y])
+        // Columns every sample of which is inside, or inside the hole.
+        let solid = (
+            libm::ceilf(center - narrowest) as i32,
+            libm::floorf(center + narrowest) as i32,
+        );
+        let hole_touched = (
+            libm::floorf(center - hole_widest) as i32,
+            libm::ceilf(center + hole_widest) as i32,
+        );
+        let hole_empty = (
+            libm::ceilf(center - hole_narrowest) as i32,
+            libm::floorf(center + hole_narrowest) as i32,
+        );
+        let solid_parts = if hole_widest > 0.0 {
+            [
+                (solid.0, solid.1.min(hole_touched.0)),
+                (solid.0.max(hole_touched.1), solid.1),
+            ]
+        } else {
+            [solid, (0, 0)]
+        };
+        for (from, to) in solid_parts {
+            if to > from {
+                target.fill_solid(
+                    &Rectangle::new(Point::new(from, y), Size::new((to - from) as u32, 1)),
+                    color,
+                )?;
+            }
+        }
+        let cover = |x: i32| {
+            let mut inside = 0;
+            for (&outer, &hole) in outers.iter().zip(&holes) {
+                for j in 0..SAMPLES {
+                    let d = libm::fabsf(x as f32 + (j as f32 + 0.5) * step - center);
+                    if d < outer && d >= hole {
+                        inside += 1;
+                    }
                 }
-            })
-        });
-        rasterize_path_clipped(raster, path, Transform::IDENTITY, (-left as f32, -y as f32));
-        coverage.clear();
-        coverage.extend(raster.get_bitmap_iter_even_odd());
-        for (row, pixels) in coverage.chunks_exact(width).enumerate() {
-            target.blend_row(left, y + row as i32, pixels, color);
+            }
+            (inside * 255 / (SAMPLES * SAMPLES)) as u8
+        };
+        // Only the columns between the solid spans and the empty middle of the hole, where an
+        // edge crosses, are sampled, each run blended as one row.
+        let mut skips = [solid_parts[0], solid_parts[1], (0, 0)];
+        if hole_narrowest > 0.0 {
+            skips[2] = hole_empty;
+        }
+        skips.sort_unstable_by_key(|&(from, _)| from);
+        let mut x = left;
+        for (from, to) in skips
+            .into_iter()
+            .filter(|&(from, to)| to > from)
+            .chain(core::iter::once((right, right)))
+        {
+            while x < from.min(right) {
+                let end = from.min(right).min(x + line.len() as i32);
+                for (cell, column) in line.iter_mut().zip(x..end) {
+                    *cell = cover(column);
+                }
+                target.blend_row(x, y, &line[..(end - x) as usize], color);
+                x = end;
+            }
+            x = x.max(to);
         }
     }
+    Ok(())
 }

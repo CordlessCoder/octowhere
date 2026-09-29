@@ -346,8 +346,12 @@ interpreted them:
   the UTC digits when the minute changes.
 - **The card** shows the pin in place of the mark, 17.5 px a unit about the centre and 1.9 times
   that from frame 13, with the mark's cadence: striped, dark, lit, grown, then dark on lime. It
-  has no tile frame or hatch. Its fill is rasterized in bands of 8,192 pixels, since the grown
-  pin's whole box would need about 736 KB.
+  has no tile frame or hatch. The pin, and the row's square, are drawn as shapes symmetric
+  about a centre line: solid spans for whole pixels, and 4 × 4 samples only where an edge
+  crosses a pixel, as the design's 4× renders sample.
+- **The title's coverage** is built once per start-up, filled and hollow, a few glyphs a frame
+  over the opening, and freed when the card starts. Rasterizing the 112 px glyphs every frame
+  cost more than a frame. It holds about 92 KB of the internal heap while the identity plays.
 - **The card's lime page** runs to the glass's edge, where the design's stops at radius 232,
   since the frame clears straight to lime rather than painting a disc over black.
 - **The UTC digits** show dashes (`000 000 111 000 000`) when the clock has no time or its
@@ -612,15 +616,18 @@ that changed redraw. Measured on the device, per frame:
 | Start-up identity, a frame while its title and marks build | about 23 ms, at most 31 ms |
 | Start-up identity, once settled | nothing but the scatter's turns and the digits |
 | Start-up card, a frame | about 12 ms, at most 22 ms |
-| V11 identity, a frame while its title and marks build, by `timing-log` | about 48 ms, at most 51 ms, from about 30 ms before V11 |
-| V11 card, a frame with the pin at 1×, by `timing-log` | 34–38 ms, from 32–33 ms |
-| V11 card, a frame with the pin at 1.9×, by `timing-log` | about 97 ms, from at most 38 ms |
+| V11 identity, a frame while its title types in | 20.8 ms median, at most 25.9 ms |
+| V11 identity, a frame of its flicker or the pin's arrival | 23–24 ms median, at most 26 ms |
+| V11 identity, a frame of its opening, building the title | 18.8 ms median, at most 27.2 ms |
+| V11 card, a frame with the pin at 1× | 19.0 ms median, at most 26.9 ms |
+| V11 card, a frame with the pin at 1.9× | 28.5 ms median, at most 30.5 ms |
 | Start-up fault screen, a frame | 24.1 ms median, at most 26.6 ms |
 | Start-up fault screen's exit, a frame | 28.2 ms median, at most 30.1 ms |
 | Clock's charging gauge, a redraw of the fill alone | 2.5 ms median, at most 5.8 ms |
 | Clock's breathing scatter, a step's redraw | 0.93 ms median, about five a second |
 
-Of a full clock draw, the clear is about 7 ms, the scatter 3.3 ms and the band 3.4 ms. The new clock face's minute change and its entry's other steps were not measured on their own. The gauge and the fault screen were measured with a synthetic 87 % battery on `bench/charge-fault-draw`. Settings draws are recorded in
+The V11 rows were measured on `bench/startup-v11`. Of a full identity frame, the clear is
+about 9 ms and the scatter 4 ms. Of a full clock draw, the clear is about 7 ms, the scatter 3.3 ms and the band 3.4 ms. The new clock face's minute change and its entry's other steps were not measured on their own. The gauge and the fault screen were measured with a synthetic 87 % battery on `bench/charge-fault-draw`. Settings draws are recorded in
 [`docs/logs/display/settings-draw-2026-09-26.md`](../docs/logs/display/settings-draw-2026-09-26.md).
 C1's settled states, entry points and a swipe frame were measured in
 [`docs/logs/display/compass-c1-draw-2026-09-26.md`](../docs/logs/display/compass-c1-draw-2026-09-26.md).
