@@ -184,10 +184,10 @@ K1 (`design/renderer/concept/family-pass-v1-out/clock-K1-*`) on the round 4 spec
   update's loop: a 2.4 s pass, then 4 s at rest on its dispersed layout (owner). The endpoint
   never moves (`ui/charging.rs`, which matches the update's `title_pattern` at every checked
   length and phase). A change of the charging flag between two readings of a known level
-  wipes the solid layer down off the slices or back up over them across the well's 24 rows in
-  450 ms; the older 180 ms wipe for a short fill is gone, since every wipe now crosses the same
-  height. The design has no render of this horizontal wipe; `ui-sim --record clock-charging`
-  shows it. The loop runs while the face shows, dimmed or not, and redraws the fill alone.
+  wipes the solid layer along the fill in 450 ms: plugged in, its end draws back from the
+  level to the fill's start, uncovering the slices from the end; unplugged, it grows back from
+  the start over them (owner, 2026-09-29, so the wipe runs the way the bar does). The design
+  has no render of this wipe; `ui-sim --record clock-charging` shows it. The loop runs while the face shows, dimmed or not, and redraws the fill alone.
   NO DATA holds the slices still, as the update's renders do.
 - **The rail** opens from its middle outward, starting with the zone's line in the entry but taking 400 ms, a cell each side at a steady rate, and closes with the zone's line as the page leaves (owner). Its cells are `GRAY` dimmed to 29 %.
 - **The entry** follows the round 4 spec's windows and curves: the icon's rows over 150 ms by
@@ -414,8 +414,8 @@ The confirmation follows the power-off hand-off of 2026-09-29. Captures: `power-
 - **Cancelling.** The top cap, a cover, or 10 s untouched cancels. Every touch restarts the
   10 s, and after a wake from rest they count from when the screen is fully up. A cancel puts
   the screen back as it rested before the key woke it: dimmed, darkening, on the always-on
-  face or off. A dim or darkening one restarts its step, from the level that shows, so it
-  never brightens (`power-off-dim-cancel.mp4`). A short press cancels and rests the
+  face or off. A dim or darkening one comes back at the level it had reached and carries on
+  with the time it had left (design reply, `power-off-dim-cancel.mp4`). A short press cancels and rests the
   screen. While the confirmation shows, the screen timeout holds.
 - **The start-up ignores the key**, so the press that powers the board on does nothing more.
 

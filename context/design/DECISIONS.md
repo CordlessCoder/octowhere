@@ -66,6 +66,9 @@ Recorded 2026-09-26. These override the hand-off where they differ.
 15. **The design's reply to responses 2 and 3** (design, 2026-09-29), in
     `handoffs/IMPLEMENTATION-REPLY-2026-09-29-2-AND-3.md`. The pin stays at (437, 175). The
     battery's slices keep the 0.1.0 barcode's widths whatever version runs. The settings hint
-    style stays 14 px everywhere. A cancel onto a dimming screen must not brighten it or flash
-    the page; it now turns the fade back from the level that shows. The reply asks for the
-    charging and power-off recordings, and a panel check, before it signs off the motion.
+    style stays 14 px everywhere. Its review of the recordings approves `power-off.mp4` and the
+    vertical charging wipe. It asks that a cancel onto a dimming or darkening screen bring it
+    back at the level it had reached and carry on with the time it had left, which is built.
+16. **The charging wipe runs along the fill** (owner, 2026-09-29), overriding the vertical wipe
+    that entry 15's review approved. Plugged in, the solid layer's end draws back from the
+    level to the fill's start; unplugged, it grows back from the start.
