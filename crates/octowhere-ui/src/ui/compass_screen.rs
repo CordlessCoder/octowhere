@@ -14,6 +14,7 @@ use super::{
     compass::CompassView,
     icon::{self, Glyph, Tile},
     reveal::{Reveal, draw_revealed, revealed_bounds},
+    text::style,
 };
 use crate::chrome::{
     self, Color, CoverageTarget, FRAKTION, FRAKTION_BOLD, FontdueRenderer, OnBackground,
@@ -420,19 +421,6 @@ fn swept(progress: u8) -> u8 {
     (0..MARKS)
         .take_while(|&mark| u32::from(mark) * 10 * 255 < u32::from(progress) * 360)
         .count() as u8
-}
-
-fn style(
-    font: &FontdueRenderer<'static, Color>,
-    color: Color,
-    size: u32,
-    index: usize,
-) -> FontdueRenderer<'static, Color> {
-    let mut style = font.clone();
-    style.text_color = color;
-    style.font_size = size;
-    style.font_index = index;
-    style
 }
 
 /// Draws `text` centred on `x` along the baseline at `baseline`. It skips the text outright when

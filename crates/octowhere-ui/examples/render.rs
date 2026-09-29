@@ -288,7 +288,7 @@ fn settings_frames() -> Vec<(String, Stage)> {
         driver
     };
     let tap = |driver: &mut Driver, x, y| {
-        driver.stroke(&[Point::new(x, y)]);
+        driver.tap(Point::new(x, y));
         driver.wait(400_000);
     };
     // DEVICE is on the second settings page.

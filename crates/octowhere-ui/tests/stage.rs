@@ -77,7 +77,7 @@ fn a_tap_on_the_compass_does_nothing() {
     let mut driver = settled_on_compass();
     let updates = driver.stroke(&[COMPASS_CENTER + Point::new(30, -40)]);
     assert!(updates.iter().all(|update| !update.recalibrate));
-    driver.stroke(&[Point::new(233, 73)]);
+    driver.tap(Point::new(233, 73));
     assert!(!driver.stage.is_changing());
     assert_eq!(driver.stage.screen(), Screen::Compass);
 }
@@ -807,7 +807,7 @@ fn the_clock_rebuilds_on_a_change_and_shows_a_fault_at_once() {
 fn a_tap_on_the_clock_does_nothing() {
     let mut driver = Driver::on(Screen::Clock);
     driver.wait(500_000);
-    driver.stroke(&[Point::new(233, 73)]);
+    driver.tap(Point::new(233, 73));
     driver.wait(500_000);
     assert_eq!(driver.stage.screen(), Screen::Clock);
 }
@@ -1032,7 +1032,7 @@ fn open_panel(screen: Screen) -> Driver<'static> {
 }
 
 fn tap(driver: &mut Driver, x: i32, y: i32) -> Vec<Update> {
-    let updates = driver.stroke(&[Point::new(x, y)]);
+    let updates = driver.tap(Point::new(x, y));
     driver.wait(300_000);
     updates
 }
@@ -1639,7 +1639,7 @@ fn replay_damage_redraws_what_changed() {
         buffers.draw(&driver.stage, &Dirty::new_full());
     }
     tap(&mut driver, 233, 298);
-    driver.stroke(&[Point::new(233, 258)]);
+    driver.tap(Point::new(233, 258));
     for step in 0..160 {
         let partial = buffers.draw(&driver.stage, driver.stage.changed());
         let whole = render(&driver.stage);
@@ -1721,7 +1721,7 @@ fn demonstration_damage_redraws_what_changed() {
     for _ in 0..2 {
         buffers.draw(&driver.stage, &Dirty::new_full());
     }
-    driver.stroke(&[Point::new(233, 258)]);
+    driver.tap(Point::new(233, 258));
     for step in 0..360 {
         let partial = buffers.draw(&driver.stage, driver.stage.changed());
         let whole = render(&driver.stage);
@@ -1996,7 +1996,7 @@ fn frames_in(duration: Micros) -> Micros {
 fn a_wake_from_the_always_on_face_climbs_from_its_level() {
     let mut driver = resting_on(Screen::Clock, Timeout::Seconds15, true);
     wait_until(&mut driver, 22_000_000, |rest| rest == Rest::AlwaysOn);
-    let mut updates = driver.stroke(&[Point::new(233, 233)]);
+    let mut updates = driver.tap(Point::new(233, 233));
     assert_eq!(updates[0].display_on, None);
     while driver.stage.is_changing() {
         updates.push(driver.step(Input::default()));
@@ -2025,7 +2025,7 @@ fn a_wake_from_the_panel_lands_on_the_clock_and_drops_the_edit() {
             .any(|update| update.brightness == Some(rest::dim_level(255))),
         "the dim is taken from the level that shows"
     );
-    let mut updates = driver.stroke(&[Point::new(233, 233)]);
+    let mut updates = driver.tap(Point::new(233, 233));
     while driver.stage.is_changing() {
         updates.push(driver.step(Input::default()));
     }

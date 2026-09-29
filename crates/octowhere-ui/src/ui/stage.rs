@@ -250,6 +250,15 @@ impl Grid {
     }
 }
 
+/// What the settled screen showed after a step, for the next step's damage. The screens settle
+/// under exclusive conditions, so at most one has a snapshot.
+enum Drawn {
+    Compass(CompassView, Accents),
+    Clock(clock_screen::Face),
+    Panel((PeripheralState, i32, panel::Accents)),
+    Page(Page, second::Accents, PeripheralState),
+}
+
 pub struct Stage {
     screen: Screen,
     raw_touch: [Option<Point>; 2],
@@ -273,16 +282,13 @@ pub struct Stage {
     /// resting screen shows it, which needs steps that nothing else asks for.
     breath: u8,
     breathing: bool,
-    /// What the compass page showed after the last step, while it filled the panel.
-    drawn_compass: Option<(CompassView, Accents)>,
+    drawn: Option<Drawn>,
     /// The pixels the last step changed. Boxed so the frame loop's stack never holds it.
     changed: alloc::boxed::Box<Dirty>,
     dial_footprint: DialFootprint,
     /// When the clock page last settled into view, and what its accents re-reveal on.
     clock_settled: Option<ClockSettled>,
     clock_accents: clock_screen::Accents,
-    /// What the clock page showed after the last step, while it filled the panel.
-    drawn_clock: Option<clock_screen::Face>,
     /// How far the settings panel has come down over the faces.
     sheet: Sheet,
     route: Option<Route>,
@@ -290,12 +296,9 @@ pub struct Stage {
     /// When the panel last settled open, while it stays open.
     panel_settled: Option<Micros>,
     panel_accents: panel::Accents,
-    /// What the open panel showed after the last step, while nothing covered it.
-    drawn_panel: Option<(PeripheralState, i32, panel::Accents)>,
     /// A screen the panel opened, and when.
     page: Option<(Page, Micros)>,
     page_accents: second::Accents,
-    drawn_page: Option<(Page, second::Accents, PeripheralState)>,
     /// The start-up sequence, until it hands over to the clock face.
     startup: Option<Startup>,
     /// What the sequence showed after the last step.
@@ -367,21 +370,18 @@ impl Stage {
             charge: Charge::default(),
             breath: u8::MAX,
             breathing: false,
-            drawn_compass: None,
+            drawn: None,
             changed: alloc::boxed::Box::new(Dirty::new()),
             dial_footprint: DialFootprint::default(),
             clock_settled: None,
             clock_accents: clock_screen::Accents::FULL,
-            drawn_clock: None,
             sheet: Sheet::new(board::LCD_HEIGHT as i32),
             route: None,
             grid: Grid::default(),
             panel_settled: None,
             panel_accents: panel::Accents::HIDDEN,
-            drawn_panel: None,
             page: None,
             page_accents: second::Accents::FULL,
-            drawn_page: None,
             startup: None,
             startup_view: None,
             identity_marks: identity::IdentityMarks::default(),
@@ -474,9 +474,11 @@ impl Stage {
         self.screen = screen;
         self.compass_settled = None;
         self.level_since = None;
-        self.drawn_compass = None;
         self.clock_settled = None;
-        self.drawn_clock = None;
+        // An open panel or page keeps its snapshot: the face changes under it.
+        if matches!(self.drawn, Some(Drawn::Compass(..) | Drawn::Clock(_))) {
+            self.drawn = None;
+        }
     }
 
     /// How far the panel has come down over the faces: 0 closed, the panel's height open.
@@ -922,10 +924,7 @@ impl Stage {
 
     /// Forgets what each screen showed, so the next step redraws in full.
     fn forget_drawn(&mut self) {
-        self.drawn_compass = None;
-        self.drawn_clock = None;
-        self.drawn_panel = None;
-        self.drawn_page = None;
+        self.drawn = None;
         self.changed.make_full();
     }
 
@@ -1190,46 +1189,58 @@ impl Stage {
             && self.sheet.is_closed()
             && view.offset == 0
             && view.neighbour.is_none();
-        let compass = (faces_settled && self.screen == Screen::Compass)
-            .then_some((self.peripherals.compass, self.accents));
-        let clock = (faces_settled && self.screen == Screen::Clock).then_some((
-            self.peripherals.clock,
-            self.peripherals.battery,
-            self.clock_accents,
-        ));
-        let panel = (self.page.is_none() && self.sheet.is_open()).then_some((
-            self.peripherals,
-            self.grid.scroll,
-            self.panel_accents,
-        ));
-        let page = self
-            .page
-            .as_ref()
-            .map(|(page, _)| (page.clone(), self.page_accents, self.peripherals));
-        if let (Some(before), Some(after)) = (self.drawn_compass, compass) {
-            compass_screen::damage(
-                (&before.0, before.1),
-                (&after.0, after.1),
-                &self.renderer,
-                &mut self.dial_footprint,
-                &mut self.changed,
-            );
-        } else if let (Some(before), Some(after)) = (self.drawn_clock, clock) {
-            clock_screen::damage(&before, &after, &self.renderer, &mut self.changed);
-        } else if let (Some(before), Some(after)) = (self.drawn_panel, panel) {
-            self.panel_damage(&before, &after);
-        } else if let (Some(before), Some(after)) = (&self.drawn_page, &page) {
-            if before != after {
-                self.changed.make_full();
+        let drawn = if faces_settled && self.screen == Screen::Compass {
+            Some(Drawn::Compass(self.peripherals.compass, self.accents))
+        } else if faces_settled && self.screen == Screen::Clock {
+            Some(Drawn::Clock((
+                self.peripherals.clock,
+                self.peripherals.battery,
+                self.clock_accents,
+            )))
+        } else if let Some((page, _)) = &self.page {
+            Some(Drawn::Page(
+                page.clone(),
+                self.page_accents,
+                self.peripherals,
+            ))
+        } else if self.sheet.is_open() {
+            Some(Drawn::Panel((
+                self.peripherals,
+                self.grid.scroll,
+                self.panel_accents,
+            )))
+        } else {
+            None
+        };
+        match (self.drawn.take(), &drawn) {
+            (Some(Drawn::Compass(view, accents)), Some(Drawn::Compass(now, now_accents))) => {
+                compass_screen::damage(
+                    (&view, accents),
+                    (now, *now_accents),
+                    &self.renderer,
+                    &mut self.dial_footprint,
+                    &mut self.changed,
+                );
             }
-        } else if full || compass.is_some() || clock.is_some() || panel.is_some() || page.is_some()
-        {
-            self.changed.make_full();
+            (Some(Drawn::Clock(before)), Some(Drawn::Clock(after))) => {
+                clock_screen::damage(&before, after, &self.renderer, &mut self.changed);
+            }
+            (Some(Drawn::Panel(before)), Some(Drawn::Panel(after))) => {
+                self.panel_damage(&before, after);
+            }
+            (
+                Some(Drawn::Page(page, accents, state)),
+                Some(Drawn::Page(now, now_accents, now_state)),
+            ) => {
+                if (&page, accents, state) != (now, *now_accents, *now_state) {
+                    self.changed.make_full();
+                }
+            }
+            (_, Some(_)) => self.changed.make_full(),
+            (_, None) if full => self.changed.make_full(),
+            (_, None) => {}
         }
-        self.drawn_compass = compass;
-        self.drawn_clock = clock;
-        self.drawn_panel = panel;
-        self.drawn_page = page;
+        self.drawn = drawn;
     }
 
     /// The open panel's damage: the grid while it scrolls, a cell whose reading changed, or

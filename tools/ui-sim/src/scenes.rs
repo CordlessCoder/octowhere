@@ -218,13 +218,13 @@ fn start(driver: &mut Driver, screen: Screen) {
     driver.motion(facing(37.0));
 }
 
-fn page_left(driver: &mut Driver) {
-    driver.swipe(Point::new(420, 233), Point::new(60, 233), ms(250));
+fn page_left(driver: &mut Driver, duration: Micros) {
+    driver.swipe(Point::new(420, 233), Point::new(60, 233), duration);
     driver.settle();
 }
 
-fn page_right(driver: &mut Driver) {
-    driver.swipe(Point::new(60, 233), Point::new(420, 233), ms(250));
+fn page_right(driver: &mut Driver, duration: Micros) {
+    driver.swipe(Point::new(60, 233), Point::new(420, 233), duration);
     driver.settle();
 }
 
@@ -264,11 +264,11 @@ fn clock_charging(driver: &mut Driver) {
 fn swipe_to_compass(driver: &mut Driver) {
     start(driver, Screen::Clock);
     driver.wait(ms(1_200));
-    page_left(driver);
+    page_left(driver, ms(250));
     driver.wait(ms(800));
     driver.motion_over(ms(700), |t| facing(37.0 + 50.0 * swing(t)));
     driver.wait(ms(800));
-    page_right(driver);
+    page_right(driver, ms(250));
     driver.wait(ms(1_000));
 }
 
@@ -429,19 +429,9 @@ fn drain(driver: &mut Driver, from: u8, to: u8, charging: bool) {
     }
 }
 
-fn slow_page_left(driver: &mut Driver) {
-    driver.swipe(Point::new(420, 233), Point::new(60, 233), SWIPE);
-    driver.settle();
-}
-
-fn slow_page_right(driver: &mut Driver) {
-    driver.swipe(Point::new(60, 233), Point::new(420, 233), SWIPE);
-    driver.settle();
-}
-
 /// A tap, and a pause to see what it did.
 fn slow_tap(driver: &mut Driver, x: i32, y: i32) {
-    tap(driver, x, y);
+    driver.tap(Point::new(x, y));
     driver.wait(ms(1_500));
 }
 
@@ -584,7 +574,7 @@ fn tour(driver: &mut Driver) {
     show(driver, "BACK ON USB, CHARGING.", |_| {});
 
     say("SWIPE LEFT FOR THE COMPASS.");
-    slow_page_left(driver);
+    page_left(driver, SWIPE);
     say("THE HEADING. THE DIAL TURNS WITH THE DEVICE OVER A STILL BLUE FIELD.");
     driver.wait(ms(2_000));
     driver.motion_over(ms(2_000), |t| facing(37.0 + 90.0 * swing(t)));
@@ -616,7 +606,7 @@ fn tour(driver: &mut Driver) {
     driver.motion(facing(127.0));
     driver.wait(HOLD);
     say("SWIPE RIGHT FOR THE CLOCK.");
-    slow_page_right(driver);
+    page_right(driver, SWIPE);
     driver.wait(ms(2_000));
 
     say("DRAG DOWN FROM EITHER FACE FOR SETTINGS.");
@@ -633,7 +623,7 @@ fn tour(driver: &mut Driver) {
     slow_tap(driver, 233, 250);
     // The sensor task carries the stored zone from then on, as the firmware's does.
     let stored = driver
-        .stroke(&[Point::new(233, 250)])
+        .tap(Point::new(233, 250))
         .iter()
         .find_map(|update| update.store);
     let Some(Store::ManualZone(zone)) = stored else {
@@ -695,7 +685,7 @@ fn tour(driver: &mut Driver) {
     say("THE ZONE BACK TO AUTOMATIC, FROM THE GNSS POSITION.");
     open_settings(driver);
     tap_row(driver, Cell::Zone);
-    tap(driver, 233, 342);
+    driver.tap(Point::new(233, 342));
     let sensors = dublin_now(driver);
     driver.sensors(sensors);
     driver.wait(ms(1_500));
@@ -714,7 +704,7 @@ fn tour(driver: &mut Driver) {
         ms(1_500),
     );
     driver.wait(ms(2_000));
-    tap(driver, 233, 258);
+    driver.tap(Point::new(233, 258));
     say(
         "THE SELF-TEST MARKS THE PART FAILED, AND THE FAULT SCREEN NAMES IT. BOTH SAY IT IS A DEMO.",
     );
@@ -728,10 +718,6 @@ fn tour(driver: &mut Driver) {
     }
     say("THEN THE CLOCK, AS AFTER ANY START-UP.");
     driver.wait(ms(4_000));
-}
-
-fn tap(driver: &mut Driver, x: i32, y: i32) {
-    driver.stroke(&[Point::new(x, y)]);
 }
 
 fn settings(driver: &mut Driver) {
@@ -759,31 +745,31 @@ fn settings_walk(driver: &mut Driver) {
     driver.settle();
     driver.wait(ms(600));
     // Brightness to 80 %, kept.
-    tap(driver, 150, 190);
+    driver.tap(Point::new(150, 190));
     driver.wait(ms(700));
     driver.swipe(Point::new(220, 285), Point::new(333, 285), ms(500));
     driver.wait(ms(600));
-    tap(driver, 233, 250);
+    driver.tap(Point::new(233, 250));
     driver.wait(ms(700));
     // The timeout to 5 MIN, kept, then ALWAYS ON on.
-    tap(driver, 300, 260);
+    driver.tap(Point::new(300, 260));
     driver.wait(ms(700));
     driver.swipe(Point::new(233, 300), Point::new(233, 250), ms(300));
     driver.wait(ms(600));
-    tap(driver, 233, 250);
+    driver.tap(Point::new(233, 250));
     driver.wait(ms(700));
-    tap(driver, 300, 330);
+    driver.tap(Point::new(300, 330));
     driver.wait(ms(700));
     // The zone picker: one offset later, its zones, and back out.
-    tap(driver, 150, 115);
+    driver.tap(Point::new(150, 115));
     driver.wait(ms(800));
     driver.swipe(Point::new(233, 300), Point::new(233, 255), ms(300));
     driver.wait(ms(600));
-    tap(driver, 233, 250);
+    driver.tap(Point::new(233, 250));
     driver.wait(ms(900));
-    tap(driver, 120, 120);
+    driver.tap(Point::new(120, 120));
     driver.wait(ms(500));
-    tap(driver, 120, 120);
+    driver.tap(Point::new(120, 120));
     driver.wait(ms(600));
     // Up to close, back to the clock.
     driver.swipe(Point::new(233, 420), Point::new(233, 80), ms(300));
@@ -846,7 +832,7 @@ fn power_off(driver: &mut Driver) {
     // Let go short of the target: the handle goes back to its start.
     driver.swipe(Point::new(113, 258), Point::new(290, 258), ms(700));
     driver.wait(ms(1_000));
-    tap(driver, 133, 118);
+    driver.tap(Point::new(133, 118));
     driver.wait(ms(1_000));
     driver.key(Key::Short);
     driver.wait(ms(1_000));
@@ -866,7 +852,7 @@ fn power_off_dim_cancel(driver: &mut Driver) {
     driver.wait(ms(16_000));
     driver.key(Key::Long);
     driver.wait(ms(1_500));
-    tap(driver, 133, 118);
+    driver.tap(Point::new(133, 118));
     driver.wait(ms(6_500));
 }
 
@@ -884,7 +870,7 @@ fn rest(driver: &mut Driver, screen: Screen, always_on: bool) {
     });
     start(driver, screen);
     driver.wait(ms(22_000));
-    tap(driver, 233, 300);
+    driver.tap(Point::new(233, 300));
     driver.wait(ms(2_000));
 }
 

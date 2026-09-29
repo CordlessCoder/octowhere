@@ -190,6 +190,11 @@ impl<'a> Driver<'a> {
         updates
     }
 
+    /// A contact at `point` for one step, then the lift.
+    pub fn tap(&mut self, point: Point) -> Vec<Update> {
+        self.stroke(&[point])
+    }
+
     /// A stroke in a straight line from `from` to `to`, taking `duration` before the lift.
     pub fn swipe(&mut self, from: Point, to: Point, duration: Micros) -> Vec<Update> {
         let steps = frames(duration) as i32;
