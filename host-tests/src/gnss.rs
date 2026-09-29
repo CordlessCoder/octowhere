@@ -211,6 +211,10 @@ fn parser_preserves_valid_unsupported_nmea_frames() {
 #[test]
 fn parser_reports_satellite_acquisition_progress() {
     let mut parser = NmeaParser::new();
+    // The count in use comes from GGA, which counts every constellation.
+    for byte in b"$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47\r\n" {
+        parser.push(*byte).unwrap();
+    }
     for byte in b"$GNGSA,A,3,21,5,29,25,12,10,26,2,,,,,1.2,0.7,1.0*27\r\n" {
         parser.push(*byte).unwrap();
     }
