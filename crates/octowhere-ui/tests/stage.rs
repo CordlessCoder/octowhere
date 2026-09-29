@@ -2456,3 +2456,23 @@ fn the_confirmation_waits_ten_seconds_from_full_view_and_from_the_last_touch() {
     driver.wait(4_500_000);
     assert!(driver.stage.power_off().is_none());
 }
+
+#[test]
+fn the_power_off_slide_takes_a_drag_started_near_the_handle() {
+    for start in [
+        Point::new(100, 190),
+        Point::new(60, 310),
+        Point::new(170, 258),
+    ] {
+        let mut driver = resting_on(Screen::Clock, Timeout::Seconds15, false);
+        driver.key(Key::Long);
+        driver.swipe(start, start + Point::new(330, 20), 300_000);
+        assert!(
+            driver
+                .stage
+                .power_off()
+                .is_some_and(|p| p.confirmed().is_some()),
+            "from {start:?}"
+        );
+    }
+}

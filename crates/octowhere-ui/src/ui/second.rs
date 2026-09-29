@@ -1143,6 +1143,9 @@ pub struct Slide {
 pub struct Rail {
     pub handle: Rectangle,
     pub travel: i32,
+    /// Where a drag must start to take the handle: wider than the handle, which is small to land
+    /// a finger on.
+    pub grab: Rectangle,
 }
 
 impl Rail {
@@ -1166,13 +1169,14 @@ const RAIL_RIGHT: i32 = 404;
 const CLEAR_RAIL: Rail = Rail {
     handle: Rectangle::new(Point::new(RAIL_LEFT, 226), Size::new_equal(HANDLE as u32)),
     travel: RAIL_RIGHT - HANDLE - RAIL_LEFT,
+    grab: Rectangle::new(Point::new(30, 186), Size::new(140, 144)),
 };
 
 impl Slide {
     /// Follows a drag that starts on the handle, and returns whether it let go at the target.
     pub fn handle(&mut self, rail: &Rail, event: &GestureEvent) -> bool {
         match *event {
-            GestureEvent::DragStart(drag) if rail.handle.contains(drag.start) => {
+            GestureEvent::DragStart(drag) if rail.grab.contains(drag.start) => {
                 self.dragged = Some(drag.offset().x.clamp(0, rail.travel));
             }
             GestureEvent::DragMove(drag) if self.dragged.is_some() => {

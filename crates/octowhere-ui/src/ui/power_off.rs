@@ -28,6 +28,8 @@ const POWER: Glyph = [0b00100, 0b00100, 0b10001, 0b10001, 0b01110];
 const RAIL: Rail = Rail {
     handle: Rectangle::new(Point::new(83, 225), Size::new(60, 64)),
     travel: 240,
+    // From under the action line to over the help, and past the handle either side.
+    grab: Rectangle::new(Point::new(40, 180), Size::new(140, 138)),
 };
 /// The slide's rows, all a drag redraws.
 pub const SLIDER: Rectangle = Rectangle::new(Point::new(83, 225), Size::new(300, 64));
