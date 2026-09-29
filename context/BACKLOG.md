@@ -92,9 +92,8 @@ until the feature set is complete, because profiling an incomplete firmware pric
   The datasheet (`docs/datasheets/CO5300_Datasheet_V0.00.pdf`) also has TE modes and the scan
   line as proper settings, reading the current scan line (45h), partial and scroll areas, idle
   mode, deep standby, and high-brightness and contrast controls.
-- Build the protocol in [`LORA-PROTOCOL.md`](LORA-PROTOCOL.md), in its "Build order". The
-  "Firmware structure" section comes first: the radio moves into its own task, and I2C gets a
-  single owning task.
+- Build the protocol in [`LORA-PROTOCOL.md`](LORA-PROTOCOL.md), in its "Build order". Step 1,
+  the firmware structure, is done; step 2 is next.
 
 - Make the partial flush cheaper. With the compass redrawing only what changed, a one-degree turn
   flushes about 28,000 pixels in about 42 regions and takes about 10 ms, against 14.8 ms for the

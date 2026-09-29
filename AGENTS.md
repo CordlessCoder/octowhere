@@ -261,7 +261,7 @@ core 1 owns the display SPI/DMA path.
   without the IMU. `frame_loop` owns touch and drawing. It reads touch directly, takes the
   latest sensor values from `SENSOR_STATE` and `MOTION_STATE`, draws into its current
   framebuffer, records `dirty` and the display level to set, and hands the state to core 1.
-- `sensor_task`, also on core 0, owns the PMIC, RTC, GNSS and LoRa. It publishes a whole
+- `sensor_task`, also on core 0, owns the PMIC, RTC and GNSS. It publishes a whole
   `SensorSnapshot` through the `SENSOR_STATE` signal. In automatic zone mode it looks the zone
   up again whenever a fix moves about a kilometre, a zone at a time with a yield between, and
   queues a new zone for `settings_task`. It passes the PMIC's power key presses to the frame
@@ -269,6 +269,9 @@ core 1 owns the display SPI/DMA path.
   saves the GNSS module's navigation data, waits for `SETTINGS_DONE` to reach
   `SETTINGS_QUEUED`, and has the PMIC power the board off. Every settings write goes through
   `queue_write`, which keeps that count.
+- `radio_task`, also on core 0, owns the LoRa radio, its `DIO0` line and the RF switch. It
+  runs the link test when a `lora-link-*` feature is on, and otherwise holds the radio idle. It
+  is spawned only when the radio answered at boot.
 - `settings_task`, also on core 0, owns the flash and saves what `SETTINGS_WRITES` queues.
 - `boot_key_task`, also on core 0, owns GPIO0 and passes the BOOT key's short and long presses
   to the frame loop through `BOOT_KEY_PRESSES`. The stage takes them as `Input::boot_key` and
@@ -294,9 +297,12 @@ it must never come from the frame loop, which would then stop handing frames ove
 that touches flash at run time goes through the same pair. Loading at boot happens before core 1
 starts.
 
-The I2C bus is an `embassy_sync` `Mutex<NoopRawMutex, _>`. Every I2C user must stay on core 0; a
-`NoopRawMutex` gives no cross-core exclusion. Moving an I2C device to core 1 needs a different
-mutex, not just a different spawn.
+The I2C bus is an `embassy_sync` `Mutex<CriticalSectionRawMutex, _>`, shared through
+`I2cDevice` clones, so it excludes across cores. Every user is on core 0 today. The bus went async
+on core 0, which binds its interrupt there, and a user on core 1 has not been tried. A transaction
+holds the bus for its length, and a 512-byte GNSS read takes about 12 ms at 400 kHz. The lock has no
+priority; the owner chose a plain mutex over a bus-owning task, and a priority-aware mutex is the
+route if the radio needs one.
 
 The two cores exchange two PSRAM framebuffers through `util::Swap`, which is lock-free and carries
 `unsafe impl Send/Sync`. A started `SwapThreadFuture` must be allowed to complete; dropping it
@@ -362,20 +368,21 @@ The antenna path is the part that catches people. A transmit and a receive selec
 switch positions, and both are TCA9554 outputs rather than radio pins, so `LoraPath::transmit` and
 `LoraPath::receive` each perform an I2C write before the radio call. Skipping one does not fail
 loudly; it transmits or listens through the wrong path. That also couples the radio to the shared
-I2C bus and its core-0 restriction, so any timing the protocol depends on includes an I2C
-transaction.
+I2C bus, so any timing the protocol depends on includes an I2C transaction and waiting for the bus.
 
 What exists today is a link test, not a protocol. The `lora-link-tx` and `lora-link-rx` features
-build the two ends inline in `sensor_task`, sending eight bytes of `OWLK` plus a big-endian
-sequence number. Transmit waits on `DIO0`; receive polls `RxDone` in a 100-step loop. A two-board
-round trip is recorded in `docs/logs/lora/round-trip-2026-09-22.log`, with RSSI around -100 dBm.
-The receiver logged every other sequence number there, which is the two loops running free rather
-than a link problem.
+build the two ends in `radio_task`, sending eight bytes of `OWLK` plus a big-endian sequence
+number every 250 ms. Transmit waits on `DIO0`'s edge. Receive stays in continuous receive and waits
+on `DIO0`'s level, which holds until `RxDone` is cleared. A two-board round trip is recorded in
+`docs/logs/lora/round-trip-2026-09-22.log`, with RSSI around -100 dBm. The receiver logged every
+other sequence number there. Both ends then ran inside the 250 ms sensor loop, and the receiver
+listened only in part of it. Since the move the transmit end has run alone, and the two-board
+test has not been rerun.
 
 The protocol that replaces it is designed and written down in
 [`context/LORA-PROTOCOL.md`](context/LORA-PROTOCOL.md). Read that before touching the radio. It
-settles medium access, packet layout, freshness, crypto and pairing, and it names two firmware
-changes it depends on: the radio moves to its own task, and I2C gets a single owning task.
+settles medium access, packet layout, freshness, crypto and pairing. Its "Firmware structure"
+section says what the firmware changed for it.
 
 The driver has more than the link test uses: channel activity detection, RSSI and SNR per packet,
 frequency error, and a hardware random source. The protocol needs channel activity detection to

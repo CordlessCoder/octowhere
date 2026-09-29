@@ -391,22 +391,24 @@ because nobody knows to rekey.
 
 ## Firmware structure
 
-Two changes the protocol needs, both worth making on their own merits.
+Two changes the protocol needed, both made.
 
-The radio needs its own task. It is currently a register poll inside the 250 ms sensor loop, which
-leaves the receiver deaf for most of every cycle. That is why the round-trip log shows every other
-sequence number.
+The radio has its own task, `radio_task`. It was a register poll inside the 250 ms sensor loop,
+which left the receiver deaf for most of every cycle. That is why the round-trip log shows every
+other sequence number.
 
-I2C needs a single owning task. Today "every I2C user stays on core 0" is enforced by convention and
-a `NoopRawMutex` that would fail silently if someone spawned a user elsewhere. An owning task makes
-it structural and gives the slot scheduler somewhere to express priority. Bus contention is not a
+The I2C bus is a mutex that excludes across cores. It was a `NoopRawMutex`, which would have
+failed silently if someone spawned a user on core 1. A task owning the bus was considered and
+rejected: it only serialises access, as the mutex does, with a priority layer on top. Priority is
+not expected to matter, and a priority-aware mutex adds it if it does. Bus contention is not a
 timing risk for slots: the TCA9554 write is about 80 µs and entirely predictable, and the lock can
-be taken before the decision to transmit. Holding it across the packet is unnecessary, since the
-switch write before and the restore after are each short with the bus free between them.
+be taken before the decision to transmit. The longest transaction another user holds it for is a
+GNSS read of about 12 ms. Holding it across the packet is unnecessary, since the switch write before
+and the restore after are each short with the bus free between them.
 
 ## Build order
 
-1. The radio in its own task, and one task owning I2C.
+1. The radio in its own task, and a cross-core I2C lock. Done.
 2. Radio settings above, and slots on GPS time with the header and record format, carrying
    positions and neighbours.
 3. Pairing, the member table and ids.

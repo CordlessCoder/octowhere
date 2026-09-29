@@ -26,10 +26,7 @@ use embassy_futures::{
     select::{Either, Either3, Either4, select, select3, select4},
 };
 use embassy_sync::{
-    blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex},
-    channel::Channel,
-    mutex::Mutex,
-    signal::Signal,
+    blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel, mutex::Mutex, signal::Signal,
 };
 use embassy_time::{Duration, Instant, TimeoutError, Timer, with_timeout};
 use embedded_graphics::prelude::*;
@@ -109,7 +106,7 @@ static mut CORE1_STACK: esp_hal::system::Stack<8192> = esp_hal::system::Stack::n
 static CORE1_EXECUTOR: StaticCell<esp_rtos::embassy::Executor> = StaticCell::new();
 static SWAP: StaticCell<Swap<SwapState<&esp_alloc::EspHeap>>> = StaticCell::new();
 type I2cBus = I2c<'static, esp_hal::Async>;
-type SharedI2cDevice = I2cDevice<'static, NoopRawMutex, I2cBus>;
+type SharedI2cDevice = I2cDevice<'static, CriticalSectionRawMutex, I2cBus>;
 type SensorImu = ph_qmi8658::Qmi8658I2c<SharedI2cDevice, core::convert::Infallible, Input<'static>>;
 type LoraSpi = ExclusiveDevice<
     spi::master::Spi<'static, esp_hal::Async>,
@@ -152,7 +149,7 @@ impl LoraPath {
     }
 }
 
-static I2C_BUS: StaticCell<Mutex<NoopRawMutex, I2cBus>> = StaticCell::new();
+static I2C_BUS: StaticCell<Mutex<CriticalSectionRawMutex, I2cBus>> = StaticCell::new();
 static SENSOR_STATE: Signal<CriticalSectionRawMutex, SensorSnapshot> = Signal::new();
 
 /// A time a debugger writes for `sensor_task` to set the RTC to; `tools/rtc-inject.py` does.
@@ -238,9 +235,6 @@ struct SensorSnapshot {
 
 struct SensorTask {
     power: Option<Axp2101Power<SharedI2cDevice>>,
-    lora: Option<SensorLora>,
-    lora_dio0: Input<'static>,
-    lora_path: LoraPath,
     gnss: Lc76g<SharedI2cDevice, embassy_time::Delay>,
     nmea: [u8; 512],
     nmea_parser: NmeaParser,
@@ -792,9 +786,6 @@ async fn settings_task(mut store: Store) {
 async fn sensor_task(task: SensorTask) {
     let SensorTask {
         mut power,
-        mut lora,
-        mut lora_dio0,
-        mut lora_path,
         mut gnss,
         mut nmea,
         mut nmea_parser,
@@ -816,18 +807,6 @@ async fn sensor_task(task: SensorTask) {
     let mut raw_nmea_line = [0; 256];
     #[cfg(feature = "gnss-raw-log")]
     let mut raw_nmea_line_len = 0;
-
-    #[cfg(feature = "lora-link-tx")]
-    if let Some(lora) = &mut lora {
-        lora.map_dio0::<TxDone>().await.unwrap();
-    }
-    #[cfg(feature = "lora-link-rx")]
-    if let Some(lora) = &mut lora {
-        lora.map_dio0::<RxDone>().await.unwrap();
-    }
-
-    #[cfg(feature = "lora-link-tx")]
-    let mut lora_sequence = 0u32;
 
     loop {
         Timer::after(Duration::from_millis(250)).await;
@@ -872,11 +851,6 @@ async fn sensor_task(task: SensorTask) {
             );
         }
 
-        if let Some(lora) = &mut lora
-            && let Ok(irq) = lora.read(IRQ_FLAGS).await
-        {
-            debug!("[LORA] sample IRQ={=u8:#04x}", irq);
-        }
         match gnss.read_nmea_chunk(&mut nmea).await {
             Ok(data) => {
                 #[cfg(feature = "gnss-raw-log")]
@@ -1060,77 +1034,91 @@ async fn sensor_task(task: SensorTask) {
         }
         state.zone = zones.state();
 
-        #[cfg(feature = "lora-link-tx")]
-        if let Some(lora) = &mut lora {
-            let payload = [
-                b'O',
-                b'W',
-                b'L',
-                b'K',
-                (lora_sequence >> 24) as u8,
-                (lora_sequence >> 16) as u8,
-                (lora_sequence >> 8) as u8,
-                lora_sequence as u8,
-            ];
-            lora_sequence = lora_sequence.wrapping_add(1);
+        SENSOR_STATE.signal(state);
+    }
+}
 
-            if lora_path.transmit().await.is_err() {
+struct RadioTask {
+    lora: SensorLora,
+    dio0: Input<'static>,
+    path: LoraPath,
+}
+
+/// Owns the radio. Without a link test it leaves the radio as start-up configured it.
+#[embassy_executor::task]
+async fn radio_task(task: RadioTask) {
+    let RadioTask {
+        mut lora,
+        mut dio0,
+        mut path,
+    } = task;
+
+    #[cfg(feature = "lora-link-tx")]
+    {
+        lora.map_dio0::<TxDone>().await.unwrap();
+        let mut sequence = 0u32;
+        loop {
+            Timer::after(Duration::from_millis(250)).await;
+            let mut payload = *b"OWLK\0\0\0\0";
+            payload[4..].copy_from_slice(&sequence.to_be_bytes());
+            if path.transmit().await.is_err() {
                 warn!("[LORA] LINK_TX_SWITCH_FAILED");
-            } else if lora.tx(&payload).await.is_err() {
+                continue;
+            }
+            if lora.tx(&payload).await.is_err() {
                 warn!("[LORA] LINK_TX_FAILED");
             } else {
                 match select(
-                    lora_dio0.wait_for_rising_edge(),
+                    dio0.wait_for_rising_edge(),
                     Timer::after(Duration::from_secs(2)),
                 )
                 .await
                 {
-                    Either::First(_) => {
-                        info!("[LORA] LINK_TX_DONE sequence={}", lora_sequence - 1);
+                    Either::First(()) => {
+                        info!("[LORA] LINK_TX_DONE sequence={}", sequence);
                         let _ = lora.clear_interrupt::<TxDone>().await;
                     }
-                    Either::Second(_) => warn!("[LORA] LINK_TX_TIMEOUT"),
+                    Either::Second(()) => warn!("[LORA] LINK_TX_TIMEOUT"),
                 }
-                let _ = lora_path.receive().await;
             }
+            sequence = sequence.wrapping_add(1);
+            let _ = path.receive().await;
         }
-
-        #[cfg(feature = "lora-link-rx")]
-        if let Some(lora) = &mut lora {
-            info!("[LORA] LINK_RX_START");
-            if lora_path.receive().await.is_err() {
-                warn!("[LORA] LINK_RX_SWITCH_FAILED");
-            } else if lora.rx(None).await.is_err() {
-                warn!("[LORA] LINK_RX_START_FAILED");
-            } else {
-                let mut received = false;
-                for _ in 0..100 {
-                    if lora.interrupt_flag::<RxDone>().await.unwrap_or(false) {
-                        received = true;
-                        break;
-                    }
-                    Timer::after(Duration::from_millis(20)).await;
-                }
-                if received {
-                    match lora.rx_packet().await {
-                        Ok(packet) => info!(
-                            "[LORA] LINK_RX_OK len={} rssi={} snr_raw={} payload={}",
-                            packet.length,
-                            packet.rssi,
-                            packet.snr_raw,
-                            packet.payload(),
-                        ),
-                        Err(_) => warn!("[LORA] LINK_RX_PACKET_FAILED"),
-                    }
-                } else {
-                    warn!("[LORA] LINK_RX_TIMEOUT");
-                }
-                let _ = lora.clear_all_interrupts().await;
-            }
-        }
-
-        SENSOR_STATE.signal(state);
     }
+
+    #[cfg(feature = "lora-link-rx")]
+    {
+        lora.map_dio0::<RxDone>().await.unwrap();
+        if path.receive().await.is_err() {
+            warn!("[LORA] LINK_RX_SWITCH_FAILED");
+        }
+        // Continuous receive stays listening between packets, so none is missed while one is
+        // read out.
+        if lora.rx(None).await.is_err() {
+            warn!("[LORA] LINK_RX_START_FAILED");
+        }
+        info!("[LORA] LINK_RX_START");
+        loop {
+            // DIO0 stays high until RxDone is cleared, so a level wait cannot miss a packet.
+            match select(dio0.wait_for_high(), Timer::after(Duration::from_secs(2))).await {
+                Either::First(()) => match lora.rx_packet().await {
+                    Ok(packet) => info!(
+                        "[LORA] LINK_RX_OK len={} rssi={} snr_raw={} payload={}",
+                        packet.length,
+                        packet.rssi,
+                        packet.snr_raw,
+                        packet.payload(),
+                    ),
+                    Err(_) => warn!("[LORA] LINK_RX_PACKET_FAILED"),
+                },
+                Either::Second(()) => warn!("[LORA] LINK_RX_TIMEOUT"),
+            }
+            let _ = lora.clear_all_interrupts().await;
+        }
+    }
+
+    #[cfg(not(any(feature = "lora-link-tx", feature = "lora-link-rx")))]
+    core::future::pending::<()>().await;
 }
 
 fn bench_repeat<R>(mut the_thing: impl FnMut() -> R, name: &str) -> (R, Duration) {
@@ -1438,7 +1426,7 @@ async fn bring_up(
     .with_scl(parts.scl)
     .with_sda(parts.sda)
     .into_async();
-    let i2c = I2C_BUS.init(Mutex::<NoopRawMutex, _>::new(i2c));
+    let i2c = I2C_BUS.init(Mutex::<CriticalSectionRawMutex, _>::new(i2c));
     let i2c = I2cDevice::new(i2c);
 
     let mut power = Axp2101Power::new(i2c.clone());
@@ -1649,13 +1637,21 @@ async fn bring_up(
         parts.lora_cs,
     )
     .await;
-    let lora_dio0 = Input::new(parts.lora_dio0, InputConfig::default());
-    let lora_path = LoraPath::new(
-        i2c.clone(),
-        !((1 << board::EXIO_GPS_RESET)
-            | (1 << board::EXIO_LORA_RESET)
-            | (1 << board::EXIO_LORA_TX_SWITCH)),
-    );
+    if let Some(lora) = lora {
+        spawner.spawn(
+            radio_task(RadioTask {
+                lora,
+                dio0: Input::new(parts.lora_dio0, InputConfig::default()),
+                path: LoraPath::new(
+                    i2c.clone(),
+                    !((1 << board::EXIO_GPS_RESET)
+                        | (1 << board::EXIO_LORA_RESET)
+                        | (1 << board::EXIO_LORA_TX_SWITCH)),
+                ),
+            })
+            .unwrap(),
+        );
+    }
 
     if touch_ok {
         touch.set_config(Cst9217Config {
@@ -1676,9 +1672,6 @@ async fn bring_up(
     spawner.spawn(
         sensor_task(SensorTask {
             power,
-            lora,
-            lora_dio0,
-            lora_path,
             gnss,
             nmea: [0; 512],
             nmea_parser,
