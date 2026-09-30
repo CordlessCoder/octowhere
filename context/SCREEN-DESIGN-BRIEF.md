@@ -396,7 +396,7 @@ The confirmation follows the power-off hand-off of 2026-09-29. Captures: `power-
 `power-off-dim-cancel.mp4` (`--record power-off-dim-cancel`).
 
 - **A short press** rests the screen at once, on the always-on face if ALWAYS ON is on and
-  dark otherwise, without the dim. On a resting screen it wakes it, as a touch would.
+  dark otherwise, without the dim. On a resting screen it wakes it, as a double tap would.
 - **A long press** cuts to the confirmation from any face or settings screen. On a resting
   screen it fades up onto it over the 250 ms wake, with no clock frame first. The screen
   keeps what showed under it, and a cancel returns to it.
@@ -432,9 +432,12 @@ show it with a 15 s timeout. Where the build differs from the spec or interprets
   off.
 - **Off** is the panel's display-off and sleep. The touch controller still reports with the
   panel asleep, so the spec's fallback (a black frame at level 0) is not needed.
+- **A double tap wakes** the always-on face or the dark screen (owner, 30 Sep 2026), rather
+  than any contact: its second tap must come within 400 ms of the first. The touch controller
+  recognises the taps itself, in its gesture mode, while the screen rests.
 - **A wake from off** runs the page's entry and the fade up after 140 ms, once the panel is
   out of sleep, so neither plays on a dark panel.
-- **The timer restarts** on any contact, a cover, the pager, the panel or the grid moving, a
+- **The timer restarts** on a wake, any contact, a cover, the pager, the panel or the grid moving, a
   second-level screen opening or closing, and on the compass a heading more than 10° from the
   heading at the last restart. It does not run during the start-up or a replay, and restarts
   when the clock face takes over.
@@ -480,7 +483,7 @@ velocity. It sees a second contact but no gesture uses one.
 | Brightness | A tap in the top cap, or anywhere else | Cancels, or keeps the level |
 | Brightness, clear confirm | A horizontal drag | Sets the level, or moves the handle (only if the drag starts on the handle) |
 | Dimmed | A contact | Fades back to the level and does nothing else. The finger is ignored until it lifts |
-| Always-on face, off | A contact | Wakes the screen (see "Timeout and rest as built"), and does nothing else |
+| Always-on face, off | A double tap | Wakes the screen (see "Timeout and rest as built"), and does nothing else. A contact, a single tap or a swipe does nothing |
 | Dimmed, always-on face, off | Cover | Nothing |
 | Any screen | Cover | Goes to the clock face, discarding any edit in progress. From the panel it closes with the released-drag motion, and the face under it becomes the clock. It is the only cover gesture |
 
@@ -521,8 +524,8 @@ plumbing it is firmware work. There are three grades.
    - Touch contacts and the cover report.
 2. **Known to the firmware, not passed to the screens:** GNSS time to the millisecond, fix
    quality, and when the clock was last set from GNSS. Also the compass calibration's internals.
-3. **Does not exist:** raise to wake, or any wake but touch (the IMU's wake-on-motion and the
-   buttons are unused); a 12-hour clock (ruled out by the clock spec); units, languages, sounds or vibration; pairing, the location mesh,
+3. **Does not exist:** raise to wake, or any wake but a double tap or the power key (the
+   IMU's wake-on-motion and the BOOT key are unused); a 12-hour clock (ruled out by the clock spec); units, languages, sounds or vibration; pairing, the location mesh,
    Wi-Fi or Bluetooth; alarms, timers, step counting and notifications.
 
 ## Settings

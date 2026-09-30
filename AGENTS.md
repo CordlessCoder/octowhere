@@ -255,7 +255,7 @@ wait for TE and the flush that show it (`touch-latency-bench`, summarised by
 `tools/touch-latency-summary.py`), can replace the controller's reports with a scripted finger
 (`touch-latency-synthetic`) and put back the old blocking handoff (`touch-latency-fifo`),
 runs the finger on both handoffs with `tools/touch-latency-sweep.sh`, logs every read as it is
-made, with the report's bytes (`touch-read-log`) and times each lift from its report to the step that counts it.
+made, with the report's bytes (`touch-read-log`), times each lift from its report to the step that counts it, and steps the controller through its modes on each short BOOT press (`touch-mode-probe`).
 
 ## Concurrency
 
@@ -292,7 +292,10 @@ Core 1 owns the display SPI/DMA path.
   of the controller's INT, every 10 ms while a finger is down, or when the frame loop asks, and
   queues each read in `TOUCH_READS` without waiting for it to be taken. A newer contact replaces
   one the frame loop has not taken, a stale read never displaces a report, and a lift or cover
-  is kept ahead of the next report.
+  is kept ahead of the next report. While the stage rests on the always-on face or dark, the
+  frame loop asks through `TOUCH_WAKE_GESTURES` for the controller's gesture mode, in which it
+  reports only the gestures it recognises; a double tap wakes the screen, and a reset takes the
+  controller out of it again.
 - `radio_task`, on `BUS_EXECUTOR`, owns the LoRa radio, its `DIO0` line and the RF switch. It
   runs the link test when a `lora-link-*` feature is on, and otherwise holds the radio idle. It
   is spawned only when the radio answered at boot.
@@ -330,7 +333,10 @@ to release the bus, and core 0 stops; it did, within seconds, with only the GNSS
 there. The bus went async on core 0, which binds its interrupt there. A transaction holds the
 bus for its length, and a 512-byte GNSS read takes about 12 ms at 400 kHz. The lock has no
 priority; the owner chose a plain mutex over a bus-owning task, and a priority-aware mutex is the
-route if the radio needs one.
+route if the radio needs one. The bus has esp-hal's software timeout, per byte. A device can end
+a read early, and without a deadline esp-hal then yields for ever waiting for commands that never
+run; a yield on `BUS_EXECUTOR` runs again at once, so core 0 stops. The touch controller did, in
+its normal and low-power scan modes.
 
 Every lock esp-hal and esp-rtos take raises the interrupt level to 5, so `BUS_EXECUTOR` never runs
 inside one. esp-hal saves the FPU registers across interrupts (`float-save-restore`), so the bus

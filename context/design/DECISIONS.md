@@ -72,3 +72,8 @@ Recorded 2026-09-26. These override the hand-off where they differ.
 16. **The charging wipe runs along the fill** (owner, 2026-09-29), overriding the vertical wipe
     that entry 15's review approved. Plugged in, the solid layer's end draws back from the
     level to the fill's start; unplugged, it grows back from the start.
+
+17. **A double tap wakes a resting screen** (owner, 2026-09-30), on the always-on face and
+    dark alike, instead of any contact. A single tap, a swipe or a hand does not. The touch
+    controller watches for the taps in its gesture mode, which the owner took as the power
+    saving; its low-power scan mode is not used.
