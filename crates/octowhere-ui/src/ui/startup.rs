@@ -914,10 +914,11 @@ const NAME_MIDDLE: f32 = 258.0;
 /// frame.
 const NAME_START: i32 = 60;
 const NAME_SPEED: i32 = 1;
-/// The ticker's size and ink top, how fast it moves left in px a frame, and how many frames
-/// each of its two lines shows before the other.
+/// The ticker's size and baseline, which centres the ink of every letter and `_` in the strip,
+/// whatever its line holds, how fast it moves left in px a frame, and how many frames each of
+/// its two lines shows before the other.
 const TICKER_PX: u32 = 34;
-const TICKER_TOP: i32 = 242;
+const TICKER_BASELINE: i32 = 268;
 const TICKER_SPEED: i32 = 4;
 const TICKER_TURN: u32 = 36;
 const FAULT_HATCH: Rectangle = Rectangle::new(Point::new(290, 164), Size::new(29, 27));
@@ -1027,7 +1028,7 @@ fn draw_fault<D: CoverageTarget<Color = Color>>(
         };
         let mut strip = Knockout::new(&mut *target, STRIP_ROWS, 0..0, chrome::BLACK);
         let style = small(font, color, TICKER_PX, SHAPIRO);
-        let baseline = text::baseline_for_ink_top(&style, &line, TICKER_TOP);
+        let baseline = TICKER_BASELINE;
         let period = libm::roundf(style.advance(&line)) as i32;
         let mut pen = (-TICKER_SPEED * frame).rem_euclid(period) - period;
         while pen < 466 {
@@ -1505,6 +1506,22 @@ mod tests {
             );
             Ok(())
         }
+    }
+
+    #[test]
+    fn the_ticker_centres_its_letters_and_underscores_in_the_strip() {
+        let font = FontdueRenderer::new(
+            chrome::FontdueRendererCtx::new_rc(),
+            20,
+            chrome::WHITE,
+            chrome::FONTS,
+        );
+        let style = small(&font, chrome::WHITE, TICKER_PX, SHAPIRO);
+        let middle = (STRIP_ROWS.start + STRIP_ROWS.end) as f32 / 2.0;
+        assert_eq!(
+            TICKER_BASELINE,
+            text::baseline_for_ink_middle(&style, "ABCDEFGHIJKLMNOPQRSTUVWXYZ_", middle)
+        );
     }
 
     #[test]
