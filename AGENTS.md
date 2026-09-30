@@ -46,6 +46,9 @@ initialization or peripheral mappings.
 - `src/settings.rs` keeps settings in flash across restarts, in an ekv database: the time zone
   mode, the manually chosen zone, the zone GNSS last placed the device in, the display's
   brightness, the screen timeout, and whether the screen rests on the always-on face. `partitions.csv` is the flash layout, and the cargo runner flashes it.
+- `tools/compass-texture.py` records the design's compass fields into
+  `crates/octowhere-ui/src/ui/compass_texture.rs`, from the design's own generator, and checks
+  the recording repaints it exactly.
 - `tools/tz-references.py` writes each zone's reference point into `crates/tz/src/references.rs`,
   which the picker ranks zones by.
 - `crates/` also holds the local `lc76g`, `sx127x-lora` and `sx127x-common` crates.
@@ -165,7 +168,7 @@ Weigh that cost before adding one.
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 1,218,832 bytes, 7.78% of the 15,663,104-byte app partition that
+The image is currently 1,283,584 bytes, 8.20% of the 15,663,104-byte app partition that
 `partitions.csv` gives it. Measure with `espflash save-image --chip esp32s3 --flash-size 16mb
 --partition-table partitions.csv <elf> <out>`; without those two options it assumes 4 MB of flash
 and the default table. The time zone
@@ -473,8 +476,11 @@ All default off. None belongs in normal firmware behavior.
 
 The active UI uses the compile-time fontdue renderer in
 [`crates/octowhere-ui/src/chrome.rs`](crates/octowhere-ui/src/chrome.rs), with the Marathon Shapiro
-and PPFraktion font data under `assets/`. Maratype sets the identity's title and nothing else:
-the owner rejected it on every other screen. `embedded-layout` supplies the current text alignment
+and PPFraktion font data under `assets/`. KH Interference Bold sets the large readings, the
+clock's label, the compass caption and the settings' row names and selected values; its asset is
+a trial, and a release needs a licensed one. Fraktion Sans Light sets the clock's band lines and
+the offset picker's lower neighbour. Maratype sets the identity's title and nothing else: the
+owner rejected it on every other screen. `embedded-layout` supplies the current text alignment
 helpers.
 
 ## Design language

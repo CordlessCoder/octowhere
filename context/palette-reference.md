@@ -59,6 +59,8 @@ board value except `BLACK`.
 | `BLACK` | `#000000` | none | background field, knockout text on saturated fills |
 | `FAULT_BLUE` | `#001DFF` | none | the fault screen's ticker, the failed parts' names (2026-09-27 update) |
 | `FAULT_YELLOW` | `#ECDB0B` | R2C1 | the fault screen's ticker, the fault word (2026-09-27 update) |
+| `HALFTONE` | `#180A36`, `#250C54`, `#371374` | none | the settings halftone's marks, darker where sparse (2026-09-30 update) |
+| `COMPASS_NOISE` | `#040B1D` to `#2558AA`, six levels | none | the compass field's blue noise, from the design's `compass_noise.py` (2026-09-30 update) |
 
 The roles are the design's, from
 [`design/docs/OCTOWHERE-COLOR-ROLES.md`](design/docs/OCTOWHERE-COLOR-ROLES.md), which also

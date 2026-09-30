@@ -76,4 +76,14 @@ Recorded 2026-09-26. These override the hand-off where they differ.
 17. **A double tap wakes a resting screen** (owner, 2026-09-30), on the always-on face and
     dark alike, instead of any contact. A single tap, a swipe or a hand does not. The touch
     controller watches for the taps in its gesture mode, which the owner took as the power
-    saving; its low-power scan mode is not used.
+    saving; its low-power scan mode is not used.18. **The 2026-09-30 typography update** (owner, 2026-09-30), in
+    `handoffs/IMPLEMENTATION-HANDOFF-2026-09-30/`, approved and built. KH Interference Bold
+    sets the clock's digits and label, the compass readout and caption, the settings' row names
+    and selected values; Fraktion Sans Light the clock's band lines and the offset's lower
+    neighbour. The compass's settled fields are the design's own fixtures in its blue noise
+    palette, and the settings halftone takes the S1 prototype's lobes with three purples that
+    brighten with the density. The owner checked the clock in the simulator. Where the build
+    departs from the reference renders, `SCREEN-DESIGN-BRIEF.md` says so: the compass fields
+    follow `compass_noise.py` where the reference render differs from it, `---` centres in the
+    slab, the fields keep off the foreground's boxes rather than its ink, HOLD LEVEL keeps its
+    earlier field, the halftone's solid marks stay 4 px and it still breathes (4a).

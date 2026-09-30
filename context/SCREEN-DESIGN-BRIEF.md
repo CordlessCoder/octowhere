@@ -112,8 +112,10 @@ the panel. Touch targets are no smaller than about 10 mm.
   replaces types in again by cell reveal: the hours, minutes and seconds over 180 ms, and the
   first token line over 160 ms from 120 ms. A tick never animates the digits.
 - **Compass:** C1 adds a fixed dim blue field after a five-step build within the 440 ms entry.
-  Heading holds low horizontal blocks through turns; calibration and HOLD LEVEL use sparse
-  stepped tiles; interference dims the blocks; NO DATA has none. The dial, five states and
+  The settled fields are the design's own (the 2026-09-30 update): heading on its blocks, seed
+  4, calibration on its triangles, seed 8, interference on blocks, seed 5, in its blue noise
+  palette at 0.62, 0.47 and 0.26, and at a further 0.27 over the centre. HOLD LEVEL keeps its
+  sparse stepped tiles as approved; NO DATA has none. The dial, five states and
   state transitions remain as the compass spec and animation addendum describe, with the 66 px
   outlined icon. It no longer has cover-to-recalibrate, its `COVER SCREEN TO RECAL`
   hint, or the divider above it. The tilt line ends the stack. Calibration restarts from the
@@ -170,7 +172,13 @@ K1 (`design/renderer/concept/family-pass-v1-out/clock-K1-*`) on the round 4 spec
   do not show. The elements then draw on known black, and a changed hour moves no mark.
 - **The scatter** is the firmware's generator with K1's two fields, facings and densities, in
   `PURPLE` dimmed to 49 %, clear of the band's rows by about 4 px. NO DATA has none.
-- **The seconds** sit at the band's right, pen at (388, 244), and show `--` while the time is
+- **Typography** is the 2026-09-30 update's: the hours, minutes and seconds in KH Interference
+  Bold, 136 px and 40 px, their ink centred on columns 103 and 185, and 401 and 425; the status
+  label in KH Bold 18; UTC and the battery line in Fraktion Sans Light 16, on baselines 248 and
+  266. A withheld time's `--` stays Fraktion Mono Bold on the same columns. The handoff starts
+  the band's ink at column 262; its reference renders start it at 263 and 264, which the build
+  matches.
+- **The seconds** sit at the band's right, on baseline 244, and show `--` while the time is
   withheld, as K1 has them.
 - **The battery line** reads `BAT 87%`, `BAT 87% CHG` while charging, `USB` with USB and no
   battery, and `BAT --` while unknown. With no known level the well holds a static `GRAY` hatch at
@@ -198,13 +206,26 @@ K1 (`design/renderer/concept/family-pass-v1-out/clock-K1-*`) on the round 4 spec
 ## Settings as built
 
 S1 has four rows on each of two pages. Each row keeps its action and live value from the older
-panel; the rules, index, label and smaller icon follow the selected S1 layout. The outer arcs
-use the firmware scatter generator rather than the concept renderer's random points. That
-texture stays still at rest. A changing value damages only its row; a page drag redraws the
-panel. The existing 420 ms entry cadence now reveals the rows on page 1.
+panel; the rules, index, label and smaller icon follow the selected S1 layout. Row names are
+KH Interference Bold 20, and the values Fraktion Mono Bold 20 (the 2026-09-30 update). The
+outer arcs' halftone follows the S1 prototype's law (`settings_study.py`): an 8 px grid inside
+radius 219, 43 % of points in the two lobes beside the rows and 9 % elsewhere, none over the
+title, the hint or the rows' block, drawn with the firmware's hash rather than the prototype's
+random points. Each mark takes one of three purples, `#180A36`, `#250C54` and `#371374`, by
+how dense the halftone is where it lies, spread a little by its own number: quiet marks mix the
+darker two, lobe marks the brighter two. The prototype picks its purples at random and draws
+solid marks 6 px square; the firmware's solid mark stays 4 px, inset, as on the clock and the
+identity. The halftone breathes while the panel rests, as decision 4a has it. A changing value
+damages only its row; a page drag redraws the panel. The existing 420 ms entry cadence now
+reveals the rows on page 1.
 
 D3 puts the offset, zone, brightness, timeout and replay selection on a violet field with black
-text. A simulated replay failure has an orange field and a DEMO label. The device page shows
+text. Since the 2026-09-30 update the selected values are KH Interference Bold at their Mono
+sizes (offset 51, zone 37, brightness 54, timeout and always-on 43, GOOD 36, a demonstrated
+failure 25), centred by ink as before; the offset's lower neighbour is Fraktion Sans Light 18,
+and every other line keeps its Mono face. The widest zone names, `BAHIA BANDERAS`,
+`PORT-AU-PRINCE` and `DUMONTDURVILLE`, run about 22 px past the slab's right edge, as they
+did in Mono: the picker has no fitting. A simulated replay failure has an orange field and a DEMO label. The device page shows
 version, battery and GNSS first; power and satellite detail follow as it scrolls, then the
 bundled zone-data attribution, REPLAY START-UP and CLEAR SETTINGS. The clear confirmation keeps
 its orange drag. The routes, saves, cancel and cover behavior are unchanged. Host stills are
@@ -234,11 +255,14 @@ Listed in precedence order: the first whose condition holds is shown.
 | NO DATA | the motion sensors have not yet given an orientation | none | no-data glyph, `RED` | `COMPASS`, `GRAY` | none | `RED` | `NO DATA` | none |
 | INTERFERENCE | a heading, and the field is disturbed | turned to the heading | interference glyph, `ORANGE` | `MAGNETIC`, `GRAY` | `INTERFERENCE`, Mono Bold 24 px `ORANGE` | `ORANGE` | degrees | shown |
 | HEADING | a heading | turned to the heading | arrow, `BLUE` | `MAGNETIC`, `GRAY` | none | `WHITE` | degrees | shown |
-| CALIBRATING | no heading, calibration under 100 % | none | open loop, `ORANGE` | `CALIBRATION`, `ORANGE` | `TURN ALL WAYS`, Mono Regular 19 px `GRAY` | `ORANGE` | percent | shown |
+| CALIBRATING | no heading, calibration under 100 % | none | open loop, `ORANGE` | `CALIBRATION`, `ORANGE` | `TURN ALL WAYS`, Mono Regular 20 px `GRAY` | `ORANGE` | percent | shown |
 | HOLD LEVEL | no heading, calibrated | none | centred horizon, `WHITE` | `MAGNETIC`, `GRAY` | `HOLD LEVEL`, Mono Regular 20 px `GRAY` | `WHITE` | `---` | shown |
 
 The slab, icon and caption never move or resize. The state line's space is kept when it is
-empty.
+empty. The readout and `---` are KH Interference Bold 86, and the caption KH Bold 18 (the
+2026-09-30 update). The digits keep one place and the `°` or `%` centres on column 311, level
+with the digits' top, so finishing a calibration moves nothing. `---` centres in the slab as
+the handoff's text says, where its reference render draws it 12 px above the centre.
 
 ### What drives the states
 
@@ -554,13 +578,19 @@ plumbing it is firmware work. There are three grades.
 The firmware is `no_std` Rust drawing into an RGB565 framebuffer. Every draw goes through a
 target that takes antialiased coverage a row at a time and blends it with what is already there.
 
-- **Fonts:** three faces, each at any pixel size and antialiased.
+- **Fonts:** six faces, each at any pixel size and antialiased.
   - Marathon Shapiro Wide 65, the display face. Printable ASCII.
   - PP Fraktion Mono Regular, the full font, including `©`.
   - PP Fraktion Mono Bold. Printable ASCII and `°`.
+  - KH Interference Bold, monospaced: the clock's digits, the compass readout, captions, row
+    names and the settings' selected values. Space to `_`, so capitals, digits and punctuation.
+    The asset is a trial; a release needs a licensed one.
+  - PP Fraktion Sans Light, proportional: the clock's band lines and the offset's lower
+    neighbour. Space to `_`.
+  - Maratype: the identity's title only, its seven letters.
   - Any other glyph in these fonts' full files can be added, at a cost in flash, not draw time.
-    `assets/` also holds PP Fraktion Sans (Light, Bold and italics), the Mono italics, and a
-    trial of KH Interference. Adding a face costs flash and needs its licence checked.
+    `assets/` also holds PP Fraktion Sans Bold and the italics. Adding a face costs flash and
+    needs its licence checked.
 - **Upright text:** aligned in a box, or pen on a baseline. Ink bounds can be measured before
   drawing, so a design can centre by ink and tests can check that text fits.
 - **Stretched text:** upright text scaled taller than its font without widening, as the
@@ -589,7 +619,9 @@ target that takes antialiased coverage a row at a time and blends it with what i
   A halo costs the ring plus the plain text. Stretched, doubled and rotated text have no outline
   yet.
 - **Solid rectangles:** exact, and the cheapest thing to draw. C1 builds its fixed blue field
-  from these; it does not store a texture image.
+  from these; it does not store a texture image. The settled fields are the design's shapes,
+  recorded by `tools/compass-texture.py` into `ui/compass_texture.rs`, and drawn a row at a
+  time, cut to radius 229 and kept 2 px off the still foreground's boxes.
 - **The 5 × 5 icon system:** outlined, at any module size. The frame is a quarter of the module
   (at least 2 px), black inside, and the modules are in the state colour. In use: 96 px (clock
   and second-level screens), 66 px (compass and panel cells). The glyphs are in the specs'
