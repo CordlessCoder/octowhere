@@ -130,8 +130,9 @@ than the `esp` one and flags more.
 
 `cargo run --release`, from the repository root, uses the configured `espflash` runner to flash
 the board with `partitions.csv` and decode its log. The firmware logs only through defmt, so the image holds an index per message rather than
-its text, and the serial stream needs the ELF to read. `espflash monitor --no-reset
---log-format defmt --elf <elf>` reads it without restarting the board. `DEFMT_LOG` in
+its text, and the serial stream needs the ELF to read. `espflash monitor --non-interactive
+--log-format defmt --elf <elf>` reads it, and restarts the board as it opens the port. Do not add
+`--no-reset`: it has left the board frozen in download mode. `DEFMT_LOG` in
 [`.cargo/config.toml`](.cargo/config.toml) sets the level at compile time. It is `info`, which
 leaves out the periodic sensor samples and the GNSS start-up trace; build with `DEFMT_LOG=debug`
 for them.
@@ -248,7 +249,12 @@ clip, summarised by `tools/round-summary.py`), and on the host groups every fill
 framebuffer by the drawing that asked for it (`tests/fill_sources.rs` in `crates/octowhere-ui`);
 and `bench/startup-v11`, which replays the V11 start-up for ever and logs each identity and card
 frame's draw by part and the internal heap in use (`startup-bench`, summarised by
-`tools/startup-summary.py`).
+`tools/startup-summary.py`); and `bench/touch-latency`, which times each touch read from the
+controller's INT edge, caught by a pulse counter, through the read, the step, the draw, core 1's
+wait for TE and the flush that show it (`touch-latency-bench`, summarised by
+`tools/touch-latency-summary.py`), can replace the controller's reports with a scripted finger
+(`touch-latency-synthetic`) and put back the old blocking handoff (`touch-latency-fifo`), and
+runs the finger on both handoffs with `tools/touch-latency-sweep.sh`.
 
 ## Concurrency
 

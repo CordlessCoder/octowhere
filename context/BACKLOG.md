@@ -167,13 +167,21 @@ until the feature set is complete, because profiling an incomplete firmware pric
   it again, at most once a minute, and show GNSS as faulted if that keeps failing. A reset
   clears the module's time, so send the RTC's time after it. Strain relief on the IPEX cable
   addresses the trigger itself.
-- Benchmark touch-to-frame latency (owner, 2026-09-29). Touch reads now go through `touch_task`
-  on `BUS_EXECUTOR`, and the frame loop asks for one through `TOUCH_POLL` while a contact is held.
-  Time each stage from the controller's interrupt: the read, the stage step that takes it, the draw,
-  and the flush that puts the frame on the panel. Report the spread as well as the median, at rest,
-  during a drag and while the compass samples fast, on a `bench/touch-latency` branch.
+- A lift counts only after three empty samples (`LIFT_SAMPLES`), and after the lift report
+  those come from the frame loop's polls, 16.7 ms apart. A swipe's release then waits a median
+  43 ms after the lift report, at most 64 (`bench/touch-latency`, scripted finger, 2026-09-30).
+  Polling sooner after a lift, or a time rule in `GestureTracker`, would shorten it. Which one is
+  a UI decision.
 
 ## Deferred, with detail elsewhere
+
+- Touch-to-frame latency during a drag is about 60 ms at the median, 75 ms at p90, from the
+  controller's report to the end of the flush that shows it (`bench/touch-latency`, 2026-09-30,
+  a finger on the clock and the compass). Reading and stepping take under 2 ms and the read waits
+  about 4–6 ms for the frame loop. The rest is the draw, about 30 ms, core 1's wait for TE,
+  about 9 ms, and the flush, about 15 ms. The flush and TE are settled (below), so the draw is
+  the lever. It was about 100 ms before `touch_task` read each report once and stopped waiting for
+  the frame loop to take the one before.
 
 - Shortening a full-panel flush is closed (owner, 2026-09-25): it was explored as far as it
   usefully goes. The findings stay here so nobody retries them. Measured during drags on

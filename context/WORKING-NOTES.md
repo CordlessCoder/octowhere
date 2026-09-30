@@ -43,8 +43,9 @@ look is in [`design/`](design/README.md).
   loses its output.
 - A reset read loses the first two seconds or so of log while USB reconnects. Put start-up
   microbenchmarks behind a 3 s delay.
-- Never combine `--no-reset` with `--non-interactive`: it left the board frozen in download
-  mode and the owner had to reconnect it. `--no-reset` alone reads without a restart.
+- Do not use `--no-reset`. With `--non-interactive` it left the board frozen in download mode
+  and the owner had to reconnect it; alone, under `script` for a pty, it did the same on
+  2026-09-30. Capture with a reset read.
 - Opening the serial port resets the chip, even with DTR and RTS held low. To inspect a hang,
   halt it with `probe-rs` over the USB JTAG first (`probe-rs list` shows "ESP JTAG").
 - The PMIC's I2C init fails about one boot in three right after flashing. Retry before
