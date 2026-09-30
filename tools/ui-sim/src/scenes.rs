@@ -77,6 +77,12 @@ pub const SCENES: &[Scene] = &[
         captioned: false,
     },
     Scene {
+        name: "zone-scroll",
+        about: "the zone picker on a name too long for its slab, which scrolls to its end and back",
+        run: zone_scroll,
+        captioned: false,
+    },
+    Scene {
         name: "rest-always-on",
         about: "a 15 s timeout: the dim, the always-on face, and a double tap back to the clock",
         run: rest_always_on,
@@ -729,6 +735,28 @@ fn settings(driver: &mut Driver) {
     driver.motion(calibrating(54));
     driver.wait(ms(1_200));
     settings_walk(driver);
+}
+
+/// The picker opened on Port-au-Prince, whose name and identifier overhang the slab.
+fn zone_scroll(driver: &mut Driver) {
+    driver.stage = Stage::new(PeripheralState {
+        firmware: "0.1.0",
+        ..PeripheralState::default()
+    });
+    start(driver, Screen::Clock);
+    let mut sensors = dublin();
+    sensors.zone = ZoneState {
+        mode: ZoneMode::Manual,
+        zone: octowhere_ui::tz::DATABASE
+            .find("America/Port-au-Prince")
+            .map(|zone| zone.id),
+    };
+    driver.sensors(sensors);
+    driver.wait(ms(1_200));
+    open_settings(driver);
+    tap_row(driver, Cell::Zone);
+    slow_tap(driver, 233, 250);
+    driver.wait(ms(8_000));
 }
 
 /// From the clock face into the settings panel, through brightness and the zone picker, and

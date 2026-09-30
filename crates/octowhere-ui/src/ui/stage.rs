@@ -454,12 +454,14 @@ impl Stage {
                 None => power_off.deadline(),
             });
         let silent_lift = self.raw_touch[0].map(|_| self.touched_at + SILENT_LIFT);
+        let page = self.page.as_ref().and_then(|(page, _)| page.next_change());
         [
             self.startup_due,
             rest,
             power_off,
             self.gesture.lift_due(),
             silent_lift,
+            page,
         ]
         .into_iter()
         .flatten()
@@ -713,7 +715,7 @@ impl Stage {
         self.sheet.step(now);
         self.grid.step(now);
         if let Some((page, _)) = &mut self.page {
-            self.fading |= page.step(now);
+            self.fading |= page.step(now, &self.peripherals, &self.renderer);
         }
         // A panel that springs back without closing keeps its entry: the accents it faded on the
         // way out come back with its offset.
@@ -1288,7 +1290,13 @@ impl Stage {
                 Some(Drawn::Page(now, now_accents, now_state)),
             ) => {
                 if (&page, accents, state) != (now, *now_accents, *now_state) {
-                    self.changed.make_full();
+                    match now
+                        .scroll_damage(&page)
+                        .filter(|_| (accents, state) == (*now_accents, *now_state))
+                    {
+                        Some(lines) => lines.iter().for_each(|&line| self.changed.add(line)),
+                        None => self.changed.make_full(),
+                    }
                 }
             }
             (_, Some(_)) => self.changed.make_full(),

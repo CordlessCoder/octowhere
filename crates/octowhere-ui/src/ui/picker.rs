@@ -22,7 +22,7 @@ use super::{
 use crate::{
     chrome::{
         self, Color, CoverageTarget, FRAKTION, FRAKTION_BOLD, FRAKTION_SANS_LIGHT, FontdueRenderer,
-        INTERFERENCE_BOLD, OnBackground,
+        INTERFERENCE_BOLD, OnBackground, Window,
     },
     tz::DATABASE,
 };
@@ -41,6 +41,16 @@ const FLING_STOP: f32 = 60.0;
 /// cannot be trusted. A zone is listed under the offset it keeps at each.
 const RULES_ONLY: [i64; 2] = [4_102_444_800, 4_118_083_200];
 const NEIGHBOURS: [f32; 2] = [164.0, 301.0];
+/// A zone's name and identifier lines, where each clips: the slab less its padding, from the
+/// lines' left.
+const LINES: [Rectangle; 2] = [
+    Rectangle::new(Point::new(TEXT_LEFT, 189), Size::new(274, 60)),
+    Rectangle::new(Point::new(TEXT_LEFT, 249), Size::new(274, 29)),
+];
+/// A line too long for its clip scrolls: it holds at its start, runs to its end, holds, and
+/// runs back, over and over. The two lines share the cycle, run at the longer one's speed.
+const SCROLL_HOLD: Micros = 1_200_000;
+const SCROLL_SPEED: f32 = 40.0;
 
 #[derive(Clone, Debug, PartialEq)]
 enum Step {
@@ -65,6 +75,67 @@ pub struct Picker {
     fling: Option<(f32, f32, Micros)>,
     /// Where the fling started from.
     flung_from: usize,
+    /// The zone whose lines scroll, since when, how far each line has run of how far it overhangs
+    /// its clip, and when the next run starts while they hold.
+    scroll: Option<Scroll>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Scroll {
+    index: usize,
+    since: Micros,
+    overhang: [i32; 2],
+    run: [i32; 2],
+    next: Option<Micros>,
+}
+
+impl Scroll {
+    /// How long one run takes, from start to end.
+    fn travel(&self) -> Micros {
+        let longest = self.overhang[0].max(self.overhang[1]);
+        (longest as f32 / SCROLL_SPEED * 1e6) as Micros
+    }
+
+    /// How far through the cycle `now` is, and from when to when each run happens in it.
+    fn phase(&self, now: Micros) -> (Micros, [core::ops::Range<Micros>; 2]) {
+        let travel = self.travel();
+        let period = 2 * (SCROLL_HOLD + travel);
+        let at = now.saturating_sub(self.since) % period.max(1);
+        let out = SCROLL_HOLD..SCROLL_HOLD + travel;
+        let back = out.end + SCROLL_HOLD..period;
+        (at, [out, back])
+    }
+
+    /// Each line's run at `now`, 0 at its start and its overhang at its end.
+    fn at(&self, now: Micros) -> [i32; 2] {
+        let (at, [out, back]) = self.phase(now);
+        let travel = self.travel().max(1) as f32;
+        let share = if out.contains(&at) {
+            (at - out.start) as f32 / travel
+        } else if back.contains(&at) {
+            1.0 - (at - back.start) as f32 / travel
+        } else if at < out.start {
+            0.0
+        } else {
+            1.0
+        };
+        self.overhang
+            .map(|overhang| libm::roundf(overhang as f32 * share) as i32)
+    }
+
+    /// Whether a run is under way, and if not, when the next one starts.
+    fn running(&self, now: Micros) -> Result<(), Micros> {
+        if self.overhang == [0, 0] {
+            return Err(Micros::MAX);
+        }
+        let (at, [out, back]) = self.phase(now);
+        let start = now - at;
+        match () {
+            () if out.contains(&at) || back.contains(&at) => Ok(()),
+            () if at < out.start => Err(start + out.start),
+            () => Err(start + back.start),
+        }
+    }
 }
 
 impl Eq for Picker {}
@@ -174,6 +245,41 @@ fn city(name: &str) -> String<32> {
     city
 }
 
+/// The selected zone's name and identifier lines' styles.
+fn line_styles(font: &FontdueRenderer<'static, Color>) -> [FontdueRenderer<'static, Color>; 2] {
+    [
+        style(font, chrome::BLACK, 37, INTERFERENCE_BOLD),
+        style(font, chrome::BLACK, 14, FRAKTION_BOLD),
+    ]
+}
+
+/// Where each line's pen starts before it scrolls: the name centred on row 220 by its ink, the
+/// identifier's ink top on row 253, both from the lines' left.
+fn line_pens(font: &FontdueRenderer<'static, Color>, lines: &[String<48>; 2]) -> [Point; 2] {
+    let [big, small] = line_styles(font);
+    [
+        Point::new(
+            text::pen_x_for_ink_left(&big, &lines[0], TEXT_LEFT),
+            text::baseline_for_ink_middle(&big, &lines[0], 220.0),
+        ),
+        Point::new(
+            text::pen_x_for_ink_left(&small, &lines[1], TEXT_LEFT),
+            text::baseline_for_ink_top(&small, &lines[1], 253),
+        ),
+    ]
+}
+
+/// How far past its clip each line's ink reaches, or 0.
+fn overhang(font: &FontdueRenderer<'static, Color>, lines: &[String<48>; 2]) -> [i32; 2] {
+    let pens = line_pens(font, lines);
+    let styles = line_styles(font);
+    core::array::from_fn(|i| {
+        let ink = styles[i].baseline_bounds(&lines[i], pens[i]);
+        let end = LINES[i].top_left.x + LINES[i].size.width as i32;
+        (ink.top_left.x + ink.size.width as i32 - end).max(0)
+    })
+}
+
 fn signed(offset: i32) -> String<8> {
     let mut text = String::new();
     let sign = if offset < 0 { '-' } else { '+' };
@@ -211,6 +317,7 @@ impl Picker {
             grabbed: None,
             fling: None,
             flung_from: 0,
+            scroll: None,
         }
     }
 
@@ -302,8 +409,62 @@ impl Picker {
         }
     }
 
-    /// Advances a fling, and says whether it is still going.
-    pub fn step(&mut self, now: Micros) -> bool {
+    /// Advances a fling and the zone's lines' scroll, and says whether either is moving.
+    pub fn step(
+        &mut self,
+        now: Micros,
+        peripherals: &PeripheralState,
+        font: &FontdueRenderer<'static, Color>,
+    ) -> bool {
+        let flinging = self.step_fling(now);
+        self.scroll = self.zone_lines(peripherals).map(|lines| {
+            let mut scroll = match self.scroll {
+                Some(scroll) if scroll.index == self.index => scroll,
+                _ => Scroll {
+                    index: self.index,
+                    since: now,
+                    overhang: overhang(font, &lines),
+                    run: [0, 0],
+                    next: None,
+                },
+            };
+            scroll.run = scroll.at(now);
+            scroll.next = scroll.running(now).err().filter(|&at| at != Micros::MAX);
+            scroll
+        });
+        let scrolling = self
+            .scroll
+            .is_some_and(|scroll| scroll.running(now).is_ok());
+        flinging || scrolling
+    }
+
+    /// When the zone's lines next start to scroll, while they hold.
+    #[must_use]
+    pub fn next_change(&self) -> Option<Micros> {
+        self.scroll?.next
+    }
+
+    /// The lines whose scroll alone tells `self` from `before`, if nothing else does.
+    #[must_use]
+    pub fn scroll_damage(&self, before: &Self) -> Option<&'static [Rectangle; 2]> {
+        fn still(picker: &Picker) -> (&Step, usize, Option<usize>, usize, Option<Scroll>) {
+            (
+                &picker.step,
+                picker.index,
+                picker.grabbed,
+                picker.flung_from,
+                picker.scroll.map(|scroll| Scroll {
+                    run: [0, 0],
+                    next: None,
+                    ..scroll
+                }),
+            )
+        }
+        (self.fling.is_none() && before.fling.is_none() && still(self) == still(before))
+            .then_some(&LINES)
+    }
+
+    fn step_fling(&mut self, now: Micros) -> bool {
         let Some((travel, speed, last)) = self.fling else {
             return false;
         };
@@ -453,6 +614,26 @@ impl Picker {
         second::draw_footer("DRAG OFFSET / TAP FOR ZONES", accents, font, target)
     }
 
+    /// The selected zone's name and its identifier with the abbreviation, on the zone step.
+    fn zone_lines(&self, peripherals: &PeripheralState) -> Option<[String<48>; 2]> {
+        let Step::Zone { offset, zones, .. } = &self.step else {
+            return None;
+        };
+        let zone = DATABASE.zone(zones[self.index]);
+        let mut name = String::new();
+        _ = name.push_str(&city(zone.name));
+        let mut line = String::<48>::new();
+        for c in zone.name.chars() {
+            _ = line.push(c.to_ascii_uppercase());
+        }
+        let abbreviation = offsets_of(&zone, time_of(peripherals))
+            .into_iter()
+            .find(|each| each.utc_offset == *offset)
+            .map_or("", |each| each.abbreviation);
+        _ = write!(line, "  {abbreviation}");
+        Some([name, line])
+    }
+
     fn draw_zones<D: CoverageTarget<Color = Color>>(
         &self,
         peripherals: &PeripheralState,
@@ -460,15 +641,10 @@ impl Picker {
         font: &FontdueRenderer<'static, Color>,
         target: &mut D,
     ) -> Result<(), D::Error> {
-        let Step::Zone {
-            offset,
-            zones,
-            nearest,
-        } = &self.step
-        else {
+        let Step::Zone { zones, nearest, .. } = &self.step else {
             return Ok(());
         };
-        let (offset, nearest) = (*offset, *nearest);
+        let nearest = *nearest;
         second::draw_cap(
             "ZONE / 02",
             "BACK",
@@ -479,38 +655,22 @@ impl Picker {
             target,
         )?;
         second::draw_slab(188, 278, chrome::VIOLET, target)?;
-        let unix = time_of(peripherals);
-        let zone = DATABASE.zone(zones[self.index]);
-        let big = style(font, chrome::BLACK, 37, INTERFERENCE_BOLD);
-        let name = city(zone.name);
-        let pen = Point::new(
-            text::pen_x_for_ink_left(&big, &name, TEXT_LEFT),
-            text::baseline_for_ink_middle(&big, &name, 220.0),
-        );
-        big.draw_on_baseline(
-            &name,
-            pen,
-            &mut OnBackground::new(&mut *target, chrome::VIOLET),
-        )?;
-        let mut line = String::<48>::new();
-        for c in zone.name.chars() {
-            _ = line.push(c.to_ascii_uppercase());
+        let run = self.scroll.map_or([0, 0], |scroll| scroll.run);
+        if let Some(lines) = self.zone_lines(peripherals) {
+            for (((text, style), pen), (clip, run)) in lines
+                .iter()
+                .zip(line_styles(font))
+                .zip(line_pens(font, &lines))
+                .zip(LINES.iter().zip(run))
+            {
+                let clipped = &mut Window::new(&mut *target, Point::zero(), *clip);
+                style.draw_on_baseline(
+                    text,
+                    pen - Point::new(run, 0),
+                    &mut OnBackground::new(clipped, chrome::VIOLET),
+                )?;
+            }
         }
-        let abbreviation = offsets_of(&zone, unix)
-            .into_iter()
-            .find(|each| each.utc_offset == offset)
-            .map_or("", |each| each.abbreviation);
-        _ = write!(line, "  {abbreviation}");
-        let small = style(font, chrome::BLACK, 14, FRAKTION_BOLD);
-        let pen = Point::new(
-            text::pen_x_for_ink_left(&small, &line, TEXT_LEFT),
-            text::baseline_for_ink_top(&small, &line, 253),
-        );
-        small.draw_on_baseline(
-            &line,
-            pen,
-            &mut OnBackground::new(&mut *target, chrome::VIOLET),
-        )?;
         for (neighbour, row) in self.neighbours().into_iter().zip(NEIGHBOURS) {
             if let Some(index) = neighbour {
                 Self::draw_neighbour(&city(DATABASE.zone(zones[index]).name), row, font, target)?;
@@ -542,6 +702,32 @@ impl Picker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_long_line_holds_runs_out_holds_and_runs_back() {
+        let scroll = Scroll {
+            index: 0,
+            since: 1_000,
+            overhang: [40, 20],
+            run: [0, 0],
+            next: None,
+        };
+        let travel = scroll.travel();
+        assert_eq!(travel, 1_000_000);
+        let at = |t: Micros| scroll.at(1_000 + t);
+        assert_eq!(at(0), [0, 0]);
+        assert_eq!(at(SCROLL_HOLD - 1), [0, 0]);
+        assert_eq!(at(SCROLL_HOLD + travel / 2), [20, 10]);
+        assert_eq!(at(SCROLL_HOLD + travel + 1), [40, 20]);
+        assert_eq!(at(2 * SCROLL_HOLD + travel + travel / 2), [20, 10]);
+        assert_eq!(at(2 * (SCROLL_HOLD + travel)), [0, 0]);
+        assert_eq!(scroll.running(1_000), Err(1_000 + SCROLL_HOLD));
+        assert_eq!(scroll.running(1_000 + SCROLL_HOLD + 1), Ok(()));
+        assert_eq!(
+            scroll.running(1_000 + SCROLL_HOLD + travel),
+            Err(1_000 + 2 * SCROLL_HOLD + travel)
+        );
+    }
 
     #[test]
     fn cities_are_the_last_part_in_capitals_and_etc_is_at_sea() {

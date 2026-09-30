@@ -1359,6 +1359,37 @@ fn a_fling_in_the_picker_keeps_stepping_and_stops() {
     assert!(!driver.stage.is_changing());
 }
 
+#[test]
+fn a_long_zone_name_scrolls_and_redraws_only_its_lines() {
+    let mut driver = open_panel(Screen::Clock);
+    driver.step(sensors(
+        clock_at(12, 7, 42),
+        zone("America/Port-au-Prince", ZoneMode::Manual),
+    ));
+    tap(&mut driver, 150, 115);
+    tap(&mut driver, 233, 250);
+    assert!(matches!(driver.stage.page(), Some(Page::Picker(_))));
+    // Holding at its start, the name leaves the stage at rest until its run is due.
+    driver.settle();
+    let start = render(&driver.stage);
+    let mut buffers = Buffers::new();
+    buffers.draw(&driver.stage, &Dirty::new_full());
+    let (mut moved, mut limited) = (false, true);
+    for step in 0..6_000_000 / script::FRAME {
+        driver.step(Input::default());
+        let changed = driver.stage.changed();
+        // The two lines, 274 px wide and 89 rows, grown to the panel's 2 × 2 grain.
+        limited &= changed.is_empty() || changed.pixels() <= 276 * 90;
+        let partial = buffers.draw(&driver.stage, changed);
+        let whole = render(&driver.stage);
+        let wrong = differing(partial, &whole);
+        assert_eq!(wrong, 0, "step {step}: {wrong} pixels differ");
+        moved |= differing(&whole, &start) > 0;
+    }
+    assert!(moved, "the name never scrolled");
+    assert!(limited, "a scroll step redrew more than the zone's lines");
+}
+
 /// The panel and every screen it opens, drawn clipped to tiles, must match drawing whole.
 #[test]
 fn the_panel_and_its_screens_draw_the_same_in_tiles() {

@@ -155,10 +155,33 @@ impl Page {
     }
 
     /// Advances anything that moves on its own, and says whether it still does.
-    pub fn step(&mut self, now: Micros) -> bool {
+    pub fn step(
+        &mut self,
+        now: Micros,
+        peripherals: &PeripheralState,
+        font: &FontdueRenderer<'static, Color>,
+    ) -> bool {
         match self {
-            Self::Picker(picker) => picker.step(now),
+            Self::Picker(picker) => picker.step(now, peripherals, font),
             _ => false,
+        }
+    }
+
+    /// When something that holds still starts to move again on its own.
+    #[must_use]
+    pub fn next_change(&self) -> Option<Micros> {
+        match self {
+            Self::Picker(picker) => picker.next_change(),
+            _ => None,
+        }
+    }
+
+    /// The areas that alone differ from `before`, when a scrolling line is all that moved.
+    #[must_use]
+    pub fn scroll_damage(&self, before: &Self) -> Option<&'static [Rectangle; 2]> {
+        match (self, before) {
+            (Self::Picker(picker), Self::Picker(before)) => picker.scroll_damage(before),
+            _ => None,
         }
     }
 
