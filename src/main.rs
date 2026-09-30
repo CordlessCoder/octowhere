@@ -1376,10 +1376,14 @@ async fn touch_task(mut touch: TouchDriver) {
         let read = touch.read_touch_data().await.map_err(|_| ());
         // A poll asked for while this read ran is answered by it.
         TOUCH_POLL.reset();
+        #[cfg(feature = "touch-latency-bench")]
+        let trace = touch_latency::end_read(trace);
+        #[cfg(feature = "touch-read-log")]
+        touch_latency::log_read(&trace, &read);
         put_touch_read(TouchRead {
             read,
             #[cfg(feature = "touch-latency-bench")]
-            trace: touch_latency::end_read(trace),
+            trace,
         });
     }
 }
@@ -2478,6 +2482,8 @@ async fn frame_loop(
             if let Some(trace) = &mut timings.touch {
                 trace.stepped();
             }
+            #[cfg(feature = "touch-latency-bench")]
+            touch_latency::contact_step(in_contact, stage.in_contact());
             if update.recalibrate {
                 info!("[COMPASS] recalibrating on request");
                 COMPASS_RECALIBRATE.store(true, Ordering::Relaxed);

@@ -43,6 +43,8 @@ static COUNTER: BlockingMutex<CS, RefCell<Option<Pcnt<'static>>>> =
 #[cfg(feature = "touch-latency-fifo")]
 pub static TAKEN: embassy_sync::signal::Signal<CS, ()> = embassy_sync::signal::Signal::new();
 static SEQUENCE: BlockingMutex<CS, Cell<u32>> = BlockingMutex::new(Cell::new(0));
+/// The edge of the lift report the frame loop took last, while a contact was held.
+static LIFT_REPORTED: BlockingMutex<CS, Cell<Option<u64>>> = BlockingMutex::new(Cell::new(None));
 
 /// Counts INT's falling edges on unit 0 and its rising edges on unit 1, one interrupt each.
 pub fn watch(pcnt: PCNT<'static>, fall: InputSignal<'static>, rise: InputSignal<'static>) {
@@ -148,6 +150,46 @@ pub fn end_read(mut trace: ReadTrace) -> ReadTrace {
     trace
 }
 
+/// Logs a read as it is made, before the frame loop can drop it.
+#[cfg(feature = "touch-read-log")]
+pub fn log_read(trace: &ReadTrace, data: &Result<TouchData, ()>) {
+    let (x, y) = first_point(data);
+    info!(
+        "[TOUCH-READ] seq={=u32} src={=str} kind={=str} at={=u64} edge={=i64} reports={=u32} \
+         x={=i32} y={=i32}",
+        trace.sequence,
+        if trace.by_poll { "poll" } else { "int" },
+        kind(data),
+        trace.read,
+        trace.edge.map_or(-1, |edge| edge as i64),
+        trace.reports,
+        x,
+        y,
+    );
+}
+
+fn kind(data: &Result<TouchData, ()>) -> &'static str {
+    match data {
+        Ok(TouchData::Stale) => "stale",
+        Ok(TouchData::Points(points)) if points.is_empty() => "lift",
+        Ok(TouchData::Lifted(_)) => "lift",
+        Ok(TouchData::Gesture(_)) => "gesture",
+        Ok(TouchData::Points(_)) => "contact",
+        Ok(TouchData::CoverGesture) => "cover",
+        Err(()) => "failed",
+    }
+}
+
+/// The first point of a contact, or -1.
+fn first_point(data: &Result<TouchData, ()>) -> (i32, i32) {
+    match data {
+        Ok(TouchData::Points(points)) => points
+            .first()
+            .map_or((-1, -1), |point| (i32::from(point.x), i32::from(point.y))),
+        _ => (-1, -1),
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct FrameTrace {
     read: ReadTrace,
@@ -174,21 +216,16 @@ pub fn received(
     waiting_since: Instant,
 ) -> FrameTrace {
     let received = Instant::now().as_micros();
-    let kind = match data {
-        Ok(TouchData::Stale) => "stale",
-        Ok(TouchData::Points(points)) if points.is_empty() => "lift",
-        Ok(TouchData::Lifted(_)) => "lift",
-        Ok(TouchData::Gesture(_)) => "gesture",
-        Ok(TouchData::Points(_)) => "contact",
-        Ok(TouchData::CoverGesture) => "cover",
-        Err(()) => "failed",
-    };
-    let (x, y) = match data {
-        Ok(TouchData::Points(points)) => points
-            .first()
-            .map_or((-1, -1), |point| (i32::from(point.x), i32::from(point.y))),
-        _ => (-1, -1),
-    };
+    let kind = kind(data);
+    let (x, y) = first_point(data);
+    if kind == "lift" && in_contact {
+        let edge = read.edge.unwrap_or(read.woken);
+        LIFT_REPORTED.lock(|reported| {
+            if reported.get().is_none() {
+                reported.set(Some(edge));
+            }
+        });
+    }
     FrameTrace {
         read,
         kind,
@@ -393,5 +430,22 @@ mod synthetic {
             y: y as u16,
         });
         TouchData::Points(points)
+    }
+}
+
+/// Called after each step. Logs how long the stage took to count a contact lifted, from the
+/// edge of its first lift report, or that it lifted without one.
+pub fn contact_step(was_in_contact: bool, in_contact: bool) {
+    if in_contact {
+        return;
+    }
+    let reported = LIFT_REPORTED.lock(|reported| reported.take());
+    if !was_in_contact {
+        return;
+    }
+    let now = Instant::now().as_micros();
+    match reported {
+        Some(edge) => info!("[TOUCH-LIFT] report_to_lift={=u64}", now - edge),
+        None => info!("[TOUCH-LIFT] without_report at={=u64}", now),
     }
 }

@@ -61,6 +61,8 @@ touch-latency-bench = []
 touch-latency-synthetic = ["touch-latency-bench"]
 # Puts back the old handoff, where a read waits for the frame loop to take the one before.
 touch-latency-fifo = ["touch-latency-synthetic"]
+# Logs every read as `touch_task` makes it, including those the frame loop never takes.
+touch-read-log = ["touch-latency-bench"]
 
 [patch.crates-io]
 tca9554 = { git = "https://github.com/CordlessCoder/tca9554-rs", rev = "dd76e69" }
