@@ -22,6 +22,10 @@ pub struct Scatter {
     /// scatter has the same gap on both sides.
     pub gap: Option<(core::ops::RangeInclusive<i32>, i32)>,
     pub color: Color,
+    /// Colours for the marks, darkest first, in place of `color`. A mark takes one by how dense
+    /// the field is where it lies, before its look scales it, so a mark keeps its colour as the
+    /// field blooms and breathes; its own number spreads the choice a little.
+    pub tones: &'static [Color],
     /// Where on the grid marks may show. Where fields overlap, a point takes its mark from the
     /// first field that shows it.
     pub fields: &'static [Field],
@@ -36,6 +40,31 @@ pub struct Field {
     pub radius: f32,
     /// Picks the pattern. The same seed draws the same pattern every time.
     pub seed: u32,
+    pub law: Law,
+}
+
+/// How a field's chance of showing a point varies across it, before a look scales it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Law {
+    /// Rising from the centre to the edge, and highest on the side the look faces.
+    Radial,
+    /// `quiet` everywhere but in `lobes`, where it is `peak`, by the mark's top-left corner.
+    /// Looks' facings do not turn it.
+    Lobes {
+        lobes: &'static [Rectangle],
+        quiet: f32,
+        peak: f32,
+    },
+}
+
+impl Law {
+    /// The highest chance it gives.
+    fn peak(self) -> f32 {
+        match self {
+            Self::Radial => 1.0,
+            Self::Lobes { peak, .. } => peak,
+        }
+    }
 }
 
 /// How a field looks on one frame: its dense side faces `facing` radians clockwise from the
@@ -66,6 +95,13 @@ pub const PITCH: i32 = 8;
 const MARK: i32 = 6;
 /// Below this share of its numbers, a shown point draws the hollow mark.
 const HOLLOW: f32 = 0.6;
+/// A mark's tone runs from `TONE_FLOOR` where its field is sparsest across `TONE_RANGE` to where
+/// it is densest, and its own number moves it by up to half of `TONE_SPREAD` either way, so
+/// sparse marks mix the darker tones and dense marks the brighter. `TONE_SEED` seeds that number.
+const TONE_FLOOR: f32 = 0.15;
+const TONE_RANGE: f32 = 0.6;
+const TONE_SPREAD: f32 = 0.6;
+const TONE_SEED: u32 = 0x746f_6e65;
 /// The glass's radius about the panel's centre. A mark shows only if it lies wholly inside.
 const GLASS: i32 = DISPLAY_SIZE.width as i32 / 2;
 
@@ -76,10 +112,12 @@ impl Scatter {
         origin: Point::new(12, -2),
         gap: Some((197..=317, 2)),
         color: chrome::PURPLE,
+        tones: &[],
         fields: &[Field {
             center: Point::new(233, 233),
             radius: 228.0,
             seed: 0x6f63_7477,
+            law: Law::Radial,
         }],
     };
 
@@ -109,10 +147,11 @@ impl Scatter {
             clear,
             target,
             visible,
-            |target, _, corner, hollow| {
+            |target, _, corner, hollow, tone| {
                 if result.is_err() {
                     return;
                 }
+                let color = self.tone(tone);
                 result = if hollow {
                     [
                         ((0, 0), (6, 2)),
@@ -124,13 +163,13 @@ impl Scatter {
                     .try_for_each(|(offset, size)| {
                         target.fill_solid(
                             &Rectangle::new(corner + Point::from(offset), Size::from(size)),
-                            self.color,
+                            color,
                         )
                     })
                 } else {
                     target.fill_solid(
                         &Rectangle::new(corner + Point::new(1, 1), Size::new_equal(4)),
-                        self.color,
+                        color,
                     )
                 };
             },
@@ -157,7 +196,7 @@ impl Scatter {
             clear,
             &mut shown,
             |_, _| true,
-            |shown, point, _, hollow| {
+            |shown, point, _, hollow, _| {
                 shown.shown[point / 32] |= 1 << (point % 32);
                 if hollow {
                     shown.hollow[point / 32] |= 1 << (point % 32);
@@ -187,6 +226,19 @@ impl Scatter {
         }
     }
 
+    /// The colour for a mark whose place in its field's density law, spread by its number, is
+    /// `tone`, from 0 to about 1.
+    fn tone(&self, tone: f32) -> Color {
+        let last = self.tones.len().saturating_sub(1);
+        match self
+            .tones
+            .get(((tone * self.tones.len() as f32) as usize).min(last))
+        {
+            Some(&color) => color,
+            None => self.color,
+        }
+    }
+
     fn columns(&self) -> i32 {
         (DISPLAY_SIZE.width as i32 - self.origin.x + PITCH - 1) / PITCH
     }
@@ -206,8 +258,8 @@ impl Scatter {
         )
     }
 
-    /// Calls `mark` with the index, the mark's top-left corner and whether it is hollow for
-    /// each shown point whose mark lies in an area `wanted` accepts. `wanted` sees a grid
+    /// Calls `mark` with the index, the mark's top-left corner, whether it is hollow and its tone
+    /// for each shown point whose mark lies in an area `wanted` accepts. `wanted` sees a grid
     /// row's whole strip before its points. Both get `state`.
     ///
     /// Each point owns two numbers of each field's generator, counted in raster order over the
@@ -218,7 +270,7 @@ impl Scatter {
         clear: &[Rectangle],
         state: &mut T,
         wanted: impl Fn(&mut T, Rectangle) -> bool,
-        mut mark: impl FnMut(&mut T, usize, Point, bool),
+        mut mark: impl FnMut(&mut T, usize, Point, bool, f32),
     ) {
         debug_assert_eq!(looks.len(), self.fields.len());
         let turns: Vec<(f32, f32)> = looks
@@ -303,21 +355,38 @@ impl Scatter {
                     if squared > field.radius * field.radius {
                         continue;
                     }
-                    let (r, toward) = if squared > 0.0 {
-                        let inverse = inverse_sqrt(squared);
-                        (squared * inverse, (dx * cos + dy * sin) * inverse)
-                    } else {
-                        (0.0, 0.0)
+                    let chance = match field.law {
+                        Law::Radial => {
+                            let (r, toward) = if squared > 0.0 {
+                                let inverse = inverse_sqrt(squared);
+                                (squared * inverse, (dx * cos + dy * sin) * inverse)
+                            } else {
+                                (0.0, 0.0)
+                            };
+                            let radial = 0.45 + 0.55 * ((r - 40.0) * (1.0 / 180.0)).clamp(0.0, 1.0);
+                            radial * (0.45 + 0.55 * toward)
+                        }
+                        Law::Lobes { lobes, quiet, peak } => {
+                            if lobes.iter().any(|lobe| lobe.contains(corner)) {
+                                peak
+                            } else {
+                                quiet
+                            }
+                        }
                     };
-                    let radial = 0.45 + 0.55 * ((r - 40.0) * (1.0 / 180.0)).clamp(0.0, 1.0);
-                    let turn = 0.45 + 0.55 * toward;
-                    if number(field.seed, n) < radial * turn * look.density {
+                    if number(field.seed, n) < chance * look.density {
                         // Checked only for a point that shows, as few do.
                         if !clear
                             .iter()
                             .any(|keep| !keep.intersection(&cell).is_zero_sized())
                         {
-                            mark(state, point, corner, number(field.seed, n + 1) < HOLLOW);
+                            // A generator of its own, so the tones leave the pattern alone.
+                            let spread = number(field.seed ^ TONE_SEED, n) - 0.5;
+                            let tone = TONE_FLOOR
+                                + TONE_RANGE * chance / field.law.peak()
+                                + TONE_SPREAD * spread;
+                            let hollow = number(field.seed, n + 1) < HOLLOW;
+                            mark(state, point, corner, hollow, tone);
                         }
                         break;
                     }
@@ -375,7 +444,7 @@ mod tests {
             &[],
             &mut shown,
             |_, _| true,
-            |shown, _, corner, hollow| shown.push((corner, hollow)),
+            |shown, _, corner, hollow, _| shown.push((corner, hollow)),
         );
         shown
     }
@@ -453,17 +522,20 @@ mod tests {
         center: Point::new(270, 145),
         radius: 150.0,
         seed: 1,
+        law: Law::Radial,
     };
     // Closer than the identity's two, so that many points fall in both.
     const LOWER: Field = Field {
         center: Point::new(200, 240),
         radius: 150.0,
         seed: 2,
+        law: Law::Radial,
     };
     const TWO: Scatter = Scatter {
         origin: Point::new(12, -2),
         gap: None,
         color: chrome::PURPLE,
+        tones: &[],
         fields: &[UPPER, LOWER],
     };
     const LOOKS: [Look; 2] = [

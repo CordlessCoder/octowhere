@@ -3,6 +3,7 @@ pub mod charging;
 pub mod clock;
 pub mod clock_screen;
 pub mod compass_screen;
+mod compass_texture;
 pub mod dirty;
 pub mod ease;
 pub mod geometry;

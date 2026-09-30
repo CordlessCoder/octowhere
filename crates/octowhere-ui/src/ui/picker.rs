@@ -20,7 +20,10 @@ use super::{
     text::{self, style},
 };
 use crate::{
-    chrome::{self, Color, CoverageTarget, FRAKTION, FRAKTION_BOLD, FontdueRenderer, OnBackground},
+    chrome::{
+        self, Color, CoverageTarget, FRAKTION, FRAKTION_BOLD, FRAKTION_SANS_LIGHT, FontdueRenderer,
+        INTERFERENCE_BOLD, OnBackground,
+    },
     tz::DATABASE,
 };
 
@@ -395,7 +398,7 @@ impl Picker {
                 &mut OnBackground::new(&mut *target, chrome::BLACK),
             )?;
         }
-        let big = style(font, chrome::BLACK, 51, FRAKTION_BOLD);
+        let big = style(font, chrome::BLACK, 51, INTERFERENCE_BOLD);
         let time = clock_at(unix, offset);
         let pen = Point::new(
             text::pen_x_for_ink_left(&big, &time, TEXT_LEFT),
@@ -435,7 +438,7 @@ impl Picker {
                 clock_at(unix, offsets[next]),
                 signed(offsets[next])
             );
-            let small = style(font, chrome::GRAY, 17, FRAKTION);
+            let small = style(font, chrome::GRAY, 18, FRAKTION_SANS_LIGHT);
             let pen = Point::new(
                 text::pen_x_for_ink_left(&small, &line, TEXT_LEFT),
                 text::baseline_for_ink_middle(&small, &line, NEIGHBOURS[1]),
@@ -478,7 +481,7 @@ impl Picker {
         second::draw_slab(188, 278, chrome::VIOLET, target)?;
         let unix = time_of(peripherals);
         let zone = DATABASE.zone(zones[self.index]);
-        let big = style(font, chrome::BLACK, 37, FRAKTION_BOLD);
+        let big = style(font, chrome::BLACK, 37, INTERFERENCE_BOLD);
         let name = city(zone.name);
         let pen = Point::new(
             text::pen_x_for_ink_left(&big, &name, TEXT_LEFT),

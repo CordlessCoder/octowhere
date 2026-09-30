@@ -20,7 +20,7 @@ use embedded_graphics::{
 
 use super::{
     clock::ClockView,
-    scatter::{Field, Look, Scatter, Shown},
+    scatter::{Field, Law, Look, Scatter, Shown},
     screens, smooth,
     startup::{self, CENTER, Context},
     text,
@@ -161,11 +161,13 @@ const UPPER: Field = Field {
     center: Point::new(270, 145),
     radius: 150.0,
     seed: 0x6f63_7475,
+    law: Law::Radial,
 };
 const LOWER: Field = Field {
     center: Point::new(190, 334),
     radius: 125.0,
     seed: 0x6f63_7476,
+    law: Law::Radial,
 };
 const UPPER_LOOK: Look = Look {
     facing: -0.65,
@@ -216,6 +218,7 @@ fn scatter() -> Scatter {
         origin: Point::new(12, -2),
         gap: Some((162..=340, 2)),
         color: chrome::shade(chrome::PURPLE, SCATTER_LEVEL),
+        tones: &[],
         fields: &[UPPER, LOWER],
     }
 }

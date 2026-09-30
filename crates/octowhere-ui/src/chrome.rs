@@ -743,12 +743,20 @@ fontdue_macros::fontdue_font_from_file!(
     chars: " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\u{b0}"
 );
 
-// Only the start-up's BOOT is set in it.
+// The large readings and the labels the design sets in it take capitals, digits and their
+// punctuation.
 fontdue_macros::fontdue_font_from_file!(
     InterferenceBoldFont,
     "../../../assets/KH Interference TRIAL/OTF/KHInterferenceTRIAL-Bold.otf",
     scale: 24.0,
-    chars: "BOT"
+    chars: " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_"
+);
+
+fontdue_macros::fontdue_font_from_file!(
+    FraktionSansLightFont,
+    "../../../assets/PPFraktion-Free for personal use v1.1/Sans/PPFraktionSans-Light.otf",
+    scale: 24.0,
+    chars: " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_"
 );
 
 // Only the identity's title is set in it.
@@ -766,6 +774,7 @@ pub const FONTS: &[&dyn FontRepr] = &[
     &FraktionMonoBoldFont,
     &InterferenceBoldFont,
     &MaratypeFont,
+    &FraktionSansLightFont,
 ];
 /// Indices into [`FONTS`].
 pub const SHAPIRO: usize = 0;
@@ -773,8 +782,9 @@ pub const FRAKTION: usize = 1;
 pub const FRAKTION_BOLD: usize = 2;
 pub const INTERFERENCE_BOLD: usize = 3;
 pub const MARATYPE: usize = 4;
+pub const FRAKTION_SANS_LIGHT: usize = 5;
 
-const fn color_from_rgb(r: u8, g: u8, b: u8) -> Color {
+pub const fn color_from_rgb(r: u8, g: u8, b: u8) -> Color {
     Color::new(
         (r as f64 / 255. * Color::MAX_R as f64) as u8,
         (g as f64 / 255. * Color::MAX_G as f64) as u8,
@@ -824,6 +834,23 @@ pub const DEEP_BLUE: Color = color_from_hex("#000df6");
 /// yellow.
 pub const FAULT_BLUE: Color = color_from_hex("#001dff");
 pub const FAULT_YELLOW: Color = color_from_hex("#ecdb0b");
+/// The compass field's blue noise, from the design's `compass_noise.py`, darkest first: 8-bit
+/// channels, since the field dims them before they become colours (2026-09-30 update).
+pub const COMPASS_NOISE: [(u8, u8, u8); 6] = [
+    (4, 11, 29),
+    (6, 19, 49),
+    (9, 31, 72),
+    (15, 47, 103),
+    (25, 66, 140),
+    (37, 88, 170),
+];
+/// The settings halftone's purples, darkest first: sparse marks take the dark ones and dense
+/// marks the bright (2026-09-30 update).
+pub const HALFTONE: [Color; 3] = [
+    color_from_hex("#180a36"),
+    color_from_hex("#250c54"),
+    color_from_hex("#371374"),
+];
 
 /// `color` dimmed toward black, `level` of 255 of the way from it. The designs' dim marks and
 /// fields are tokens seen this way, not colours of their own.

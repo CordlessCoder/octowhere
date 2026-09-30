@@ -17,8 +17,8 @@ use super::{
     text::style,
 };
 use crate::chrome::{
-    self, Color, CoverageTarget, FRAKTION, FRAKTION_BOLD, FontdueRenderer, OnBackground,
-    RgbColorExt as _, SHAPIRO, Window,
+    self, Color, CoverageTarget, FRAKTION, FRAKTION_BOLD, FontdueRenderer, INTERFERENCE_BOLD,
+    OnBackground, RgbColorExt as _, SHAPIRO, Window,
 };
 
 pub const CENTER: Point = Point::new(233, 233);
@@ -32,28 +32,132 @@ const _: () = assert!(
 pub(crate) const SLAB: Rectangle = Rectangle::new(Point::new(135, 204), Size::new(196, 91));
 /// Where a state's line of text sits between the caption and the slab, centred by its ink. It is
 /// as tall as the tallest such line, `INTERFERENCE`.
-const STATUS_BAND: Rectangle = Rectangle::new(Point::new(0, 179), Size::new(466, 18));
-/// The caption's ink top is row 160, and its antialiased ink reaches its baseline row.
-const CAPTION_BASELINE: i32 = 171;
+const STATUS_BAND: Rectangle = Rectangle::new(Point::new(0, 180), Size::new(466, 18));
+/// The caption's ink top is row 159.
+const CAPTION_BASELINE: i32 = 172;
 /// The largest icon whose corners stay inside the letters' orbit at every heading.
 const ICON: Tile = Tile {
     corner: Point::new(200, 87),
     module: 10,
     padding: 8,
 };
-/// The readout's first pen position and its suffix's, both on their baselines. Heading and
+/// The readout's first pen position on its baseline, which centres the digits' ink in the slab's
+/// rows, and the column the suffix's ink centres on, level with the digits' top. Heading and
 /// calibration share them, so completing a calibration does not move the digits.
-const READOUT: Point = Point::new(143, SLAB.top_left.y + 79);
-const SUFFIX: Point = Point::new(298, SLAB.top_left.y + 43);
+const READOUT: Point = Point::new(142, SLAB.top_left.y + 76);
+const SUFFIX_CENTRE: f32 = 311.5;
+const SUFFIX_BASELINE: i32 = SLAB.top_left.y + 54;
 const TILT_BASELINE: i32 = 327;
 const LETTER_RADIUS: f32 = 172.0;
+/// The entry's fields and HOLD LEVEL's keep off this rectangle.
 const TEXTURE_CLEAR: Rectangle = Rectangle::new(Point::new(126, 153), Size::new(214, 194));
+/// A settled field shows only this far from the panel's centre, and dims further by
+/// `CORE_LEVEL` across the rows and columns the readout stack stands in, bounds exclusive.
+const FIELD_RADIUS: i32 = 229;
+const CORE_COLUMNS: core::ops::Range<i32> = 116..351;
+const CORE_ROWS: core::ops::Range<i32> = 81..344;
+const CORE_LEVEL: f32 = 0.27;
+/// How far a settled field keeps off the foreground's ink.
+const HALO: i32 = 2;
 
+/// The field each state settles on, and how bright each shows it; an entering field shows the
+/// same in proportion to the heading's, as the design's entry is full bright before the heading
+/// settles at 0.62.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TextureKind {
     Blocks,
-    Tiles,
+    Triangles,
     DimBlocks,
+    /// HOLD LEVEL's, kept as approved before the design's palette.
+    Tiles,
+}
+
+impl TextureKind {
+    fn settled(self) -> f32 {
+        match self {
+            Self::Blocks | Self::Tiles => 0.62,
+            Self::Triangles => 0.47,
+            Self::DimBlocks => 0.26,
+        }
+    }
+
+    fn entering(self) -> f32 {
+        self.settled() / Self::Blocks.settled()
+    }
+
+    fn shapes(self) -> &'static [Shape] {
+        match self {
+            Self::Blocks | Self::Tiles => super::compass_texture::HEADING,
+            Self::Triangles => super::compass_texture::CALIBRATION,
+            Self::DimBlocks => super::compass_texture::INTERFERENCE,
+        }
+    }
+}
+
+/// A shape of a settled field: a rectangle's corner, width, height and shade, or a triangle with
+/// 19 px legs on its corner, rising when its right angle is at the bottom right. A shade is 0 for
+/// black, or a palette level from 1 to 5, with 8 added for its highlight.
+#[derive(Clone, Copy, Debug)]
+pub enum Shape {
+    Rect(i16, i16, u8, u8, u8),
+    Triangle(i16, i16, bool, u8),
+}
+
+impl Shape {
+    fn bounds(self) -> Rectangle {
+        match self {
+            Self::Rect(x, y, width, height, _) => Rectangle::new(
+                Point::new(x.into(), y.into()),
+                Size::new(width.into(), height.into()),
+            ),
+            Self::Triangle(x, y, _, _) => {
+                Rectangle::new(Point::new(x.into(), y.into()), Size::new_equal(20))
+            }
+        }
+    }
+
+    fn shade(self) -> u8 {
+        match self {
+            Self::Rect(.., shade) | Self::Triangle(.., shade) => shade,
+        }
+    }
+
+    /// Each row it covers, with its first and last column.
+    fn rows(self) -> impl Iterator<Item = (i32, i32, i32)> {
+        let bounds = self.bounds();
+        let (left, right) = (
+            bounds.top_left.x,
+            bounds.top_left.x + bounds.size.width as i32 - 1,
+        );
+        bounds.rows().map(move |y| match self {
+            Self::Rect(..) => (y, left, right),
+            Self::Triangle(_, _, rising, _) => {
+                let down = y - bounds.top_left.y;
+                if rising {
+                    (y, right - down, right)
+                } else {
+                    (y, left, right - down)
+                }
+            }
+        })
+    }
+}
+
+/// `shade` of the palette, dimmed to `k`, the way the design's float image truncates it.
+fn noise(shade: u8, k: f32) -> Color {
+    if shade == 0 {
+        return chrome::BLACK;
+    }
+    let (r, g, b) = chrome::COMPASS_NOISE[usize::from(shade & 7)];
+    let lift = |c: u8| {
+        if shade & 8 == 0 {
+            c
+        } else {
+            (libm::floorf(f32::from(c) * 1.30) as u8).saturating_add(2)
+        }
+    };
+    let dim = |c: u8| (f32::from(lift(c)) * k) as u8;
+    chrome::color_from_rgb(dim(r), dim(g), dim(b))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -70,7 +174,8 @@ impl Texture {
             return None;
         }
         let kind = match mode {
-            Mode::Calibrating(_) | Mode::HoldLevel => TextureKind::Tiles,
+            Mode::Calibrating(_) => TextureKind::Triangles,
+            Mode::HoldLevel => TextureKind::Tiles,
             Mode::Interference(_) => TextureKind::DimBlocks,
             Mode::Heading(_) => TextureKind::Blocks,
             Mode::NoData => return None,
@@ -78,11 +183,18 @@ impl Texture {
         Some(Self { kind, phase, level })
     }
 
-    fn draw<D: CoverageTarget<Color = Color>>(self, target: &mut D) -> Result<(), D::Error> {
+    fn draw<D: CoverageTarget<Color = Color>>(
+        self,
+        font: &FontdueRenderer<'static, Color>,
+        target: &mut D,
+    ) -> Result<(), D::Error> {
         if self.phase == 2 {
             return Ok(());
         }
-        if self.phase == 3 || self.phase == 5 && self.kind == TextureKind::Tiles {
+        if self.phase == 5 && self.kind != TextureKind::Tiles {
+            return self.draw_settled(font, target);
+        }
+        if self.phase == 3 || self.phase == 5 {
             return self.draw_tiles(target);
         }
         let (count, seed) = match self.phase {
@@ -106,19 +218,21 @@ impl Texture {
             if !texture_place(area) || !target.visible(&area) {
                 continue;
             }
-            let level = match self.kind {
-                TextureKind::Blocks => [36, 52, 70, 88][((n >> 28) & 3) as usize],
-                TextureKind::Tiles => [25, 34, 43, 52][((n >> 28) & 3) as usize],
-                TextureKind::DimBlocks => [14, 20, 26, 32][((n >> 28) & 3) as usize],
+            let index = ((n >> 28) & 3) as u8;
+            let (color, stripe) = if self.kind == TextureKind::Tiles {
+                let level = [25, 34, 43, 52][usize::from(index)];
+                (
+                    chrome::BLACK.lerp(&chrome::BLUE, self.dimmed(level)),
+                    chrome::BLACK.lerp(&chrome::BLUE, self.dimmed(level + 15)),
+                )
+            } else {
+                let k = self.kind.entering() * f32::from(self.level) / 255.0;
+                (noise(index + 1, k), noise((index + 1) | 8, k))
             };
-            let color = chrome::BLACK.lerp(&chrome::BLUE, self.dimmed(level));
             target.fill_solid(&area, color)?;
             if height >= 7 {
-                let stripe = Rectangle::new(Point::new(x, y + 3), Size::new(width as u32, 1));
-                target.fill_solid(
-                    &stripe,
-                    chrome::BLACK.lerp(&chrome::BLUE, self.dimmed(level.saturating_add(15))),
-                )?;
+                let row = Rectangle::new(Point::new(x, y + 3), Size::new(width as u32, 1));
+                target.fill_solid(&row, stripe)?;
             }
         }
         Ok(())
@@ -148,13 +262,15 @@ impl Texture {
                 if n % 100 >= chance {
                     continue;
                 }
-                let base = if self.kind == TextureKind::Tiles {
-                    20
+                let index = ((n >> 28) & 3) as u8;
+                let color = if self.kind == TextureKind::Tiles {
+                    chrome::BLACK.lerp(&chrome::BLUE, self.dimmed(20 + index * 10))
                 } else {
-                    36
+                    noise(
+                        index + 1,
+                        self.kind.entering() * f32::from(self.level) / 255.0,
+                    )
                 };
-                let level = base + ((n >> 28) & 3) as u8 * 10;
-                let color = chrome::BLACK.lerp(&chrome::BLUE, self.dimmed(level));
                 let rising = n & (1 << 19) != 0;
                 for step in 0..4 {
                     let left = if rising { x + step * 4 } else { x };
@@ -170,6 +286,119 @@ impl Texture {
         }
         Ok(())
     }
+}
+
+impl Texture {
+    /// The state's settled field: its shapes in order, each row cut to the field's circle and
+    /// kept off the foreground, and dimmed further in the core.
+    fn draw_settled<D: CoverageTarget<Color = Color>>(
+        self,
+        font: &FontdueRenderer<'static, Color>,
+        target: &mut D,
+    ) -> Result<(), D::Error> {
+        let k = self.kind.settled() * f32::from(self.level) / 255.0;
+        let mut colors = [[chrome::BLACK; 16]; 2];
+        for shade in (1..16).filter(|shade| usize::from(shade & 7) < chrome::COMPASS_NOISE.len()) {
+            colors[0][usize::from(shade)] = noise(shade, k);
+            colors[1][usize::from(shade)] = noise(shade, k * CORE_LEVEL);
+        }
+        let clear = foreground(font);
+        for shape in self.kind.shapes() {
+            if !target.visible(&shape.bounds()) {
+                continue;
+            }
+            let shade = usize::from(shape.shade());
+            for (y, left, right) in shape.rows() {
+                let dy = y - CENTER.y;
+                let row =
+                    Rectangle::new(Point::new(left, y), Size::new((right - left + 1) as u32, 1));
+                if dy.abs() > FIELD_RADIUS || !target.visible(&row) {
+                    continue;
+                }
+                let reach = libm::sqrtf((FIELD_RADIUS * FIELD_RADIUS - dy * dy) as f32) as i32;
+                let (left, right) = (left.max(CENTER.x - reach), right.min(CENTER.x + reach));
+                // Outside the core's rows, the core is empty at column 0, left of the circle.
+                let core = if CORE_ROWS.contains(&y) {
+                    CORE_COLUMNS
+                } else {
+                    0..0
+                };
+                for (from, to) in outside(y, left, right, clear) {
+                    for (from, to, inside) in [
+                        (from, to.min(core.start - 1), 0),
+                        (from.max(core.start), to.min(core.end - 1), 1),
+                        (from.max(core.end), to, 0),
+                    ] {
+                        if from <= to {
+                            let row = Rectangle::new(
+                                Point::new(from, y),
+                                Size::new((to - from + 1) as u32, 1),
+                            );
+                            target.fill_solid(&row, colors[inside][shade])?;
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Where a settled field keeps clear: every part of the foreground that stands still, its ink
+/// grown by the halo. The dial turns, and its ticks and letters are drawn over the field.
+fn foreground(font: &FontdueRenderer<'static, Color>) -> &'static [Rectangle; 9] {
+    static FOREGROUND: embassy_sync::once_lock::OnceLock<[Rectangle; 9]> =
+        embassy_sync::once_lock::OnceLock::new();
+    FOREGROUND.get_or_init(|| {
+        let caption = |mode| {
+            let (text, color) = caption(mode);
+            let style = caption_style(font, color);
+            revealed_bounds(&style, text, caption_pen(&style, text))
+        };
+        let line = |mode| {
+            let status = status(mode).unwrap();
+            let (style, baseline) = status.style(font);
+            revealed_bounds(&style, status.text, status.pen(&style, baseline))
+        };
+        let tilt = tilt_style(font);
+        [
+            ICON.bounds(),
+            SLAB,
+            caption(Mode::Heading(0)),
+            caption(Mode::Calibrating(0)),
+            caption(Mode::NoData),
+            line(Mode::Interference(0)),
+            line(Mode::Calibrating(0)),
+            line(Mode::HoldLevel),
+            centred_bounds(&tilt, "P +00  R +00", CENTER.x, TILT_BASELINE),
+        ]
+        .map(|area| area.offset(HALO))
+    })
+}
+
+/// The pieces of row `y` from `left` to `right`, inclusive, that no rectangle of `clear` covers.
+fn outside(y: i32, left: i32, right: i32, clear: &[Rectangle]) -> heapless::Vec<(i32, i32), 10> {
+    let mut pieces = heapless::Vec::<(i32, i32), 10>::new();
+    if left <= right {
+        _ = pieces.push((left, right));
+    }
+    for area in clear.iter().filter(|area| area.rows().contains(&y)) {
+        let (start, end) = (
+            area.top_left.x,
+            area.top_left.x + area.size.width as i32 - 1,
+        );
+        let mut kept = heapless::Vec::<(i32, i32), 10>::new();
+        for (from, to) in pieces {
+            if from < start {
+                _ = kept.push((from, to.min(start - 1)));
+            }
+            if to > end {
+                _ = kept.push((from.max(end + 1), to));
+            }
+        }
+        pieces = kept;
+    }
+    pieces
 }
 
 fn texture_hash(mut n: u32) -> u32 {
@@ -584,7 +813,7 @@ fn caption_style(
     font: &FontdueRenderer<'static, Color>,
     color: Color,
 ) -> FontdueRenderer<'static, Color> {
-    style(font, color, 16, FRAKTION_BOLD)
+    style(font, color, 18, INTERFERENCE_BOLD)
 }
 
 fn tilt_style(font: &FontdueRenderer<'static, Color>) -> FontdueRenderer<'static, Color> {
@@ -599,11 +828,18 @@ fn letter_style(
 }
 
 fn numerals(font: &FontdueRenderer<'static, Color>) -> FontdueRenderer<'static, Color> {
-    style(font, chrome::BLACK, 86, FRAKTION_BOLD)
+    style(font, chrome::BLACK, 86, INTERFERENCE_BOLD)
 }
 
 fn suffix(font: &FontdueRenderer<'static, Color>) -> FontdueRenderer<'static, Color> {
     style(font, chrome::BLACK, 40, FRAKTION_BOLD)
+}
+
+fn suffix_pen(style: &FontdueRenderer<'static, Color>, unit: &str) -> Point {
+    Point::new(
+        super::text::pen_x_for_ink_centre(style, unit, SUFFIX_CENTRE),
+        SUFFIX_BASELINE,
+    )
 }
 
 pub fn draw<D>(
@@ -617,7 +853,7 @@ where
 {
     let parts = Parts::of(view, accents);
     if let Some(texture) = parts.texture {
-        texture.draw(target)?;
+        texture.draw(font, target)?;
     }
     {
         if let Some((heading, marks)) = parts.dial {
@@ -819,7 +1055,12 @@ fn readout_damage(
         damage.add(SLAB);
         return;
     };
-    suffix(font).glyph_damage((old_unit, SUFFIX), (new_unit, SUFFIX), damage);
+    let suffix = suffix(font);
+    suffix.glyph_damage(
+        (old_unit, suffix_pen(&suffix, old_unit)),
+        (new_unit, suffix_pen(&suffix, new_unit)),
+        damage,
+    );
     numerals(font).glyph_damage((old_digits, READOUT), (new_digits, READOUT), damage);
 }
 
@@ -849,7 +1090,7 @@ struct Status {
 fn status(mode: Mode) -> Option<Status> {
     let (text, color, size, index) = match mode {
         Mode::Interference(_) => ("INTERFERENCE", chrome::ORANGE, 24, FRAKTION_BOLD),
-        Mode::Calibrating(_) => ("TURN ALL WAYS", chrome::GRAY, 19, FRAKTION),
+        Mode::Calibrating(_) => ("TURN ALL WAYS", chrome::GRAY, 20, FRAKTION),
         Mode::HoldLevel => ("HOLD LEVEL", chrome::GRAY, 20, FRAKTION),
         Mode::Heading(_) | Mode::NoData => return None,
     };
@@ -997,7 +1238,8 @@ fn draw_readout<D: CoverageTarget<Color = Color>>(
         Readout::Dashes => numerals.draw_on_baseline(DASHES, dashes_origin(&numerals), slab),
         Readout::Digits(digits, unit) => {
             numerals.draw_on_baseline(digits, READOUT, slab)?;
-            suffix(font).draw_on_baseline(unit, SUFFIX, slab)
+            let suffix = suffix(font);
+            suffix.draw_on_baseline(unit, suffix_pen(&suffix, unit), slab)
         }
     }
 }
@@ -1055,7 +1297,7 @@ mod tests {
         );
         assert_eq!(
             Texture::of(Mode::Calibrating(0), full, 255),
-            Texture::of(Mode::HoldLevel, full, 255)
+            Texture::of(Mode::Calibrating(99), full, 255)
         );
         assert_eq!(Texture::of(Mode::NoData, full, 255), None);
         assert_eq!(
@@ -1099,7 +1341,7 @@ mod tests {
             ("100", "%"),
         ] {
             let ink = numerals.baseline_bounds(digits, READOUT);
-            let mark = suffix.baseline_bounds(unit, SUFFIX);
+            let mark = suffix.baseline_bounds(unit, suffix_pen(&suffix, unit));
             assert!(!mark.is_zero_sized(), "{unit} has no glyph");
             assert!(
                 inside(ink, SLAB),

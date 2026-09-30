@@ -12,13 +12,13 @@ use super::{
     clock_screen,
     icon::{self, Glyph, Tile},
     reveal::{Reveal, draw_revealed, revealed_bounds},
-    scatter::{Field, Look, Scatter},
+    scatter::{Field, Law, Look, Scatter},
     screens::PeripheralState,
     text::{self, style},
 };
 use crate::chrome::{
-    self, Color, CoverageTarget, FRAKTION, FRAKTION_BOLD, FontdueRenderer, OnBackground, SHAPIRO,
-    Window,
+    self, Color, CoverageTarget, FRAKTION, FRAKTION_BOLD, FontdueRenderer, INTERFERENCE_BOLD,
+    OnBackground, SHAPIRO, Window,
 };
 
 /// Distance between the two complete pages during a sideways drag.
@@ -36,38 +36,38 @@ const MARKERS_LEFT: i32 = 221;
 const MARKER_PITCH: i32 = 16;
 pub const HINT: &str = "DRAG UP TO CLOSE";
 const HINT_TOP: i32 = 406;
+/// The S1 prototype's halftone (`settings_study.py`): an 8 px grid inside radius 219, dense in
+/// two lobes beside the rows and sparse elsewhere, and none over the title, the hint or the
+/// rows' block. Its marks' purples brighten with the density.
 const SCATTER: Scatter = Scatter {
-    origin: Point::new(24, 10),
+    origin: Point::new(24, 24),
     gap: None,
     color: chrome::PURPLE,
-    fields: &[
-        Field {
-            center: Point::new(35, 180),
-            radius: 220.0,
-            seed: 0x53_31_4c,
+    tones: &chrome::HALFTONE,
+    fields: &[Field {
+        center: Point::new(236, 236),
+        radius: 219.0,
+        seed: 0x53_31_4c,
+        law: Law::Lobes {
+            lobes: &[
+                Rectangle::new(Point::new(0, 91), Size::new(80, 127)),
+                Rectangle::new(Point::new(387, 245), Size::new(79, 125)),
+            ],
+            quiet: 0.09,
+            peak: 0.43,
         },
-        Field {
-            center: Point::new(430, 304),
-            radius: 220.0,
-            seed: 0x53_31_52,
-        },
-    ],
+    }],
 };
-const SCATTER_LOOKS: [Look; 2] = [
-    Look {
-        facing: 3.0,
-        density: 0.8,
-    },
-    Look {
-        facing: 0.0,
-        density: 0.8,
-    },
-];
-/// The title and the hint stay clear. The cells do not: they are drawn over the scatter, which
-/// shows through them as they scroll, so a clear edge there would show.
-const SCATTER_CLEAR: [Rectangle; 2] = [
-    Rectangle::new(Point::new(102, 0), Size::new(262, 83)),
-    Rectangle::new(Point::new(112, 371), Size::new(242, 70)),
+const SCATTER_LOOK: Look = Look {
+    facing: 0.0,
+    density: 1.0,
+};
+/// No mark's top-left may lie over the title, the hint or the rows' block; a mark is left out
+/// when it meets one of these.
+const SCATTER_CLEAR: [Rectangle; 3] = [
+    Rectangle::new(Point::new(109, 0), Size::new(254, 83)),
+    Rectangle::new(Point::new(118, 376), Size::new(236, 90)),
+    Rectangle::new(Point::new(85, 88), Size::new(302, 283)),
 ];
 
 pub const ZONE: Glyph = [0b11011, 0b10001, 0b00100, 0b10001, 0b11011];
@@ -346,7 +346,7 @@ fn index_style(font: &FontdueRenderer<'static, Color>) -> FontdueRenderer<'stati
 }
 
 fn name_style(font: &FontdueRenderer<'static, Color>) -> FontdueRenderer<'static, Color> {
-    style(font, chrome::WHITE, 19, FRAKTION_BOLD)
+    style(font, chrome::WHITE, 20, INTERFERENCE_BOLD)
 }
 
 fn value_style(
@@ -492,21 +492,14 @@ fn draw_rules<D: CoverageTarget<Color = Color>>(
     Ok(())
 }
 
-fn scatter() -> Scatter {
-    Scatter {
-        color: chrome::shade(chrome::PURPLE, 100),
-        ..SCATTER
-    }
-}
-
 /// The scatter's looks at its bloom and breath: the bloom eases in, as the clock face's does.
-fn scatter_looks(accents: &Accents) -> [Look; 2] {
+fn scatter_looks(accents: &Accents) -> [Look; 1] {
     let bloom = f32::from(accents.scatter) / 255.0;
     let k = bloom * bloom * f32::from(accents.breath) / 255.0;
-    SCATTER_LOOKS.map(|look| Look {
-        density: look.density * k,
-        ..look
-    })
+    [Look {
+        density: SCATTER_LOOK.density * k,
+        ..SCATTER_LOOK
+    }]
 }
 
 /// The scatter the panel and the screens it opens share, at `accents`' bloom and breath.
@@ -514,14 +507,13 @@ pub fn draw_scatter<D: CoverageTarget<Color = Color>>(
     accents: &Accents,
     target: &mut D,
 ) -> Result<(), D::Error> {
-    scatter().draw_clear_of(&scatter_looks(accents), &SCATTER_CLEAR, target)
+    SCATTER.draw_clear_of(&scatter_looks(accents), &SCATTER_CLEAR, target)
 }
 
 /// Marks the scatter's marks that differ between `before` and `after`.
 pub fn scatter_damage(before: &Accents, after: &Accents, damage: &mut chrome::Dirty) {
-    let scatter = scatter();
-    let shown = |accents| scatter.shown_clear_of(&scatter_looks(accents), &SCATTER_CLEAR);
-    scatter.changed(&shown(before), &shown(after), damage);
+    let shown = |accents| SCATTER.shown_clear_of(&scatter_looks(accents), &SCATTER_CLEAR);
+    SCATTER.changed(&shown(before), &shown(after), damage);
 }
 
 pub fn draw<D: CoverageTarget<Color = Color>>(

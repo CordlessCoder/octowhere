@@ -18,21 +18,24 @@ use super::{
     clock::{ClockState, ClockView, DateTime, ZoneMode, ZoneState},
     icon::{self, Glyph, Tile},
     reveal::{Reveal, draw_revealed, revealed_bounds},
-    scatter::{Field, Look, Scatter},
+    scatter::{Field, Law, Look, Scatter},
     screens::Battery,
     text,
 };
 use crate::chrome::{
-    self, Color, CoverageTarget, FRAKTION, FRAKTION_BOLD, FontdueRenderer, OnBackground, SHAPIRO,
+    self, Color, CoverageTarget, FRAKTION, FRAKTION_BOLD, FRAKTION_SANS_LIGHT, FontdueRenderer,
+    INTERFERENCE_BOLD, OnBackground, SHAPIRO,
 };
 
 const CENTER: Point = Point::new(233, 233);
 const DIGITS_PX: u32 = 136;
+/// The pens that centre the digits' ink on columns 103 and 185, and the seconds' on 401 and
+/// 425, in KH or in the withheld time's Mono dashes.
 const HOURS: Point = Point::new(62, 184);
 const MINUTES: Point = Point::new(62, 305);
-const SECONDS: Point = Point::new(388, 244);
+const SECONDS: Point = Point::new(389, 244);
 const SECONDS_PX: u32 = 40;
-const LABEL: Point = Point::new(261, 225);
+const LABEL: Point = Point::new(262, 225);
 const TILE: Tile = Tile {
     corner: Point::new(262, 90),
     module: 16,
@@ -49,16 +52,15 @@ const BAND: Rectangle = Rectangle::new(Point::new(0, 198), Size::new(466, 120));
 const HOURS_INK: Rectangle = Rectangle::new(Point::new(62, 88), Size::new(166, 99));
 const MINUTES_INK: Rectangle = Rectangle::new(Point::new(62, 209), Size::new(166, 99));
 const SECONDS_INK: Rectangle = Rectangle::new(Point::new(388, 215), Size::new(50, 31));
-const LABEL_INK: Rectangle = Rectangle::new(Point::new(260, 211), Size::new(70, 19));
+const LABEL_INK: Rectangle = Rectangle::new(Point::new(260, 211), Size::new(80, 19));
 const NO_DATA_INK: Rectangle = Rectangle::new(Point::new(70, 245), Size::new(163, 24));
 /// `NO DATA`'s ink starts on the digits' ink column, centred on this row.
 const NO_DATA_LEFT: i32 = 71;
 const NO_DATA_MIDDLE_TWICE: i32 = 515;
-/// The band's two lines, UTC and the battery, by their caps' tops, and the region either's ink
-/// and reveal blocks can reach.
-const BAND_LINES: [i32; 2] = [238, 256];
+/// The band's two lines, UTC and the battery, by their baselines, their pen, and the region either's ink and reveal blocks can reach.
+const BAND_LINES: [i32; 2] = [248, 266];
 const BAND_LINE_LEFT: i32 = 262;
-const BAND_LINES_INK: Rectangle = Rectangle::new(Point::new(260, 234), Size::new(104, 36));
+const BAND_LINES_INK: Rectangle = Rectangle::new(Point::new(260, 234), Size::new(110, 36));
 /// The battery gauge under the band lines: a black well, and the fill inset three, from the
 /// left. No outline: the black keeps a fill in the band's colour apart from the band.
 const WELL: Rectangle = Rectangle::new(Point::new(262, 281), Size::new(178, 30));
@@ -90,11 +92,13 @@ const UPPER: Field = Field {
     center: Point::new(304, 139),
     radius: 220.0,
     seed: 0x6f63_6b31,
+    law: Law::Radial,
 };
 const LOWER: Field = Field {
     center: Point::new(164, 363),
     radius: 178.0,
     seed: 0x6f63_6b32,
+    law: Law::Radial,
 };
 const UPPER_LOOK: Look = Look {
     facing: -0.60,
@@ -736,6 +740,7 @@ fn scatter() -> Scatter {
         origin: Point::new(12, -2),
         gap: Some((193..=322, 0)),
         color: chrome::shade(chrome::PURPLE, SCATTER_LEVEL),
+        tones: &[],
         fields: &[UPPER, LOWER],
     }
 }
@@ -767,16 +772,50 @@ pub(crate) fn style(
     style
 }
 
-fn digits(font: &FontdueRenderer<'static, Color>, color: Color) -> FontdueRenderer<'static, Color> {
-    style(font, color, DIGITS_PX, FRAKTION_BOLD)
+fn withheld(digits: &str) -> bool {
+    digits.starts_with('-')
 }
 
-fn seconds_style(font: &FontdueRenderer<'static, Color>) -> FontdueRenderer<'static, Color> {
-    style(font, chrome::BLACK, SECONDS_PX, FRAKTION_BOLD)
+/// The style and pen for a pair of digits at `pen`, `size` px: KH, or Mono for the dashes of a
+/// withheld time.
+fn placed_digits(
+    font: &FontdueRenderer<'static, Color>,
+    color: Color,
+    size: u32,
+    digits: &str,
+    pen: Point,
+) -> (FontdueRenderer<'static, Color>, Point) {
+    let face = if withheld(digits) {
+        FRAKTION_BOLD
+    } else {
+        INTERFERENCE_BOLD
+    };
+    (style(font, color, size, face), pen)
+}
+
+fn hours(
+    font: &FontdueRenderer<'static, Color>,
+    digits: &str,
+) -> (FontdueRenderer<'static, Color>, Point) {
+    placed_digits(font, chrome::WHITE, DIGITS_PX, digits, HOURS)
+}
+
+fn minutes(
+    font: &FontdueRenderer<'static, Color>,
+    digits: &str,
+) -> (FontdueRenderer<'static, Color>, Point) {
+    placed_digits(font, chrome::BLACK, DIGITS_PX, digits, MINUTES)
+}
+
+fn seconds(
+    font: &FontdueRenderer<'static, Color>,
+    digits: &str,
+) -> (FontdueRenderer<'static, Color>, Point) {
+    placed_digits(font, chrome::BLACK, SECONDS_PX, digits, SECONDS)
 }
 
 fn label_style(font: &FontdueRenderer<'static, Color>) -> FontdueRenderer<'static, Color> {
-    style(font, chrome::BLACK, 16, FRAKTION_BOLD)
+    style(font, chrome::BLACK, 18, INTERFERENCE_BOLD)
 }
 
 pub(crate) fn no_data_style(
@@ -805,15 +844,10 @@ where
     if let Some(bloom) = parts.scatter {
         scatter().draw_clear_of(&looks(bloom), &parts.clear(), target)?;
     }
-    if let Some(hours) = parts.hours.as_ref().filter(|_| target.visible(&HOURS_INK)) {
+    if let Some(digits) = parts.hours.as_ref().filter(|_| target.visible(&HOURS_INK)) {
         let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
-        draw_revealed(
-            &digits(font, chrome::WHITE),
-            hours,
-            HOURS,
-            parts.time.part(0, 2),
-            field,
-        )?;
+        let (style, pen) = hours(font, digits);
+        draw_revealed(&style, digits, pen, parts.time.part(0, 2), field)?;
     }
     let (glyph, color, rows) = parts.icon;
     if target.visible(&TILE.bounds()) {
@@ -828,14 +862,9 @@ where
             draw_revealed(&label_style(font), label, LABEL, reveal, band)?;
         }
         match &parts.minutes {
-            Some(minutes) if band.visible(&MINUTES_INK) => {
-                draw_revealed(
-                    &digits(font, chrome::BLACK),
-                    minutes,
-                    MINUTES,
-                    parts.time.part(2, 2),
-                    band,
-                )?;
+            Some(digits) if band.visible(&MINUTES_INK) => {
+                let (style, pen) = minutes(font, digits);
+                draw_revealed(&style, digits, pen, parts.time.part(2, 2), band)?;
             }
             Some(_) => {}
             None if band.visible(&NO_DATA_INK) => {
@@ -843,18 +872,13 @@ where
             }
             None => {}
         }
-        if let Some(seconds) = parts
+        if let Some(digits) = parts
             .seconds
             .as_ref()
             .filter(|_| band.visible(&SECONDS_INK))
         {
-            draw_revealed(
-                &seconds_style(font),
-                seconds,
-                SECONDS,
-                parts.time.part(4, 2),
-                band,
-            )?;
+            let (style, pen) = seconds(font, digits);
+            draw_revealed(&style, digits, pen, parts.time.part(4, 2), band)?;
         }
         if let Some(lines) = parts
             .band_lines
@@ -862,8 +886,8 @@ where
             .filter(|_| band.visible(&BAND_LINES_INK))
         {
             let style = band_line_style(font);
-            for ((text, reveal), top) in lines.iter().zip(BAND_LINES) {
-                draw_revealed(&style, text, band_line_pen(&style, top), *reveal, band)?;
+            for ((text, reveal), baseline) in lines.iter().zip(BAND_LINES) {
+                draw_revealed(&style, text, band_line_pen(baseline), *reveal, band)?;
             }
         }
     }
@@ -886,11 +910,11 @@ where
 }
 
 fn band_line_style(font: &FontdueRenderer<'static, Color>) -> FontdueRenderer<'static, Color> {
-    style(font, chrome::BLACK, 14, FRAKTION)
+    style(font, chrome::BLACK, 16, FRAKTION_SANS_LIGHT)
 }
 
-fn band_line_pen(style: &FontdueRenderer<'static, Color>, top: i32) -> Point {
-    Point::new(BAND_LINE_LEFT, top + text::cap(style))
+fn band_line_pen(baseline: i32) -> Point {
+    Point::new(BAND_LINE_LEFT, baseline)
 }
 
 fn draw_gauge<D: CoverageTarget<Color = Color>>(
@@ -970,25 +994,31 @@ fn draw_rail<D: CoverageTarget<Color = Color>>(
     Ok(())
 }
 
-fn text(digits: &Option<String<2>>) -> &str {
-    digits.as_ref().map_or("", String::as_str)
-}
+type Place = fn(&FontdueRenderer<'static, Color>, &str) -> (FontdueRenderer<'static, Color>, Point);
 
 /// Marks what changed in a pair of digits: each changed glyph on a tick, or every cell either
-/// shows while its reveal moves.
+/// shows while its reveal moves or it changes face.
 fn digit_damage(
-    style: &FontdueRenderer<'static, Color>,
-    pen: Point,
+    font: &FontdueRenderer<'static, Color>,
+    place: Place,
     (old, old_reveal): (&Option<String<2>>, Reveal),
     (new, new_reveal): (&Option<String<2>>, Reveal),
     damage: &mut chrome::Dirty,
 ) {
-    if old_reveal != new_reveal {
-        for digits in [old, new].into_iter().flatten() {
-            damage.add(revealed_bounds(style, digits, pen));
-        }
-    } else if old != new {
-        style.glyph_damage((text(old), pen), (text(new), pen), damage);
+    if old == new && old_reveal == new_reveal {
+        return;
+    }
+    if let (Some(old), Some(new)) = (old, new)
+        && old_reveal == new_reveal
+        && withheld(old) == withheld(new)
+    {
+        let (style, pen) = place(font, old);
+        style.glyph_damage((old, pen), (new, pen), damage);
+        return;
+    }
+    for digits in [old, new].into_iter().flatten() {
+        let (style, pen) = place(font, digits);
+        damage.add(revealed_bounds(&style, digits, pen));
     }
 }
 
@@ -1043,10 +1073,9 @@ pub fn damage(
     if old.band != new.band {
         damage.add(BAND);
     }
-    let white = digits(font, chrome::WHITE);
     digit_damage(
-        &white,
-        HOURS,
+        font,
+        hours,
         (&old.hours, old.time.part(0, 2)),
         (&new.hours, new.time.part(0, 2)),
         damage,
@@ -1069,18 +1098,16 @@ pub fn damage(
         damage.add(MINUTES_INK);
         damage.add(NO_DATA_INK);
     }
-    let black = digits(font, chrome::BLACK);
     digit_damage(
-        &black,
-        MINUTES,
+        font,
+        minutes,
         (&old.minutes, old.time.part(2, 2)),
         (&new.minutes, new.time.part(2, 2)),
         damage,
     );
-    let seconds = seconds_style(font);
     digit_damage(
-        &seconds,
-        SECONDS,
+        font,
+        seconds,
         (&old.seconds, old.time.part(4, 2)),
         (&new.seconds, new.time.part(4, 2)),
         damage,
@@ -1088,8 +1115,8 @@ pub fn damage(
     if old.band_lines != new.band_lines {
         let style = band_line_style(font);
         for lines in [&old.band_lines, &new.band_lines].into_iter().flatten() {
-            for ((text, _), top) in lines.iter().zip(BAND_LINES) {
-                damage.add(revealed_bounds(&style, text, band_line_pen(&style, top)));
+            for ((text, _), baseline) in lines.iter().zip(BAND_LINES) {
+                damage.add(revealed_bounds(&style, text, band_line_pen(baseline)));
             }
         }
     }
@@ -1182,7 +1209,8 @@ mod tests {
         );
         const DIGITS: &str = "0123456789-";
         const TEXT: &str = "0123456789-+:ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-        // Each character repeated to the line's longest, since every font here is monospaced.
+        // Each character repeated to the line's longest, since the digits and label are set in
+        // monospaced faces.
         let check =
             |name: &str,
              region: Rectangle,
@@ -1199,14 +1227,12 @@ mod tests {
                     );
                 }
             };
-        check("hours", HOURS_INK, DIGITS, 2, &|_| {
-            (digits(&font, chrome::WHITE), HOURS)
+        check("hours", HOURS_INK, DIGITS, 2, &|text| hours(&font, text));
+        check("minutes", MINUTES_INK, DIGITS, 2, &|text| {
+            minutes(&font, text)
         });
-        check("minutes", MINUTES_INK, DIGITS, 2, &|_| {
-            (digits(&font, chrome::BLACK), MINUTES)
-        });
-        check("seconds", SECONDS_INK, DIGITS, 2, &|_| {
-            (seconds_style(&font), SECONDS)
+        check("seconds", SECONDS_INK, DIGITS, 2, &|text| {
+            seconds(&font, text)
         });
         let longest = [
             Mode::NoData,
@@ -1221,11 +1247,23 @@ mod tests {
         check("label", LABEL_INK, TEXT, longest, &|_| {
             (label_style(&font), LABEL)
         });
+        // Sans is proportional, so the band lines are checked with every value they can hold.
         let band_line = band_line_style(&font);
-        for top in BAND_LINES {
-            check("band line", BAND_LINES_INK, TEXT, 12, &|_| {
-                (band_line.clone(), band_line_pen(&band_line, top))
-            });
+        let mut lines: std::vec::Vec<std::string::String> =
+            ["UTC --:--", "BAT --", "USB"].map(Into::into).to_vec();
+        for d in '0'..='9' {
+            lines.push(format!("UTC {d}{d}:{d}{d}"));
+            lines.push(format!("BAT {d}{d}% CHG"));
+        }
+        lines.push("BAT 100% CHG".into());
+        for text in &lines {
+            for baseline in BAND_LINES {
+                let bounds = revealed_bounds(&band_line, text, band_line_pen(baseline));
+                assert!(
+                    inside(BAND_LINES_INK, bounds),
+                    "band line {text:?} at {bounds:?} leaves {BAND_LINES_INK:?}"
+                );
+            }
         }
         let no_data = no_data_style(&font).baseline_bounds("NO DATA", no_data_origin(&font));
         assert!(inside(NO_DATA_INK, no_data), "NO DATA at {no_data:?}");

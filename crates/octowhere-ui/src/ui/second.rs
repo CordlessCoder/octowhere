@@ -21,7 +21,8 @@ use super::{
     text::{self, style},
 };
 use crate::chrome::{
-    self, Color, CoverageTarget, FRAKTION, FRAKTION_BOLD, FontdueRenderer, OnBackground, Window,
+    self, Color, CoverageTarget, FRAKTION, FRAKTION_BOLD, FontdueRenderer, INTERFERENCE_BOLD,
+    OnBackground, Window,
 };
 
 const CENTER: Point = Point::new(233, 233);
@@ -439,7 +440,7 @@ impl Brightness {
         let percent = panel::percent(self.level);
         let mut level = String::<4>::new();
         _ = write!(level, "{percent}%");
-        let big = style(font, chrome::BLACK, 54, FRAKTION_BOLD);
+        let big = style(font, chrome::BLACK, 54, INTERFERENCE_BOLD);
         let pen = Point::new(
             text::pen_x_for_ink_left(&big, &level, TEXT_LEFT),
             text::baseline_for_ink_middle(&big, &level, 228.0),
@@ -867,7 +868,7 @@ impl Stepper {
         } else {
             43
         };
-        let big = style(font, chrome::BLACK, size, FRAKTION_BOLD);
+        let big = style(font, chrome::BLACK, size, INTERFERENCE_BOLD);
         let pen = Point::new(
             text::pen_x_for_ink_left(&big, &chosen, TEXT_LEFT),
             text::baseline_for_ink_middle(&big, &chosen, CHOICE_MIDDLE),
