@@ -663,6 +663,7 @@ that changed redraw. Measured on the device, per frame:
 | Compass, tilt changes by a degree, before C1 | 1.7 ms |
 | Compass, a step of the dial sweep, before C1 | 7–12 ms |
 | Compass, heading changes by a degree, before C1 | about 13 ms |
+| Compass, heading changes by a degree, over the design's field (2026-09-30) | 14.0 ms median, 16.7 ms p90; 10.8 and 14.3 ms over the field before it |
 | Clock drawn in full | about 20 ms, at most 25 ms |
 | Compass drawn in full, before C1 | 13–23 ms |
 | C1 compass heading, full | 22.857 ms median |
