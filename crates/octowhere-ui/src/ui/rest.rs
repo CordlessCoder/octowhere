@@ -88,6 +88,9 @@ pub const WAKE_FADE: Micros = 250_000;
 /// display-on. A wake from off starts the page's entry and the fade up after it, so neither
 /// runs on a dark panel.
 pub const PANEL_WAKE: Micros = 140_000;
+/// A resting screen wakes on a second tap within this long of the first. The controller reports
+/// a double tap as two taps, about 130 to 190 ms apart.
+pub const DOUBLE_TAP: Micros = 400_000;
 /// A heading change of more than this, in tenths of a degree since the timer last restarted,
 /// restarts it while the compass shows.
 pub const HEADING_RESTART: u16 = 100;

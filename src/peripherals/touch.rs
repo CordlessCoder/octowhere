@@ -8,6 +8,10 @@ const CST9220_CHIP_ID: u16 = 0x9220;
 const CST9217_CHIP_ID: u16 = 0x9217;
 
 const REG_READ: u16 = 0xD000;
+/// Written before each mode command; a read of `REG_COMMAND_ECHO` then answers `0x1E`.
+const REG_COMMAND: u16 = 0xD11E;
+const REG_COMMAND_ECHO: u16 = 0x0002;
+const REG_GESTURE_MODE: u16 = 0xD104;
 const REG_DEBUG_MODE: u16 = 0xD101;
 const REG_SLEEP_MODE: u16 = 0xD105;
 const REG_DIS_LOW_POWER_SCAN_MODE: u16 = 0xD106;
@@ -33,8 +37,6 @@ const PROGRAM_PAGE_SIZE: u8 = 128;
 const READ_BUF_SIZE: usize = MAX_FINGER_NUM * 5 + 5;
 
 const ACK_VALUE: u8 = 0xAB;
-
-// TODO: Impl Lpscan mode
 
 #[repr(u8)]
 #[derive(Debug, Clone, Copy)]
@@ -123,6 +125,8 @@ pub struct TouchPoint {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TouchData {
     CoverGesture,
+    /// A gesture the controller recognised, reported alone while it is in gesture mode.
+    Gesture(Gesture),
     Points(heapless::Vec<TouchPoint, 2, u8>),
     /// The finger lifted, last found here. This is the position of the controller's last
     /// report, which a missed read leaves newer than the last one read.
@@ -131,6 +135,31 @@ pub enum TouchData {
     /// last read left. Whatever the last report said still holds.
     Stale,
 }
+/// The gestures the controller reports, in panel terms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Gesture {
+    Tap,
+    SwipeLeft,
+    SwipeRight,
+    SwipeUp,
+    SwipeDown,
+}
+
+impl Gesture {
+    /// A lift report's byte 4, which carries the gesture in gesture mode. A double tap comes as
+    /// two taps.
+    fn from_code(code: u8) -> Option<Self> {
+        match code & 0x70 {
+            0x10 => Some(Gesture::Tap),
+            0x30 => Some(Gesture::SwipeLeft),
+            0x40 => Some(Gesture::SwipeDown),
+            0x50 => Some(Gesture::SwipeRight),
+            0x60 => Some(Gesture::SwipeUp),
+            _ => None,
+        }
+    }
+}
+
 impl Default for TouchData {
     fn default() -> Self {
         TouchData::Points(heapless::Vec::new())
@@ -189,6 +218,9 @@ impl<I: I2c, RST, INT, DELAY> Cst9217<I, INT, RST, DELAY> {
         self.i2c.write(self.addr, &ack).await?;
         match report_kind(&buf) {
             Report::Stale => return Ok(TouchData::Stale),
+            Report::Lifted if let Some(gesture) = Gesture::from_code(buf[4]) => {
+                return Ok(TouchData::Gesture(gesture));
+            }
             Report::Lifted => {
                 let (_, _, mut point) = decode_point(&buf, 0);
                 self.config.apply(self.width, self.height, &mut point);
@@ -233,6 +265,53 @@ impl<I: I2c, RST: OutputPin, INT, DELAY: embedded_hal_async::delay::DelayNs>
 {
     pub async fn init(&mut self) -> Result<(), Cst9217Error<I::Error, RST::Error>> {
         self.delay.delay_ms(CST9217_POWER_ON_SETTLE_MS).await;
+        self.start().await
+    }
+
+    /// Has the controller report only the gestures it recognises, one INT pulse each, instead
+    /// of every contact. [`Self::leave_gesture_mode`] undoes it.
+    pub async fn enter_gesture_mode(&mut self) -> Result<(), I::Error> {
+        // From the debug mode `start` leaves it in, gesture mode goes on reporting contacts.
+        self.command(REG_NORMAL_MODE).await?;
+        self.command(REG_GESTURE_MODE).await
+    }
+
+    /// Resets the controller, since no mode command leaves gesture mode, and starts it as `init`
+    /// does. Normal mode is not used after: it ends some reads early, and debug mode does not.
+    pub async fn leave_gesture_mode(&mut self) -> Result<(), Cst9217Error<I::Error, RST::Error>> {
+        self.reset().await.map_err(Cst9217Error::ResetError)?;
+        self.start().await
+    }
+
+    /// Sends a mode command, after the exchange Hynitron's driver makes before each one. The
+    /// command goes even if the exchange is not answered, as that driver's does.
+    async fn command(&mut self, command: u16) -> Result<(), I::Error> {
+        for _ in 0..3 {
+            if self
+                .i2c
+                .write(self.addr, &REG_COMMAND.to_be_bytes())
+                .await
+                .is_err()
+            {
+                self.delay.delay_ms(1).await;
+                continue;
+            }
+            self.delay.delay_ms(1).await;
+            let mut echo = [0u8; 2];
+            let answered = self
+                .i2c
+                .write_read(self.addr, &REG_COMMAND_ECHO.to_be_bytes(), &mut echo)
+                .await;
+            if answered.is_ok() && echo[1] == 0x1E {
+                break;
+            }
+        }
+        self.i2c.write(self.addr, &command.to_be_bytes()).await
+    }
+
+    /// Puts the controller in the debug mode every read so far has been made in, and reads its
+    /// resolution and firmware.
+    async fn start(&mut self) -> Result<(), Cst9217Error<I::Error, RST::Error>> {
         if i2c_helper::write_wide_reg(&mut self.i2c, self.addr, REG_DEBUG_MODE, 0x01)
             .await
             .is_err()
@@ -330,7 +409,8 @@ impl<I: I2c, RST, INT: Wait, DELAY> Cst9217<I, INT, RST, DELAY> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CST92XX_ACK, Cst9217Config, READ_BUF_SIZE, Report, TouchPoint, decode_point, report_kind,
+        CST92XX_ACK, Cst9217Config, Gesture, READ_BUF_SIZE, Report, TouchPoint, decode_point,
+        report_kind,
     };
     use embedded_hal::digital::OutputPin;
     use embedded_hal_async::{
@@ -483,6 +563,20 @@ mod tests {
             decode_point(&report, 0),
             (0, 0, TouchPoint { x: 0xba, y: 0xe5 })
         );
+    }
+
+    #[test]
+    fn a_gesture_comes_in_a_lift_report() {
+        let mut report = [
+            0x00, 0x0b, 0x10, 0x79, 0x10, 0x01, 0xab, 0x10, 0x00, 0x00, 0x3c, 0x00, 0xab, 0x80,
+            0x00,
+        ];
+        assert_eq!(report_kind(&report), Report::Lifted);
+        assert_eq!(Gesture::from_code(report[4]), Some(Gesture::Tap));
+        report[4] = 0x30;
+        assert_eq!(Gesture::from_code(report[4]), Some(Gesture::SwipeLeft));
+        report[4] = 0x00;
+        assert_eq!(Gesture::from_code(report[4]), None);
     }
 
     #[test]

@@ -64,7 +64,7 @@ use octowhere::{
         magnetometer::{Bmm350, MagnetometerError},
         power::{Axp2101Error, Axp2101Power, PowerKey},
         rtc::{DateTime as RtcDateTime, Pcf85063aRtc, RtcError},
-        touch::{Cst9217, Cst9217Config, Cst9217Error, TouchData},
+        touch::{Cst9217, Cst9217Config, Cst9217Error, Gesture, TouchData},
     },
     settings::{self, Store},
     tz::{self, DATABASE},
@@ -74,6 +74,7 @@ use octowhere::{
         second::choice_label,
         stage::{
             Input as StageInput, Key as StageKey, Motion, Sensors, Stage, Store as Choice, Touch,
+            TouchGesture,
         },
         startup::{Outcome, Part, Report},
     },
@@ -245,6 +246,9 @@ static ZONE_STATE: BlockingMutex<CriticalSectionRawMutex, Cell<ZoneState>> =
     }));
 /// Asks `touch_task` to read the controller without waiting for its report.
 static TOUCH_POLL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+/// Whether the stage wants the controller in gesture mode, reporting only the gestures that can
+/// wake a resting screen, from the frame loop for `touch_task`.
+static TOUCH_WAKE_GESTURES: Signal<CriticalSectionRawMutex, bool> = Signal::new();
 /// Reads of the touch controller the frame loop has not taken, oldest first: see
 /// [`put_touch_read`].
 static TOUCH_READS: BlockingMutex<CriticalSectionRawMutex, RefCell<heapless::Deque<TouchRead, 2>>> =
@@ -257,7 +261,10 @@ type TouchRead = Result<TouchData, ()>;
 fn is_report(read: &TouchRead) -> bool {
     matches!(
         read,
-        Ok(TouchData::Points(_) | TouchData::Lifted(_) | TouchData::CoverGesture)
+        Ok(TouchData::Points(_)
+            | TouchData::Lifted(_)
+            | TouchData::Gesture(_)
+            | TouchData::CoverGesture)
     )
 }
 
@@ -1294,12 +1301,46 @@ async fn zone_task(mut zones: ZoneTracker) {
 }
 
 /// Reads the touch controller when it signals a report, or when the frame loop asks through
-/// `TOUCH_POLL`, and queues each read for the frame loop.
+/// `TOUCH_POLL`, and queues each read for the frame loop. Puts the controller in and out of
+/// gesture mode as `TOUCH_WAKE_GESTURES` asks, trying again each second until it switches.
 #[embassy_executor::task]
 async fn touch_task(mut touch: TouchDriver) {
+    const RETRY: Duration = Duration::from_secs(1);
+    let mut gestures = false;
+    let mut wanted = false;
     loop {
-        if let Either::First(Err(_)) = select(touch.wait_for_touch(), TOUCH_POLL.wait()).await {
-            continue;
+        if gestures != wanted {
+            let switched = if wanted {
+                touch.enter_gesture_mode().await.is_ok()
+            } else {
+                touch.leave_gesture_mode().await.is_ok()
+            };
+            if switched {
+                gestures = wanted;
+            } else {
+                warn!("[TOUCH] switching gesture mode to {} failed", wanted);
+            }
+        }
+        let retry = async {
+            if gestures == wanted {
+                core::future::pending::<()>().await;
+            }
+            Timer::after(RETRY).await;
+        };
+        match select4(
+            touch.wait_for_touch(),
+            TOUCH_POLL.wait(),
+            TOUCH_WAKE_GESTURES.wait(),
+            retry,
+        )
+        .await
+        {
+            Either4::First(Err(_)) | Either4::Fourth(()) => continue,
+            Either4::Third(asked) => {
+                wanted = asked;
+                continue;
+            }
+            Either4::First(Ok(())) | Either4::Second(()) => {}
         }
         let read = touch.read_touch_data().await.map_err(|_| ());
         // A poll asked for while this read ran is answered by it.
@@ -2212,6 +2253,7 @@ async fn frame_loop(
     #[cfg(feature = "damage-debug")]
     let mut outlined = Dirty::new();
     let mut last_touch_poll = Instant::now();
+    let mut asked_wake_gestures = false;
     const TOUCH_REPOLL: Duration = Duration::from_micros(16_667);
     // A write waits for the frame showing its result to reach the panel, since the display
     // freezes while it runs: core 1 has flushed a frame once the swap after the one that
@@ -2293,6 +2335,13 @@ async fn frame_loop(
                 Some(Ok(TouchData::Lifted(point))) => {
                     Some(Touch::Lifted(Point::new(point.x as i32, point.y as i32)))
                 }
+                Some(Ok(TouchData::Gesture(gesture))) => Some(Touch::Gesture(match gesture {
+                    Gesture::Tap => TouchGesture::Tap,
+                    Gesture::SwipeLeft => TouchGesture::SwipeLeft,
+                    Gesture::SwipeRight => TouchGesture::SwipeRight,
+                    Gesture::SwipeUp => TouchGesture::SwipeUp,
+                    Gesture::SwipeDown => TouchGesture::SwipeDown,
+                })),
                 Some(Ok(TouchData::CoverGesture)) => Some(Touch::Cover),
                 _ => None,
             };
@@ -2321,6 +2370,11 @@ async fn frame_loop(
                 }),
                 boot_key,
             });
+            let wake_gestures = stage.watches_for_wake();
+            if wake_gestures != asked_wake_gestures {
+                TOUCH_WAKE_GESTURES.signal(wake_gestures);
+                asked_wake_gestures = wake_gestures;
+            }
             if update.recalibrate {
                 info!("[COMPASS] recalibrating on request");
                 COMPASS_RECALIBRATE.store(true, Ordering::Relaxed);

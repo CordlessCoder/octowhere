@@ -78,13 +78,13 @@ pub const SCENES: &[Scene] = &[
     },
     Scene {
         name: "rest-always-on",
-        about: "a 15 s timeout: the dim, the always-on face, and a touch back to the clock",
+        about: "a 15 s timeout: the dim, the always-on face, and a double tap back to the clock",
         run: rest_always_on,
         captioned: false,
     },
     Scene {
         name: "rest-off",
-        about: "a 15 s timeout on the compass: the dim, the panel off, and a touch back",
+        about: "a 15 s timeout on the compass: the dim, the panel off, and a double tap back",
         run: rest_off,
         captioned: false,
     },
@@ -870,7 +870,7 @@ fn rest(driver: &mut Driver, screen: Screen, always_on: bool) {
     });
     start(driver, screen);
     driver.wait(ms(22_000));
-    driver.tap(Point::new(233, 300));
+    driver.double_tap();
     driver.wait(ms(2_000));
 }
 

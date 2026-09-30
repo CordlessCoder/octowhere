@@ -9,7 +9,7 @@ use embedded_graphics::prelude::Point;
 use super::{
     gesture::Micros,
     screens::{PeripheralState, Screen},
-    stage::{Input, Key, Motion, Sensors, Stage, Touch, Update},
+    stage::{Input, Key, Motion, Sensors, Stage, Touch, TouchGesture, Update},
     startup::{Outcome, Part, Report},
 };
 
@@ -128,6 +128,13 @@ impl<'a> Driver<'a> {
             touch: Some(touch),
             ..Input::default()
         })
+    }
+
+    /// Two taps as the touch controller reports them in gesture mode, a step apart, which wake
+    /// a resting screen.
+    pub fn double_tap(&mut self) -> Update {
+        self.read(Touch::Gesture(TouchGesture::Tap));
+        self.read(Touch::Gesture(TouchGesture::Tap))
     }
 
     pub fn cover(&mut self) -> Update {

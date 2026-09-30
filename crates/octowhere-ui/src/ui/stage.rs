@@ -54,8 +54,21 @@ pub enum Touch {
     Contacts([Option<Point>; 2]),
     /// The finger lifted, last found at this point.
     Lifted(Point),
+    /// A gesture the controller recognised, while [`Stage::watches_for_wake`] has it report
+    /// nothing else.
+    Gesture(TouchGesture),
     /// The controller recognised a hand covering the screen.
     Cover,
+}
+
+/// The gestures the touch controller recognises itself.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TouchGesture {
+    Tap,
+    SwipeLeft,
+    SwipeRight,
+    SwipeUp,
+    SwipeDown,
 }
 
 /// A short or long press of the power key or the BOOT key.
@@ -314,6 +327,8 @@ pub struct Stage {
     startup_due: Option<Micros>,
     /// A contact that skipped the sequence, which the faces ignore until it lifts.
     swallowed: bool,
+    /// When the last tap came while the screen rested, waiting for the second of a double tap.
+    rest_tap: Option<Micros>,
     /// The clock face's time and date type in as its next entry starts.
     clock_types_in: bool,
     /// The start-up once it has finished, which a replay counts its parts from.
@@ -393,6 +408,7 @@ impl Stage {
             startup_level: None,
             startup_due: None,
             swallowed: false,
+            rest_tap: None,
             clock_types_in: false,
             last_boot: None,
             rest: Rest::Awake,
@@ -559,6 +575,14 @@ impl Stage {
         self.raw_touch[0]
     }
 
+    /// The screen rests on the always-on face or dark, and wakes only on a double tap, so the
+    /// touch controller should report only the gestures it recognises. The contacts it would
+    /// report otherwise do nothing here.
+    #[must_use]
+    pub fn watches_for_wake(&self) -> bool {
+        matches!(self.rest, Rest::AlwaysOn | Rest::Off)
+    }
+
     /// A finger is down, or the gesture tracker has not yet seen it lift. Touch should be read
     /// again soon even without an interrupt.
     #[must_use]
@@ -634,7 +658,7 @@ impl Stage {
         if let Some(touch) = touch {
             self.raw_touch = match touch {
                 Touch::Contacts(contacts) => contacts,
-                Touch::Lifted(_) | Touch::Cover => [None; 2],
+                Touch::Lifted(_) | Touch::Gesture(_) | Touch::Cover => [None; 2],
             };
             if self.raw_touch[0].is_some() {
                 self.touched_at = now;
@@ -774,7 +798,7 @@ impl Stage {
             Touch::Contacts(contacts) if contacts.iter().any(Option::is_some) => {
                 self.covered_at = None;
             }
-            Touch::Contacts(_) | Touch::Lifted(_) => {}
+            Touch::Contacts(_) | Touch::Lifted(_) | Touch::Gesture(_) => {}
         }
         touch == Touch::Cover && fresh
     }
@@ -976,6 +1000,7 @@ impl Stage {
         touch: &mut Option<Touch>,
         update: &mut Update,
     ) -> bool {
+        let double_tapped = self.watches_for_wake() && self.double_tapped(*touch, now);
         match self.rest {
             Rest::Awake => return false,
             // The contact that lifts the dim does nothing else.
@@ -1009,7 +1034,7 @@ impl Stage {
                 }
                 return false;
             }
-            Rest::AlwaysOn | Rest::Off if contact => {
+            Rest::AlwaysOn | Rest::Off if double_tapped => {
                 self.wake(now, update);
                 return false;
             }
@@ -1017,6 +1042,20 @@ impl Stage {
         }
         self.step_always_on(now);
         true
+    }
+
+    /// Whether `touch` is the second tap of a double tap on the resting screen.
+    fn double_tapped(&mut self, touch: Option<Touch>, now: Micros) -> bool {
+        if touch != Some(Touch::Gesture(TouchGesture::Tap)) {
+            return false;
+        }
+        match self.rest_tap.take() {
+            Some(first) if now.saturating_sub(first) <= rest::DOUBLE_TAP => true,
+            _ => {
+                self.rest_tap = Some(now);
+                false
+            }
+        }
     }
 
     /// Works out what the always-on face shows, while the screen rests on it. It must run in
@@ -1047,6 +1086,7 @@ impl Stage {
     /// entry, or from the panel onto the clock face. The level fades back up to the stored one,
     /// so an unsaved brightness goes with any other edit.
     fn wake(&mut self, now: Micros, update: &mut Update) {
+        self.restart(now);
         self.entry_from = now;
         if self.rest == Rest::Off {
             update.display_on = Some(true);
@@ -1293,6 +1333,7 @@ impl Stage {
     fn gesture(&mut self, touch: Option<Touch>, now: Micros) -> GestureEvent {
         match touch {
             Some(_) if self.swallowed => GestureEvent::None,
+            Some(Touch::Gesture(_)) => self.gesture.expire(now),
             Some(Touch::Lifted(last)) => self.gesture.lift(Some(last), now),
             Some(_) => self.gesture.update(self.raw_touch[0], now),
             None => self.gesture.expire(now),

@@ -11,7 +11,7 @@ use octowhere_ui::{
         gesture::{LIFT_GRACE, Micros, SILENT_LIFT},
         screens::Screen,
         script::{self, Driver},
-        stage::{Input, Motion, Sensors, Stage, Touch},
+        stage::{Input, Motion, Sensors, Stage, Touch, TouchGesture},
         startup::{Outcome, Part},
     },
 };
@@ -1917,12 +1917,8 @@ fn after_the_dim_the_panel_goes_off_and_nothing_redraws() {
 fn a_wake_from_off_runs_the_entry_and_the_climb_once_the_panel_is_on() {
     let mut driver = resting_on(Screen::Compass, Timeout::Seconds15, false);
     wait_until(&mut driver, 22_000_000, |rest| rest == Rest::Off);
-    let woken = driver.now() + script::FRAME;
-    let mut updates = driver.stroke(&[
-        Point::new(400, 233),
-        Point::new(300, 233),
-        Point::new(200, 233),
-    ]);
+    let woken = driver.now() + 2 * script::FRAME;
+    let mut updates = vec![driver.double_tap()];
     assert_eq!(updates[0].display_on, Some(true));
     assert_eq!(driver.stage.rest(), Rest::Awake);
     assert_eq!(driver.stage.screen(), Screen::Compass);
@@ -2051,7 +2047,7 @@ fn frames_in(duration: Micros) -> Micros {
 fn a_wake_from_the_always_on_face_climbs_from_its_level() {
     let mut driver = resting_on(Screen::Clock, Timeout::Seconds15, true);
     wait_until(&mut driver, 22_000_000, |rest| rest == Rest::AlwaysOn);
-    let mut updates = driver.tap(Point::new(233, 233));
+    let mut updates = vec![driver.double_tap()];
     assert_eq!(updates[0].display_on, None);
     while driver.stage.is_changing() {
         updates.push(driver.step(Input::default()));
@@ -2069,6 +2065,32 @@ fn a_wake_from_the_always_on_face_climbs_from_its_level() {
 }
 
 #[test]
+fn a_resting_screen_wakes_only_on_a_double_tap() {
+    for always_on in [true, false] {
+        let mut driver = resting_on(Screen::Clock, Timeout::Seconds15, always_on);
+        assert!(!driver.stage.watches_for_wake());
+        let resting = if always_on { Rest::AlwaysOn } else { Rest::Off };
+        wait_until(&mut driver, 22_000_000, |rest| rest == resting);
+        assert!(driver.stage.watches_for_wake());
+
+        driver.tap(Point::new(233, 233));
+        driver.read(Touch::Gesture(TouchGesture::SwipeLeft));
+        driver.read(Touch::Gesture(TouchGesture::Tap));
+        driver.wait(rest::DOUBLE_TAP + script::FRAME);
+        driver.read(Touch::Gesture(TouchGesture::Tap));
+        assert_eq!(
+            driver.stage.rest(),
+            resting,
+            "a contact, a swipe or two slow taps woke it"
+        );
+
+        driver.read(Touch::Gesture(TouchGesture::Tap));
+        assert_eq!(driver.stage.rest(), Rest::Awake);
+        assert!(!driver.stage.watches_for_wake());
+    }
+}
+
+#[test]
 fn a_wake_from_the_panel_lands_on_the_clock_and_drops_the_edit() {
     let mut driver = open_panel(Screen::Compass);
     tap(&mut driver, 150, 190);
@@ -2080,7 +2102,7 @@ fn a_wake_from_the_panel_lands_on_the_clock_and_drops_the_edit() {
             .any(|update| update.brightness == Some(rest::dim_level(255))),
         "the dim is taken from the level that shows"
     );
-    let mut updates = driver.tap(Point::new(233, 233));
+    let mut updates = vec![driver.double_tap()];
     while driver.stage.is_changing() {
         updates.push(driver.step(Input::default()));
     }
@@ -2172,7 +2194,7 @@ fn rest_damage_redraws_what_changed() {
             check(&driver, "always on");
         }
     }
-    driver.touch(Some(Point::new(233, 233)));
+    driver.double_tap();
     check(&driver, "woken");
     for step in 0..40 {
         driver.touch(None);
