@@ -87,3 +87,5 @@ Recorded 2026-09-26. These override the hand-off where they differ.
     follow `compass_noise.py` where the reference render differs from it, `---` centres in the
     slab, the fields keep off the foreground's boxes rather than its ink, HOLD LEVEL keeps its
     earlier field, the halftone's solid marks stay 4 px and it still breathes (4a).
+19. **A zone line too long for the picker's slab scrolls** (owner, 2026-09-30), rather than
+    stepping its size down: it holds at its start, runs to its end, holds and runs back.

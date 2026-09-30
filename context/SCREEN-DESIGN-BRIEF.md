@@ -153,7 +153,7 @@ always-on face's `always-on-local`, `always-on-stopped`, `always-on-no-zone` and
 `always-on-no-data`, which `context/screen-captures/` keeps. `tools/ui-sim` records scenes as
 GIF or MP4 at 20 ms per frame, with the finger marked: `--record compass-states`, `--record
 startup`, `--record clock-charging`, `--record startup-failed`, `--record settings`, `--record rest-always-on`, `--record
-rest-off` and `--record tour`, which walks every screen and state slowly for a viewer new to
+rest-off`, `--record zone-scroll` and `--record tour`, which walks every screen and state slowly for a viewer new to
 the device, in about three and a half minutes, with a caption for each step in a column beside
 the panel; `--scenes` lists the rest. The simulator shows the display's
 level by scaling colours against the stored level. The captures' fixture is 13:07:42 on Thu 24 Sep 2026 in Europe/Dublin, and heading 047°,
@@ -223,9 +223,12 @@ D3 puts the offset, zone, brightness, timeout and replay selection on a violet f
 text. Since the 2026-09-30 update the selected values are KH Interference Bold at their Mono
 sizes (offset 51, zone 37, brightness 54, timeout and always-on 43, GOOD 36, a demonstrated
 failure 25), centred by ink as before; the offset's lower neighbour is Fraktion Sans Light 18,
-and every other line keeps its Mono face. The widest zone names, `BAHIA BANDERAS`,
-`PORT-AU-PRINCE` and `DUMONTDURVILLE`, run about 22 px past the slab's right edge, as they
-did in Mono: the picker has no fitting. A simulated replay failure has an orange field and a DEMO label. The device page shows
+and every other line keeps its Mono face. A zone's name or identifier too long for the slab
+scrolls, clipped to the slab less its 13 px padding: it holds 1.2 s at its start, runs to its
+end at 40 px/s, holds, and runs back, the two lines on one cycle (owner, 2026-09-30). The
+widest names, `BAHIA BANDERAS`, `PORT-AU-PRINCE` and `DUMONTDURVILLE`, overhang by about 36
+px, and the 30-character identifiers overhang too. A run redraws only the two lines; `ui-sim
+--record zone-scroll` shows it. A simulated replay failure has an orange field and a DEMO label. The device page shows
 version, battery and GNSS first; power and satellite detail follow as it scrolls, then the
 bundled zone-data attribution, REPLAY START-UP and CLEAR SETTINGS. The clear confirmation keeps
 its orange drag. The routes, saves, cancel and cover behavior are unchanged. Host stills are
