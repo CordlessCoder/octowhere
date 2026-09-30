@@ -1379,7 +1379,7 @@ async fn touch_task(mut touch: TouchDriver) {
         #[cfg(feature = "touch-latency-bench")]
         let trace = touch_latency::end_read(trace);
         #[cfg(feature = "touch-read-log")]
-        touch_latency::log_read(&trace, &read);
+        touch_latency::log_read(&trace, &read, touch.last_raw());
         put_touch_read(TouchRead {
             read,
             #[cfg(feature = "touch-latency-bench")]

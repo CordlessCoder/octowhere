@@ -150,13 +150,19 @@ pub fn end_read(mut trace: ReadTrace) -> ReadTrace {
     trace
 }
 
-/// Logs a read as it is made, before the frame loop can drop it.
+/// Logs a read as it is made, before the frame loop can drop it, with the bytes of any report it
+/// found.
 #[cfg(feature = "touch-read-log")]
-pub fn log_read(trace: &ReadTrace, data: &Result<TouchData, ()>) {
+pub fn log_read(trace: &ReadTrace, data: &Result<TouchData, ()>, raw: &[u8]) {
     let (x, y) = first_point(data);
+    let raw = if matches!(data, Ok(TouchData::Stale) | Err(())) {
+        &[][..]
+    } else {
+        raw
+    };
     info!(
         "[TOUCH-READ] seq={=u32} src={=str} kind={=str} at={=u64} edge={=i64} reports={=u32} \
-         x={=i32} y={=i32}",
+         x={=i32} y={=i32} raw={=[u8]:02x}",
         trace.sequence,
         if trace.by_poll { "poll" } else { "int" },
         kind(data),
@@ -165,6 +171,7 @@ pub fn log_read(trace: &ReadTrace, data: &Result<TouchData, ()>) {
         trace.reports,
         x,
         y,
+        raw,
     );
 }
 

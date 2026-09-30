@@ -25,3 +25,10 @@ With the scripted finger (`touch-latency-synthetic`, 200 s each, not kept), a li
 median 60 ms after its report with three empty reads (p90 94, max 110), and 49 ms with the timed
 lift (p90 85, max 101). With a finger the timed lift came to a median 54 ms on the compass and 40
 ms on the clock face; the step at the deadline waits behind the compass's redraws.
+- `finger-reads-raw.txt`: the timed lift, with each report's raw bytes. Fast flicks, some off
+  the edge, slow drags and taps. A lift report carries the position of the controller's last
+  report: 72 of 77 matched the last contact read, and the other 5 came 20 to 28 ms after it,
+  where a read had missed a report, and lay 23 to 61 px further along. No finger came back after
+  a lift here, so it could not show whether a bounce's lift report differs; apart from byte 0
+  and the position, every lift report's bytes matched a contact's. Four contacts went quiet
+  with no lift report: three flicks off the edge and one finger held still.

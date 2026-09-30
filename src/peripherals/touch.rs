@@ -99,6 +99,7 @@ pub struct Cst9217<I, INT, RST, DELAY> {
     height: u16,
     firmware: (u32, u32),
     config: Cst9217Config,
+    last_raw: [u8; READ_BUF_SIZE],
 }
 
 #[derive(Debug)]
@@ -179,6 +180,7 @@ impl<I: I2c, RST, INT, DELAY> Cst9217<I, INT, RST, DELAY> {
             height: 0,
             firmware: (0, 0),
             config: Default::default(),
+            last_raw: [0; READ_BUF_SIZE],
         }
     }
     pub fn with_address(mut self, addr: u8) -> Self {
@@ -216,6 +218,7 @@ impl<I: I2c, RST, INT, DELAY> Cst9217<I, INT, RST, DELAY> {
             CST92XX_ACK,
         ];
         self.i2c.write(self.addr, &ack).await?;
+        self.last_raw = buf;
         match report_kind(&buf) {
             Report::Stale => return Ok(TouchData::Stale),
             Report::Lifted if let Some(gesture) = Gesture::from_code(buf[4]) => {
@@ -248,6 +251,11 @@ impl<I: I2c, RST, INT, DELAY> Cst9217<I, INT, RST, DELAY> {
         }
         Ok(TouchData::Points(points))
     }
+    /// The bytes the last read returned.
+    pub fn last_raw(&self) -> &[u8; READ_BUF_SIZE] {
+        &self.last_raw
+    }
+
     /// The controller's firmware version and checksum, as `init` read them.
     pub fn firmware(&self) -> (u32, u32) {
         self.firmware
