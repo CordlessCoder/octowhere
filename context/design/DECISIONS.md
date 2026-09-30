@@ -89,3 +89,5 @@ Recorded 2026-09-26. These override the hand-off where they differ.
     earlier field, the halftone's solid marks stay 4 px and it still breathes (4a).
 19. **A zone line too long for the picker's slab scrolls** (owner, 2026-09-30), rather than
     stepping its size down: it holds at its start, runs to its end, holds and runs back.
+20. **The clock face's scatter varies its brightness too** (owner, 2026-09-30), with the
+    settings halftone's three purples: dense marks bright, sparse marks dark.

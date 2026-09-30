@@ -170,8 +170,12 @@ K1 (`design/renderer/concept/family-pass-v1-out/clock-K1-*`) on the round 4 spec
   the icon, each token line and the rail), where the
   design grows each element's ink by 2 px in black. Marks the design lets sit between letters
   do not show. The elements then draw on known black, and a changed hour moves no mark.
-- **The scatter** is the firmware's generator with K1's two fields, facings and densities, in
-  `PURPLE` dimmed to 49 %, clear of the band's rows by about 4 px. NO DATA has none.
+- **The scatter** is the firmware's generator with K1's two fields, facings and densities,
+  clear of the band's rows by about 4 px. NO DATA has none. Its marks take the settings
+  halftone's three purples by how dense the field is where they lie, the brightest from a
+  chance of 0.8, where its densest tenth of marks sit (owner, 2026-09-30). The brightest is
+  the single colour it had before, so the scatter reads dimmer overall, darkest in the sparse
+  lower left.
 - **Typography** is the 2026-09-30 update's: the hours, minutes and seconds in KH Interference
   Bold, 136 px and 40 px, their ink centred on columns 103 and 185, and 401 and 425; the status
   label in KH Bold 18; UTC and the battery line in Fraktion Sans Light 16, on baselines 248 and
