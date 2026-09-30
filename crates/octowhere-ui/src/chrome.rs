@@ -752,6 +752,14 @@ fontdue_macros::fontdue_font_from_file!(
     chars: " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_"
 );
 
+// Only the identity's subtitle is set in it.
+fontdue_macros::fontdue_font_from_file!(
+    InterferenceRegularFont,
+    "../../../assets/KH Interference TRIAL/OTF/KHInterferenceTRIAL-Regular.otf",
+    scale: 24.0,
+    chars: " +-./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+);
+
 fontdue_macros::fontdue_font_from_file!(
     FraktionSansLightFont,
     "../../../assets/PPFraktion-Free for personal use v1.1/Sans/PPFraktionSans-Light.otf",
@@ -775,6 +783,7 @@ pub const FONTS: &[&dyn FontRepr] = &[
     &InterferenceBoldFont,
     &MaratypeFont,
     &FraktionSansLightFont,
+    &InterferenceRegularFont,
 ];
 /// Indices into [`FONTS`].
 pub const SHAPIRO: usize = 0;
@@ -783,6 +792,7 @@ pub const FRAKTION_BOLD: usize = 2;
 pub const INTERFERENCE_BOLD: usize = 3;
 pub const MARATYPE: usize = 4;
 pub const FRAKTION_SANS_LIGHT: usize = 5;
+pub const INTERFERENCE: usize = 6;
 
 pub const fn color_from_rgb(r: u8, g: u8, b: u8) -> Color {
     Color::new(

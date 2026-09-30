@@ -26,7 +26,7 @@ use super::{
     text,
 };
 use crate::chrome::{
-    self, Color, CoverageTarget, Dirty, FRAKTION, FontdueRenderer, INTERFERENCE_BOLD, MARATYPE,
+    self, Color, CoverageTarget, Dirty, FontdueRenderer, INTERFERENCE, INTERFERENCE_BOLD, MARATYPE,
     OnBackground,
 };
 
@@ -124,9 +124,11 @@ const ROW_TOP: i32 = 311;
 const ROW_HEIGHT: f32 = 25.0;
 const ROW_LEFT: f32 = 33.0;
 const ROW_GAP: f32 = 8.0;
-/// The version barcode, its 67 px of bars and spaces widened to this.
-const BARCODE_WIDTH: f32 = 113.625;
-const SQUARE_LEFT: i32 = 155;
+/// The version barcode, its 67 px of bars and spaces widened to this: what the row's 400 px
+/// leave after the square, the digits, the GNSS symbol, their four gaps and the copy's widest
+/// line, 172 px (the 2026-10-01 update).
+const BARCODE_WIDTH: f32 = 74.0;
+const SQUARE_LEFT: i32 = 115;
 const SQUARE: i32 = 25;
 const DIGITS_LEFT: f32 = ROW_LEFT + BARCODE_WIDTH + ROW_GAP + SQUARE as f32 + ROW_GAP;
 /// The digits' modules, and the step from one digit to the next, with twice the gap between
@@ -138,7 +140,8 @@ const GNSS_MODULE: f32 = 5.0;
 /// From the row's left to past the GNSS symbol, the columns the barcode, digits and symbol
 /// share.
 const ROW_LINE: usize = (GNSS_LEFT + 5.0 * GNSS_MODULE) as usize + 1 - ROW_LEFT as usize;
-const COPY_LEFT: i32 = 300;
+/// The copy's pen, which puts its visible ink on column 261.
+const COPY_LEFT: i32 = 260;
 const COPY_TOPS: [i32; 2] = [309, 325];
 /// Past the minutes' last module.
 const DIGITS_RIGHT: f32 = DIGITS_LEFT + 3.0 * DIGIT_STEP + 8.0 + 3.0 * DIGIT_MODULE.0;
@@ -864,7 +867,7 @@ fn draw_row<D: CoverageTarget<Color = Color>>(
         }
     }
     if shown(4) {
-        let style = style(font, chrome::LIME, 14, FRAKTION);
+        let style = style(font, chrome::LIME, 18, INTERFERENCE);
         let mut version = heapless::String::<32>::new();
         let _ = write!(version, "VERSION {}", context.firmware);
         let mut count = heapless::String::<24>::new();

@@ -1,6 +1,7 @@
-//! The always-on face, lit low while the screen rests: the time in regular-weight digits, a
+//! The always-on face, lit low while the screen rests: the time in the clock face's digits, a
 //! 24-hour rail, dim blue blocks between the hours and the minutes, and the battery in every
-//! state. H2b of `context/design/`; section 3 of the round 3 spec has its behaviour.
+//! state. H2b of `context/design/` with the 2026-10-01 update's typography; section 3 of the
+//! round 3 spec has its behaviour.
 
 use core::fmt::Write as _;
 
@@ -16,20 +17,23 @@ use super::{
     screens::{self, Battery},
 };
 use crate::chrome::{
-    self, Color, CoverageTarget, FRAKTION, FRAKTION_BOLD, FontdueRenderer, SHAPIRO,
+    self, Color, CoverageTarget, FRAKTION, FRAKTION_BOLD, FRAKTION_SANS_LIGHT, FontdueRenderer,
+    INTERFERENCE_BOLD, SHAPIRO,
 };
 
 const CENTER: Point = Point::new(233, 233);
 const DIGITS_PX: u32 = 136;
-/// Each digit's pen, so the regular weight sits where the clock face's bold digits do.
+/// Each digit's pen, where the clock face's digits sit: KH, or Mono for the unknown time's
+/// dashes.
 const DIGIT_PENS: [i32; 2] = [62, 144];
 const HOURS_BASELINE: i32 = 184;
 const MINUTES_BASELINE: i32 = 305;
 const LINE_INK_TOP: i32 = 334;
 const SMALL_PX: u32 = 16;
-/// The battery: its line's ink right edge and top, and ten cells under it, a tenth of full each.
-const BATTERY_RIGHT: i32 = 366;
-const BATTERY_TOP: i32 = 94;
+/// The battery: `BAT` and its value's ink right edge and top, and ten cells under it, a tenth of
+/// full each.
+const BATTERY_RIGHT: i32 = 365;
+const BATTERY_TOP: i32 = 96;
 const CELLS_LEFT: i32 = 276;
 const CELL_PITCH: i32 = 10;
 const CELL: Size = Size::new(7, 4);
@@ -200,7 +204,7 @@ pub fn draw<D: CoverageTarget<Color = Color>>(
         let top = libm::roundf(NO_DATA_MIDDLE - ink.size.height as f32 / 2.0) as i32;
         centred(&word, "NO DATA", top, target)?;
         return centred(
-            &clock_screen::style(font, chrome::GRAY, 13, FRAKTION),
+            &clock_screen::style(font, chrome::GRAY, 14, INTERFERENCE_BOLD),
             "CLOCK",
             NO_DATA_CAPTION_TOP,
             target,
@@ -241,19 +245,24 @@ pub fn draw<D: CoverageTarget<Color = Color>>(
         )?;
     }
 
-    let digits = clock_screen::style(font, chrome::WHITE, DIGITS_PX, FRAKTION);
+    let face = if view.clock.is_some() {
+        INTERFERENCE_BOLD
+    } else {
+        FRAKTION_BOLD
+    };
+    let digits = clock_screen::style(font, chrome::WHITE, DIGITS_PX, face);
     for (text, baseline) in view.time.iter().zip([HOURS_BASELINE, MINUTES_BASELINE]) {
         for (i, pen) in DIGIT_PENS.into_iter().enumerate() {
             digits.draw_on_baseline(&text[i..=i], Point::new(pen, baseline), target)?;
         }
     }
-    let (line, color) = match view.state {
-        State::Local => (view.date.as_deref().unwrap_or(""), chrome::GRAY),
-        State::NoZone => ("UTC  /  NO ZONE", chrome::GRAY),
-        State::Stopped | State::NoData => ("STOPPED", chrome::ORANGE),
+    let (line, color, face) = match view.state {
+        State::Local => (view.date.as_deref().unwrap_or(""), chrome::GRAY, FRAKTION),
+        State::NoZone => ("UTC / NO ZONE", chrome::GRAY, INTERFERENCE_BOLD),
+        State::Stopped | State::NoData => ("STOPPED", chrome::ORANGE, INTERFERENCE_BOLD),
     };
     centred(
-        &clock_screen::style(font, color, SMALL_PX, FRAKTION),
+        &clock_screen::style(font, color, SMALL_PX, face),
         line,
         LINE_INK_TOP,
         target,
@@ -301,10 +310,10 @@ fn draw_battery<D: CoverageTarget<Color = Color>>(
     font: &FontdueRenderer<'static, Color>,
     target: &mut D,
 ) -> Result<(), D::Error> {
-    let mut line = String::<12>::new();
+    let mut value = String::<8>::new();
     let (percent, color) = match battery.filter(|battery| battery.present) {
         Some(battery) => {
-            _ = write!(line, "BAT {}%", battery.percent);
+            _ = write!(value, "{}%", battery.percent);
             (
                 Some(battery.percent.min(100)),
                 if battery.percent <= LOW {
@@ -315,17 +324,19 @@ fn draw_battery<D: CoverageTarget<Color = Color>>(
             )
         }
         None => {
-            _ = line.push_str("BAT --");
+            _ = value.push_str("--");
             (None, chrome::GRAY)
         }
     };
-    let style = clock_screen::style(font, color, 14, FRAKTION_BOLD);
-    let ink = style.baseline_bounds(&line, Point::zero());
-    let pen = Point::new(
-        BATTERY_RIGHT + 1 - ink.top_left.x - ink.size.width as i32,
-        BATTERY_TOP - ink.top_left.y,
-    );
-    style.draw_on_baseline(&line, pen, target)?;
+    // `BAT` in KH, then its value in Sans a KH space on, the pair ending on the right edge.
+    let label = clock_screen::style(font, color, 14, INTERFERENCE_BOLD);
+    let figures = clock_screen::style(font, color, 14, FRAKTION_SANS_LIGHT);
+    let step = libm::roundf(label.advance("BAT ")) as i32;
+    let ink = figures.baseline_bounds(&value, Point::zero());
+    let baseline = BATTERY_TOP - label.baseline_bounds("BAT", Point::zero()).top_left.y;
+    let at = BATTERY_RIGHT + 1 - ink.top_left.x - ink.size.width as i32;
+    figures.draw_on_baseline(&value, Point::new(at, baseline), target)?;
+    label.draw_on_baseline("BAT", Point::new(at - step, baseline), target)?;
     for i in 0..10 {
         let cell = Rectangle::new(Point::new(CELLS_LEFT + CELL_PITCH * i, CELLS_TOP), CELL);
         target.fill_solid(&cell, shaded(chrome::BLUE, CELL_LEVEL))?;

@@ -21,8 +21,8 @@ use super::{
     identity, screens, text,
 };
 use crate::chrome::{
-    self, Color, CoverageTarget, FRAKTION, FRAKTION_BOLD, FontdueRenderer, Knockout, OnBackground,
-    SHAPIRO, Window,
+    self, Color, CoverageTarget, FRAKTION, FRAKTION_BOLD, FontdueRenderer, INTERFERENCE_BOLD,
+    Knockout, OnBackground, SHAPIRO, Window,
 };
 
 /// A part the self-test waits for, in the order its cells run.
@@ -594,11 +594,13 @@ fn draw_self_test<D: CoverageTarget<Color = Color>>(
                 ("FAIL", chrome::RED, chrome::RED)
             }
         };
-        let name_style = small(font, name_color, 17, FRAKTION_BOLD);
+        let name_style = small(font, name_color, 18, INTERFERENCE_BOLD);
         let name = part.name();
+        // Its visible ink starts at (left + 82, top + 12); the ink box takes in a faint column
+        // and row before it.
         let pen = Point::new(
-            text::pen_x_for_ink_left(&name_style, name, left + 82),
-            text::baseline_for_ink_top(&name_style, name, top + 12),
+            text::pen_x_for_ink_left(&name_style, name, left + 81),
+            text::baseline_for_ink_top(&name_style, name, top + 11),
         );
         name_style.draw_on_baseline(name, pen, field)?;
         let status_style = small(font, color, 16, FRAKTION_BOLD);
