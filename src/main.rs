@@ -255,7 +255,10 @@ type TouchRead = Result<TouchData, ()>;
 
 /// A contact, a lift or a cover, rather than a stale or failed read.
 fn is_report(read: &TouchRead) -> bool {
-    matches!(read, Ok(TouchData::Points(_) | TouchData::CoverGesture))
+    matches!(
+        read,
+        Ok(TouchData::Points(_) | TouchData::Lifted(_) | TouchData::CoverGesture)
+    )
 }
 
 fn is_contact(read: &TouchRead) -> bool {
@@ -2279,6 +2282,9 @@ async fn frame_loop(
                         positions[slot] = Some(Point::new(point.x as i32, point.y as i32));
                     }
                     Some(Touch::Contacts(positions))
+                }
+                Some(Ok(TouchData::Lifted(point))) => {
+                    Some(Touch::Lifted(Point::new(point.x as i32, point.y as i32)))
                 }
                 Some(Ok(TouchData::CoverGesture)) => Some(Touch::Cover),
                 _ => None,

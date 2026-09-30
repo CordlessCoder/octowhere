@@ -136,6 +136,27 @@ impl GestureTracker {
         }
     }
 
+    /// Takes a lift report, with where the finger was last found if the report says. A position
+    /// the tracker has not seen, from a report the caller missed, moves the contact there first.
+    pub fn lift(&mut self, last: Option<Point>, now: Micros) -> GestureEvent {
+        let Some(contact) = &mut self.contact else {
+            return GestureEvent::None;
+        };
+        let moved = contact.lifted.is_none() && last.is_some_and(|last| last != contact.current());
+        let event = match last {
+            Some(last) if moved => self.update(Some(last), now),
+            _ => GestureEvent::None,
+        };
+        if let Some(contact) = &mut self.contact {
+            contact.lifted.get_or_insert(now);
+        }
+        if event == GestureEvent::None {
+            self.expire(now)
+        } else {
+            event
+        }
+    }
+
     /// A contact reported after its lift came due still continues it, since it may have
     /// arrived while the caller was busy and before the deadline.
     pub fn update(&mut self, position: Option<Point>, now: Micros) -> GestureEvent {
@@ -162,10 +183,7 @@ impl GestureTracker {
                     GestureEvent::None
                 }
             }
-            (None, Some(contact)) => {
-                contact.lifted.get_or_insert(now);
-                self.expire(now)
-            }
+            (None, Some(_)) => self.lift(None, now),
             (None, None) => GestureEvent::None,
         }
     }
@@ -279,6 +297,37 @@ mod tests {
             GestureEvent::None
         );
         assert_eq!(tracker.lift_due(), None);
+    }
+
+    #[test]
+    fn a_lift_from_a_position_not_yet_seen_moves_there_first() {
+        let mut tracker = GestureTracker::default();
+        tracker.update(Some(Point::new(300, 200)), 0);
+        tracker.update(Some(Point::new(250, 200)), 10_000);
+        let GestureEvent::DragMove(drag) = tracker.lift(Some(Point::new(190, 200)), 30_000) else {
+            panic!("expected the lift to move the drag");
+        };
+        assert_eq!(drag.current, Point::new(190, 200));
+        assert_eq!(tracker.lift_due(), Some(30_000 + LIFT_GRACE));
+        let GestureEvent::DragEnd(end) = tracker.expire(30_000 + LIFT_GRACE) else {
+            panic!("expected a drag end");
+        };
+        assert_eq!(end.current, Point::new(190, 200));
+    }
+
+    #[test]
+    fn a_lift_where_the_finger_was_last_seen_moves_nothing() {
+        let mut tracker = GestureTracker::default();
+        tracker.update(Some(Point::new(300, 200)), 0);
+        tracker.update(Some(Point::new(250, 200)), 10_000);
+        assert_eq!(
+            tracker.lift(Some(Point::new(250, 200)), 20_000),
+            GestureEvent::None
+        );
+        let GestureEvent::DragEnd(end) = tracker.expire(20_000 + LIFT_GRACE) else {
+            panic!("expected a drag end");
+        };
+        assert!((end.velocity.0 + 5000.0).abs() < 1.0, "{:?}", end.velocity);
     }
 
     #[test]

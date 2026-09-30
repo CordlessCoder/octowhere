@@ -124,6 +124,9 @@ pub struct TouchPoint {
 pub enum TouchData {
     CoverGesture,
     Points(heapless::Vec<TouchPoint, 2, u8>),
+    /// The finger lifted, last found here. This is the position of the controller's last
+    /// report, which a missed read leaves newer than the last one read.
+    Lifted(TouchPoint),
     /// No report since the last read: the controller has not replaced the acknowledgement the
     /// last read left. Whatever the last report said still holds.
     Stale,
@@ -186,7 +189,11 @@ impl<I: I2c, RST, INT, DELAY> Cst9217<I, INT, RST, DELAY> {
         self.i2c.write(self.addr, &ack).await?;
         match report_kind(&buf) {
             Report::Stale => return Ok(TouchData::Stale),
-            Report::Lifted => return Ok(TouchData::Points(heapless::Vec::new())),
+            Report::Lifted => {
+                let (_, _, mut point) = decode_point(&buf, 0);
+                self.config.apply(self.width, self.height, &mut point);
+                return Ok(TouchData::Lifted(point));
+            }
             Report::Fresh => {}
         }
         // Check for cover screen gesture
@@ -201,14 +208,8 @@ impl<I: I2c, RST, INT, DELAY> Cst9217<I, INT, RST, DELAY> {
         }
 
         for i in 0..point_count {
-            let data_idx = (i * 5) + if i == 0 { 0 } else { 2 };
-            let data = &buf[data_idx as usize..][..4];
-            let id = data[0] >> 4;
-            let event = data[0] & 0x0F;
-            let x = ((data[1] as u16) << 4) | (data[3] >> 4) as u16;
-            let y = ((data[2] as u16) << 4) | (data[3] & 0x0F) as u16;
+            let (id, event, mut point) = decode_point(&buf, i.into());
             if event == 0x06 && id < MAX_FINGER_NUM as u8 {
-                let mut point = TouchPoint { x, y };
                 self.config.apply(self.width, self.height, &mut point);
                 _ = points.push(point);
             }
@@ -298,6 +299,14 @@ enum Report {
     Stale,
 }
 
+/// The `index`th point of a report: its id, its event and where it is, before the config applies.
+fn decode_point(buf: &[u8; READ_BUF_SIZE], index: usize) -> (u8, u8, TouchPoint) {
+    let data = &buf[index * 5 + if index == 0 { 0 } else { 2 }..][..4];
+    let x = (u16::from(data[1]) << 4) | u16::from(data[3] >> 4);
+    let y = (u16::from(data[2]) << 4) | u16::from(data[3] & 0x0F);
+    (data[0] >> 4, data[0] & 0x0F, TouchPoint { x, y })
+}
+
 /// A read before the controller writes its next report returns our acknowledgement in byte 0.
 /// A still finger is reported less often than the frame loop polls, so these arrive mid-contact.
 fn report_kind(buf: &[u8; READ_BUF_SIZE]) -> Report {
@@ -320,7 +329,9 @@ impl<I: I2c, RST, INT: Wait, DELAY> Cst9217<I, INT, RST, DELAY> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CST92XX_ACK, Cst9217Config, READ_BUF_SIZE, Report, TouchPoint, report_kind};
+    use super::{
+        CST92XX_ACK, Cst9217Config, READ_BUF_SIZE, Report, TouchPoint, decode_point, report_kind,
+    };
     use embedded_hal::digital::OutputPin;
     use embedded_hal_async::{
         delay::DelayNs,
@@ -459,6 +470,19 @@ mod tests {
         assert_eq!(report_kind(&report), Report::Fresh);
         report[6] = 0;
         assert_eq!(report_kind(&report), Report::Stale);
+    }
+
+    #[test]
+    fn a_lift_report_keeps_the_last_position() {
+        let report = [
+            0x00, 0x0b, 0x0e, 0xa5, 0x00, 0x01, 0xab, 0x00, 0x00, 0x00, 0x3c, 0x00, 0xab, 0x80,
+            0x00,
+        ];
+        assert_eq!(report_kind(&report), Report::Lifted);
+        assert_eq!(
+            decode_point(&report, 0),
+            (0, 0, TouchPoint { x: 0xba, y: 0xe5 })
+        );
     }
 
     #[test]

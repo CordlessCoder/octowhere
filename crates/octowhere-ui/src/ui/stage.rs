@@ -52,6 +52,8 @@ pub struct Sensors {
 pub enum Touch {
     /// Up to two contacts in panel coordinates; none when nothing touches.
     Contacts([Option<Point>; 2]),
+    /// The finger lifted, last found at this point.
+    Lifted(Point),
     /// The controller recognised a hand covering the screen.
     Cover,
 }
@@ -632,7 +634,7 @@ impl Stage {
         if let Some(touch) = touch {
             self.raw_touch = match touch {
                 Touch::Contacts(contacts) => contacts,
-                Touch::Cover => [None; 2],
+                Touch::Lifted(_) | Touch::Cover => [None; 2],
             };
             if self.raw_touch[0].is_some() {
                 self.touched_at = now;
@@ -671,7 +673,7 @@ impl Stage {
             self.grid.scroll,
             self.page.is_some(),
         );
-        let event = self.gesture(touch.is_some(), now);
+        let event = self.gesture(touch, now);
         let mut effects = Effects::default();
         self.route_event(&event, now, &mut effects, &mut update);
 
@@ -772,7 +774,7 @@ impl Stage {
             Touch::Contacts(contacts) if contacts.iter().any(Option::is_some) => {
                 self.covered_at = None;
             }
-            Touch::Contacts(_) => {}
+            Touch::Contacts(_) | Touch::Lifted(_) => {}
         }
         touch == Touch::Cover && fresh
     }
@@ -865,7 +867,7 @@ impl Stage {
         if self.raw_touch[0].is_none() {
             self.swallowed = false;
         }
-        let event = self.gesture(touch.is_some(), now);
+        let event = self.gesture(touch, now);
         let cover = touch.is_some_and(|touch| self.new_cover(touch, now));
         let powered_off = self.powered_off;
         let Some(power_off) = &mut self.power_off else {
@@ -1288,11 +1290,12 @@ impl Stage {
     }
 
     /// What this step's report, or its absence, makes of the contact.
-    fn gesture(&mut self, reported: bool, now: Micros) -> GestureEvent {
-        if reported && !self.swallowed {
-            self.gesture.update(self.raw_touch[0], now)
-        } else {
-            self.gesture.expire(now)
+    fn gesture(&mut self, touch: Option<Touch>, now: Micros) -> GestureEvent {
+        match touch {
+            Some(_) if self.swallowed => GestureEvent::None,
+            Some(Touch::Lifted(last)) => self.gesture.lift(Some(last), now),
+            Some(_) => self.gesture.update(self.raw_touch[0], now),
+            None => self.gesture.expire(now),
         }
     }
 

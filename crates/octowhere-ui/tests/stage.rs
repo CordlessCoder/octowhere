@@ -11,7 +11,7 @@ use octowhere_ui::{
         gesture::{LIFT_GRACE, Micros, SILENT_LIFT},
         screens::Screen,
         script::{self, Driver},
-        stage::{Input, Motion, Sensors, Stage},
+        stage::{Input, Motion, Sensors, Stage, Touch},
         startup::{Outcome, Part},
     },
 };
@@ -224,6 +224,17 @@ fn a_lift_counts_once_its_grace_runs_out() {
     assert_eq!(driver.stage.next_change(), Some(reported + LIFT_GRACE));
     driver.wait(LIFT_GRACE);
     assert!(!driver.stage.in_contact());
+}
+
+#[test]
+fn a_lift_carries_a_swipe_the_last_reports_missed() {
+    let mut driver = Driver::new();
+    driver.touch(Some(Point::new(400, 233)));
+    driver.touch(Some(Point::new(396, 233)));
+    driver.read(Touch::Lifted(Point::new(60, 233)));
+    driver.wait(LIFT_GRACE);
+    driver.settle();
+    assert_eq!(driver.stage.screen(), Screen::Compass);
 }
 
 #[test]
