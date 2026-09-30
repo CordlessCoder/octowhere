@@ -55,6 +55,9 @@ lora-link-tx = []
 lora-link-rx = []
 # Lets a debugger set the RTC, as GNSS or as the RTC's own time; see `tools/rtc-inject.py`.
 rtc-inject = []
+# Holds the compass on its settled fields, 10 s each of heading, calibration and interference,
+# the heading turning a degree every 100 ms, and logs every draw's time.
+compass-field-bench = ["timing-log"]
 
 [patch.crates-io]
 tca9554 = { git = "https://github.com/CordlessCoder/tca9554-rs", rev = "dd76e69" }

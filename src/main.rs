@@ -2254,6 +2254,10 @@ async fn frame_loop(
     let mut outlined = Dirty::new();
     let mut last_touch_poll = Instant::now();
     let mut asked_wake_gestures = false;
+    #[cfg(feature = "compass-field-bench")]
+    let bench_start = Instant::now();
+    #[cfg(feature = "compass-field-bench")]
+    let (mut bench_phase, mut bench_shown) = (u64::MAX, false);
     const TOUCH_REPOLL: Duration = Duration::from_micros(16_667);
     // A write waits for the frame showing its result to reach the panel, since the display
     // freezes while it runs: core 1 has flushed a frame once the swap after the one that
@@ -2345,6 +2349,28 @@ async fn frame_loop(
                 Some(Ok(TouchData::CoverGesture)) => Some(Touch::Cover),
                 _ => None,
             };
+            #[cfg(feature = "compass-field-bench")]
+            let motion_state = {
+                let elapsed = bench_start.elapsed().as_millis();
+                let phase = elapsed / 10_000 % 3;
+                if phase != bench_phase {
+                    bench_phase = phase;
+                    info!("[BENCH] phase {} (0 heading, 1 calibration, 2 interference)", phase);
+                }
+                if !stage.starting_up() && !bench_shown {
+                    stage.show(octowhere::ui::screens::Screen::Compass);
+                    bench_shown = true;
+                    info!("[BENCH] on the compass");
+                }
+                motion_state.map(|mut motion: octowhere::ui::stage::Motion| {
+                    motion.compass.live = true;
+                    motion.compass.disturbed = phase == 2;
+                    motion.compass.calibration_percent = if phase == 1 { 54 } else { 100 };
+                    motion.compass.heading_decidegrees =
+                        (phase != 1).then(|| (elapsed / 100 % 360) as u16 * 10);
+                    motion
+                })
+            };
             let update = stage.step(StageInput {
                 now: Instant::now().as_micros(),
                 touch,
@@ -2422,10 +2448,21 @@ async fn frame_loop(
                 repaint.make_full();
                 *drawn = true;
             }
+            #[cfg(feature = "compass-field-bench")]
+            let drawing = Instant::now();
             if repaint.is_full() {
                 stage.draw(fb);
             } else if !repaint.is_empty() {
                 stage.draw(&mut chrome::Clip::new(fb, &repaint));
+            }
+            #[cfg(feature = "compass-field-bench")]
+            if !repaint.is_empty() {
+                info!(
+                    "[BENCH] draw us={} repaint_px={} full={}",
+                    drawing.elapsed().as_micros(),
+                    repaint.pixels(),
+                    repaint.is_full()
+                );
             }
             // The panel already shows the step before, so only this step's pixels change on it.
             dirty.clone_from(changed);
