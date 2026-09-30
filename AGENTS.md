@@ -281,9 +281,11 @@ Core 1 owns the display SPI/DMA path.
 - `motion_task`, on `BUS_EXECUTOR`, owns the IMU and magnetometer, the compass calibration and
   the sensor fusion. It samples every 250 ms, or every 20 ms while the frame loop sets
   `COMPASS_ACTIVE`, and publishes a `MotionSnapshot` through `MOTION_STATE`.
-- `touch_task`, on `BUS_EXECUTOR`, owns the touch controller. It reads it when the controller
-  signals a report or the frame loop asks, and sends each read through `TOUCH_READS`, which
-  holds one, so it reads no faster than the frame loop takes them.
+- `touch_task`, on `BUS_EXECUTOR`, owns the touch controller. It reads it on each falling edge
+  of the controller's INT, every 10 ms while a finger is down, or when the frame loop asks, and
+  queues each read in `TOUCH_READS` without waiting for it to be taken. A newer contact replaces
+  one the frame loop has not taken, a stale read never displaces a report, and a lift or cover
+  is kept ahead of the next report.
 - `radio_task`, on `BUS_EXECUTOR`, owns the LoRa radio, its `DIO0` line and the RF switch. It
   runs the link test when a `lora-link-*` feature is on, and otherwise holds the radio idle. It
   is spawned only when the radio answered at boot.

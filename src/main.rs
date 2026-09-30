@@ -14,7 +14,7 @@ extern crate alloc;
 
 use alloc::{alloc::Allocator, boxed::Box};
 use core::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     future::Future,
     sync::atomic::{AtomicBool, AtomicU32, Ordering},
 };
@@ -245,8 +245,54 @@ static ZONE_STATE: BlockingMutex<CriticalSectionRawMutex, Cell<ZoneState>> =
     }));
 /// Asks `touch_task` to read the controller without waiting for its report.
 static TOUCH_POLL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
-/// Each read of the touch controller, for the frame loop, which takes one a step.
-static TOUCH_READS: Channel<CriticalSectionRawMutex, Result<TouchData, ()>, 1> = Channel::new();
+/// Reads of the touch controller the frame loop has not taken, oldest first: see
+/// [`put_touch_read`].
+static TOUCH_READS: BlockingMutex<CriticalSectionRawMutex, RefCell<heapless::Deque<TouchRead, 2>>> =
+    BlockingMutex::new(RefCell::new(heapless::Deque::new()));
+static TOUCH_READY: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+type TouchRead = Result<TouchData, ()>;
+
+/// A contact, a lift or a cover, rather than a stale or failed read.
+fn is_report(read: &TouchRead) -> bool {
+    matches!(read, Ok(TouchData::Points(_) | TouchData::CoverGesture))
+}
+
+fn is_contact(read: &TouchRead) -> bool {
+    matches!(read, Ok(TouchData::Points(points)) if !points.is_empty())
+}
+
+/// Queues a read for the frame loop without waiting for it to be taken. A newer contact
+/// replaces one the frame loop has not taken, and a stale or failed read never displaces a
+/// report. A lift or a cover stays, and the next report queues behind it.
+fn put_touch_read(read: TouchRead) {
+    TOUCH_READS.lock(|reads| {
+        let mut reads = reads.borrow_mut();
+        let replace = match reads.back() {
+            None => false,
+            Some(back) if !is_report(&read) && is_report(back) => return,
+            Some(back) => {
+                !is_report(&read) || is_contact(back) || !is_report(back) || reads.is_full()
+            }
+        };
+        if replace && let Some(back) = reads.back_mut() {
+            *back = read;
+        } else {
+            _ = reads.push_back(read);
+        }
+    });
+    TOUCH_READY.signal(());
+}
+
+/// Waits for the oldest read the frame loop has not taken.
+async fn take_touch_read() -> TouchRead {
+    loop {
+        if let Some(read) = TOUCH_READS.lock(|reads| reads.borrow_mut().pop_front()) {
+            return read;
+        }
+        TOUCH_READY.wait().await;
+    }
+}
 
 #[derive(Clone, Copy)]
 enum ZoneChoice {
@@ -1245,7 +1291,7 @@ async fn zone_task(mut zones: ZoneTracker) {
 }
 
 /// Reads the touch controller when it signals a report, or when the frame loop asks through
-/// `TOUCH_POLL`, and hands each read to the frame loop, one at a time.
+/// `TOUCH_POLL`, and queues each read for the frame loop.
 #[embassy_executor::task]
 async fn touch_task(mut touch: TouchDriver) {
     loop {
@@ -1255,7 +1301,7 @@ async fn touch_task(mut touch: TouchDriver) {
         let read = touch.read_touch_data().await.map_err(|_| ());
         // A poll asked for while this read ran is answered by it.
         TOUCH_POLL.reset();
-        TOUCH_READS.send(read).await;
+        put_touch_read(read);
     }
 }
 
@@ -2202,7 +2248,7 @@ async fn frame_loop(
                 wait_timeout = wait_timeout.min(until);
             }
             let (touch_read, sensor_state, motion_state, boot, key, boot_key) = match select4(
-                TOUCH_READS.receive(),
+                take_touch_read(),
                 select4(
                     SENSOR_STATE.wait(),
                     BOOT_REPORTS.receive(),

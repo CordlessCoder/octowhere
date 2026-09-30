@@ -310,8 +310,11 @@ fn report_kind(buf: &[u8; READ_BUF_SIZE]) -> Report {
 }
 
 impl<I: I2c, RST, INT: Wait, DELAY> Cst9217<I, INT, RST, DELAY> {
+    /// Waits for the controller to signal a report. INT pulses low for about 2 ms each time,
+    /// longer than a read, so waiting for the low level would read one report several times. An
+    /// edge that comes while nothing waits is missed.
     pub fn wait_for_touch(&mut self) -> impl Future<Output = Result<(), INT::Error>> {
-        self.int.wait_for_low()
+        self.int.wait_for_falling_edge()
     }
 }
 
