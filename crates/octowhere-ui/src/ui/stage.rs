@@ -12,7 +12,7 @@ use super::{
     compass::CompassView,
     compass_screen::{self, Accents, DialFootprint, Mode},
     ease::Ease,
-    gesture::{Drag, GestureEvent, GestureTracker, Micros},
+    gesture::{Drag, GestureEvent, GestureTracker, Micros, SILENT_LIFT},
     identity,
     pager::Pager,
     panel::{self, Cell},
@@ -262,6 +262,8 @@ enum Drawn {
 pub struct Stage {
     screen: Screen,
     raw_touch: [Option<Point>; 2],
+    /// When a report last found a finger.
+    touched_at: Micros,
     gesture: GestureTracker,
     pager: Pager,
     peripherals: PeripheralState,
@@ -353,6 +355,7 @@ impl Stage {
         Self {
             screen: Screen::ALL[0],
             raw_touch: [None; 2],
+            touched_at: 0,
             gesture: GestureTracker::default(),
             pager: Pager::new(0, Screen::ALL.len(), board::LCD_WIDTH as i32),
             renderer: FontdueRenderer::new(
@@ -432,10 +435,17 @@ impl Stage {
                 Some(confirmed) => (!self.powered_off).then_some(confirmed + power_off::FADE),
                 None => power_off.deadline(),
             });
-        [self.startup_due, rest, power_off]
-            .into_iter()
-            .flatten()
-            .min()
+        let silent_lift = self.raw_touch[0].map(|_| self.touched_at + SILENT_LIFT);
+        [
+            self.startup_due,
+            rest,
+            power_off,
+            self.gesture.lift_due(),
+            silent_lift,
+        ]
+        .into_iter()
+        .flatten()
+        .min()
     }
 
     /// The power-off confirmation, while it shows.
@@ -614,11 +624,19 @@ impl Stage {
             full |= self.screen == Screen::Clock;
         }
 
+        // A finger that has gone quiet stands in for the lift report the controller never sent.
+        let touch = touch.or_else(|| {
+            (self.raw_touch[0].is_some() && now.saturating_sub(self.touched_at) >= SILENT_LIFT)
+                .then_some(Touch::Contacts([None; 2]))
+        });
         if let Some(touch) = touch {
             self.raw_touch = match touch {
                 Touch::Contacts(contacts) => contacts,
                 Touch::Cover => [None; 2],
             };
+            if self.raw_touch[0].is_some() {
+                self.touched_at = now;
+            }
         }
         // The timer does not run during the start-up; it restarts when the clock face takes over.
         if self.startup.is_some() {
@@ -653,11 +671,7 @@ impl Stage {
             self.grid.scroll,
             self.page.is_some(),
         );
-        let event = if touch.is_some() && !self.swallowed {
-            self.gesture.update(self.raw_touch[0], now)
-        } else {
-            GestureEvent::None
-        };
+        let event = self.gesture(touch.is_some(), now);
         let mut effects = Effects::default();
         self.route_event(&event, now, &mut effects, &mut update);
 
@@ -851,11 +865,7 @@ impl Stage {
         if self.raw_touch[0].is_none() {
             self.swallowed = false;
         }
-        let event = if touch.is_some() && !self.swallowed {
-            self.gesture.update(self.raw_touch[0], now)
-        } else {
-            GestureEvent::None
-        };
+        let event = self.gesture(touch.is_some(), now);
         let cover = touch.is_some_and(|touch| self.new_cover(touch, now));
         let powered_off = self.powered_off;
         let Some(power_off) = &mut self.power_off else {
@@ -1274,6 +1284,15 @@ impl Stage {
             {
                 self.changed.add(panel::cell_damage(cell, after.1));
             }
+        }
+    }
+
+    /// What this step's report, or its absence, makes of the contact.
+    fn gesture(&mut self, reported: bool, now: Micros) -> GestureEvent {
+        if reported && !self.swallowed {
+            self.gesture.update(self.raw_touch[0], now)
+        } else {
+            self.gesture.expire(now)
         }
     }
 

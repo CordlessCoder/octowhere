@@ -9,9 +9,13 @@ pub type Micros = u64;
 pub const TAP_SLOP: i32 = 16;
 /// Velocity is measured over the samples in this trailing window.
 pub const VELOCITY_WINDOW: Micros = 80_000;
-/// Consecutive samples without contact before the contact counts as lifted. The controller
-/// drops single samples mid-contact.
-pub const LIFT_SAMPLES: u8 = 3;
+/// How long after a lift is reported the contact counts as lifted. The controller reports a
+/// fast-moving finger lifted mid-drag and finds it again up to about 25 ms later.
+pub const LIFT_GRACE: Micros = 30_000;
+/// How long a contact goes without a report before it counts as lifted anyway. A finger that
+/// leaves the panel while moving fast can go without a lift report. A finger held still has
+/// gone up to about 100 ms between reports.
+pub const SILENT_LIFT: Micros = 150_000;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Drag {
@@ -52,7 +56,8 @@ struct Contact {
     history: [(Point, Micros); HISTORY],
     newest: usize,
     len: usize,
-    empty_samples: u8,
+    /// When a lift was reported, if no contact has been reported since.
+    lifted: Option<Micros>,
 }
 
 impl Contact {
@@ -93,21 +98,46 @@ impl Contact {
     }
 }
 
-/// Feed it every touch read, with or without contact, and nothing else: velocity comes from
-/// the sample times, so repeating a stale sample would read as the finger holding still.
+/// Feed it every report the controller writes, with or without contact, and nothing else:
+/// velocity comes from the sample times, so repeating a stale report would read as the finger
+/// holding still. On a step without a report, call [`GestureTracker::expire`] instead, which
+/// ends a contact whose lift came due.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct GestureTracker {
     contact: Option<Contact>,
 }
 
 impl GestureTracker {
-    /// Whether a contact is in progress, including one waiting out [`LIFT_SAMPLES`]. The caller
-    /// keeps reading touch until this is false, or the lift is never seen.
+    /// Whether a contact is in progress, including one waiting out [`LIFT_GRACE`]. The caller
+    /// keeps reading touch until this is false, or the contact never ends.
     #[must_use]
     pub fn in_contact(&self) -> bool {
         self.contact.is_some()
     }
 
+    /// When a reported lift ends the contact, unless a contact is reported first.
+    #[must_use]
+    pub fn lift_due(&self) -> Option<Micros> {
+        self.contact?.lifted.map(|lifted| lifted + LIFT_GRACE)
+    }
+
+    /// Ends the contact if its lift is due.
+    pub fn expire(&mut self, now: Micros) -> GestureEvent {
+        if self.lift_due().is_none_or(|due| now < due) {
+            return GestureEvent::None;
+        }
+        let Some(contact) = self.contact.take() else {
+            return GestureEvent::None;
+        };
+        if contact.dragging {
+            GestureEvent::DragEnd(contact.drag())
+        } else {
+            GestureEvent::Tap(contact.start)
+        }
+    }
+
+    /// A contact reported after its lift came due still continues it, since it may have
+    /// arrived while the caller was busy and before the deadline.
     pub fn update(&mut self, position: Option<Point>, now: Micros) -> GestureEvent {
         match (position, &mut self.contact) {
             (Some(position), None) => {
@@ -120,7 +150,7 @@ impl GestureTracker {
                 GestureEvent::Down(position)
             }
             (Some(position), Some(contact)) => {
-                contact.empty_samples = 0;
+                contact.lifted = None;
                 contact.push(position, now);
                 let offset = position - contact.start;
                 if contact.dragging {
@@ -133,17 +163,8 @@ impl GestureTracker {
                 }
             }
             (None, Some(contact)) => {
-                contact.empty_samples += 1;
-                if contact.empty_samples < LIFT_SAMPLES {
-                    return GestureEvent::None;
-                }
-                let contact = *contact;
-                self.contact = None;
-                if contact.dragging {
-                    GestureEvent::DragEnd(contact.drag())
-                } else {
-                    GestureEvent::Tap(contact.start)
-                }
+                contact.lifted.get_or_insert(now);
+                self.expire(now)
             }
             (None, None) => GestureEvent::None,
         }
@@ -224,14 +245,53 @@ mod tests {
     }
 
     #[test]
-    fn a_short_gap_does_not_end_the_contact() {
+    fn a_contact_reported_within_the_grace_continues() {
         let mut tracker = GestureTracker::default();
-        let events = run(
-            &mut tracker,
-            &[Some((100, 100)), None, None, Some((101, 100))],
-        );
-        assert_eq!(events[3], GestureEvent::None);
+        let events = run(&mut tracker, &[Some((100, 100)), None, Some((101, 100))]);
+        assert_eq!(events[1..], [GestureEvent::None; 2]);
         assert!(tracker.in_contact());
+    }
+
+    #[test]
+    fn a_lift_ends_the_contact_once_the_grace_runs_out() {
+        let mut tracker = GestureTracker::default();
+        tracker.update(Some(Point::new(100, 100)), 0);
+        tracker.update(None, 10_000);
+        tracker.update(None, 20_000);
+        assert_eq!(tracker.lift_due(), Some(10_000 + LIFT_GRACE));
+        assert_eq!(tracker.expire(10_000 + LIFT_GRACE - 1), GestureEvent::None);
+        assert_eq!(
+            tracker.expire(10_000 + LIFT_GRACE),
+            GestureEvent::Tap(Point::new(100, 100))
+        );
+        assert!(!tracker.in_contact());
+        assert_eq!(tracker.lift_due(), None);
+    }
+
+    #[test]
+    fn a_contact_reported_once_the_lift_is_due_continues() {
+        let mut tracker = GestureTracker::default();
+        tracker.update(Some(Point::new(100, 100)), 0);
+        tracker.update(None, 10_000);
+        let late = 10_000 + LIFT_GRACE + FRAME;
+        assert_eq!(
+            tracker.update(Some(Point::new(101, 100)), late),
+            GestureEvent::None
+        );
+        assert_eq!(tracker.lift_due(), None);
+    }
+
+    #[test]
+    fn a_contact_after_the_grace_is_a_new_one() {
+        let mut tracker = GestureTracker::default();
+        tracker.update(Some(Point::new(100, 100)), 0);
+        tracker.update(None, 10_000);
+        let now = 10_000 + LIFT_GRACE;
+        assert_eq!(tracker.expire(now), GestureEvent::Tap(Point::new(100, 100)));
+        assert_eq!(
+            tracker.update(Some(Point::new(300, 100)), now),
+            GestureEvent::Down(Point::new(300, 100))
+        );
     }
 
     #[test]

@@ -7,7 +7,7 @@ use alloc::{boxed::Box, vec::Vec};
 use embedded_graphics::prelude::Point;
 
 use super::{
-    gesture::{LIFT_SAMPLES, Micros},
+    gesture::Micros,
     screens::{PeripheralState, Screen},
     stage::{Input, Key, Motion, Sensors, Stage, Touch, Update},
     startup::{Outcome, Part, Report},
@@ -182,11 +182,26 @@ impl<'a> Driver<'a> {
         update
     }
 
-    /// A contact along `path`, a point a step, then the empty reads that count as a lift.
-    /// Returns every update.
+    /// A contact along `path`, a point a step, then its lift. Returns every update.
     pub fn stroke(&mut self, path: &[Point]) -> Vec<Update> {
         let mut updates: Vec<_> = path.iter().map(|&point| self.touch(Some(point))).collect();
-        updates.extend((0..LIFT_SAMPLES).map(|_| self.touch(None)));
+        updates.extend(self.lift());
+        updates
+    }
+
+    /// Reports the finger lifted, and steps until the stage counts it lifted. Returns every
+    /// update.
+    ///
+    /// # Panics
+    ///
+    /// If the contact has not ended after a second.
+    pub fn lift(&mut self) -> Vec<Update> {
+        let mut updates = alloc::vec![self.touch(None)];
+        let end = self.now + 1_000_000;
+        while self.stage.in_contact() {
+            assert!(self.now < end, "the contact never ended");
+            updates.push(self.step(Input::default()));
+        }
         updates
     }
 

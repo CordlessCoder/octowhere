@@ -2194,12 +2194,6 @@ async fn frame_loop(
     mut stage: Stage,
     mut fb_st: SwapThread<'static, SwapState<&'static esp_alloc::EspHeap>>,
 ) {
-    // The last report the controller wrote, which a stale read repeats.
-    let mut touch_data = TouchData::default();
-    let mut last_report = Instant::now();
-    /// A contact with no fresh report for this long has ended without its lift report. Held
-    /// fingers were reported at most 101 ms apart.
-    const LIFT_WITHOUT_REPORT: Duration = Duration::from_millis(300);
     let mut prev_swap_draw = Duration::MIN;
     // The buffer drawn next last held the frame before the current one, so it repaints the
     // current step's damage as well as its own.
@@ -2272,39 +2266,26 @@ async fn frame_loop(
                 Either4::Third(state) => (None, None, Some(state), None, None, None),
                 Either4::Fourth(()) => (None, None, None, None, None, None),
             };
-            let touch_ready = match touch_read {
-                Some(Ok(TouchData::Stale)) if last_report.elapsed() < LIFT_WITHOUT_REPORT => true,
-                Some(Ok(TouchData::Stale)) => {
-                    touch_data = TouchData::default();
-                    true
-                }
-                Some(Ok(fresh)) => {
-                    touch_data = fresh;
-                    last_report = Instant::now();
-                    true
-                }
-                Some(Err(())) => {
-                    warn!("[TOUCH] read failed");
-                    false
-                }
-                None => false,
-            };
-            if touch_ready {
-                last_touch_poll = Instant::now();
+            match touch_read {
+                Some(Ok(_)) => last_touch_poll = Instant::now(),
+                Some(Err(())) => warn!("[TOUCH] read failed"),
+                None => {}
             }
+            // A stale read found no new report, so the stage hears nothing from it.
+            let touch = match touch_read {
+                Some(Ok(TouchData::Points(points))) => {
+                    let mut positions = [None; 2];
+                    for (slot, point) in points.iter().take(2).enumerate() {
+                        positions[slot] = Some(Point::new(point.x as i32, point.y as i32));
+                    }
+                    Some(Touch::Contacts(positions))
+                }
+                Some(Ok(TouchData::CoverGesture)) => Some(Touch::Cover),
+                _ => None,
+            };
             let update = stage.step(StageInput {
                 now: Instant::now().as_micros(),
-                touch: touch_ready.then(|| match &touch_data {
-                    TouchData::Points(points) => {
-                        let mut positions = [None; 2];
-                        for (slot, point) in points.iter().take(2).enumerate() {
-                            positions[slot] = Some(Point::new(point.x as i32, point.y as i32));
-                        }
-                        Touch::Contacts(positions)
-                    }
-                    TouchData::CoverGesture => Touch::Cover,
-                    TouchData::Stale => unreachable!("a stale read keeps the last report"),
-                }),
+                touch,
                 motion: motion_state,
                 sensors: sensor_state.map(|state| {
                     let signal = state.gnss.signal;

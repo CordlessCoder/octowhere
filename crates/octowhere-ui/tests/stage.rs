@@ -8,7 +8,7 @@ use octowhere_ui::{
         clock_screen::Accents as ClockAccents,
         compass::CompassView,
         compass_screen::{Accents, CENTER as COMPASS_CENTER},
-        gesture::{LIFT_SAMPLES, Micros},
+        gesture::{LIFT_GRACE, Micros, SILENT_LIFT},
         screens::Screen,
         script::{self, Driver},
         stage::{Input, Motion, Sensors, Stage},
@@ -143,9 +143,7 @@ fn the_compass_accents_stay_hidden_while_it_slides_in() {
     driver.touch(Some(Point::new(400, 233)));
     driver.touch(Some(Point::new(200, 233)));
     driver.touch(Some(Point::new(10, 233)));
-    for _ in 0..LIFT_SAMPLES {
-        driver.touch(None);
-    }
+    driver.lift();
     for _ in 0..120 {
         if driver.stage.screen() == Screen::Compass {
             break;
@@ -212,9 +210,35 @@ fn a_contact_keeps_the_stage_reading_touch_until_it_lifts() {
     let mut driver = Driver::on(Screen::Clock);
     driver.touch(Some(Point::new(233, 233)));
     assert!(driver.stage.in_contact());
-    for _ in 0..LIFT_SAMPLES {
-        driver.touch(None);
-    }
+    driver.lift();
+    assert!(!driver.stage.in_contact());
+}
+
+#[test]
+fn a_lift_counts_once_its_grace_runs_out() {
+    let mut driver = Driver::on(Screen::Clock);
+    driver.touch(Some(Point::new(233, 233)));
+    driver.touch(None);
+    let reported = driver.now();
+    assert!(driver.stage.in_contact());
+    assert_eq!(driver.stage.next_change(), Some(reported + LIFT_GRACE));
+    driver.wait(LIFT_GRACE);
+    assert!(!driver.stage.in_contact());
+}
+
+#[test]
+fn a_finger_gone_quiet_counts_as_lifted() {
+    let mut driver = Driver::on(Screen::Clock);
+    driver.touch(Some(Point::new(233, 233)));
+    let touched = driver.now();
+    assert_eq!(driver.stage.next_change(), Some(touched + SILENT_LIFT));
+    driver.wait(SILENT_LIFT);
+    assert_eq!(driver.stage.contact(), None);
+    assert!(
+        driver.stage.in_contact(),
+        "the grace follows the missing report"
+    );
+    driver.wait(LIFT_GRACE);
     assert!(!driver.stage.in_contact());
 }
 
@@ -754,9 +778,7 @@ fn the_clock_accents_build_after_the_page_settles_and_leave_with_the_offset() {
     driver.touch(Some(Point::new(200, 233)));
     assert_eq!(clock_accents(&driver).icon_rows, 0);
     driver.touch(Some(Point::new(399, 233)));
-    for _ in 0..LIFT_SAMPLES {
-        driver.touch(None);
-    }
+    driver.lift();
     driver.settle();
     assert_eq!(driver.stage.screen(), Screen::Clock);
     assert_eq!(
@@ -903,7 +925,10 @@ fn a_running_clock_ticks_each_second_unless_stopped() {
 fn a_swipe_takes_its_duration_and_turns_the_page() {
     let mut driver = Driver::new();
     let updates = driver.swipe(Point::new(400, 233), Point::new(60, 233), 300_000);
-    assert_eq!(updates.len(), 18 + 1 + usize::from(LIFT_SAMPLES));
+    assert_eq!(
+        updates.len(),
+        18 + 1 + 1 + LIFT_GRACE.div_ceil(script::FRAME) as usize
+    );
     driver.settle();
     assert_eq!(driver.stage.screen(), Screen::Compass);
 }
