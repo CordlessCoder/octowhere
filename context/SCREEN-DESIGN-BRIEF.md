@@ -344,10 +344,10 @@ interpreted them:
 - **Colours.** The design's dim marks are tokens dimmed toward black (`chrome::shade`): the
   outlined title and unlit ticks are `LIME` at 34 %, the partly lit ticks 58 %, the opening's
   block rows 96, 82, 91 and 100 %, the registration marks `GRAY` at 32 % and their hairlines
-  25 %, and the scatter `PURPLE` at 27 %. BOOT and the dim blocks behind the opening are
+  25 %; the scatter takes the halftone's purples, below. BOOT and the dim blocks behind the opening are
   `DEEP_BLUE`, `#000DF6`, the intro cinematic's blue, at full, 55 % and 10–18 % (owner).
 - **BOOT** is set in KH Interference Bold at 38 px, turned a quarter clockwise, as the design
-  has it (owner). Only its three letters are embedded.
+  has it (owner).
 - **The opening's backdrop** of 185 dim blocks comes from a fixed sequence of the firmware's
   own, not Python's generator, so the blocks sit elsewhere at the same density.
 - **The title** is Maratype at 112 px (2026-09-29 update), its pen on whole pixels, so its ink
@@ -373,7 +373,11 @@ interpreted them:
   (`ui::scatter`), with its grid origin, the band it stops short of and its colour as
   parameters, and one or more fields on that grid, each a circle and a seed with its own
   facing and density. Where fields overlap, the first to show a point gives its mark. A mark
-  shows only if it lies wholly inside the glass. The owner wants it on more pages later.
+  shows only if it lies wholly inside the glass. The owner wants it on more pages later. Its
+  marks take the settings halftone's three purples by how dense the field is where they lie,
+  the brightest from a chance of 0.71, where its densest tenth of marks sit (owner,
+  2026-09-30), so it reads brighter than the single `PURPLE` at 27 % it had. A mark whose tone
+  changes as the upper field turns redraws with the marks the turn moves.
 - **Redraws.** Every identity frame before frame 67, when the pin settles, redraws in full.
   From then on a frame redraws only the scatter marks its turns move, the square's dot, and
   the UTC digits when the minute changes.
