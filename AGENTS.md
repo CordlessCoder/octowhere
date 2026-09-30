@@ -253,8 +253,9 @@ frame's draw by part and the internal heap in use (`startup-bench`, summarised b
 controller's INT edge, caught by a pulse counter, through the read, the step, the draw, core 1's
 wait for TE and the flush that show it (`touch-latency-bench`, summarised by
 `tools/touch-latency-summary.py`), can replace the controller's reports with a scripted finger
-(`touch-latency-synthetic`) and put back the old blocking handoff (`touch-latency-fifo`), and
-runs the finger on both handoffs with `tools/touch-latency-sweep.sh`.
+(`touch-latency-synthetic`) and put back the old blocking handoff (`touch-latency-fifo`),
+runs the finger on both handoffs with `tools/touch-latency-sweep.sh`, logs every read as it is
+made (`touch-read-log`) and times each lift from its report to the step that counts it.
 
 ## Concurrency
 

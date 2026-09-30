@@ -167,11 +167,6 @@ until the feature set is complete, because profiling an incomplete firmware pric
   it again, at most once a minute, and show GNSS as faulted if that keeps failing. A reset
   clears the module's time, so send the RTC's time after it. Strain relief on the IPEX cable
   addresses the trigger itself.
-- A lift counts only after three empty samples (`LIFT_SAMPLES`), and after the lift report
-  those come from the frame loop's polls, 16.7 ms apart. A swipe's release then waits a median
-  43 ms after the lift report, at most 64 (`bench/touch-latency`, scripted finger, 2026-09-30).
-  Polling sooner after a lift, or a time rule in `GestureTracker`, would shorten it. Which one is
-  a UI decision.
 
 ## Deferred, with detail elsewhere
 
@@ -181,7 +176,9 @@ until the feature set is complete, because profiling an incomplete firmware pric
   about 4–6 ms for the frame loop. The rest is the draw, about 30 ms, core 1's wait for TE,
   about 9 ms, and the flush, about 15 ms. The flush and TE are settled (below), so the draw is
   the lever. It was about 100 ms before `touch_task` read each report once and stopped waiting for
-  the frame loop to take the one before.
+  the frame loop to take the one before. A lift counts `LIFT_GRACE` (30 ms) after its report,
+  but with a finger that came to a median 54 ms on the compass and 40 ms on the clock face:
+  the step at the deadline waits behind a draw. The draw is the lever there too.
 
 - Shortening a full-panel flush is closed (owner, 2026-09-25): it was explored as far as it
   usefully goes. The findings stay here so nobody retries them. Measured during drags on
