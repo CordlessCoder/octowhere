@@ -168,7 +168,7 @@ Weigh that cost before adding one.
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 1,283,584 bytes, 8.20% of the 15,663,104-byte app partition that
+The image is currently 1,300,992 bytes, 8.31% of the 15,663,104-byte app partition that
 `partitions.csv` gives it. Measure with `espflash save-image --chip esp32s3 --flash-size 16mb
 --partition-table partitions.csv <elf> <out>`; without those two options it assumes 4 MB of flash
 and the default table. The time zone
@@ -478,12 +478,12 @@ All default off. None belongs in normal firmware behavior.
 
 The active UI uses the compile-time fontdue renderer in
 [`crates/octowhere-ui/src/chrome.rs`](crates/octowhere-ui/src/chrome.rs), with the Marathon Shapiro
-and PPFraktion font data under `assets/`. KH Interference Bold sets the large readings, the
-clock's label, the compass caption and the settings' row names and selected values; its asset is
-a trial, and a release needs a licensed one. Fraktion Sans Light sets the clock's band lines and
-the offset picker's lower neighbour. Maratype sets the identity's title and nothing else: the
-owner rejected it on every other screen. `embedded-layout` supplies the current text alignment
-helpers.
+and PPFraktion font data under `assets/`. KH Interference Bold sets the large readings, the clock's
+label, the compass caption and the settings' row names and selected values; its asset is a trial,
+and a release needs a licensed one. KH Interference Regular sets the identity's subtitle. Fraktion
+Sans Light sets the clock's band lines, the offset picker's lower neighbour and the always-on face's
+battery value. Maratype sets the identity's title and nothing else: the owner rejected it on every
+other screen. `embedded-layout` supplies the current text alignment helpers.
 
 ## Design language
 

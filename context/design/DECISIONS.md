@@ -92,3 +92,9 @@ Recorded 2026-09-26. These override the hand-off where they differ.
 20. **The clock face's and the identity's scatters vary their brightness too** (owner,
     2026-09-30), with the settings halftone's three purples: dense marks bright, sparse marks
     dark.
+21. **The 2026-10-01 start-up and always-on update** (owner, 2026-10-01), in
+    `handoffs/octowhere-startup-aod-handoff-2026-10-01/`, approved and built: KH Bold names on
+    the self-test, a KH Regular subtitle on a 74 px barcode, and the clock face's KH digits and
+    compact labels on the always-on face. BOOT and the fault screen are unchanged. After a
+    failed boot the subtitle keeps `SELF TEST n/6 OK` (owner). Its pixel shift is not built:
+    the owner will take it up separately, now that no ring stands in its way.

@@ -341,6 +341,9 @@ interpreted them:
   MOTION 500 ms, MAGNET 500 ms, GNSS 1.5 s.
 - **A demonstration's self-test** reads `DEMO, NOT A HARDWARE TEST` where a boot's reads its
   version.
+- **Typography** is the 2026-10-01 update's: the six parts' names in KH Interference Bold 18,
+  their visible ink from (left + 82, row + 12); the title, indices, statuses and metadata keep
+  their faces.
 - **Colours.** The design's dim marks are tokens dimmed toward black (`chrome::shade`): the
   outlined title and unlit ticks are `LIME` at 34 %, the partly lit ticks 58 %, the opening's
   block rows 96, 82, 91 and 100 %, the registration marks `GRAY` at 32 % and their hairlines
@@ -356,9 +359,12 @@ interpreted them:
   1.55 px. A glyph types in by its outline's shade rising over 55 ms, which at 30 fps is one
   frame at part shade. Its partly lit frames show 2 px slices of the filled word.
 - **The subtitle row** is V11's, as wide as the title's ink: the barcode's 20 bars widened to
-  113.625 px, the square with its octagonal hole and a dot that pulses once a second from dark
-  on frame 22, the digits in 4 × 5 px modules, the GNSS symbol in 5 px modules, and the two
-  lines of copy with their ink from x 300 at tops 309 and 325. Its fractional edges are blended
+  74 px, the square at x 115 with its octagonal hole and a dot that pulses once a second from
+  dark on frame 22, the digits in 4 × 5 px modules, the GNSS symbol in 5 px modules, and the two
+  lines of copy in KH Interference Regular 18 with their ink from x 261 at tops 309 and 325 (the
+  2026-10-01 update). The barcode takes what the 400 px row leaves after the copy's widest
+  line, 172 px. After a failed boot the second line still reads `SELF TEST n/6 OK`, as the
+  owner chose over `n/6 FAIL`, which is 194 px and would not fit. Its fractional edges are blended
   rather than rounded, and each row of set modules is one span, so no seam shows between them.
 - **The pluses** replace the ticks: 7 px arms, 1 px thick, 10 px out from the title's ink
   corners, at (23, 167) and (442, 298), with the ticks' flicker.
@@ -481,7 +487,11 @@ show it with a 15 s timeout. Where the build differs from the spec or interprets
   follows the brightness; a percentage is fixed whatever the brightness. With
   the brightness editor open, the dim is taken from the level being previewed. A wake from the
   panel discards the preview and fades up to the stored level.
-- **The always-on face** is the hand-off's H2b: regular-weight digits, dim blue blocks where
+- **The always-on face** is the hand-off's H2b with the 2026-10-01 update's typography: the
+  clock face's KH Bold digits on its columns, Mono Bold dashes while the time is unknown, `BAT`
+  in KH Bold 14 and its value in Fraktion Sans Light 14 a KH space on, ending at x 365, `UTC /
+  NO ZONE` and `STOPPED` in KH Bold 16, and `CLOCK` under NO DATA in KH Bold 14; the date stays
+  Fraktion Mono Regular 16. It keeps its dim blue blocks where
   the rules were, a 24-hour rail and the battery in every state. With local time the blocks are
   H2's, which step sideways with the minute; NO ZONE and STOPPED take the quieter bars their
   renders have. NO ZONE shows UTC with a subdued blue marker on its hour, STOPPED
@@ -589,15 +599,16 @@ plumbing it is firmware work. There are three grades.
 The firmware is `no_std` Rust drawing into an RGB565 framebuffer. Every draw goes through a
 target that takes antialiased coverage a row at a time and blends it with what is already there.
 
-- **Fonts:** six faces, each at any pixel size and antialiased.
+- **Fonts:** seven faces, each at any pixel size and antialiased.
   - Marathon Shapiro Wide 65, the display face. Printable ASCII.
   - PP Fraktion Mono Regular, the full font, including `©`.
   - PP Fraktion Mono Bold. Printable ASCII and `°`.
-  - KH Interference Bold, monospaced: the clock's digits, the compass readout, captions, row
-    names and the settings' selected values. Space to `_`, so capitals, digits and punctuation.
+  - KH Interference Bold, monospaced: the clock's and always-on face's digits, the compass
+    readout, captions, row names, the self-test's names and the settings' selected values. Space to `_`, so capitals, digits and punctuation.
     The asset is a trial; a release needs a licensed one.
-  - PP Fraktion Sans Light, proportional: the clock's band lines and the offset's lower
-    neighbour. Space to `_`.
+  - KH Interference Regular: the identity's subtitle only. Capitals, digits, space and `+-./`.
+  - PP Fraktion Sans Light, proportional: the clock's band lines, the offset's lower
+    neighbour and the always-on face's battery value. Space to `_`.
   - Maratype: the identity's title only, its seven letters.
   - Any other glyph in these fonts' full files can be added, at a cost in flash, not draw time.
     `assets/` also holds PP Fraktion Sans Bold and the italics. Adding a face costs flash and
