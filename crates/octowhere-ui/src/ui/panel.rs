@@ -12,7 +12,7 @@ use super::{
     clock_screen,
     icon::{self, Glyph, Tile},
     reveal::{Reveal, draw_revealed, revealed_bounds},
-    scatter::{Field, Law, Look, Scatter},
+    scatter::{Field, Law, Look, Scatter, Tones},
     screens::PeripheralState,
     text::{self, style},
 };
@@ -43,7 +43,10 @@ const SCATTER: Scatter = Scatter {
     origin: Point::new(24, 24),
     gap: None,
     color: chrome::PURPLE,
-    tones: &chrome::HALFTONE,
+    tones: Some(Tones {
+        colors: &chrome::HALFTONE,
+        dense: LOBE,
+    }),
     fields: &[Field {
         center: Point::new(236, 236),
         radius: 219.0,
@@ -54,10 +57,12 @@ const SCATTER: Scatter = Scatter {
                 Rectangle::new(Point::new(387, 245), Size::new(79, 125)),
             ],
             quiet: 0.09,
-            peak: 0.43,
+            peak: LOBE,
         },
     }],
 };
+/// The lobes' chance, at which marks take the brighter purples.
+const LOBE: f32 = 0.43;
 const SCATTER_LOOK: Look = Look {
     facing: 0.0,
     density: 1.0,

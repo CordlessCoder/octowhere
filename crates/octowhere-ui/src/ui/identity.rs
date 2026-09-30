@@ -218,7 +218,7 @@ fn scatter() -> Scatter {
         origin: Point::new(12, -2),
         gap: Some((162..=340, 2)),
         color: chrome::shade(chrome::PURPLE, SCATTER_LEVEL),
-        tones: &[],
+        tones: None,
         fields: &[UPPER, LOWER],
     }
 }

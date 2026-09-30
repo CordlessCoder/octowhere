@@ -22,10 +22,8 @@ pub struct Scatter {
     /// scatter has the same gap on both sides.
     pub gap: Option<(core::ops::RangeInclusive<i32>, i32)>,
     pub color: Color,
-    /// Colours for the marks, darkest first, in place of `color`. A mark takes one by how dense
-    /// the field is where it lies, before its look scales it, so a mark keeps its colour as the
-    /// field blooms and breathes; its own number spreads the choice a little.
-    pub tones: &'static [Color],
+    /// Colours for the marks in place of `color`, if any.
+    pub tones: Option<Tones>,
     /// Where on the grid marks may show. Where fields overlap, a point takes its mark from the
     /// first field that shows it.
     pub fields: &'static [Field],
@@ -43,6 +41,15 @@ pub struct Field {
     pub law: Law,
 }
 
+/// Marks' colours, darkest first. A mark takes one by its field's chance where it lies, before its
+/// look scales it, so a mark keeps its colour as the field blooms and breathes: sparse marks the
+/// darker, and marks at `dense` or above the brighter. Its own number spreads the choice a little.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Tones {
+    pub colors: &'static [Color],
+    pub dense: f32,
+}
+
 /// How a field's chance of showing a point varies across it, before a look scales it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Law {
@@ -55,16 +62,6 @@ pub enum Law {
         quiet: f32,
         peak: f32,
     },
-}
-
-impl Law {
-    /// The highest chance it gives.
-    fn peak(self) -> f32 {
-        match self {
-            Self::Radial => 1.0,
-            Self::Lobes { peak, .. } => peak,
-        }
-    }
 }
 
 /// How a field looks on one frame: its dense side faces `facing` radians clockwise from the
@@ -95,8 +92,8 @@ pub const PITCH: i32 = 8;
 const MARK: i32 = 6;
 /// Below this share of its numbers, a shown point draws the hollow mark.
 const HOLLOW: f32 = 0.6;
-/// A mark's tone runs from `TONE_FLOOR` where its field is sparsest across `TONE_RANGE` to where
-/// it is densest, and its own number moves it by up to half of `TONE_SPREAD` either way, so
+/// A mark's tone runs from `TONE_FLOOR` where its field is sparsest across `TONE_RANGE` to its
+/// tones' `dense`, and its own number moves it by up to half of `TONE_SPREAD` either way, so
 /// sparse marks mix the darker tones and dense marks the brighter. `TONE_SEED` seeds that number.
 const TONE_FLOOR: f32 = 0.15;
 const TONE_RANGE: f32 = 0.6;
@@ -112,7 +109,7 @@ impl Scatter {
         origin: Point::new(12, -2),
         gap: Some((197..=317, 2)),
         color: chrome::PURPLE,
-        tones: &[],
+        tones: None,
         fields: &[Field {
             center: Point::new(233, 233),
             radius: 228.0,
@@ -151,7 +148,7 @@ impl Scatter {
                 if result.is_err() {
                     return;
                 }
-                let color = self.tone(tone);
+                let color = self.tone(tone.0, tone.1);
                 result = if hollow {
                     [
                         ((0, 0), (6, 2)),
@@ -226,17 +223,16 @@ impl Scatter {
         }
     }
 
-    /// The colour for a mark whose place in its field's density law, spread by its number, is
-    /// `tone`, from 0 to about 1.
-    fn tone(&self, tone: f32) -> Color {
-        let last = self.tones.len().saturating_sub(1);
-        match self
-            .tones
-            .get(((tone * self.tones.len() as f32) as usize).min(last))
-        {
-            Some(&color) => color,
-            None => self.color,
-        }
+    /// The colour for a mark where its field's chance is `chance`, spread by `spread`, from -0.5
+    /// to 0.5.
+    fn tone(&self, chance: f32, spread: f32) -> Color {
+        let Some(tones) = self.tones else {
+            return self.color;
+        };
+        let tone = TONE_FLOOR + TONE_RANGE * (chance / tones.dense).min(1.0) + TONE_SPREAD * spread;
+        let last = tones.colors.len().saturating_sub(1);
+        let index = ((tone.max(0.0) * tones.colors.len() as f32) as usize).min(last);
+        tones.colors.get(index).copied().unwrap_or(self.color)
     }
 
     fn columns(&self) -> i32 {
@@ -270,7 +266,7 @@ impl Scatter {
         clear: &[Rectangle],
         state: &mut T,
         wanted: impl Fn(&mut T, Rectangle) -> bool,
-        mut mark: impl FnMut(&mut T, usize, Point, bool, f32),
+        mut mark: impl FnMut(&mut T, usize, Point, bool, (f32, f32)),
     ) {
         debug_assert_eq!(looks.len(), self.fields.len());
         let turns: Vec<(f32, f32)> = looks
@@ -382,11 +378,8 @@ impl Scatter {
                         {
                             // A generator of its own, so the tones leave the pattern alone.
                             let spread = number(field.seed ^ TONE_SEED, n) - 0.5;
-                            let tone = TONE_FLOOR
-                                + TONE_RANGE * chance / field.law.peak()
-                                + TONE_SPREAD * spread;
                             let hollow = number(field.seed, n + 1) < HOLLOW;
-                            mark(state, point, corner, hollow, tone);
+                            mark(state, point, corner, hollow, (chance, spread));
                         }
                         break;
                     }
@@ -535,7 +528,7 @@ mod tests {
         origin: Point::new(12, -2),
         gap: None,
         color: chrome::PURPLE,
-        tones: &[],
+        tones: None,
         fields: &[UPPER, LOWER],
     };
     const LOOKS: [Look; 2] = [

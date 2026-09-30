@@ -18,7 +18,7 @@ use super::{
     clock::{ClockState, ClockView, DateTime, ZoneMode, ZoneState},
     icon::{self, Glyph, Tile},
     reveal::{Reveal, draw_revealed, revealed_bounds},
-    scatter::{Field, Law, Look, Scatter},
+    scatter::{Field, Law, Look, Scatter, Tones},
     screens::Battery,
     text,
 };
@@ -109,6 +109,9 @@ const LOWER_LOOK: Look = Look {
     density: 0.28,
 };
 const SCATTER_LEVEL: u8 = 125;
+/// The chance at which the scatter's marks take its brighter purples: the densest tenth of its
+/// marks lie at it or above.
+const DENSE: f32 = 0.8;
 const GNSS: Glyph = [0b00100, 0b01010, 0b10101, 0b01010, 0b00100];
 const RTC: Glyph = [0b11111, 0b10001, 0b10101, 0b10001, 0b11111];
 const STOPPED: Glyph = [0b01010, 0b01010, 0b01010, 0b01010, 0b01010];
@@ -740,7 +743,10 @@ fn scatter() -> Scatter {
         origin: Point::new(12, -2),
         gap: Some((193..=322, 0)),
         color: chrome::shade(chrome::PURPLE, SCATTER_LEVEL),
-        tones: &[],
+        tones: Some(Tones {
+            colors: &chrome::HALFTONE,
+            dense: DENSE,
+        }),
         fields: &[UPPER, LOWER],
     }
 }
