@@ -36,6 +36,8 @@
 //! - K: the power key. Released within a second it is a short press; held a second, a long one.
 //!   O: the BOOT key, the same way.
 //! - Drag down from a face for the settings panel, as on the device.
+//! - While the screen rests on the always-on face or is dark, a click is the touch controller's
+//!   tap gesture, as its gesture mode reports one, so a double click wakes it.
 //! - Tab: next screen without the slide. P: save the window to `ui-sim-<n>.png` in the current
 //!   directory. V: start or stop recording it to `ui-sim-<n>.gif`, or `.mp4` with `--mp4`,
 //!   which keeps the mask it started with. M: mask the corners or show them. Esc: quit.
@@ -66,7 +68,7 @@ use octowhere_ui::{
         compass::CompassView,
         screens::{Battery, Gnss, PeripheralState},
         script::{self, Driver},
-        stage::{Input, Key as PowerKey, Motion, Sensors, Stage, Store, Touch},
+        stage::{Input, Key as PowerKey, Motion, Sensors, Stage, Store, Touch, TouchGesture},
     },
 };
 
@@ -76,6 +78,8 @@ mod scenes;
 
 const WIDTH: usize = LCD_WIDTH as usize;
 const HEIGHT: usize = LCD_HEIGHT as usize;
+/// The longest press the touch controller's gesture mode takes for a tap.
+const TAP_US: u64 = 300_000;
 /// The motion task's sample periods, fast while a compass screen shows.
 const FAST_SAMPLE_US: u64 = 20_000;
 /// How long K is held before it counts as a long press, as the power controller is set to.
@@ -572,6 +576,8 @@ fn interact(mut window: Window, masked: bool, extension: &str) {
     let mut zone_changed = false;
     // When K went down, and whether it has been held long enough to count as a long press.
     let (mut power_key, mut boot_key) = (Held::default(), Held::default());
+    // When the button went down while the controller watched for gestures.
+    let mut pressed_at = None;
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
         let now = start.elapsed().as_micros() as u64 + 1;
@@ -641,13 +647,28 @@ fn interact(mut window: Window, masked: bool, extension: &str) {
             .get_mouse_pos(MouseMode::Discard)
             .filter(|_| window.get_mouse_down(MouseButton::Left))
             .map(|(x, y)| Point::new(x as i32, y as i32));
+        let touch = if window.is_key_down(Key::H) {
+            Some(Touch::Cover)
+        } else if stage.watches_for_wake() {
+            // The controller's gesture mode reports a tap as the finger lifts, and no contacts.
+            match (contact, pressed_at) {
+                (Some(_), None) => {
+                    pressed_at = Some(now);
+                    None
+                }
+                (None, Some(at)) => {
+                    pressed_at = None;
+                    (now - at < TAP_US).then_some(Touch::Gesture(TouchGesture::Tap))
+                }
+                _ => None,
+            }
+        } else {
+            pressed_at = None;
+            Some(Touch::Contacts([contact, None]))
+        };
         let update = stage.step(Input {
             now,
-            touch: Some(if window.is_key_down(Key::H) {
-                Touch::Cover
-            } else {
-                Touch::Contacts([contact, None])
-            }),
+            touch,
             motion: motion_due.then(|| readings.motion()),
             sensors: sensors_due.then(|| sensors(&readings)),
             boot: None,
