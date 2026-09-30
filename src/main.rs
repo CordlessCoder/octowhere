@@ -1730,9 +1730,16 @@ async fn bring_up(spawner: Spawner, parts: Parts, zones: ZoneTracker) {
     // The I²C pull-ups share VCC3V3 with the secondary board.
     Timer::after(Duration::from_millis(board::I2C_POWER_SETTLE_MS)).await;
 
+    // A device can end a read early, which leaves the peripheral waiting for commands that never
+    // run; without a deadline the driver yields for ever, and a yield on `BUS_EXECUTOR` starves
+    // the core. The timeout is about nine byte times at the bus clock.
     let i2c = I2c::new(
         parts.i2c,
-        esp_hal::i2c::master::Config::default().with_frequency(Rate::from_hz(board::I2C_FREQ_HZ)),
+        esp_hal::i2c::master::Config::default()
+            .with_frequency(Rate::from_hz(board::I2C_FREQ_HZ))
+            .with_software_timeout(esp_hal::i2c::master::SoftwareTimeout::PerByte(
+                esp_hal::time::Duration::from_micros(200),
+            )),
     )
     .expect("I2C failed")
     .with_scl(parts.scl)
