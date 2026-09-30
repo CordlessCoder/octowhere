@@ -1,0 +1,63 @@
+INT low, the last time before each read, ms: n=1943 min=  2.01 p10=  2.06 med=  2.33 p90=  2.49 max=  2.63
+drag from rest, slop crossed → first change, ms: —
+drag from rest, slop crossed → first change, compass, ms: —
+
+at rest: 25 reads, 15 changed the panel
+  int/contact 21, poll/stale 4
+  reports overwritten before a read: 0
+  ms, over frames that changed the panel:
+    edge → task wakes            n=  12 min=  0.11 p10=  0.12 med=  0.14 p90=  0.21 max=  0.23
+    wake → read done             n=  15 min=  0.79 p10=  0.99 med=  1.04 p90=  1.21 max=  1.24
+    read → frame loop takes it   n=  15 min=  0.52 p10=  1.68 med= 15.61 p90= 51.21 max= 55.71
+    step                         n=  15 min=  0.36 p10=  0.76 med=  1.21 p90=  8.72 max=  8.73
+    draw                         n=  15 min=  5.36 p10=  5.38 med= 26.15 p90= 32.62 max= 34.05
+    draw → core 1 takes frame    n=  15 min=  0.23 p10=  0.27 med=  0.30 p90=  1.57 max=  4.08
+    take → TE                    n=  15 min=  1.89 p10=  3.19 med=  8.76 p90= 15.49 max= 15.60
+    flush                        n=  15 min=  1.36 p10=  1.70 med= 13.08 p90= 14.45 max= 14.64
+    total                        n=  15 min= 45.40 p10= 52.15 med= 72.61 p90= 98.08 max=101.34
+    unchanged: → drawn or taken  n=  10 min=  2.62 p10=  3.00 med=  3.10 p90= 16.01 max= 16.01
+
+during a drag: 366 reads, 59 changed the panel
+  int/contact 63, int/lift 4, int/stale 271, poll/contact 21, poll/lift 2, poll/stale 5
+  reports overwritten before a read: 58
+  ms, over frames that changed the panel:
+    edge → task wakes            n=  44 min=  0.05 p10=  0.08 med=  0.36 p90=  6.75 max=  9.93
+    wake → read done             n=  59 min=  0.60 p10=  0.63 med=  1.01 p90=  1.08 max=  1.40
+    read → frame loop takes it   n=  59 min=  1.15 p10=  1.94 med= 55.04 p90= 66.35 max= 68.19
+    step                         n=  59 min=  0.66 p10=  0.96 med=  1.27 p90=  8.29 max=  8.96
+    draw                         n=  59 min=  0.80 p10=  5.14 med= 27.82 p90= 31.25 max= 34.22
+    draw → core 1 takes frame    n=  59 min=  0.24 p10=  0.27 med=  0.33 p90=  1.37 max=  3.78
+    take → TE                    n=  59 min=  0.70 p10=  2.61 med=  8.65 p90= 14.78 max= 16.82
+    flush                        n=  59 min=  0.70 p10=  1.96 med= 13.95 p90= 14.95 max= 16.49
+    total                        n=  59 min= 16.51 p10= 55.04 med=101.44 p90=124.96 max=129.92
+    unchanged: → drawn or taken  n= 307 min=  2.48 p10=  2.80 med=  3.36 p90= 10.41 max=105.93
+
+at rest, compass sampling fast: 65 reads, 46 changed the panel
+  int/contact 22, int/stale 1, poll/stale 42
+  reports overwritten before a read: 0
+  ms, over frames that changed the panel:
+    edge → task wakes            n=   9 min=  0.08 p10=  0.08 med=  0.12 p90=  0.58 max=  0.58
+    wake → read done             n=  46 min=  0.71 p10=  0.86 med=  1.00 p90=  1.03 max=  1.50
+    read → frame loop takes it   n=  46 min=  0.49 p10=  0.98 med= 16.14 p90= 56.12 max= 59.88
+    step                         n=  46 min=  0.10 p10=  0.13 med=  0.78 p90=  1.53 max=  2.95
+    draw                         n=  46 min=  2.25 p10= 15.02 med= 22.50 p90= 29.29 max= 37.93
+    draw → core 1 takes frame    n=  46 min=  0.24 p10=  0.30 med=  0.39 p90=  1.67 max= 12.68
+    take → TE                    n=  46 min=  0.26 p10=  1.53 med=  8.55 p90= 15.49 max= 17.05
+    flush                        n=  46 min=  0.69 p10=  1.34 med= 15.16 p90= 16.18 max= 17.08
+    total                        n=  46 min= 29.16 p10= 42.57 med= 53.82 p90=108.65 max=116.62
+    unchanged: → drawn or taken  n=  19 min=  1.89 p10=  1.90 med=  2.70 p90= 18.06 max= 50.27
+
+during a drag, compass sampling fast: 1490 reads, 181 changed the panel
+  int/contact 125, int/lift 2, int/stale 962, poll/contact 132, poll/lift 30, poll/stale 239
+  reports overwritten before a read: 241
+  ms, over frames that changed the panel:
+    edge → task wakes            n= 159 min=  0.07 p10=  0.12 med=  2.59 p90=  8.90 max= 21.15
+    wake → read done             n= 181 min=  0.60 p10=  0.83 med=  1.02 p90=  1.33 max=  4.50
+    read → frame loop takes it   n= 181 min=  0.14 p10= 19.76 med= 49.11 p90= 61.52 max= 71.39
+    step                         n= 181 min=  0.07 p10=  0.95 med=  1.35 p90=  1.79 max=  3.41
+    draw                         n= 181 min=  2.14 p10= 16.01 med= 22.33 p90= 29.07 max= 35.43
+    draw → core 1 takes frame    n= 181 min=  0.13 p10=  0.27 med=  0.38 p90=  7.98 max= 13.10
+    take → TE                    n= 181 min=  0.26 p10=  1.70 med=  9.52 p90= 15.81 max= 17.13
+    flush                        n= 181 min=  0.69 p10=  1.26 med= 14.74 p90= 15.81 max= 16.70
+    total                        n= 181 min= 34.19 p10= 59.76 med=100.77 p90=119.97 max=137.71
+    unchanged: → drawn or taken  n=1309 min=  1.66 p10=  2.01 med=  2.45 p90=  6.81 max=120.86

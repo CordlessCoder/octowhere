@@ -55,6 +55,12 @@ lora-link-tx = []
 lora-link-rx = []
 # Lets a debugger set the RTC, as GNSS or as the RTC's own time; see `tools/rtc-inject.py`.
 rtc-inject = []
+# Times each touch read from the controller's report to the flush that shows it.
+touch-latency-bench = []
+# Replaces the controller's reports with a scripted finger's, on top of `touch-latency-bench`.
+touch-latency-synthetic = ["touch-latency-bench"]
+# Puts back the old handoff, where a read waits for the frame loop to take the one before.
+touch-latency-fifo = ["touch-latency-synthetic"]
 
 [patch.crates-io]
 tca9554 = { git = "https://github.com/CordlessCoder/tca9554-rs", rev = "dd76e69" }

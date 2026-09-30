@@ -255,21 +255,27 @@ static TOUCH_READS: BlockingMutex<CriticalSectionRawMutex, RefCell<heapless::Deq
     BlockingMutex::new(RefCell::new(heapless::Deque::new()));
 static TOUCH_READY: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
-type TouchRead = Result<TouchData, ()>;
-
-/// A contact, a lift or a cover, rather than a stale or failed read.
-fn is_report(read: &TouchRead) -> bool {
-    matches!(
-        read,
-        Ok(TouchData::Points(_)
-            | TouchData::Lifted(_)
-            | TouchData::Gesture(_)
-            | TouchData::CoverGesture)
-    )
+struct TouchRead {
+    read: Result<TouchData, ()>,
+    #[cfg(feature = "touch-latency-bench")]
+    trace: touch_latency::ReadTrace,
 }
 
-fn is_contact(read: &TouchRead) -> bool {
-    matches!(read, Ok(TouchData::Points(points)) if !points.is_empty())
+impl TouchRead {
+    /// A contact, a lift or a cover, rather than a stale or failed read.
+    fn is_report(&self) -> bool {
+        matches!(
+            self.read,
+            Ok(TouchData::Points(_)
+                | TouchData::Lifted(_)
+                | TouchData::Gesture(_)
+                | TouchData::CoverGesture)
+        )
+    }
+
+    fn is_contact(&self) -> bool {
+        matches!(&self.read, Ok(TouchData::Points(points)) if !points.is_empty())
+    }
 }
 
 /// Queues a read for the frame loop without waiting for it to be taken. A newer contact
@@ -280,9 +286,9 @@ fn put_touch_read(read: TouchRead) {
         let mut reads = reads.borrow_mut();
         let replace = match reads.back() {
             None => false,
-            Some(back) if !is_report(&read) && is_report(back) => return,
+            Some(back) if !read.is_report() && back.is_report() => return,
             Some(back) => {
-                !is_report(&read) || is_contact(back) || !is_report(back) || reads.is_full()
+                !read.is_report() || back.is_contact() || !back.is_report() || reads.is_full()
             }
         };
         if replace && let Some(back) = reads.back_mut() {
@@ -298,6 +304,8 @@ fn put_touch_read(read: TouchRead) {
 async fn take_touch_read() -> TouchRead {
     loop {
         if let Some(read) = TOUCH_READS.lock(|reads| reads.borrow_mut().pop_front()) {
+            #[cfg(feature = "touch-latency-fifo")]
+            touch_latency::TAKEN.signal(());
             return read;
         }
         TOUCH_READY.wait().await;
@@ -312,6 +320,9 @@ enum ZoneChoice {
     Cleared,
 }
 pub static PSRAM_HEAP: esp_alloc::EspHeap = esp_alloc::EspHeap::empty();
+
+#[cfg(feature = "touch-latency-bench")]
+mod touch_latency;
 
 #[cfg(feature = "gnss-full-power")]
 const GNSS_LOW_POWER_MODE: LowPowerMode = LowPowerMode::Disabled;
@@ -591,6 +602,8 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
         } = state;
 
         let start = Instant::now();
+        #[cfg(feature = "touch-latency-bench")]
+        let touch = timings.touch.take();
 
         if *display_on == Some(true) && display.display_on().await.is_err() {
             warn!("[DISPLAY] display on failed");
@@ -664,6 +677,18 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
             warn!("[DISPLAY] display off failed");
         }
         timings.spi_time = start.elapsed() - timings.vsync_wait;
+        #[cfg(feature = "touch-latency-bench")]
+        if let Some(trace) = touch {
+            let damage = if is_first_flush || dirty.is_full() {
+                "full"
+            } else if dirty.is_empty() {
+                "none"
+            } else {
+                "part"
+            };
+            let te = start + timings.vsync_wait;
+            trace.log(start, te, damage);
+        }
 
         timings.swap_spi = prev_swap_spi;
 
@@ -1303,6 +1328,7 @@ async fn zone_task(mut zones: ZoneTracker) {
 /// Reads the touch controller when it signals a report, or when the frame loop asks through
 /// `TOUCH_POLL`, and queues each read for the frame loop. Puts the controller in and out of
 /// gesture mode as `TOUCH_WAKE_GESTURES` asks, trying again each second until it switches.
+#[cfg(not(feature = "touch-latency-synthetic"))]
 #[embassy_executor::task]
 async fn touch_task(mut touch: TouchDriver) {
     const RETRY: Duration = Duration::from_secs(1);
@@ -1327,7 +1353,7 @@ async fn touch_task(mut touch: TouchDriver) {
             }
             Timer::after(RETRY).await;
         };
-        match select4(
+        let by_poll = match select4(
             touch.wait_for_touch(),
             TOUCH_POLL.wait(),
             TOUCH_WAKE_GESTURES.wait(),
@@ -1340,12 +1366,54 @@ async fn touch_task(mut touch: TouchDriver) {
                 wanted = asked;
                 continue;
             }
-            Either4::First(Ok(())) | Either4::Second(()) => {}
-        }
+            Either4::First(Ok(())) => false,
+            Either4::Second(()) => true,
+        };
+        #[cfg(feature = "touch-latency-bench")]
+        let trace = touch_latency::begin_read(by_poll);
+        #[cfg(not(feature = "touch-latency-bench"))]
+        let _ = by_poll;
         let read = touch.read_touch_data().await.map_err(|_| ());
         // A poll asked for while this read ran is answered by it.
         TOUCH_POLL.reset();
-        put_touch_read(read);
+        put_touch_read(TouchRead {
+            read,
+            #[cfg(feature = "touch-latency-bench")]
+            trace: touch_latency::end_read(trace),
+        });
+    }
+}
+
+/// Reads the touch controller on a synthetic finger's reports instead of its own, so the chain
+/// after it can be timed without a hand on the panel. Each read still goes over the bus.
+#[cfg(feature = "touch-latency-synthetic")]
+#[embassy_executor::task]
+async fn touch_task(mut touch: TouchDriver) {
+    // Past the start-up sequence, which takes no touch.
+    let mut finger = touch_latency::Finger::new(Instant::now() + Duration::from_secs(10));
+    loop {
+        let woke = select(Timer::at(finger.next_pulse()), TOUCH_POLL.wait()).await;
+        // Pulses that fell during the last read still leave their reports.
+        while finger.next_pulse() <= Instant::now() {
+            touch_latency::synthetic_edge(finger.next_pulse());
+            finger.pulse();
+        }
+        let by_poll = matches!(woke, Either::Second(()));
+        let trace = touch_latency::begin_read(by_poll);
+        let read = touch
+            .read_touch_data()
+            .await
+            .map(|_| finger.read())
+            .map_err(|_| ());
+        TOUCH_POLL.reset();
+        #[cfg(feature = "touch-latency-fifo")]
+        while TOUCH_READS.lock(|reads| !reads.borrow().is_empty()) {
+            touch_latency::TAKEN.wait().await;
+        }
+        put_touch_read(TouchRead {
+            read,
+            trace: touch_latency::end_read(trace),
+        });
     }
 }
 
@@ -1565,6 +1633,9 @@ struct Timings {
     swap_draw: Duration,
     swap_spi: Duration,
     frametime: Duration,
+    /// The touch read this frame's step took.
+    #[cfg(feature = "touch-latency-bench")]
+    touch: Option<touch_latency::FrameTrace>,
 }
 
 /// Marks the one-pixel border of `region`.
@@ -1663,6 +1734,8 @@ struct Parts {
     touch_int: peripherals::GPIO11<'static>,
     imu_int2: peripherals::GPIO21<'static>,
     bus_interrupt: peripherals::FROM_CPU_INTR2<'static>,
+    #[cfg(feature = "touch-latency-bench")]
+    pcnt: peripherals::PCNT<'static>,
 }
 
 #[embassy_executor::task]
@@ -1748,6 +1821,8 @@ async fn async_main(spawner: Spawner) {
         touch_int: peripherals.GPIO11,
         imu_int2: peripherals.GPIO21,
         bus_interrupt: peripherals.FROM_CPU_INTR2,
+        #[cfg(feature = "touch-latency-bench")]
+        pcnt: peripherals.PCNT,
     };
     let zones = ZoneTracker {
         mode: saved.zone_mode,
@@ -1817,6 +1892,15 @@ async fn bring_up(spawner: Spawner, parts: Parts, zones: ZoneTracker) {
     let mut rtc = Pcf85063aRtc::new(i2c.clone());
     let touch_rst = Output::new(parts.touch_rst, Level::High, OutputConfig::default());
     let touch_int = Input::new(parts.touch_int, InputConfig::default());
+    #[cfg(all(
+        feature = "touch-latency-bench",
+        not(feature = "touch-latency-synthetic")
+    ))]
+    touch_latency::watch(
+        parts.pcnt,
+        touch_int.peripheral_input(),
+        touch_int.peripheral_input(),
+    );
     let mut touch = Cst9217::new(i2c.clone(), touch_rst, touch_int, embassy_time::Delay);
     let gyro_range = ph_qmi8658::GyroRange::Dps512;
     let accel_range = ph_qmi8658::AccelRange::G2;
@@ -2293,6 +2377,8 @@ async fn frame_loop(
                 let until = Duration::from_micros(due.saturating_sub(Instant::now().as_micros()));
                 wait_timeout = wait_timeout.min(until);
             }
+            #[cfg(feature = "touch-latency-bench")]
+            let waiting_since = Instant::now();
             let (touch_read, sensor_state, motion_state, boot, key, boot_key) = match select4(
                 take_touch_read(),
                 select4(
@@ -2318,6 +2404,19 @@ async fn frame_loop(
                 Either4::Third(state) => (None, None, Some(state), None, None, None),
                 Either4::Fourth(()) => (None, None, None, None, None, None),
             };
+            #[cfg(feature = "touch-latency-bench")]
+            {
+                timings.touch = touch_read.as_ref().map(|touch| {
+                    touch_latency::received(
+                        touch.trace,
+                        &touch.read,
+                        in_contact,
+                        COMPASS_ACTIVE.load(Ordering::Relaxed),
+                        waiting_since,
+                    )
+                });
+            }
+            let touch_read = touch_read.map(|touch| touch.read);
             match touch_read {
                 Some(Ok(_)) => last_touch_poll = Instant::now(),
                 Some(Err(())) => warn!("[TOUCH] read failed"),
@@ -2375,6 +2474,10 @@ async fn frame_loop(
                 TOUCH_WAKE_GESTURES.signal(wake_gestures);
                 asked_wake_gestures = wake_gestures;
             }
+            #[cfg(feature = "touch-latency-bench")]
+            if let Some(trace) = &mut timings.touch {
+                trace.stepped();
+            }
             if update.recalibrate {
                 info!("[COMPASS] recalibrating on request");
                 COMPASS_RECALIBRATE.store(true, Ordering::Relaxed);
@@ -2426,6 +2529,10 @@ async fn frame_loop(
                 stage.draw(fb);
             } else if !repaint.is_empty() {
                 stage.draw(&mut chrome::Clip::new(fb, &repaint));
+            }
+            #[cfg(feature = "touch-latency-bench")]
+            if let Some(trace) = &mut timings.touch {
+                trace.drawn();
             }
             // The panel already shows the step before, so only this step's pixels change on it.
             dirty.clone_from(changed);
