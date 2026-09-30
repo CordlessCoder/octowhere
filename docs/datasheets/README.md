@@ -20,8 +20,11 @@ for revisions before designing new hardware around a component.
 | `SX1272_Datasheet.pdf` | Semtech SX1272/73 LoRa transceiver | [Semtech product page](https://www.semtech.com/products/wireless-rf/lora-connect/sx1272) |
 | `SX1272_73_Errata.pdf` | Semtech SX1272/73 V2b errata note | [Semiconductor mirror](https://www.micro-semiconductor.se/datasheet/b2-SX1272DVK1BAS.pdf) |
 | `ENG_DS_2195835_A1.pdf` | TE Connectivity 2195835 ISM 868/915 MHz flexible PCB antenna; the board uses 2195835-3 | [TE product page](https://www.te.com/en/product-2195835-3.html) |
-| `CST9217_Datasheet_V1.0.pdf` | Hynitron CST9217 touch controller | [Scribd copy](https://www.scribd.com/document/843319208/3-%E8%A7%A6%E6%91%B8%E8%8A%AF%E7%89%87%E6%95%B0%E6%8D%AE%E6%89%8B%E5%86%8C-CST9217-V1-0) |
 | `AXP2101_SWcharge_V1.0.pdf` | X-Powers AXP2101 power-management IC | [Waveshare mirror](https://files.waveshare.com/wiki/common/X-power-AXP2101_SWcharge_V1.0.pdf) |
 
 The board schematic and board-level pin map remain in the Waveshare
 documentation rather than this directory.
+
+There is no CST9217 reference here. The only copy found online repeats its first page, a feature
+list, and no register map has been published. Hynitron's own driver, `hyn_cst92xx.c`, is the
+reference for its commands; `docs/hardware-notes.md` lists them.
