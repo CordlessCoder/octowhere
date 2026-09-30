@@ -46,6 +46,7 @@ pub struct Field {
 /// darker, and marks at `dense` or above the brighter. Its own number spreads the choice a little.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Tones {
+    /// At most four.
     pub colors: &'static [Color],
     pub dense: f32,
 }
@@ -148,7 +149,9 @@ impl Scatter {
                 if result.is_err() {
                     return;
                 }
-                let color = self.tone(tone.0, tone.1);
+                let color = self
+                    .tones
+                    .map_or(self.color, |tones| tones.colors[usize::from(tone)]);
                 result = if hollow {
                     [
                         ((0, 0), (6, 2)),
@@ -174,7 +177,8 @@ impl Scatter {
         result
     }
 
-    /// Which points show with `looks`, and which of them are hollow, for [`Scatter::changed`].
+    /// Which points show with `looks`, which of them are hollow, and their tones, for
+    /// [`Scatter::changed`].
     #[must_use]
     pub fn shown(&self, looks: &[Look]) -> Shown {
         self.shown_clear_of(looks, &[])
@@ -187,16 +191,23 @@ impl Scatter {
         let mut shown = Shown {
             shown: vec![0; words],
             hollow: vec![0; words],
+            tone: [vec![0; words], vec![0; words]],
         };
         self.each_shown(
             looks,
             clear,
             &mut shown,
             |_, _| true,
-            |shown, point, _, hollow, _| {
-                shown.shown[point / 32] |= 1 << (point % 32);
+            |shown, point, _, hollow, tone| {
+                let bit = 1 << (point % 32);
+                shown.shown[point / 32] |= bit;
                 if hollow {
-                    shown.hollow[point / 32] |= 1 << (point % 32);
+                    shown.hollow[point / 32] |= bit;
+                }
+                for (place, bits) in shown.tone.iter_mut().enumerate() {
+                    if tone >> place & 1 != 0 {
+                        bits[point / 32] |= bit;
+                    }
                 }
             },
         );
@@ -204,15 +215,18 @@ impl Scatter {
     }
 
     /// Adds the cell of every point that shows in one of `before` and `after` and not the other,
-    /// or shows in both with a different mark.
+    /// or shows in both with a different mark or tone.
     pub fn changed(&self, before: &Shown, after: &Shown, changed: &mut Dirty) {
-        let words = before
-            .shown
-            .iter()
-            .zip(&after.shown)
-            .zip(before.hollow.iter().zip(&after.hollow));
-        for (word, ((a, b), (hollow_a, hollow_b))) in words.enumerate() {
-            let mut differ = (a ^ b) | (hollow_a ^ hollow_b);
+        let bits = [
+            (&before.shown, &after.shown),
+            (&before.hollow, &after.hollow),
+            (&before.tone[0], &after.tone[0]),
+            (&before.tone[1], &after.tone[1]),
+        ];
+        for word in 0..before.shown.len().min(after.shown.len()) {
+            let mut differ = bits
+                .iter()
+                .fold(0, |differ, (a, b)| differ | (a[word] ^ b[word]));
             while differ != 0 {
                 let point = word as i32 * 32 + differ.trailing_zeros() as i32;
                 differ &= differ - 1;
@@ -223,16 +237,15 @@ impl Scatter {
         }
     }
 
-    /// The colour for a mark where its field's chance is `chance`, spread by `spread`, from -0.5
-    /// to 0.5.
-    fn tone(&self, chance: f32, spread: f32) -> Color {
+    /// The index of the colour for a mark where its field's chance is `chance`, spread by
+    /// `spread`, from -0.5 to 0.5; 0 without tones.
+    fn tone(&self, chance: f32, spread: f32) -> u8 {
         let Some(tones) = self.tones else {
-            return self.color;
+            return 0;
         };
         let tone = TONE_FLOOR + TONE_RANGE * (chance / tones.dense).min(1.0) + TONE_SPREAD * spread;
         let last = tones.colors.len().saturating_sub(1);
-        let index = ((tone.max(0.0) * tones.colors.len() as f32) as usize).min(last);
-        tones.colors.get(index).copied().unwrap_or(self.color)
+        ((tone.max(0.0) * tones.colors.len() as f32) as usize).min(last) as u8
     }
 
     fn columns(&self) -> i32 {
@@ -266,7 +279,7 @@ impl Scatter {
         clear: &[Rectangle],
         state: &mut T,
         wanted: impl Fn(&mut T, Rectangle) -> bool,
-        mut mark: impl FnMut(&mut T, usize, Point, bool, (f32, f32)),
+        mut mark: impl FnMut(&mut T, usize, Point, bool, u8),
     ) {
         debug_assert_eq!(looks.len(), self.fields.len());
         let turns: Vec<(f32, f32)> = looks
@@ -379,7 +392,8 @@ impl Scatter {
                             // A generator of its own, so the tones leave the pattern alone.
                             let spread = number(field.seed ^ TONE_SEED, n) - 0.5;
                             let hollow = number(field.seed, n + 1) < HOLLOW;
-                            mark(state, point, corner, hollow, (chance, spread));
+                            let tone = self.tone(chance, spread);
+                            mark(state, point, corner, hollow, tone);
                         }
                         break;
                     }
@@ -400,11 +414,13 @@ fn number(seed: u32, n: u32) -> f32 {
     (x >> 8) as f32 / (1 << 24) as f32
 }
 
-/// Which of a scatter's grid points show, and which of those are hollow, a bit each.
+/// Which of a scatter's grid points show, and which of those are hollow, a bit each, and the
+/// index of each one's tone in two bits.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Shown {
     shown: Vec<u32>,
     hollow: Vec<u32>,
+    tone: [Vec<u32>; 2],
 }
 
 /// 1/√x for positive x, to within a few units in the last place: a guess from the float's bits
@@ -567,6 +583,34 @@ mod tests {
         expected.extend(lower.iter().filter(|(corner, _)| !overlap(corner)));
         expected.sort_by_key(|(corner, _)| (corner.y, corner.x));
         assert_eq!(each(&TWO, &LOOKS), expected);
+    }
+
+    #[test]
+    fn a_mark_that_changes_tone_is_damaged() {
+        let toned = Scatter {
+            tones: Some(Tones {
+                colors: &chrome::HALFTONE,
+                dense: 0.7,
+            }),
+            ..TWO
+        };
+        let before = toned.shown(&LOOKS);
+        let point = before.shown.iter().enumerate().find_map(|(word, bits)| {
+            (*bits != 0).then(|| word * 32 + bits.trailing_zeros() as usize)
+        });
+        let point = point.expect("a mark shows");
+        let mut after = before.clone();
+        after.tone[1][point / 32] ^= 1 << (point % 32);
+        let mut changed = Dirty::default();
+        toned.changed(&before, &after, &mut changed);
+        assert!(!changed.is_empty());
+        // The dense side faces the look, so turning it moves marks between tones.
+        let turned = LOOKS.map(|look| Look {
+            facing: look.facing + 1.0,
+            ..look
+        });
+        let later = toned.shown(&turned);
+        assert_ne!(before.tone, later.tone);
     }
 
     #[test]

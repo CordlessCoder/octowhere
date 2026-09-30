@@ -20,7 +20,7 @@ use embedded_graphics::{
 
 use super::{
     clock::ClockView,
-    scatter::{Field, Law, Look, Scatter, Shown},
+    scatter::{Field, Law, Look, Scatter, Shown, Tones},
     screens, smooth,
     startup::{self, CENTER, Context},
     text,
@@ -182,6 +182,9 @@ const TURN_EVERY: u32 = 11;
 const TURNS: u32 = 5;
 const TURN: f32 = 0.09;
 const SCATTER_LEVEL: u8 = 69;
+/// The chance at which the scatter's marks take its brighter purples: the densest tenth of its
+/// marks lie at it or above.
+const DENSE: f32 = 0.71;
 
 /// From this frame only the scatter's turns and the clock's digits change. Before it, a frame
 /// redraws everything.
@@ -218,7 +221,10 @@ fn scatter() -> Scatter {
         origin: Point::new(12, -2),
         gap: Some((162..=340, 2)),
         color: chrome::shade(chrome::PURPLE, SCATTER_LEVEL),
-        tones: None,
+        tones: Some(Tones {
+            colors: &chrome::HALFTONE,
+            dense: DENSE,
+        }),
         fields: &[UPPER, LOWER],
     }
 }
