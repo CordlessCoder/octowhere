@@ -63,6 +63,8 @@ touch-latency-synthetic = ["touch-latency-bench"]
 touch-latency-fifo = ["touch-latency-synthetic"]
 # Logs every read as `touch_task` makes it, including those the frame loop never takes.
 touch-read-log = ["touch-latency-bench"]
+# Steps the touch controller through its modes on each short BOOT press, logging every read.
+touch-mode-probe = ["touch-read-log"]
 
 [patch.crates-io]
 tca9554 = { git = "https://github.com/CordlessCoder/tca9554-rs", rev = "dd76e69" }

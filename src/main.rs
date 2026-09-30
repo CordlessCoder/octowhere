@@ -1334,6 +1334,8 @@ async fn touch_task(mut touch: TouchDriver) {
     const RETRY: Duration = Duration::from_secs(1);
     let mut gestures = false;
     let mut wanted = false;
+    #[cfg(feature = "touch-mode-probe")]
+    let mut probe_step = 0;
     loop {
         if gestures != wanted {
             let switched = if wanted {
@@ -1353,14 +1355,29 @@ async fn touch_task(mut touch: TouchDriver) {
             }
             Timer::after(RETRY).await;
         };
-        let by_poll = match select4(
-            touch.wait_for_touch(),
-            TOUCH_POLL.wait(),
-            TOUCH_WAKE_GESTURES.wait(),
-            retry,
+        #[cfg(feature = "touch-mode-probe")]
+        let step_mode = touch_latency::MODE_STEP.wait();
+        #[cfg(not(feature = "touch-mode-probe"))]
+        let step_mode = core::future::pending::<()>();
+        let woke = select(
+            select4(
+                touch.wait_for_touch(),
+                TOUCH_POLL.wait(),
+                TOUCH_WAKE_GESTURES.wait(),
+                retry,
+            ),
+            step_mode,
         )
-        .await
-        {
+        .await;
+        let woke = match woke {
+            Either::First(woke) => woke,
+            Either::Second(()) => {
+                #[cfg(feature = "touch-mode-probe")]
+                touch_latency::step_mode(&mut touch, &mut probe_step).await;
+                continue;
+            }
+        };
+        let by_poll = match woke {
             Either4::First(Err(_)) | Either4::Fourth(()) => continue,
             Either4::Third(asked) => {
                 wanted = asked;
@@ -2484,6 +2501,13 @@ async fn frame_loop(
             }
             #[cfg(feature = "touch-latency-bench")]
             touch_latency::contact_step(in_contact, stage.in_contact());
+            #[cfg(feature = "touch-mode-probe")]
+            {
+                if matches!(boot_key, Some(StageKey::Short)) {
+                    touch_latency::MODE_STEP.signal(());
+                }
+                touch_latency::heartbeat();
+            }
             if update.recalibrate {
                 info!("[COMPASS] recalibrating on request");
                 COMPASS_RECALIBRATE.store(true, Ordering::Relaxed);

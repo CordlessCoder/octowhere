@@ -293,7 +293,7 @@ impl<I: I2c, RST: OutputPin, INT, DELAY: embedded_hal_async::delay::DelayNs>
 
     /// Sends a mode command, after the exchange Hynitron's driver makes before each one. The
     /// command goes even if the exchange is not answered, as that driver's does.
-    async fn command(&mut self, command: u16) -> Result<(), I::Error> {
+    pub async fn command(&mut self, command: u16) -> Result<(), I::Error> {
         for _ in 0..3 {
             if self
                 .i2c

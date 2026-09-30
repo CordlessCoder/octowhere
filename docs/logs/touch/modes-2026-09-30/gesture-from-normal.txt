@@ -1,0 +1,205 @@
+I (404) esp_image: segment 3: paddr=00138678 vaddr=3fc8cb5c size2.170798 [INFO ] [BEAT] frame loop at=2170722 int_falls=0 int_rises=0
+3.174639 [INFO ] [BEAT] frame loop at=3174550 int_falls=0 int_rises=0
+4.174638 [INFO ] [BEAT] frame loop at=4174557 int_falls=0 int_rises=0
+5.174648 [INFO ] [BEAT] frame loop at=5174569 int_falls=0 int_rises=0
+6.174645 [INFO ] [BEAT] frame loop at=6174569 int_falls=0 int_rises=0
+7.184949 [INFO ] [BEAT] frame loop at=7184879 int_falls=0 int_rises=0
+8.185247 [INFO ] [BEAT] frame loop at=8185171 int_falls=0 int_rises=0
+9.185743 [INFO ] [BEAT] frame loop at=9185674 int_falls=0 int_rises=0
+10.186150 [INFO ] [BEAT] frame loop at=10186083 int_falls=0 int_rises=0
+11.186268 [INFO ] [BEAT] frame loop at=11186199 int_falls=0 int_rises=0
+12.187718 [INFO ] [BEAT] frame loop at=12187644 int_falls=0 int_rises=0
+13.188345 [INFO ] [BEAT] frame loop at=13188275 int_falls=0 int_rises=0
+14.188857 [INFO ] [BEAT] frame loop at=14188787 int_falls=0 int_rises=0
+14.395782 [INFO ] [KEY] BOOT Short
+14.398057 [INFO ] [TOUCH-MODE] step=1 mode=normal command=0xd109 handshake=true sent=true at=14398019
+15.189425 [INFO ] [BEAT] frame loop at=15189353 int_falls=0 int_rises=0
+16.189668 [INFO ] [BEAT] frame loop at=16189598 int_falls=0 int_rises=0
+17.189865 [INFO ] [BEAT] frame loop at=17189793 int_falls=0 int_rises=0
+18.198001 [INFO ] [BEAT] frame loop at=18197927 int_falls=0 int_rises=0
+18.406325 [INFO ] [KEY] BOOT Short
+18.408641 [INFO ] [TOUCH-MODE] step=2 mode=gesture command=0xd104 handshake=true sent=true at=18408599
+19.198111 [INFO ] [BEAT] frame loop at=19198040 int_falls=0 int_rises=0
+20.198135 [INFO ] [BEAT] frame loop at=20198063 int_falls=0 int_rises=0
+21.199017 [INFO ] [BEAT] frame loop at=21198948 int_falls=0 int_rises=0
+22.126104 [INFO ] [TOUCH-READ] seq=1 src=int kind=lift at=22126047 edge=-1 reports=0 x=-1 y=-1 raw=[00, 09, 0a, 6d, 10, 01, ab, 10, 00, 00, 3c, 4a, 09, 07, 09]
+22.199199 [INFO ] [BEAT] frame loop at=22199129 int_falls=1 int_rises=1
+23.199771 [INFO ] [BEAT] frame loop at=23199699 int_falls=1 int_rises=1
+24.199785 [INFO ] [BEAT] frame loop at=24199716 int_falls=1 int_rises=1
+25.200003 [INFO ] [BEAT] frame loop at=25199935 int_falls=1 int_rises=1
+25.376059 [INFO ] [TOUCH-READ] seq=2 src=int kind=lift at=25376002 edge=-1 reports=0 x=-1 y=-1 raw=[00, 0d, 0f, 11, 10, 01, ab, 10, 00, 00, 3c, 4a, 09, 07, 09]
+26.200021 [INFO ] [BEAT] frame loop at=26199951 int_falls=2 int_rises=2
+27.200069 [INFO ] [BEAT] frame loop at=27199997 int_falls=2 int_rises=2
+28.176884 [INFO ] [TOUCH-READ] seq=3 src=int kind=lift at=28176823 edge=-1 reports=0 x=-1 y=-1 raw=[00, 0c, 0e, 55, 10, 01, ab, 10, 00, 00, 3c, 4a, 09, 07, 09]
+28.213093 [INFO ] [BEAT] frame loop at=28213021 int_falls=3 int_rises=3
+29.213261 [INFO ] [BEAT] frame loop at=29213192 int_falls=3 int_rises=3
+30.213794 [INFO ] [BEAT] frame loop at=30213724 int_falls=3 int_rises=3
+31.214009 [INFO ] [BEAT] frame loop at=31213935 int_falls=3 int_rises=3
+32.214413 [INFO ] [BEAT] frame loop at=32214343 int_falls=3 int_rises=3
+33.214815 [INFO ] [BEAT] frame loop at=33214746 int_falls=3 int_rises=3
+34.215515 [INFO ] [BEAT] frame loop at=34215443 int_falls=3 int_rises=3
+35.215943 [INFO ] [BEAT] frame loop at=35215873 int_falls=3 int_rises=3
+36.172003 [INFO ] [TOUCH-READ] seq=4 src=int kind=lift at=36171943 edge=-1 reports=0 x=-1 y=-1 raw=[00, 0d, 0d, c9, 10, 01, ab, 10, 00, 00, 3c, 4a, 09, 07, 09]
+36.216125 [INFO ] [BEAT] frame loop at=36216069 int_falls=4 int_rises=4
+36.360284 [INFO ] [TOUCH-READ] seq=5 src=int kind=lift at=36360225 edge=-1 reports=0 x=-1 y=-1 raw=[00, 0d, 0d, ca, 10, 01, ab, 10, 00, 00, 3c, 4a, 09, 07, 09]
+37.216765 [INFO ] [BEAT] frame loop at=37216632 int_falls=5 int_rises=5
+38.306991 [INFO ] [BEAT] frame loop at=38306917 int_falls=5 int_rises=5
+39.181488 [INFO ] [TOUCH-READ] seq=6 src=int kind=lift at=39181426 edge=-1 reports=0 x=-1 y=-1 raw=[00, 0d, 0c, b6, 10, 01, ab, 10, 00, 00, 3c, 4a, 09, 07, 09]
+39.314630 [INFO ] [BEAT] frame loop at=39314583 int_falls=6 int_rises=6
+39.349392 [INFO ] [TOUCH-READ] seq=7 src=int kind=lift at=39349337 edge=-1 reports=0 x=-1 y=-1 raw=[00, 0e, 0d, e6, 10, 01, ab, 10, 00, 00, 3c, 4a, 09, 07, 09]
+40.322337 [INFO ] [BEAT] frame loop at=40322263 int_falls=7 int_rises=7
+41.330076 [INFO ] [BEAT] frame loop at=41330002 int_falls=7 int_rises=7
+41.558269 [INFO ] [TOUCH-READ] seq=8 src=int kind=lift at=41558211 edge=-1 reports=0 x=-1 y=-1 raw=[00, 0d, 0c, 8b, 10, 01, ab, 10, 00, 00, 3c, 4a, 09, 07, 09]
+41.685503 [INFO ] [TOUCH-READ] seq=9 src=int kind=lift at=41685446 edge=-1 reports=0 x=-1 y=-1 raw=[00, 0d, 0d, 29, 10, 01, ab, 10, 00, 00, 3c, 4a, 09, 07, 09]
+42.338142 [INFO ] [BEAT] frame loop at=42338062 int_falls=9 int_rises=9
+43.345570 [INFO ] [BEAT] frame loop at=43345504 int_falls=9 int_rises=9
+44.352916 [INFO ] [BEAT] frame loop at=44352852 int_falls=9 int_rises=9
+45.360312 [INFO ] [BEAT] frame loop at=45360245 int_falls=9 int_rises=9
+46.367647 [INFO ] [BEAT] frame loop at=46367582 int_falls=9 int_rises=9
+47.374961 [INFO ] [BEAT] frame loop at=47374897 int_falls=9 int_rises=9
+47.548933 [INFO ] [TOUCH-READ] seq=10 src=int kind=lift at=47548879 edge=-1 reports=0 x=-1 y=-1 raw=[00, 1c, 0c, 84, 30, 01, ab, 30, 00, 00, 3c, 4a, 09, 07, 09]
+48.382566 [INFO ] [BEAT] frame loop at=48382500 int_falls=10 int_rises=10
+49.389916 [INFO ] [BEAT] frame loop at=49389852 int_falls=10 int_rises=10
+49.645434 [INFO ] [TOUCH-READ] seq=11 src=int kind=lift at=49645371 edge=-1 reports=0 x=-1 y=-1 raw=[00, 00, 12, dc, 50, 01, ab, 50, 00, 00, 3c, 4a, 09, 07, 09]
+50.397267 [INFO ] [BEAT] frame loop at=50397199 int_falls=11 int_rises=11
+51.169941 [INFO ] [TOUCH-READ] seq=12 src=int kind=lift at=51169885 edge=-1 reports=0 x=-1 y=-1 raw=[00, 10, 1a, 74, 60, 01, ab, 60, 00, 00, 3c, 4a, 09, 07, 09]
+51.404603 [INFO ] [BEAT] frame loop at=51404534 int_falls=12 int_rises=12
+52.412068 [INFO ] [BEAT] frame loop at=52412001 int_falls=12 int_rises=12
+53.031739 [INFO ] [TOUCH-READ] seq=13 src=int kind=lift at=53031682 edge=-1 reports=0 x=-1 y=-1 raw=[00, 10, 00, 9a, 40, 01, ab, 40, 00, 00, 3c, 4a, 09, 07, 09]
+53.419893 [INFO ] [BEAT] frame loop at=53419825 int_falls=13 int_rises=13
+54.427068 [INFO ] [BEAT] frame loop at=54427006 int_falls=13 int_rises=13
+55.434402 [INFO ] [BEAT] frame loop at=55434338 int_falls=13 int_rises=13
+55.949939 [INFO ] [KEY] BOOT Short
+56.060314 [INFO ] [TOUCH-MODE] step=3 reset ok=true
+56.062030 [INFO ] [TOUCH-MODE] step=3 mode=reset-normal command=0xd109 handshake=true sent=true at=56062024
+56.441807 [INFO ] [BEAT] frame loop at=56441740 int_falls=13 int_rises=13
+56.855473 [INFO ] [TOUCH-READ] seq=14 src=int kind=contact at=56855417 edge=-1 reports=0 x=451 y=248 raw=[06, 00, 0d, e9, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+56.865884 [INFO ] [TOUCH-READ] seq=15 src=int kind=contact at=56865818 edge=-1 reports=0 x=451 y=248 raw=[06, 00, 0d, e9, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+56.875770 [INFO ] [TOUCH-READ] seq=16 src=int kind=contact at=56875753 edge=-1 reports=0 x=451 y=248 raw=[06, 00, 0d, e9, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+56.884219 [INFO ] [TOUCH-READ] seq=17 src=poll kind=stale at=56884183 edge=-1 reports=0 x=-1 y=-1 raw=[]
+56.885754 [INFO ] [TOUCH-READ] seq=18 src=int kind=stale at=56885726 edge=-1 reports=0 x=-1 y=-1 raw=[]
+56.896447 [INFO ] [TOUCH-READ] seq=19 src=int kind=contact at=56896380 edge=-1 reports=0 x=451 y=248 raw=[06, 00, 0d, e9, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+56.906385 [INFO ] [TOUCH-READ] seq=20 src=int kind=contact at=56906340 edge=-1 reports=0 x=451 y=248 raw=[06, 00, 0d, e9, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+56.916691 [INFO ] [TOUCH-READ] seq=21 src=int kind=contact at=56916653 edge=-1 reports=0 x=438 y=253 raw=[06, 01, 0d, b4, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+56.922940 [INFO ] [TOUCH-READ] seq=22 src=poll kind=stale at=56922922 edge=-1 reports=0 x=-1 y=-1 raw=[]
+56.926876 [INFO ] [TOUCH-READ] seq=23 src=int kind=stale at=56926814 edge=-1 reports=0 x=-1 y=-1 raw=[]
+56.937055 [INFO ] [TOUCH-READ] seq=24 src=int kind=contact at=56937016 edge=-1 reports=0 x=420 y=258 raw=[06, 02, 0c, df, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+56.947032 [INFO ] [TOUCH-READ] seq=25 src=int kind=contact at=56946973 edge=-1 reports=0 x=413 y=259 raw=[06, 03, 0c, 4e, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+56.957589 [INFO ] [TOUCH-READ] seq=26 src=int kind=contact at=56957537 edge=-1 reports=0 x=405 y=260 raw=[06, 03, 0c, cd, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+56.959022 [INFO ] [TOUCH-READ] seq=27 src=poll kind=failed at=56959010 edge=-1 reports=0 x=-1 y=-1 raw=[]
+56.967965 [INFO ] [TOUCH-READ] seq=28 src=int kind=contact at=56967943 edge=-1 reports=0 x=397 y=260 raw=[06, 04, 0c, 4d, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+56.978215 [INFO ] [TOUCH-READ] seq=29 src=int kind=contact at=56978149 edge=-1 reports=0 x=390 y=260 raw=[06, 04, 0c, bd, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+56.988414 [INFO ] [TOUCH-READ] seq=30 src=int kind=contact at=56988367 edge=-1 reports=0 x=382 y=261 raw=[06, 05, 0c, 3c, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+56.994611 [INFO ] [TOUCH-READ] seq=31 src=poll kind=stale at=56994575 edge=-1 reports=0 x=-1 y=-1 raw=[]
+56.998598 [INFO ] [TOUCH-READ] seq=32 src=int kind=stale at=56998484 edge=-1 reports=0 x=-1 y=-1 raw=[]
+57.008686 [INFO ] [TOUCH-READ] seq=33 src=int kind=contact at=57008638 edge=-1 reports=0 x=368 y=262 raw=[06, 06, 0c, 1b, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.014078 [INFO ] [TOUCH-READ] seq=34 src=poll kind=stale at=57014044 edge=-1 reports=0 x=-1 y=-1 raw=[]
+57.018802 [INFO ] [TOUCH-READ] seq=35 src=int kind=stale at=57018783 edge=-1 reports=0 x=-1 y=-1 raw=[]
+57.028930 [INFO ] [TOUCH-READ] seq=36 src=int kind=contact at=57028868 edge=-1 reports=0 x=352 y=264 raw=[06, 07, 0c, 19, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.039264 [INFO ] [TOUCH-READ] seq=37 src=int kind=contact at=57039224 edge=-1 reports=0 x=344 y=264 raw=[06, 07, 0c, 99, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.049670 [INFO ] [TOUCH-READ] seq=38 src=int kind=contact at=57049540 edge=-1 reports=0 x=337 y=264 raw=[06, 08, 0c, 09, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.059773 [INFO ] [TOUCH-READ] seq=39 src=int kind=contact at=57059709 edge=-1 reports=0 x=328 y=265 raw=[06, 08, 0c, 98, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.069883 [INFO ] [TOUCH-READ] seq=40 src=int kind=contact at=57069829 edge=-1 reports=0 x=321 y=267 raw=[06, 09, 0c, 06, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.080241 [INFO ] [TOUCH-READ] seq=41 src=int kind=contact at=57080175 edge=-1 reports=0 x=313 y=268 raw=[06, 09, 0c, 85, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.090486 [INFO ] [TOUCH-READ] seq=42 src=int kind=contact at=57090422 edge=-1 reports=0 x=304 y=268 raw=[06, 0a, 0c, 15, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.102997 [INFO ] [TOUCH-READ] seq=43 src=int kind=contact at=57102979 edge=-1 reports=0 x=294 y=269 raw=[06, 0a, 0c, b4, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.103914 [INFO ] [TOUCH-READ] seq=44 src=poll kind=stale at=57103901 edge=-1 reports=0 x=-1 y=-1 raw=[]
+57.110671 [INFO ] [TOUCH-READ] seq=45 src=int kind=stale at=57110614 edge=-1 reports=0 x=-1 y=-1 raw=[]
+57.120938 [INFO ] [TOUCH-READ] seq=46 src=int kind=contact at=57120893 edge=-1 reports=0 x=280 y=272 raw=[06, 0b, 0c, 91, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.131278 [INFO ] [TOUCH-READ] seq=47 src=int kind=contact at=57131214 edge=-1 reports=0 x=273 y=273 raw=[06, 0c, 0c, 00, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.141538 [INFO ] [TOUCH-READ] seq=48 src=int kind=contact at=57141474 edge=-1 reports=0 x=265 y=274 raw=[06, 0c, 0b, 8f, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.151824 [INFO ] [TOUCH-READ] seq=49 src=int kind=contact at=57151740 edge=-1 reports=0 x=258 y=274 raw=[06, 0c, 0b, ff, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.161988 [INFO ] [TOUCH-READ] seq=50 src=int kind=contact at=57161920 edge=-1 reports=0 x=252 y=275 raw=[06, 0d, 0b, 5e, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.172201 [INFO ] [TOUCH-READ] seq=51 src=int kind=contact at=57172139 edge=-1 reports=0 x=245 y=275 raw=[06, 0d, 0b, ce, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.182421 [INFO ] [TOUCH-READ] seq=52 src=int kind=contact at=57182359 edge=-1 reports=0 x=237 y=277 raw=[06, 0e, 0b, 4c, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.188217 [INFO ] [TOUCH-READ] seq=53 src=poll kind=stale at=57188182 edge=-1 reports=0 x=-1 y=-1 raw=[]
+57.192441 [INFO ] [TOUCH-READ] seq=54 src=int kind=stale at=57192381 edge=-1 reports=0 x=-1 y=-1 raw=[]
+57.202690 [INFO ] [TOUCH-READ] seq=55 src=int kind=contact at=57202625 edge=-1 reports=0 x=221 y=277 raw=[06, 0f, 0b, 4c, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.212981 [INFO ] [TOUCH-READ] seq=56 src=int kind=contact at=57212918 edge=-1 reports=0 x=213 y=276 raw=[06, 0f, 0b, cd, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.223284 [INFO ] [TOUCH-READ] seq=57 src=int kind=contact at=57223222 edge=-1 reports=0 x=206 y=275 raw=[06, 10, 0b, 3e, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.233370 [INFO ] [TOUCH-READ] seq=58 src=int kind=contact at=57233325 edge=-1 reports=0 x=199 y=274 raw=[06, 10, 0b, af, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.238019 [INFO ] [TOUCH-READ] seq=59 src=poll kind=stale at=57237991 edge=-1 reports=0 x=-1 y=-1 raw=[]
+57.243613 [INFO ] [TOUCH-READ] seq=60 src=int kind=stale at=57243491 edge=-1 reports=0 x=-1 y=-1 raw=[]
+57.253629 [INFO ] [TOUCH-READ] seq=61 src=int kind=contact at=57253612 edge=-1 reports=0 x=185 y=272 raw=[06, 11, 0c, 81, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.264022 [INFO ] [TOUCH-READ] seq=62 src=int kind=contact at=57263964 edge=-1 reports=0 x=178 y=270 raw=[06, 11, 0c, f3, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.274268 [INFO ] [TOUCH-READ] seq=63 src=int kind=contact at=57274206 edge=-1 reports=0 x=168 y=268 raw=[06, 12, 0c, 95, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.284227 [INFO ] [TOUCH-READ] seq=64 src=int kind=contact at=57284181 edge=-1 reports=0 x=157 y=270 raw=[06, 13, 0c, 43, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.286818 [INFO ] [TOUCH-READ] seq=65 src=poll kind=stale at=57286791 edge=-1 reports=0 x=-1 y=-1 raw=[]
+57.294553 [INFO ] [TOUCH-READ] seq=66 src=int kind=stale at=57294496 edge=-1 reports=0 x=-1 y=-1 raw=[]
+57.304733 [INFO ] [TOUCH-READ] seq=67 src=int kind=contact at=57304673 edge=-1 reports=0 x=132 y=279 raw=[06, 14, 0b, da, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.314948 [INFO ] [TOUCH-READ] seq=68 src=int kind=contact at=57314890 edge=-1 reports=0 x=120 y=285 raw=[06, 15, 0b, 94, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.320110 [INFO ] [TOUCH-READ] seq=69 src=poll kind=stale at=57320082 edge=-1 reports=0 x=-1 y=-1 raw=[]
+57.325052 [INFO ] [TOUCH-READ] seq=70 src=int kind=stale at=57324990 edge=-1 reports=0 x=-1 y=-1 raw=[]
+57.350049 [INFO ] [TOUCH-READ] seq=71 src=poll kind=stale at=57349987 edge=-1 reports=0 x=-1 y=-1 raw=[]
+57.371335 [INFO ] [TOUCH-READ] seq=72 src=poll kind=stale at=57371275 edge=-1 reports=0 x=-1 y=-1 raw=[]
+57.391318 [INFO ] [TOUCH-READ] seq=73 src=poll kind=stale at=57391258 edge=-1 reports=0 x=-1 y=-1 raw=[]
+57.411882 [INFO ] [TOUCH-READ] seq=74 src=poll kind=stale at=57411822 edge=-1 reports=0 x=-1 y=-1 raw=[]
+57.430681 [INFO ] [TOUCH-READ] seq=75 src=poll kind=stale at=57430617 edge=-1 reports=0 x=-1 y=-1 raw=[]
+57.455130 [INFO ] [TOUCH-READ] seq=76 src=poll kind=stale at=57455110 edge=-1 reports=0 x=-1 y=-1 raw=[]
+57.455545 [INFO ] [BEAT] frame loop at=57455509 int_falls=60 int_rises=60
+57.473327 [INFO ] [TOUCH-READ] seq=77 src=poll kind=stale at=57473268 edge=-1 reports=0 x=-1 y=-1 raw=[]
+57.593696 [INFO ] [TOUCH-READ] seq=78 src=int kind=contact at=57593639 edge=-1 reports=0 x=123 y=231 raw=[06, 15, 0e, 6a, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.603808 [INFO ] [TOUCH-READ] seq=79 src=int kind=contact at=57603760 edge=-1 reports=0 x=123 y=231 raw=[06, 15, 0e, 6a, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.614147 [INFO ] [TOUCH-READ] seq=80 src=int kind=contact at=57614101 edge=-1 reports=0 x=123 y=231 raw=[06, 15, 0e, 6a, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.624388 [INFO ] [TOUCH-READ] seq=81 src=int kind=contact at=57624340 edge=-1 reports=0 x=123 y=231 raw=[06, 15, 0e, 6a, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.634636 [INFO ] [TOUCH-READ] seq=82 src=int kind=contact at=57634574 edge=-1 reports=0 x=123 y=231 raw=[06, 15, 0e, 6a, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.644836 [INFO ] [TOUCH-READ] seq=83 src=int kind=contact at=57644797 edge=-1 reports=0 x=139 y=228 raw=[06, 14, 0e, 6d, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.655033 [INFO ] [TOUCH-READ] seq=84 src=int kind=contact at=57654995 edge=-1 reports=0 x=150 y=227 raw=[06, 13, 0e, be, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.665401 [INFO ] [TOUCH-READ] seq=85 src=int kind=contact at=57665335 edge=-1 reports=0 x=161 y=225 raw=[06, 13, 0f, 00, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.675412 [INFO ] [TOUCH-READ] seq=86 src=int kind=contact at=57675384 edge=-1 reports=0 x=169 y=224 raw=[06, 12, 0f, 81, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.685506 [INFO ] [TOUCH-READ] seq=87 src=int kind=contact at=57685474 edge=-1 reports=0 x=177 y=223 raw=[06, 12, 0f, 02, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.691297 [INFO ] [TOUCH-READ] seq=88 src=poll kind=stale at=57691259 edge=-1 reports=0 x=-1 y=-1 raw=[]
+57.695860 [INFO ] [TOUCH-READ] seq=89 src=int kind=stale at=57695794 edge=-1 reports=0 x=-1 y=-1 raw=[]
+57.706445 [INFO ] [TOUCH-READ] seq=90 src=int kind=contact at=57706341 edge=-1 reports=0 x=193 y=221 raw=[06, 11, 0f, 04, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.716301 [INFO ] [TOUCH-READ] seq=91 src=int kind=contact at=57716274 edge=-1 reports=0 x=202 y=220 raw=[06, 10, 0f, 75, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.726383 [INFO ] [TOUCH-READ] seq=92 src=int kind=contact at=57726363 edge=-1 reports=0 x=210 y=218 raw=[06, 0f, 0f, f7, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.730333 [INFO ] [TOUCH-READ] seq=93 src=poll kind=stale at=57730286 edge=-1 reports=0 x=-1 y=-1 raw=[]
+57.736634 [INFO ] [TOUCH-READ] seq=94 src=int kind=stale at=57736566 edge=-1 reports=0 x=-1 y=-1 raw=[]
+57.747124 [INFO ] [TOUCH-READ] seq=95 src=int kind=contact at=57747043 edge=-1 reports=0 x=232 y=216 raw=[06, 0e, 0f, 99, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.756859 [INFO ] [TOUCH-READ] seq=96 src=int kind=contact at=57756842 edge=-1 reports=0 x=241 y=215 raw=[06, 0e, 0f, 0a, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.763665 [INFO ] [TOUCH-READ] seq=97 src=poll kind=stale at=57763625 edge=-1 reports=0 x=-1 y=-1 raw=[]
+57.767103 [INFO ] [TOUCH-READ] seq=98 src=int kind=stale at=57767039 edge=-1 reports=0 x=-1 y=-1 raw=[]
+57.777532 [INFO ] [TOUCH-READ] seq=99 src=int kind=contact at=57777476 edge=-1 reports=0 x=260 y=212 raw=[06, 0c, 0f, dd, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.787867 [INFO ] [TOUCH-READ] seq=100 src=int kind=contact at=57787799 edge=-1 reports=0 x=270 y=213 raw=[06, 0c, 0f, 3c, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.796873 [INFO ] [TOUCH-READ] seq=101 src=poll kind=stale at=57796827 edge=-1 reports=0 x=-1 y=-1 raw=[]
+57.808479 [INFO ] [TOUCH-READ] seq=102 src=int kind=contact at=57808378 edge=-1 reports=0 x=295 y=212 raw=[06, 0a, 0f, ad, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.818397 [INFO ] [TOUCH-READ] seq=103 src=int kind=contact at=57818355 edge=-1 reports=0 x=306 y=211 raw=[06, 09, 0f, fe, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.828613 [INFO ] [TOUCH-READ] seq=104 src=poll kind=contact at=57828556 edge=-1 reports=0 x=316 y=210 raw=[06, 09, 0f, 5f, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.838750 [INFO ] [TOUCH-READ] seq=105 src=int kind=contact at=57838690 edge=-1 reports=0 x=324 y=210 raw=[06, 08, 0f, df, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.849385 [INFO ] [TOUCH-READ] seq=106 src=int kind=contact at=57849298 edge=-1 reports=0 x=334 y=209 raw=[06, 08, 10, 30, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.861417 [INFO ] [TOUCH-READ] seq=107 src=int kind=contact at=57861370 edge=-1 reports=0 x=345 y=208 raw=[06, 07, 10, 81, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.865291 [INFO ] [TOUCH-READ] seq=108 src=poll kind=stale at=57865258 edge=-1 reports=0 x=-1 y=-1 raw=[]
+57.869231 [INFO ] [TOUCH-READ] seq=109 src=int kind=stale at=57869173 edge=-1 reports=0 x=-1 y=-1 raw=[]
+57.879419 [INFO ] [TOUCH-READ] seq=110 src=int kind=contact at=57879381 edge=-1 reports=0 x=367 y=210 raw=[06, 06, 0f, 2f, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.889801 [INFO ] [TOUCH-READ] seq=111 src=int kind=contact at=57889778 edge=-1 reports=0 x=376 y=212 raw=[06, 05, 0f, 9d, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.897877 [INFO ] [TOUCH-READ] seq=112 src=poll kind=stale at=57897849 edge=-1 reports=0 x=-1 y=-1 raw=[]
+57.899568 [INFO ] [TOUCH-READ] seq=113 src=int kind=stale at=57899527 edge=-1 reports=0 x=-1 y=-1 raw=[]
+57.910254 [INFO ] [TOUCH-READ] seq=114 src=int kind=contact at=57910165 edge=-1 reports=0 x=395 y=212 raw=[06, 04, 0f, 6d, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.920653 [INFO ] [TOUCH-READ] seq=115 src=int kind=contact at=57920586 edge=-1 reports=0 x=407 y=213 raw=[06, 03, 0f, ac, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.930506 [INFO ] [TOUCH-READ] seq=116 src=int kind=contact at=57930464 edge=-1 reports=0 x=420 y=213 raw=[06, 02, 0f, dc, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.937310 [INFO ] [TOUCH-READ] seq=117 src=poll kind=stale at=57937264 edge=-1 reports=0 x=-1 y=-1 raw=[]
+57.940705 [INFO ] [TOUCH-READ] seq=118 src=int kind=stale at=57940640 edge=-1 reports=0 x=-1 y=-1 raw=[]
+57.953420 [INFO ] [TOUCH-READ] seq=119 src=int kind=contact at=57953361 edge=-1 reports=0 x=439 y=216 raw=[06, 01, 0f, a9, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.961412 [INFO ] [TOUCH-READ] seq=120 src=int kind=contact at=57961362 edge=-1 reports=0 x=445 y=218 raw=[06, 01, 0f, 47, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.971363 [INFO ] [TOUCH-READ] seq=121 src=int kind=contact at=57971329 edge=-1 reports=0 x=448 y=220 raw=[06, 01, 0f, 15, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+57.978977 [INFO ] [TOUCH-READ] seq=122 src=poll kind=stale at=57978919 edge=-1 reports=0 x=-1 y=-1 raw=[]
+57.981503 [INFO ] [TOUCH-READ] seq=123 src=int kind=stale at=57981449 edge=-1 reports=0 x=-1 y=-1 raw=[]
+57.991973 [INFO ] [TOUCH-READ] seq=124 src=int kind=lift at=57991913 edge=-1 reports=0 x=-1 y=-1 raw=[00, 00, 0f, c3, 00, 01, ab, 00, 00, 00, 3c, 4a, 09, 07, 09]
+58.010794 [INFO ] [TOUCH-READ] seq=125 src=poll kind=stale at=58010768 edge=-1 reports=0 x=-1 y=-1 raw=[]
+58.040011 [INFO ] [TOUCH-READ] seq=126 src=poll kind=stale at=58039992 edge=-1 reports=0 x=-1 y=-1 raw=[]
+58.074075 [INFO ] [TOUCH-READ] seq=127 src=poll kind=stale at=58074009 edge=-1 reports=0 x=-1 y=-1 raw=[]
+58.471526 [INFO ] [BEAT] frame loop at=58471446 int_falls=100 int_rises=100
+59.477194 [INFO ] [BEAT] frame loop at=59477117 int_falls=100 int_rises=100
+60.478498 [INFO ] [BEAT] frame loop at=60478418 int_falls=100 int_rises=100
+61.486613 [INFO ] [BEAT] frame loop at=61486536 int_falls=100 int_rises=100
+62.490236 [INFO ] [BEAT] frame loop at=62490156 int_falls=100 int_rises=100
+63.504027 [INFO ] [BEAT] frame loop at=63503949 int_falls=100 int_rises=100
+64.504997 [INFO ] [BEAT] frame loop at=64504913 int_falls=100 int_rises=100
+65.523298 [INFO ] [BEAT] frame loop at=65522776 int_falls=100 int_rises=100
+66.530628 [INFO ] [BEAT] frame loop at=66530553 int_falls=100 int_rises=100
+67.535832 [INFO ] [BEAT] frame loop at=67535756 int_falls=100 int_rises=100
+68.546652 [INFO ] [BEAT] frame loop at=68546575 int_falls=100 int_rises=100
+69.555397 [INFO ] [BEAT] frame loop at=69555317 int_falls=100 int_rises=100
+70.563232 [INFO ] [BEAT] frame loop at=70563156 int_falls=100 int_rises=100
+71.570987 [INFO ] [BEAT] frame loop at=71570913 int_falls=100 int_rises=100
+72.580401 [INFO ] [BEAT] frame loop at=72580324 int_falls=100 int_rises=100

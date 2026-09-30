@@ -46,19 +46,29 @@ static SEQUENCE: BlockingMutex<CS, Cell<u32>> = BlockingMutex::new(Cell::new(0))
 /// The edge of the lift report the frame loop took last, while a contact was held.
 static LIFT_REPORTED: BlockingMutex<CS, Cell<Option<u64>>> = BlockingMutex::new(Cell::new(None));
 
+/// The probe counts edges in thousands, so that a controller toggling INT fast cannot hold the
+/// core in this interrupt; its reads lose their edge times.
+#[cfg(feature = "touch-mode-probe")]
+const EDGES_PER_INTERRUPT: i16 = 1000;
+#[cfg(not(feature = "touch-mode-probe"))]
+const EDGES_PER_INTERRUPT: i16 = 1;
+/// Thousands of falling and rising edges, for the probe.
+#[cfg(feature = "touch-mode-probe")]
+static THOUSANDS: BlockingMutex<CS, Cell<(u32, u32)>> = BlockingMutex::new(Cell::new((0, 0)));
+
 /// Counts INT's falling edges on unit 0 and its rising edges on unit 1, one interrupt each.
 pub fn watch(pcnt: PCNT<'static>, fall: InputSignal<'static>, rise: InputSignal<'static>) {
     let mut pcnt = Pcnt::new(pcnt);
     pcnt.set_interrupt_handler(on_edge);
     // A microsecond, in APB cycles.
     const FILTER: u16 = 80;
-    pcnt.unit0.set_high_limit(Some(1)).unwrap();
+    pcnt.unit0.set_high_limit(Some(EDGES_PER_INTERRUPT)).unwrap();
     pcnt.unit0.set_filter(Some(FILTER)).unwrap();
     pcnt.unit0.channel0.set_edge_signal(fall);
     pcnt.unit0
         .channel0
         .set_input_mode(EdgeMode::Increment, EdgeMode::Hold);
-    pcnt.unit1.set_high_limit(Some(1)).unwrap();
+    pcnt.unit1.set_high_limit(Some(EDGES_PER_INTERRUPT)).unwrap();
     pcnt.unit1.set_filter(Some(FILTER)).unwrap();
     pcnt.unit1.channel0.set_edge_signal(rise);
     pcnt.unit1
@@ -89,6 +99,15 @@ fn on_edge() {
         if rose {
             pcnt.unit1.reset_interrupt();
         }
+        #[cfg(feature = "touch-mode-probe")]
+        {
+            THOUSANDS.lock(|thousands| {
+                let (falls, rises) = thousands.get();
+                thousands.set((falls + u32::from(fell), rises + u32::from(rose)));
+            });
+            return;
+        }
+        #[allow(unreachable_code)]
         EDGES.lock(|edges| {
             let mut state = edges.get();
             if fell {
@@ -455,4 +474,74 @@ pub fn contact_step(was_in_contact: bool, in_contact: bool) {
         Some(edge) => info!("[TOUCH-LIFT] report_to_lift={=u64}", now - edge),
         None => info!("[TOUCH-LIFT] without_report at={=u64}", now),
     }
+}
+
+/// Set on each short BOOT press, to step the controller to its next mode.
+#[cfg(feature = "touch-mode-probe")]
+pub static MODE_STEP: embassy_sync::signal::Signal<CS, ()> = embassy_sync::signal::Signal::new();
+
+/// Gesture wake from normal mode, where it reports only gestures, then back to normal by a
+/// reset, which the normal-mode command alone does not do. From the debug mode start-up leaves
+/// it in, gesture mode goes on reporting contacts.
+#[cfg(feature = "touch-mode-probe")]
+const MODES: [(&str, u16, bool); 3] = [
+    ("normal", 0xD109, false),
+    ("gesture", 0xD104, false),
+    ("reset-normal", 0xD109, true),
+];
+
+#[cfg(feature = "touch-mode-probe")]
+pub async fn step_mode(touch: &mut super::TouchDriver, step: &mut usize) {
+    let (name, command, reset) = MODES[*step % MODES.len()];
+    let number = *step + 1;
+    *step += 1;
+    if reset {
+        let ok = touch.reset().await.is_ok();
+        info!("[TOUCH-MODE] step={=usize} reset ok={=bool}", number, ok);
+    }
+    let sent = touch.command(command).await.is_ok();
+    info!(
+        "[TOUCH-MODE] step={=usize} mode={=str} command={=u16:#x} sent={=bool} at={=u64}",
+        number,
+        name,
+        command,
+        sent,
+        Instant::now().as_micros(),
+    );
+}
+
+#[cfg(feature = "touch-mode-probe")]
+static LAST_BEAT: BlockingMutex<CS, Cell<u64>> = BlockingMutex::new(Cell::new(0));
+
+/// Logs once a second from the frame loop, so a silent log shows whether thread mode still runs.
+#[cfg(feature = "touch-mode-probe")]
+pub fn heartbeat() {
+    let now = Instant::now().as_micros();
+    let due = LAST_BEAT.lock(|last| {
+        let due = now - last.get() >= 1_000_000;
+        if due {
+            last.set(now);
+        }
+        due
+    });
+    if due {
+        let (falls, rises) = edge_counts();
+        info!("[BEAT] frame loop at={=u64} int_falls={=u32} int_rises={=u32}", now, falls, rises);
+    }
+}
+
+/// Edges on INT since the counters started.
+#[cfg(feature = "touch-mode-probe")]
+fn edge_counts() -> (u32, u32) {
+    let (fall_thousands, rise_thousands) = THOUSANDS.lock(Cell::get);
+    COUNTER.lock(|counter| {
+        let counter = counter.borrow();
+        let Some(pcnt) = counter.as_ref() else {
+            return (0, 0);
+        };
+        (
+            fall_thousands * 1000 + pcnt.unit0.value().max(0) as u32,
+            rise_thousands * 1000 + pcnt.unit1.value().max(0) as u32,
+        )
+    })
 }
