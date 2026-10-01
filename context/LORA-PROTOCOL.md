@@ -74,14 +74,15 @@ flooded through the same slots with their own ids and seen-set; see "Messages".
 
 GPS-anchored TDMA. The slot index is the node's paired id, 0–31. Slots are anchored to absolute UTC,
 so two partitions that cannot hear each other compute the same schedule and are already in phase
-when they rejoin.
+when they rejoin. A node without a fix takes its time from the arrivals of another node's packets;
+see "Keeping time without a fix".
 
 - **Round.** 45 s, 32 slots, 1.40625 s apart. A UTC day holds exactly 1920 rounds. Slot `k` starts
   at the round's start plus `k × 1.40625 s`.
 - **Slot.** The packet, at most 400 ms (255 bytes), two ~80 µs TCA9554 writes, and a ±250 ms guard:
   at most 900 ms, leaving about 0.5 s before the next slot. Plain NMEA time is enough for that
   guard, so no PPS is needed; "Time sync" below says where the ±250 ms comes from.
-- **Budget.** One packet per node per round: 0.89% duty at the largest packet, 0.41% at an
+- **Budget.** One packet per node per round: 0.89% duty at the largest packet, 0.40% at an
   eight-entry digest. If all 32 nodes sent an eight-entry digest every round, the channel would be
   busy 13% of the time.
 
@@ -152,6 +153,45 @@ size"): RMC's arrival after the second on one board, with its spread, from a fas
 the agreement between two boards synced this way, logged together. Both belong on a
 `bench/gnss-time` branch.
 
+### Keeping time without a fix
+
+A node needs a timebase to place slots: GPS time from its own fix, or another node's, taken from
+when that node's packets arrive. The owner chose this over running slots on the RTC, whose whole
+seconds two nodes can disagree on (2026-10-01). Every header names the sender's timebase:
+
+- **Source.** GPS, or a node's own clock.
+- **Root.** For a node's clock, the id of the node that started it.
+- **Hops.** How many receptions the sender is from the root: 0 for a node timing from its own fix,
+  and for a root.
+
+GPS ranks above any node's clock, and between node clocks the lower root id ranks higher.
+
+- **Taking a timebase.** A node that hears a packet from a timebase ranked above its own adopts
+  it: it sets its clock from the packet's arrival, and takes the sender's root and its hops plus
+  one. Within its timebase it refines its clock only from packets with fewer hops than its own, so
+  two nodes never set their clocks from each other and a hop's error cannot circulate. A node
+  timing from its own fix never sets its clock from another's.
+- **Arrival timing.** A sender starts its packet at its slot's start, and its id and the header's
+  base timestamp name the slot. The receiver takes the time `DIO0` signals RxDone, subtracts the
+  packet's airtime, and has that slot's start on its own timer. The latencies on both sides that do
+  not vary, the transmitter's start and the receiver's interrupt, are measured and taken out, so a
+  hop adds no bias.
+- **Sweeps.** A node with no timebase listens continuously for three rounds, 135 s, which spans
+  every node's floor round. A node not timing from its own fix sweeps again every 10 minutes, to
+  find a timebase ranked above its own, and whenever it has heard no packet with fewer hops in its
+  timebase for 7 rounds. If that sweep hears none either, the node becomes its own root, keeping
+  its clock. It keeps transmitting in its own slots during a sweep.
+- **Starting one.** A node that hears nobody in its first sweep starts its own timebase from its
+  RTC's time, as its root. Groups started this way merge as their sweeps find each other, to the
+  lowest root. A node that gets a fix moves to GPS time, and the nodes timing from it find it again
+  at their next sweep.
+- **Ageing.** A node's own GPS time counts as GPS while a fix has refined it within 30 minutes.
+  After that the node ranks as its own root, so a node with a live fix takes the group over.
+
+A node's clock is UTC only as well as its root's RTC was. Its own entries need a fix, so they are
+always stamped in GPS time; it relays another's entry only when the entry's stamp fits the 12-bit
+window below its base timestamp.
+
 ### Listening
 
 A node listens to the slot of every neighbour, every round. A neighbour is a node heard within the
@@ -206,21 +246,29 @@ wins a collision and a lost exchange costs a retry. The duty-cycle option needs 
 ## Packet
 
 ```text
-nonce (12, clear) | ciphertext: header (7) + records | tag (16)
+synthetic IV (16) | ciphertext: header (8) + records
 ```
 
-ChaCha20-Poly1305 under the group key. The nonce is fully random rather than `sender_id || counter`,
-because a sender id in the clear would tell a direction-finding listener which node transmitted. At
-~1e7 messages over the network's life, 96 random bits give a collision probability around 6e-16.
+AES-SIV (RFC 5297, AES-CMAC-SIV with a 256-bit key) under the group key, with no associated data.
+The synthetic IV is computed from the key and the whole plaintext, and is both the IV and the
+authentication tag, so the packet carries no nonce and nothing in the clear. A sender id in the
+clear would tell a direction-finding listener which node transmitted. SIV's determinism reveals
+only that two packets are identical, and a packet's timestamp keeps that from happening. Sending
+needs no random numbers, so a faulty random source leaks nothing. The owner chose it over
+ChaCha20-Poly1305 with a random 12-byte nonce, which cost 12 bytes a packet more, about 18 ms of
+airtime (2026-10-01).
 
-Header, 7 bytes, encrypted:
+Header, 8 bytes, encrypted:
 
 | Field | Bits |
 | --- | --- |
 | version | 4 |
 | sender id | 5 |
-| flags, reserved | 7 |
-| base timestamp, UTC seconds | 32 |
+| timebase source: 0 GPS, 1 a node's clock | 1 |
+| timebase root, for a node's clock | 5 |
+| hops from the timebase's root | 5 |
+| flags, reserved | 4 |
+| base timestamp, timebase seconds | 32 |
 | slot phase, reserved for CAD | 8 |
 
 After the header comes a list of records, each a type byte, a length byte and a body. A node skips
@@ -246,13 +294,16 @@ Position entry, 73 bits:
 | fix quality | 2 | |
 | hdop | 3 | log scale |
 
+With the neighbours record, which every packet carries:
+
 | Entries | Packet | Airtime |
 | --- | --- | --- |
-| 1 | 47 B | 92 ms |
-| 2 | 56 B | 108 ms |
-| 8 | 110 B | 185 ms |
-| 16 | 183 B | 292 ms |
-| 23 | 255 B | 400 ms |
+| 0 | 30 B | 72 ms |
+| 1 | 42 B | 87 ms |
+| 2 | 51 B | 103 ms |
+| 8 | 105 B | 180 ms |
+| 16 | 178 B | 287 ms |
+| 24 | 251 B | 395 ms |
 
 A packet is filled in this order until it is full or nothing is left: the sender's own entry and its
 neighbours, acknowledgements, messages oldest first, entries learned since this node last sent them
@@ -284,7 +335,7 @@ A message record carries:
 - **Latency.** Each hop waits for the relaying node's slot, 1.4 s to one round.
 - **Capacity.** Every node carries every message once, so the group's message throughput is what fits
   in one node's packet beside its positions, whatever the group's size. Beside an eight-entry digest
-  and the neighbours record, that is about 130 bytes of message body a round, or about 10 kB an hour.
+  and the neighbours record, that is about 140 bytes of message body a round, or about 11 kB an hour.
 - **Pruning, later.** Gossiping every node's neighbour set gives every node the group's graph. A node
   can then skip relaying a direct message when it is not on a shortest path to the destination, and
   a group message when the sender already reaches all its neighbours. That is where routing starts
@@ -292,16 +343,17 @@ A message record carries:
 
 ### Private messages
 
-A private message's body is sealed with ChaCha20-Poly1305 under a key only its two members hold.
+A private message's body is sealed with AES-SIV under a key only its two members hold.
 Other members relay it without reading it. Origin, destination and timing remain visible to members,
 since the header and record are under the group key.
 
-- **Key.** HKDF-SHA256 over the X25519 shared secret of the two members' keys, bound to both public
-  keys. Every member learns the others' public keys from pairing and from member records.
-- **Nonce.** Built from the origin id and the sequence number. The two members share the key, so the
-  origin id keeps their nonces apart, and the sequence number must never repeat for an origin. It is
-  persisted in flash in reserved blocks, and a boot skips to the next block, so a crash wastes numbers
-  rather than reusing them.
+- **Key.** 256 bits of HKDF-SHA256 over the X25519 shared secret of the two members' keys, bound to
+  both public keys. Every member learns the others' public keys from pairing and from member
+  records.
+- **Associated data.** The origin id and the sequence number, which bind the body to its record.
+  SIV needs no nonce. The sequence number must still never repeat for an origin, because it names
+  the message in every seen-set. It is persisted in flash in reserved blocks, and a boot skips to
+  the next block, so a crash wastes numbers rather than reusing them.
 - **Rekeying.** Removing a member is a new group key with a UTC switch time, sent to each remaining
   member as a private message. Before the switch nodes send under the old key, and after it under
   the new one. Every node tries both keys on receive. A node on the new key that hears a member still
@@ -425,7 +477,7 @@ and the restore after are each short with the bus free between them.
 
 1. The radio in its own task, and a cross-core I2C lock. Done.
 2. Radio settings above, and slots on GPS time with the header and record format, carrying
-   positions and neighbours.
+   positions and neighbours, with a timebase taken from other nodes without a fix.
 3. Pairing, the member table and ids.
 4. The cancel rule and neighbour-only listening.
 5. CAD with slot phase refined from arrival times.

@@ -288,9 +288,9 @@ Candidates to measure:
   (found from the release ELF's literal pools, 2026-10-01). Unmeasured: bound it on the compass
   field bench by replacing the dial's `sincosf` with a table of the 360 whole degrees first.
   `HardIron`'s fit and the NMEA coordinates use `f64` directly and run once per sample or fix.
-- ChaCha20 for the protocol, which is software today, and the SIMD extension could vectorise it. It
-  runs once per packet, so it only matters if profiling says so. X25519 runs once per pairing and
-  does not qualify.
+- AES-SIV for the protocol, which is software AES today; the chip's AES accelerator could take its
+  blocks. It runs once per packet, so it only matters if profiling says so. X25519 runs once per
+  pairing and does not qualify.
 
 The deliverable is a table of candidates, with cycles measured before and after and which ones
 were taken. Each measurement gets its own `bench/<topic>` branch, per "Measurement code" in
