@@ -909,7 +909,7 @@ fn startup_unplugged(driver: &mut Driver) {
 }
 
 /// Every part answering, as a start-up usually goes.
-const ANSWERING: [(Part, Outcome, u64); 6] = [
+pub const ANSWERING: [(Part, Outcome, u64); 6] = [
     (Part::Power, Outcome::Answered, 150),
     (Part::Clock, Outcome::Answered, 250),
     (Part::Touch, Outcome::Answered, 500),

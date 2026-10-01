@@ -39,7 +39,8 @@
 //!   or none.
 //! - Hold H: a hand covering the screen, which goes to the clock face.
 //! - K: the power key. Released within a second it is a short press; held a second, a long one.
-//!   O: the BOOT key, the same way.
+//!   Once powered off, held 512 ms it powers the board on, through the start-up. O: the BOOT
+//!   key, the same way.
 //! - Drag down from a face for the settings panel, as on the device.
 //! - While the screen rests on the always-on face or is dark, a click is the touch controller's
 //!   tap gesture, as its gesture mode reports one, so a double click wakes it.
@@ -74,7 +75,10 @@ use octowhere_ui::{
         screens::{Battery, Gnss, PeripheralState},
         script::{self, Driver},
         shift,
-        stage::{Input, Key as PowerKey, Motion, Sensors, Stage, Store, Touch, TouchGesture},
+        stage::{
+            Input, Key as PowerKey, Motion, Sensors, Stage, Store, Touch, TouchGesture, Update,
+        },
+        startup::{Outcome, Part, Report},
     },
 };
 
@@ -89,8 +93,10 @@ const HEIGHT: usize = LCD_HEIGHT as usize;
 const TAP_US: u64 = 300_000;
 /// The motion task's sample periods, fast while a compass screen shows.
 const FAST_SAMPLE_US: u64 = 20_000;
-/// How long K is held before it counts as a long press, as the power controller is set to.
+/// How long K is held before it counts as a long press, and how long to power the board on, as
+/// the power controller is set to.
 const KEY_LONG_US: u64 = 1_000_000;
+const POWER_ON_US: u64 = 512_000;
 
 /// A key held down: when it went down, and whether it has already reported a long press.
 #[derive(Default)]
@@ -670,6 +676,9 @@ fn interact(mut window: Window, masked: bool, extension: &str) {
     let (mut power_key, mut boot_key) = (Held::default(), Held::default());
     // When the button went down while the controller watched for gestures.
     let mut pressed_at = None;
+    // Once powered off, when K went down; and the start-up's reports not yet stepped in.
+    let (mut powered_off, mut power_on_since) = (false, None);
+    let mut reports: Vec<(Part, Outcome, u64)> = Vec::new();
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
         let now = start.elapsed().as_micros() as u64 + 1;
@@ -759,15 +768,51 @@ fn interact(mut window: Window, masked: bool, extension: &str) {
             pressed_at = None;
             Some(Touch::Contacts([contact, None]))
         };
-        let update = stage.step(Input {
-            now,
-            touch,
-            motion: motion_due.then(|| readings.motion()),
-            sensors: sensors_due.then(|| sensors(&readings)),
-            boot: None,
-            key: power_key.press(window.is_key_down(Key::K), now),
-            boot_key: boot_key.press(window.is_key_down(Key::O), now),
-        });
+        if powered_off {
+            // Only the power controller watches the key now.
+            if !window.is_key_down(Key::K) {
+                power_on_since = None;
+            } else if now - *power_on_since.get_or_insert(now) >= POWER_ON_US {
+                println!("powered on");
+                stage = Stage::starting(PeripheralState {
+                    firmware: "0.1.0",
+                    ..PeripheralState::default()
+                });
+                readings.chosen = None;
+                reports = scenes::ANSWERING
+                    .iter()
+                    .rev()
+                    .map(|&(part, outcome, at)| (part, outcome, now + at * 1_000))
+                    .collect();
+                // The power controller took that press, and the firmware never sees it.
+                power_key = Held(Some((now, true)));
+                (powered_off, next_motion, next_sensors, redraw) = (false, now, now, true);
+            }
+        }
+        let boot = match reports.last() {
+            Some(&(part, outcome, at)) if now >= at => {
+                reports.pop();
+                Some(Report { part, outcome })
+            }
+            _ => None,
+        };
+        let update = if powered_off {
+            Update::default()
+        } else {
+            stage.step(Input {
+                now,
+                touch,
+                motion: motion_due.then(|| readings.motion()),
+                sensors: sensors_due.then(|| sensors(&readings)),
+                boot,
+                key: power_key.press(window.is_key_down(Key::K), now),
+                boot_key: boot_key.press(window.is_key_down(Key::O), now),
+            })
+        };
+        if update.power_off {
+            println!("powered off; hold K 512 ms to power on");
+            powered_off = true;
+        }
         samples_fast = update.samples_fast;
         if update.recalibrate {
             readings.calibration = 0;
