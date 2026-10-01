@@ -168,7 +168,10 @@ GPS ranks above any node's clock, and between node clocks the lower root id rank
   it: it sets its clock from the packet's arrival, and takes the sender's root and its hops plus
   one. Within its timebase it refines its clock only from packets with fewer hops than its own, so
   two nodes never set their clocks from each other and a hop's error cannot circulate. A node
-  timing from its own fix never sets its clock from another's.
+  timing from its own fix never sets its clock from another's. A node that hears a clock rooted
+  at its own id takes it back as its root: it is the node's own clock, kept by the others while
+  it restarted. Without that, it would follow its own clock through them as a ghost root, until
+  each found the root lost.
 - **Arrival timing.** A sender starts its packet at its slot's start, and its id and the header's
   base timestamp name the slot. The receiver takes the time `DIO0` signals RxDone, subtracts the
   packet's airtime, and has that slot's start on its own timer. The latencies on both sides, the

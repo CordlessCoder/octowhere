@@ -144,7 +144,13 @@ impl Clock {
             }
         };
         if taken != Taken::Ignored {
-            self.clock = Some((offset, theirs.next_hop()));
+            // A clock rooted at this node's id is its own, kept by others while it restarted.
+            let timebase = if theirs.source == Source::Node(self.own) {
+                self.root()
+            } else {
+                theirs.next_hop()
+            };
+            self.clock = Some((offset, timebase));
             self.upstream = now;
         }
         if taken == Taken::Adopted {
@@ -306,6 +312,22 @@ mod tests {
             sent(&mut clock, 0, Source::Node(0), 0, 0, GPS_STALE_US + 2).taken,
             Taken::Adopted
         );
+    }
+
+    #[test]
+    fn a_node_takes_back_its_own_clock_as_its_root() {
+        let mut clock = Clock::new(24, 0);
+        let skew = 3 * SECOND;
+        let arrival = sent(&mut clock, 28, Source::Node(24), 1, skew, SECOND);
+        assert_eq!(arrival.taken, Taken::Adopted);
+        assert_eq!(
+            clock.at(0).unwrap().1,
+            Timebase {
+                source: Source::Node(24),
+                hops: 0
+            }
+        );
+        assert_eq!(clock.local(UTC), Some(UTC + skew));
     }
 
     #[test]
