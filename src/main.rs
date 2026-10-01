@@ -1064,15 +1064,22 @@ const POLL_GAP: Duration = Duration::from_millis(2);
 struct GnssTask {
     gnss: Lc76g<SharedI2cDevice, embassy_time::Delay>,
     nmea_parser: NmeaParser,
+    /// The I/O expander, for the module's reset line.
+    exio: SharedI2cDevice,
+    /// The RTC, read for the time a reset clears; `sensor_task` owns setting it.
+    rtc: Option<Pcf85063aRtc<SharedI2cDevice>>,
 }
 
 /// Reads the GNSS module around each second's burst of NMEA, publishes its state, and times
-/// UTC from when each burst is first seen. Between bursts it leaves the bus alone.
+/// UTC from when each burst is first seen. Between bursts it leaves the bus alone. A module that
+/// stops answering, or answers with nothing, is reset and configured again.
 #[embassy_executor::task]
 async fn gnss_task(task: GnssTask) {
     let GnssTask {
         mut gnss,
         mut nmea_parser,
+        mut exio,
+        mut rtc,
     } = task;
     let mut nmea = [0u8; 512];
     let mut seconds = SecondEstimator::new();
@@ -1083,6 +1090,11 @@ async fn gnss_task(task: GnssTask) {
     let mut missed = true;
     // When the module last copied its navigation data to its flash.
     let mut navigation_saved: Option<Instant> = None;
+    // When a read last found NMEA waiting, when the module was last reset for being stuck, and
+    // how many such resets it has had since it last sent NMEA.
+    let mut last_data = Instant::now();
+    let mut last_reset: Option<Instant> = None;
+    let mut resets = 0u32;
     #[cfg(feature = "gnss-raw-log")]
     let mut raw_nmea_line = [0; 256];
     #[cfg(feature = "gnss-raw-log")]
@@ -1108,9 +1120,38 @@ async fn gnss_task(task: GnssTask) {
         let mut emptied = false;
         let mut empty_reads = 0u32;
         let mut slowest_read = Duration::MIN;
+        let mut failures = 0u32;
         let (seen, mut available) = loop {
             if POWER_OFF.try_take().is_some() {
                 park_gnss(&mut gnss, navigation_saved.is_some()).await;
+            }
+            if failures >= GNSS_STUCK_FAILURES || last_data.elapsed() >= GNSS_STUCK_SILENCE {
+                if let Some(at) = last_reset
+                    && let Either::Second(()) =
+                        select(Timer::at(at + GNSS_RESET_INTERVAL), POWER_OFF.wait()).await
+                {
+                    park_gnss(&mut gnss, navigation_saved.is_some()).await;
+                }
+                resets += 1;
+                warn!(
+                    "[GNSS] stuck; resetting it, {} resets since it last sent NMEA",
+                    resets
+                );
+                // Its last fix and time are stale until it sends new ones.
+                nmea_parser = NmeaParser::new();
+                GNSS_STATE.signal(nmea_parser.state());
+                let configured = reset_gnss(&mut exio, &mut gnss, &mut nmea_parser).await;
+                info!("[GNSS] reset configured={}", configured.is_ok());
+                if configured.is_ok()
+                    && let Some(rtc) = &mut rtc
+                {
+                    send_reference_time(&mut gnss, rtc).await;
+                }
+                last_reset = Some(Instant::now());
+                last_data = Instant::now();
+                failures = 0;
+                emptied = false;
+                continue;
             }
             let read_started = Instant::now();
             let length = gnss.nmea_length().await;
@@ -1121,9 +1162,14 @@ async fn gnss_task(task: GnssTask) {
                     empty_reads += 1;
                     Timer::after(POLL_GAP).await;
                 }
-                Ok(available) => break (emptied.then(Instant::now), available),
+                Ok(available) => {
+                    last_data = Instant::now();
+                    resets = 0;
+                    break (emptied.then(Instant::now), available);
+                }
                 Err(error) => {
                     log_gnss_error(error);
+                    failures += 1;
                     emptied = false;
                     Timer::after(Duration::from_millis(250)).await;
                 }
@@ -1624,6 +1670,12 @@ const NAVIGATION_SAVE_INTERVAL: Duration = Duration::from_secs(30 * 60);
 /// included.
 const GNSS_ANSWER: Duration = Duration::from_millis(1500);
 const GNSS_DEADLINE: Duration = Duration::from_millis(4500);
+/// Failed reads in a row, or a time of reads that find nothing, after which the GNSS module is
+/// taken as stuck and reset. Moving its antenna's connector can leave it either way.
+const GNSS_STUCK_FAILURES: u32 = 8;
+const GNSS_STUCK_SILENCE: Duration = Duration::from_secs(10);
+/// The least time between two resets of a stuck module.
+const GNSS_RESET_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Each part's outcome as boot decides it, for the self-test.
 static BOOT_REPORTS: Channel<CriticalSectionRawMutex, Report, 6> = Channel::new();
@@ -1942,11 +1994,7 @@ async fn bring_up(spawner: Spawner, parts: Parts, zones: ZoneTracker) {
         }
         warn!("[GNSS] no answer; resetting it");
         gnss_reset = true;
-        pulse_gnss_reset(&mut i2c.clone())
-            .await
-            .map_err(|()| Outcome::NoReply)?;
-        Timer::after(Duration::from_secs(1)).await;
-        configure_gnss(&mut gnss, &mut nmea_parser).await
+        reset_gnss(&mut i2c.clone(), &mut gnss, &mut nmea_parser).await
     })
     .await;
     // The module starts without a time after a reset or a power-on. A reset of the chip alone,
@@ -1956,32 +2004,7 @@ async fn bring_up(spawner: Spawner, parts: Parts, zones: ZoneTracker) {
         Some(esp_hal::rtc_cntl::SocResetReason::ChipPowerOn)
     );
     if gnss_ok && rtc_ok && (gnss_reset || powered_on) {
-        match rtc.get_time().await {
-            Ok(time) if !rtc.oscillator_stopped() => {
-                let reference = GnssDateTime {
-                    year: 2000 + u16::from(time.year),
-                    month: time.month,
-                    day: time.day,
-                    weekday: time.weekday,
-                    hours: time.hours,
-                    minutes: time.minutes,
-                    seconds: time.seconds,
-                    milliseconds: 0,
-                };
-                let sent = gnss.set_reference_time(&reference).await;
-                info!(
-                    "[GNSS] reference time 20{:02}-{:02}-{:02} {:02}:{:02}:{:02} sent={}",
-                    time.year,
-                    time.month,
-                    time.day,
-                    time.hours,
-                    time.minutes,
-                    time.seconds,
-                    sent.is_ok()
-                );
-            }
-            _ => info!("[GNSS] no reference time: the RTC has none"),
-        }
+        send_reference_time(&mut gnss, &mut rtc).await;
     }
     info!(
         "[BOOT] answered: power={} clock={} touch={} motion={} magnet={} gnss={}",
@@ -2039,7 +2062,12 @@ async fn bring_up(spawner: Spawner, parts: Parts, zones: ZoneTracker) {
                 state: initial_sensor_state,
                 rtc_sync_pending: true,
             },
-            gnss: GnssTask { gnss, nmea_parser },
+            gnss: GnssTask {
+                gnss,
+                nmea_parser,
+                exio: i2c.clone(),
+                rtc: rtc_ok.then(|| Pcf85063aRtc::new(i2c.clone())),
+            },
             // The compass needs the IMU for its tilt. Without it, it shows NO DATA.
             motion: imu_ok.then(|| MotionTask {
                 magnetometer: magnetometer_ok.then_some(magnetometer),
@@ -2091,23 +2119,63 @@ async fn reset_lora(i2c: SharedI2cDevice) -> Result<(), ()> {
     Ok(())
 }
 
+/// Resets the GNSS module, lets it start, and configures it again.
+async fn reset_gnss(
+    exio: &mut SharedI2cDevice,
+    gnss: &mut Lc76g<SharedI2cDevice, embassy_time::Delay>,
+    nmea_parser: &mut NmeaParser,
+) -> Result<(), Outcome> {
+    pulse_gnss_reset(exio)
+        .await
+        .map_err(|()| Outcome::NoReply)?;
+    Timer::after(Duration::from_secs(1)).await;
+    configure_gnss(gnss, nmea_parser).await
+}
+
+/// Sends the GNSS module the RTC's time, which it starts without after a reset or a power-on.
+async fn send_reference_time(
+    gnss: &mut Lc76g<SharedI2cDevice, embassy_time::Delay>,
+    rtc: &mut Pcf85063aRtc<SharedI2cDevice>,
+) {
+    match rtc.get_time().await {
+        Ok(time) if !rtc.oscillator_stopped() => {
+            let reference = GnssDateTime {
+                year: 2000 + u16::from(time.year),
+                month: time.month,
+                day: time.day,
+                weekday: time.weekday,
+                hours: time.hours,
+                minutes: time.minutes,
+                seconds: time.seconds,
+                milliseconds: 0,
+            };
+            let sent = gnss.set_reference_time(&reference).await;
+            info!(
+                "[GNSS] reference time 20{:02}-{:02}-{:02} {:02}:{:02}:{:02} sent={}",
+                time.year,
+                time.month,
+                time.day,
+                time.hours,
+                time.minutes,
+                time.seconds,
+                sent.is_ok()
+            );
+        }
+        _ => info!("[GNSS] no reference time: the RTC has none"),
+    }
+}
+
 /// Holds the GNSS module in reset for 10 ms, which also clears its time.
 ///
 /// The module's `RESET_N` is pulled up inside it to 1.8 V and must be driven open-drain, so the
-/// pin's output bit stays low and the pin is an output only while it holds the reset.
+/// pin is an output only while it holds the reset. Every write of the output register keeps its
+/// bit low (`reset_lora`, `LoraPath`), so only the direction changes here: a read and write of
+/// the output register would race `radio_task`'s writes of the RF switch.
 async fn pulse_gnss_reset(i2c: &mut SharedI2cDevice) -> Result<(), ()> {
-    const OUTPUT: u8 = 0x01;
     const DIRECTION: u8 = 0x03;
     let reset = 1 << board::EXIO_GPS_RESET;
     let mut direction = [0];
     i2c.write_read(board::TCA9554_I2C_ADDR, &[DIRECTION], &mut direction)
-        .await
-        .map_err(|_| ())?;
-    let mut output = [0];
-    i2c.write_read(board::TCA9554_I2C_ADDR, &[OUTPUT], &mut output)
-        .await
-        .map_err(|_| ())?;
-    i2c.write(board::TCA9554_I2C_ADDR, &[OUTPUT, output[0] & !reset])
         .await
         .map_err(|_| ())?;
     i2c.write(board::TCA9554_I2C_ADDR, &[DIRECTION, direction[0] & !reset])

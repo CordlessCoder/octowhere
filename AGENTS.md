@@ -323,7 +323,9 @@ Core 1 owns the display SPI/DMA path.
   leaving the bus alone between. It publishes the parsed state through `GNSS_STATE` and times
   UTC on the local timer from each fix's burst (`gnss_time`, read with `gps_utc`). When the
   frame loop sets `POWER_OFF`, once the panel is off, it saves the module's navigation data and
-  sets `GNSS_PARKED`.
+  sets `GNSS_PARKED`. After 8 failed reads in a row, or 10 s of reads with nothing in them, it
+  resets the module through the I/O expander, at most once a minute, configures it again and
+  sends it the RTC's time.
 - `motion_task`, on `BUS_EXECUTOR`, owns the IMU and magnetometer, the compass calibration and
   the sensor fusion. It samples every 250 ms, or every 20 ms while the frame loop sets
   `COMPASS_ACTIVE`, and publishes a `MotionSnapshot` through `MOTION_STATE`.

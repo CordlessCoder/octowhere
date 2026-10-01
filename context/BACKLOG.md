@@ -140,13 +140,13 @@ until the feature set is complete, because profiling an incomplete firmware pric
   Sharing orbit data between units does not work: the module can output its ephemeris as
   RTCM 3 (`$PAIR436`), but it takes orbit data only as Quectel's EPO (`$PAIR471`), which comes
   from Quectel's server and has no documented conversion from ephemeris.
-- Recover a stuck GNSS module while running (2026-09-28). Moving the IPEX connector can leave
-  the LC76G refusing reads at `0x54`, or answering with no NMEA, until it is reset; the firmware
-  resets it only at start-up. `bench/gnss-nack` has a recovery to port: on 8 failed reads in a
-  row, or 10 s of reads with nothing in them, pulse the reset open-drain, wait 1 s and configure
-  it again, at most once a minute, and show GNSS as faulted if that keeps failing. A reset
-  clears the module's time, so send the RTC's time after it. Strain relief on the IPEX cable
-  addresses the trigger itself.
+- Show GNSS as faulted when resetting a stuck module keeps failing (2026-10-01). Moving the IPEX
+  connector can leave the LC76G refusing reads at `0x54`, or answering with no NMEA, until it is
+  reset. `gnss_task` now resets it after 8 failed reads in a row or 10 s of reads with nothing in
+  them, at most once a minute, and sends it the RTC's time after. It publishes no fix while it
+  does, but no screen says GNSS has failed: the self-test's fault is the only GNSS fault the
+  design has, so a running one needs a design round. Strain relief on the IPEX cable addresses
+  the trigger itself.
 
 ## Deferred, with detail elsewhere
 
