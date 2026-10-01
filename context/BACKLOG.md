@@ -92,7 +92,11 @@ until the feature set is complete, because profiling an incomplete firmware pric
   ruled out: the DMA cannot read PSRAM as fast as the SPI sends (see the flush entry). Opening
   each stream with `RAMWR` instead of a separate command, now in place, took the address window
   from 2.1 to 1.8 ms a frame. What remains is the row copies. The bench that measured this,
-  `bench/row-span-damage`, was deleted; its last commit was `e92ff49`.
+  `bench/row-span-damage`, was deleted; its last commit was `e92ff49`. Pixel shift's region
+  path, which builds each row from the framebuffer row the shift picks, costs about 0.5 µs a
+  row more than the straight copy it replaced, shifted or not: 15 to 22 µs on a small region
+  and 0.6 % on a large one. A shifted whole frame costs 30 to 60 µs over the unshifted
+  11.5 ms (`bench/flush-shift`, 2026-10-01, with no wait for TE).
 - Shorten the clock face's draws further. Measured on 2026-09-25 with `bench/clock-draw`, after
   the face stopped laying out parts outside the damage and the clear stopped painting under the
   band: a tick draws in about 1.5 ms (2.7 before), a full draw in 17.5–22.6 ms (20.5–27 before),

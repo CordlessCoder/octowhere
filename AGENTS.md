@@ -262,7 +262,10 @@ wait for TE and the flush that show it (`touch-latency-bench`, summarised by
 runs the finger on both handoffs with `tools/touch-latency-sweep.sh`, logs every read as it is
 made, with the report's bytes (`touch-read-log`), times each lift from its report to the step that counts it, and steps the controller through its modes on each short BOOT press (`touch-mode-probe`); and `bench/compass-field`, which holds the compass on
 its settled fields with a turning synthetic heading and logs every draw's time
-(`compass-field-bench`, summarised by `tools/compass-field-summary.py`).
+(`compass-field-bench`, summarised by `tools/compass-field-summary.py`); and
+`bench/flush-shift`, which times flushes on core 1 with no wait for TE, whole and in regions,
+at each pixel shift position, beside the region flush from before pixel shift
+(`flush-shift-bench`, summarised by `tools/flush-shift-summary.py`).
 
 ## Concurrency
 
