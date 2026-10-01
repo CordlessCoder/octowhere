@@ -9,7 +9,9 @@
 //! `--record <scene> <out>` records one without a window, to GIF or MP4 by `<out>`'s extension.
 //! Both step it on the firmware's frame period, so a recording is the same every run and shows
 //! none of the host's speed. A scene that captions its steps records with a column beside the
-//! panel for them. `--scenes` lists them. MP4 is encoded by `ffmpeg`, which must be on
+//! panel for them. In a terminal, `--record` shows bars for the frames rendered and encoded,
+//! against the scene's length from a first run that does not draw. `--scenes` lists them.
+//! MP4 is encoded by `ffmpeg`, which must be on
 //! the path, as H.264 with full colour resolution (4:4:4): players built on ffmpeg or VLC take
 //! it, but most browsers do not.
 //!
@@ -482,8 +484,26 @@ fn main() {
     }
 }
 
-/// Steps `scene` on the firmware's frame period and records it to `path`.
+/// How long `scene` records for on the recording's own clock, from a run that steps the stage
+/// without drawing it.
+fn recorded_length(scene: &scenes::Scene) -> u64 {
+    caption::clear();
+    let (mut first, mut played, mut last) = (None, 0, 0);
+    let mut driver = Driver::new();
+    driver.observe(|_, now| {
+        played += (now - last) / caption::speed();
+        last = now;
+        first.get_or_insert(played);
+    });
+    (scene.run)(&mut driver);
+    drop(driver);
+    played - first.unwrap_or(played)
+}
+
+/// Steps `scene` on the firmware's frame period and records it to `path`, with bars for the
+/// frames rendered and encoded.
 fn record(scene: &scenes::Scene, path: PathBuf, masked: bool) {
+    let mut progress = Some(record::Progress::new(recorded_length(scene)));
     let mut panel = Panel::new(masked);
     let mut column = scene.captioned.then(caption::Column::new);
     caption::clear();
@@ -525,6 +545,7 @@ fn record(scene: &scenes::Scene, path: PathBuf, masked: bool) {
                     width,
                     &frame(&panel, &mut column),
                     knock_out.as_deref(),
+                    progress.take(),
                 ));
             }
             Some(recording) => {
@@ -649,6 +670,7 @@ fn interact(mut window: Window, masked: bool, extension: &str) {
                                 WIDTH,
                                 &panel.pixels,
                                 panel.knock_out(),
+                                None,
                             ));
                         }
                     }

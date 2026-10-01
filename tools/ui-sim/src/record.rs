@@ -12,6 +12,7 @@ use std::{
 };
 
 use gif::{DisposalMethod, Encoder, Frame, Repeat};
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 
 use crate::HEIGHT;
 
@@ -25,7 +26,40 @@ const MAX_SAMPLES: u16 = u16::MAX / FRAME_CS;
 /// NeuQuant's trade of quality for speed, used when a frame has over 256 colours: its best.
 const QUANTIZE_SPEED: i32 = 1;
 
+/// Bars for a recording whose length is known: the frames rendered, and the frames the encoder
+/// has taken.
+pub struct Progress {
+    rendered: ProgressBar,
+    encoded: ProgressBar,
+}
+
+impl Progress {
+    /// For a recording `length` µs long on its own clock.
+    pub fn new(length: u64) -> Self {
+        let frames = length.div_ceil(FRAME_US).max(1);
+        let multi = MultiProgress::new();
+        let style = ProgressStyle::with_template(
+            "{prefix:>6} [{bar:40}] {pos}/{len} frames  {elapsed_precise}, eta {eta}  {msg}",
+        )
+        .expect("the template is valid")
+        .progress_chars("=> ");
+        let bar = |prefix| {
+            multi.add(
+                ProgressBar::new(frames)
+                    .with_style(style.clone())
+                    .with_prefix(prefix),
+            )
+        };
+        Self {
+            rendered: bar("render"),
+            encoded: bar("encode"),
+        }
+    }
+}
+
 pub struct Recording {
+    started: u64,
+    rendered: Option<ProgressBar>,
     next_sample: u64,
     /// The last frame taken, not yet sent, since its delay grows while the window stays the same.
     held: Vec<u32>,
@@ -64,21 +98,38 @@ impl Recording {
         width: usize,
         pixels: &[u32],
         knock_out: Option<&[bool]>,
+        progress: Option<Progress>,
     ) -> Self {
         let format = Format::of(&path)
             .unwrap_or_else(|| panic!("{} is neither a .gif nor an .mp4", path.display()));
         let (frames, received) = mpsc::channel();
         let knock_out = knock_out.map(<[bool]>::to_vec);
+        let (rendered, encoded) = progress.map(|bars| (bars.rendered, bars.encoded)).unzip();
         Self {
+            started: now,
+            rendered,
             next_sample: now + FRAME_US,
             held: pixels.to_vec(),
             samples: 1,
             frames,
             encoder: thread::spawn(move || {
-                let written = match format {
-                    Format::Gif => encode_gif(&path, width, knock_out, received),
-                    Format::Mp4 => encode_mp4(&path, width, received),
+                let advance = |samples: u16| {
+                    if let Some(bar) = &encoded {
+                        bar.inc(u64::from(samples));
+                    }
                 };
+                let flushing = || {
+                    if let Some(bar) = &encoded {
+                        bar.set_message("finishing");
+                    }
+                };
+                let written = match format {
+                    Format::Gif => encode_gif(&path, width, knock_out, received, advance),
+                    Format::Mp4 => encode_mp4(&path, width, received, advance, flushing),
+                };
+                if let Some(bar) = &encoded {
+                    bar.finish_with_message("");
+                }
                 match written {
                     Ok(()) => println!("saved {}", path.display()),
                     Err(error) => eprintln!("recording {}: {error}", path.display()),
@@ -100,10 +151,16 @@ impl Recording {
                 self.samples = 1;
             }
         }
+        if let Some(bar) = &self.rendered {
+            bar.set_position((self.next_sample - self.started) / FRAME_US);
+        }
     }
 
     /// Sends the last frame. The file is complete once the returned thread ends.
     pub fn finish(self) -> JoinHandle<()> {
+        if let Some(bar) = &self.rendered {
+            bar.finish();
+        }
         let _ = self.frames.send((self.held, self.samples));
         self.encoder
     }
@@ -114,6 +171,7 @@ fn encode_gif(
     width: usize,
     knock_out: Option<Vec<bool>>,
     frames: Receiver<(Vec<u32>, u16)>,
+    advance: impl Fn(u16),
 ) -> Result<(), Box<dyn Error>> {
     let file = BufWriter::new(File::create(path)?);
     let mut encoder = Encoder::new(file, width as u16, HEIGHT as u16, &[])?;
@@ -152,6 +210,7 @@ fn encode_gif(
         frame.delay = samples * FRAME_CS;
         frame.dispose = DisposalMethod::Keep;
         encoder.write_frame(&frame)?;
+        advance(samples);
         previous = Some(pixels);
     }
     Ok(())
@@ -165,6 +224,8 @@ fn encode_mp4(
     path: &Path,
     width: usize,
     frames: Receiver<(Vec<u32>, u16)>,
+    advance: impl Fn(u16),
+    flushing: impl Fn(),
 ) -> Result<(), Box<dyn Error>> {
     let mut ffmpeg = Command::new("ffmpeg")
         .args([
@@ -206,9 +267,12 @@ fn encode_mp4(
             .collect();
         for _ in 0..samples {
             input.write_all(&rgb)?;
+            advance(1);
         }
     }
     drop(input);
+    // ffmpeg still holds the frames its lookahead has not encoded.
+    flushing();
     let status = ffmpeg.wait()?;
     if !status.success() {
         return Err(format!("ffmpeg {status}").into());
