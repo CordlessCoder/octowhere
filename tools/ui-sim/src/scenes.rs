@@ -30,8 +30,14 @@ pub struct Scene {
 pub const SCENES: &[Scene] = &[
     Scene {
         name: "startup",
-        about: "the self-test as each part answers, the identity, the logo card and the clock",
+        about: "the self-test as each part answers, the identity, the logo card and the clock, charging",
         run: startup,
+        captioned: false,
+    },
+    Scene {
+        name: "startup-unplugged",
+        about: "the start-up into the clock with the battery not charging",
+        run: startup_unplugged,
         captioned: false,
     },
     Scene {
@@ -842,20 +848,25 @@ fn boot(driver: &mut Driver, reports: [(Part, Outcome, u64); 6]) {
 }
 
 fn startup(driver: &mut Driver) {
-    use Outcome::Answered;
-    boot(
-        driver,
-        [
-            (Part::Power, Answered, 150),
-            (Part::Clock, Answered, 250),
-            (Part::Touch, Answered, 500),
-            (Part::Motion, Answered, 600),
-            (Part::Magnet, Answered, 750),
-            (Part::Gnss, Answered, 1_300),
-        ],
-    );
+    boot(driver, ANSWERING);
     driver.wait(ms(5_900));
 }
+
+fn startup_unplugged(driver: &mut Driver) {
+    boot(driver, ANSWERING);
+    on_battery(driver, 87, false);
+    driver.wait(ms(5_900));
+}
+
+/// Every part answering, as a start-up usually goes.
+const ANSWERING: [(Part, Outcome, u64); 6] = [
+    (Part::Power, Outcome::Answered, 150),
+    (Part::Clock, Outcome::Answered, 250),
+    (Part::Touch, Outcome::Answered, 500),
+    (Part::Motion, Outcome::Answered, 600),
+    (Part::Magnet, Outcome::Answered, 750),
+    (Part::Gnss, Outcome::Answered, 1_300),
+];
 
 fn startup_failed(driver: &mut Driver) {
     use Outcome::{Answered, NoReply};
