@@ -157,7 +157,8 @@ rest-off`, `--record zone-scroll` and `--record tour`, which walks every screen 
 the device, in under four minutes, with a caption for each step in a column beside the panel,
 and ends by resting, waking and powering off from PWR; `--scenes` lists the rest. Past the
 glass's right edge, the simulator draws the board's PWR key at 45° and BOOT at 135°, as arcs
-of the bezel that light while held. The simulator shows the display's
+of the bezel that light while held. `tools/ui-web` runs the same stage in a browser page, with the
+keys on its bezel and labelled controls for every reading, including the battery's level. The simulator shows the display's
 level by scaling colours against the stored level. The captures' fixture is 13:07:42 on Thu 24 Sep 2026 in Europe/Dublin, and heading 047°,
 pitch +05, roll −12, calibration 54 %. None of it is a reading.
 

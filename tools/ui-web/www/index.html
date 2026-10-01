@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Octowhere Simulator</title>
+<meta name="description" content="The octowhere firmware's screens, running in the browser from the firmware's own drawing code.">
+<link rel="stylesheet" href="style.css">
+<script defer src="sim.js"></script>
+</head>
+<body>
+<header>
+  <h1>OCTOWHERE <span>/</span> SIMULATOR</h1>
+  <p>The firmware's screens, drawn by its own code and running in your browser. Touch the
+    round screen as you would the device. The controls stand in for its sensors and keys,
+    and every reading is synthetic.</p>
+</header>
+
+<main>
+  <section class="device" aria-label="The device">
+    <div class="bezel" id="bezel">
+      <canvas id="panel" width="466" height="466" aria-label="The device's touchscreen"></canvas>
+      <svg class="keys" id="keys" viewBox="-300 -300 600 600" aria-hidden="false">
+        <circle class="rim" r="246"></circle>
+        <g class="key" data-key="power" role="button" tabindex="0" aria-label="PWR key: press to rest the screen, hold a second to power off">
+          <path class="hit"></path>
+          <path class="arc"></path>
+          <path class="fill"></path>
+          <text>PWR</text>
+        </g>
+        <g class="key" data-key="boot" role="button" tabindex="0" aria-label="BOOT key: nothing uses it yet">
+          <path class="hit"></path>
+          <path class="arc"></path>
+          <path class="fill"></path>
+          <text>BOOT</text>
+        </g>
+      </svg>
+      <div class="off" id="off" hidden>
+        <p>POWERED OFF</p>
+        <p class="sub">Hold PWR to power it on</p>
+        <button id="power-on" type="button">Power on</button>
+      </div>
+      <div class="loading" id="loading"><p>LOADING</p></div>
+    </div>
+    <p class="hint" id="hint" aria-live="polite"></p>
+    <ul class="gestures" id="gestures">
+      <li><b>Swipe sideways</b> between the clock and the compass</li>
+      <li><b>Drag down</b> from the top for settings, <b>up</b> to close them</li>
+      <li><b>Tap</b> a setting to change it</li>
+      <li><b>Press PWR</b> to rest the screen, <b>hold it</b> a second to power off</li>
+    </ul>
+  </section>
+
+  <section class="controls" aria-label="Controls">
+    <fieldset>
+      <legend>Device</legend>
+      <div class="row buttons">
+        <button type="button" class="hold" data-hold="power" title="Press to rest the screen; hold a second for the power-off screen. Key: K">PWR</button>
+        <button type="button" class="hold" data-hold="boot" title="The BOOT key. Nothing uses it yet. Key: O">BOOT</button>
+        <button type="button" class="hold" data-hold="cover" title="A hand over the screen goes back to the clock. Hold H">Cover screen</button>
+      </div>
+      <div class="row buttons">
+        <button type="button" id="replay" title="Power on again, through the self-test and the start-up">Replay start-up</button>
+        <button type="button" id="skip" title="Start again straight on the clock face">Start on the clock</button>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Compass</legend>
+      <label class="slider">Heading <output id="heading-out">37°</output>
+        <input type="range" id="heading" min="0" max="359" step="1" value="37">
+      </label>
+      <label class="check"><input type="checkbox" data-reading="11"> Keep turning</label>
+      <label class="slider">Pitch <output id="pitch-out">0°</output>
+        <input type="range" id="pitch" min="-90" max="90" step="1" value="0">
+      </label>
+      <label class="slider">Roll <output id="roll-out">0°</output>
+        <input type="range" id="roll" min="-90" max="90" step="1" value="0">
+      </label>
+      <div class="segmented" role="radiogroup" aria-label="Calibration" data-reading="3">
+        <span>Calibration</span>
+        <button type="button" data-value="0">None</button>
+        <button type="button" data-value="54">Part-way</button>
+        <button type="button" data-value="100">Complete</button>
+      </div>
+      <label class="check"><input type="checkbox" data-reading="4"> Magnetic interference</label>
+      <label class="check"><input type="checkbox" data-reading="6"> Held upright, which withholds the heading</label>
+      <label class="check"><input type="checkbox" data-reading="5" checked> Motion sensors answering</label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Time and place</legend>
+      <div class="segmented" role="radiogroup" aria-label="Clock" data-reading="8">
+        <span>Clock</span>
+        <button type="button" data-value="0" title="Set from satellite time">GNSS</button>
+        <button type="button" data-value="1" title="Running on the real-time clock, not confirmed by GNSS">RTC</button>
+        <button type="button" data-value="2" title="The real-time clock stopped">Stopped</button>
+        <button type="button" data-value="3" title="The real-time clock cannot be read">No data</button>
+      </div>
+      <label class="select">Time zone
+        <select data-reading="7">
+          <option value="0">Not known yet</option>
+          <option value="1" selected>Dublin, found from the position</option>
+          <option value="2">New York, chosen by hand</option>
+          <option value="3">Kolkata, chosen by hand</option>
+        </select>
+      </label>
+      <label class="check"><input type="checkbox" data-reading="10" checked> GNSS has a fix</label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Power</legend>
+      <div class="segmented" role="radiogroup" aria-label="Supply" data-reading="9">
+        <span>Supply</span>
+        <button type="button" data-value="0">USB, charging</button>
+        <button type="button" data-value="1">Battery</button>
+        <button type="button" data-value="2">USB, no battery</button>
+      </div>
+      <label class="slider">Battery level <output id="level-out">87 %</output>
+        <input type="range" id="level" min="0" max="100" step="1" value="87">
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>View</legend>
+      <label class="check"><input type="checkbox" id="corners"> Show the corners the round glass hides</label>
+      <div class="row buttons">
+        <button type="button" id="screenshot">Save a screenshot</button>
+      </div>
+    </fieldset>
+
+    <details>
+      <summary>Keyboard</summary>
+      <dl class="keyboard">
+        <dt>← →</dt><dd>heading, 5° a press, 1° with Shift</dd>
+        <dt>↑ ↓</dt><dd>pitch</dd>
+        <dt>Q E</dt><dd>roll</dd>
+        <dt>Space</dt><dd>keep turning</dd>
+        <dt>C</dt><dd>calibration</dd>
+        <dt>D</dt><dd>magnetic interference</dd>
+        <dt>T</dt><dd>held upright</dd>
+        <dt>L</dt><dd>motion sensors answering</dd>
+        <dt>R</dt><dd>clock</dd>
+        <dt>Z</dt><dd>time zone</dd>
+        <dt>G</dt><dd>GNSS fix</dd>
+        <dt>B</dt><dd>supply</dd>
+        <dt>- =</dt><dd>battery level, 5 % a press, 1 % with Shift</dd>
+        <dt>K</dt><dd>hold for PWR</dd>
+        <dt>O</dt><dd>hold for BOOT</dd>
+        <dt>H</dt><dd>hold to cover the screen</dd>
+        <dt>M</dt><dd>show the corners</dd>
+        <dt>P</dt><dd>save a screenshot</dd>
+      </dl>
+    </details>
+  </section>
+</main>
+
+<footer>
+  <p>Built from <a id="revision" href="https://github.com/CordlessCoder/octowhere">__REVISION__</a>.
+    Time zone boundaries from
+    <a href="https://github.com/evansiroky/timezone-boundary-builder">timezone-boundary-builder</a>,
+    derived from OpenStreetMap data, © OpenStreetMap contributors, under the
+    <a href="https://opendatacommons.org/licenses/odbl/1-0/">Open Database License 1.0</a>; the
+    simplified database built from them is in the repository's
+    <a href="https://github.com/CordlessCoder/octowhere/tree/master/crates/tz/data">crates/tz/data</a>.
+    Zone rules from the <a href="https://www.iana.org/time-zones">IANA time zone database</a>.</p>
+</footer>
+</body>
+</html>

@@ -1,0 +1,4 @@
+# The repository's own toolchain is espup's, for the board.
+[toolchain]
+channel = "stable"
+targets = ["wasm32-unknown-unknown"]

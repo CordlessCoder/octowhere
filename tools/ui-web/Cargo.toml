@@ -1,0 +1,20 @@
+[package]
+name = "ui-web"
+version = "0.1.0"
+edition = "2024"
+description = "The firmware's UI stage in a web page, built to WebAssembly"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+critical-section = { version = "1.2.0", features = ["std"] }
+embedded-graphics = "0.8.2"
+octowhere-ui = { version = "0.1.0", path = "../../crates/octowhere-ui" }
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[workspace]

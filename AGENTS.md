@@ -54,8 +54,11 @@ initialization or peripheral mappings.
   which the picker ranks zones by.
 - `crates/` also holds the local `lc76g`, `sx127x-lora` and `sx127x-common` crates.
 - `host-tests/` is the std test harness for the board-side modules.
-- `tools/ui-sim/` runs the stage in a desktop window. `tools/design-compare.py` puts screens
-  beside the design's renders. `tools/` also holds the bench scripts.
+- `tools/ui-sim/` runs the stage in a desktop window. `tools/ui-web/` builds it to
+  WebAssembly with a page that runs it in a browser, controls in place of the desktop's keys;
+  its `build.sh` writes the static site to `dist/` and `deploy.sh` copies it to a server over
+  SSH. `tools/design-compare.py` puts screens beside the design's renders. `tools/` also holds
+  the bench scripts.
 - `docs/` holds hardware reference: the topology notes, the datasheet pack, and captured GNSS,
   LoRa and compass traces under `docs/logs/`.
 - `context/` holds the agent-facing documents below. This file stays at the root.
@@ -110,6 +113,7 @@ The `esp` toolchain from [`rust-toolchain.toml`](rust-toolchain.toml) and the ta
 cargo +stable fmt --all --check
 cargo +stable fmt --all --manifest-path host-tests/Cargo.toml --check
 cargo +stable fmt --all --manifest-path tools/ui-sim/Cargo.toml --check
+cargo +stable fmt --all --manifest-path tools/ui-web/Cargo.toml --check
 cargo build --release --offline
 cargo clippy --release --offline -- -D warnings
 cargo +stable test --manifest-path host-tests/Cargo.toml \
@@ -129,11 +133,13 @@ cargo +stable clippy --manifest-path crates/tz/Cargo.toml \
   --target x86_64-unknown-linux-gnu --all-targets -- -D warnings
 cargo +stable clippy --release --manifest-path tools/ui-sim/Cargo.toml \
   --target x86_64-unknown-linux-gnu --locked -- -D warnings
+cargo +stable clippy --release --manifest-path tools/ui-web/Cargo.toml \
+  --target wasm32-unknown-unknown --locked -- -D warnings
 ```
 
 `--all` takes `cargo fmt` into the local path crates, so the root's line covers every crate
-under `crates/`; `host-tests` and `tools/ui-sim` are outside the firmware's graph and need
-their own. Drop `--check` to apply it.
+under `crates/`; `host-tests`, `tools/ui-sim` and `tools/ui-web` are outside the firmware's
+graph and need their own. Drop `--check` to apply it.
 
 The firmware's clippy run does not reach `crates/octowhere-ui`, because a path dependency is not
 a workspace member. Its own clippy line above is what lints it. The stable clippy there is newer
