@@ -5,6 +5,11 @@ until the feature set is complete, because profiling an incomplete firmware pric
 
 ## Next
 
+- Build the identity's version barcode in with the charging gauge's build (owner, 2026-10-01):
+  the solid wiping in to the middle, the seed and the slices flying out on `ease::FLIGHT`, as
+  `ui::charging` does since `DECISIONS.md` entry 24. Today the barcode in the row under the
+  identity's title (`ui/identity.rs`, `BARCODE_WIDTH`) appears whole on its frame, as each of the
+  row's elements does. Tell the design in the next update.
 - Finish the approved architecture cleanup (owner, 2026-09-28): remove the u8g2-era assets,
   unused dependencies and helpers, and unused sensor snapshot fields; move motion processing into
   `octowhere-motion`. Those changes are in the current branch. Then move the generic I²C peripheral
