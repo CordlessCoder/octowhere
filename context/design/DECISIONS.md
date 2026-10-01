@@ -122,3 +122,13 @@ Recorded 2026-09-26. These override the hand-off where they differ.
     wipes in to the fill's middle before the build and back out from it after, on the curve the
     logo's end bars fly on. `SCREEN-DESIGN-BRIEF.md` has the timings. Placement, envelope,
     percentage and the low and unknown treatment are unchanged. The design has not seen it.
+25. **The identity's upper scatter field turns on every frame** (owner, 2026-10-01). G19
+    turned it by 0.09 rad on frames 66, 77, 88, 99 and 110, and each step flipped a batch of
+    marks at once, which read as large jumps. It now turns by the same 0.45 rad in equal steps
+    on every frame from 66 to 110, ending where it did. The lower field still holds still. The
+    design has not seen it.
+26. **The battery gauge builds in after the start-up** (owner, 2026-10-01). When the start-up
+    hands over to the clock face, the gauge no longer rises from the left. While charging,
+    the slices run their build from an empty fill, as when charging starts. Otherwise the
+    solid grows out from the fill's middle, as when charging stops. Both start at the rise's
+    160 ms. Other entries to the clock face keep the rise. The design has not seen it.

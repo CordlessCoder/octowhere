@@ -150,7 +150,7 @@ It draws the faces' stills and `panel-rest`, `settings-always-on`, `panel-end`,
 always-on face's `always-on-local`, `always-on-stopped`, `always-on-no-zone` and
 `always-on-no-data`, which `context/screen-captures/` keeps. `tools/ui-sim` records scenes as
 GIF or MP4 at 20 ms per frame, with the finger marked: `--record compass-states`, `--record
-startup`, `--record clock-charging`, `--record startup-failed`, `--record settings`, `--record rest-always-on`, `--record
+startup` (charging), `--record startup-unplugged`, `--record clock-charging`, `--record startup-failed`, `--record settings`, `--record rest-always-on`, `--record
 rest-off`, `--record zone-scroll` and `--record tour`, which walks every screen and state slowly for a viewer new to
 the device, in about three and a half minutes, with a caption for each step in a column beside
 the panel; `--scenes` lists the rest. The simulator shows the display's
@@ -188,7 +188,10 @@ K1 (`design/renderer/concept/family-pass-v1-out/clock-K1-*`) on the round 4 spec
   across the whole fill, in every state. A known 0 % leaves the well empty.
 - **The gauge** is the 2026-09-29 update's: a black well at x 262–439, y 281–310, with no
   outline, and the fill inset 3 px, 172 × 24, growing from the left to
-  round(172 × level / 100) px. The entry grows it from the left, out-back over 80 ms. While
+  round(172 × level / 100) px. The entry grows it from the left, out-back over 80 ms, except
+  as the start-up hands over: then it builds in from an empty fill, 160 ms in, with the
+  slices' build while charging and otherwise the solid growing out from the middle, as when
+  charging starts or stops (owner, 2026-10-01). While
   charging, that length splits into upright slices in the identity barcode's narrow and broad
   widths, 20 at 87 %, their gaps taking the barcode's share. They rest on the 2026-09-27
   update's dispersed layout, and the endpoint never moves (`ui/charging.rs`, which matches the
@@ -387,7 +390,9 @@ interpreted them:
   at (437, 212), but its renders and script place it at (437, 175), and the build follows them.
   Partly lit, it shows three 1 px stems, as the script has it.
 - **The scatter** uses the firmware's generator, not the design's Python surrogate, with the
-  design's two fields, facings, densities and turns. The scatter is its own module
+  design's two fields, facings and densities. The upper field turns by the design's 0.45 rad
+  from frame 66 to 110, but in equal steps on every frame rather than five steps of 0.09
+  (owner, 2026-10-01), so marks change a few at a time. The scatter is its own module
   (`ui::scatter`), with its grid origin, the band it stops short of and its colour as
   parameters, and one or more fields on that grid, each a circle and a seed with its own
   facing and density. Where fields overlap, the first to show a point gives its mark. A mark
