@@ -53,6 +53,12 @@ pub const SCENES: &[Scene] = &[
         captioned: false,
     },
     Scene {
+        name: "pixel-shift",
+        about: "the picture moving a step against burn-in as each page and the panel settle",
+        run: pixel_shift,
+        captioned: true,
+    },
+    Scene {
         name: "swipe-to-compass",
         about: "from the clock to the compass, a turn, and back",
         run: swipe_to_compass,
@@ -267,6 +273,19 @@ fn clock_charging(driver: &mut Driver) {
     driver.wait(ms(2_000));
     on_battery(driver, 87, false);
     driver.wait(ms(2_000));
+}
+
+fn pixel_shift(driver: &mut Driver) {
+    start(driver, Screen::Clock);
+    driver.wait(ms(1_500));
+    say("A NEW PAGE SETTLING MOVES THE PICTURE A STEP. THE BAND STILL MEETS THE GLASS.");
+    page_left(driver, ms(250));
+    driver.wait(ms(1_500));
+    page_right(driver, ms(250));
+    driver.wait(ms(1_500));
+    say("SO DOES THE PANEL SETTLING OPEN OR SHUT.");
+    open_settings(driver);
+    close_settings(driver);
 }
 
 fn swipe_to_compass(driver: &mut Driver) {

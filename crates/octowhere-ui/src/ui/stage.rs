@@ -23,6 +23,7 @@ use super::{
     screens::{self, Battery, DEFAULT_BRIGHTNESS, Gnss, PeripheralState, Screen},
     second::{self, Effects, Next, Page},
     sheet::Sheet,
+    shift::Shift,
     startup::{self, Phase, Replay, Report, Startup},
 };
 
@@ -355,6 +356,11 @@ pub struct Stage {
     power_off: Option<PowerOff>,
     /// [`Update::power_off`] has gone out.
     powered_off: bool,
+    /// Where the pixel shift has the picture, and the stage's minute at the last step and the
+    /// page the pager last settled on, which the shift moves on.
+    shift: Shift,
+    minute: Micros,
+    settled_page: usize,
 }
 
 impl Stage {
@@ -422,7 +428,22 @@ impl Stage {
             shown_battery: (None, 0),
             power_off: None,
             powered_off: false,
+            shift: Shift::default(),
+            minute: 0,
+            settled_page: 0,
             peripherals,
+        }
+    }
+
+    /// How far the picture is moved on the panel against burn-in. The display moves it; touch
+    /// arrives where the panel was touched, and the stage takes this off. The start-up, and a
+    /// replay of it, show unmoved.
+    #[must_use]
+    pub fn shift(&self) -> Point {
+        if self.startup.is_some() {
+            Point::zero()
+        } else {
+            self.shift.offset()
         }
     }
 
@@ -628,6 +649,12 @@ impl Stage {
             key,
             boot_key,
         } = input;
+        let offset = self.shift();
+        let touch = touch.map(|touch| match touch {
+            Touch::Contacts(contacts) => Touch::Contacts(contacts.map(|p| p.map(|p| p - offset))),
+            Touch::Lifted(point) => Touch::Lifted(point - offset),
+            other => other,
+        });
         self.changed.clear();
         self.fading = false;
         self.gauge_moving = false;
@@ -711,7 +738,7 @@ impl Stage {
         self.apply(effects, &mut update);
 
         self.pager.step(now);
-        let was_open = self.sheet.is_open();
+        let (was_open, was_closed) = (self.sheet.is_open(), self.sheet.is_closed());
         self.sheet.step(now);
         self.grid.step(now);
         if let Some((page, _)) = &mut self.page {
@@ -730,6 +757,19 @@ impl Stage {
         if self.sheet.is_closed() {
             self.panel_settled = None;
         }
+        // The shift moves where the whole picture changes anyway: a new page settling, the
+        // panel settling open or shut, and failing those a minute's change once it is due.
+        let page = self.pager.view().page;
+        let settled = !self.pager.is_moving() && page != self.settled_page;
+        if !self.pager.is_moving() {
+            self.settled_page = page;
+        }
+        let panel = (self.sheet.is_open() && !was_open) || (self.sheet.is_closed() && !was_closed);
+        let minute = now / MINUTE;
+        if settled || panel || (minute != self.minute && self.shift.is_due(now)) {
+            self.shift.advance(now);
+        }
+        self.minute = minute;
 
         let view = self.pager.view();
         self.screen = Screen::ALL[view.page];
@@ -1080,6 +1120,7 @@ impl Stage {
             if self.drawn_always_on.as_ref() != Some(&view) {
                 self.drawn_always_on = Some(view);
                 self.changed.make_full();
+                self.shift.advance(now);
             }
         }
     }
@@ -1097,6 +1138,7 @@ impl Stage {
         self.rest = Rest::Awake;
         self.swallowed = true;
         self.drawn_always_on = None;
+        self.shift.advance(now);
         if self.page.is_some() || !self.sheet.is_closed() {
             self.route = None;
             self.show(Screen::Clock);

@@ -22,6 +22,7 @@ pub mod screens;
 pub mod script;
 pub mod second;
 pub mod sheet;
+pub mod shift;
 pub mod smooth;
 pub mod stage;
 pub mod startup;

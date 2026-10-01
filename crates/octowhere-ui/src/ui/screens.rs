@@ -198,22 +198,24 @@ pub fn clear_to<D: DrawTarget<Color = Color>>(
 /// one fill. It trades a few corner pixels written for most of the calls.
 const CLEAR_SLACK: i32 = 8;
 
-/// Clears the part of `area` on the round panel, leaving `painted`, which the caller covers
-/// itself. The corners outside the panel are never seen, and the clear is bound by memory
-/// bandwidth, so skipping most of them saves in proportion.
+/// Clears the part of `area` on the round panel, and as far past its edge as the pixel shift
+/// can bring onto it, leaving `painted`, which the caller covers itself. The corners beyond are
+/// never seen, and the clear is bound by memory bandwidth, so skipping most of them saves in
+/// proportion.
 fn clear_visible<D: DrawTarget<Color = Color>>(
     target: &mut D,
     area: &Rectangle,
     painted: Option<Rectangle>,
     color: Color,
 ) -> Result<(), D::Error> {
-    const RADIUS: f32 = board::LCD_WIDTH as f32 / 2.0;
+    const RADIUS: f32 = board::LCD_WIDTH as f32 / 2.0 + super::shift::REACH as f32;
+    const MIDDLE: f32 = board::LCD_WIDTH as f32 / 2.0;
     let chord = |y: i32| {
-        let dy = y as f32 + 0.5 - RADIUS;
+        let dy = y as f32 + 0.5 - MIDDLE;
         let half = libm::sqrtf((RADIUS * RADIUS - dy * dy).max(0.0));
         (
-            libm::floorf(RADIUS - half) as i32,
-            libm::ceilf(RADIUS + half) as i32,
+            (libm::floorf(MIDDLE - half) as i32).max(0),
+            (libm::ceilf(MIDDLE + half) as i32).min(board::LCD_WIDTH as i32),
         )
     };
     let Some(bottom_right) = area.bottom_right() else {

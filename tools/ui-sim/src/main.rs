@@ -69,6 +69,7 @@ use octowhere_ui::{
         compass::CompassView,
         screens::{Battery, Gnss, PeripheralState},
         script::{self, Driver},
+        shift,
         stage::{Input, Key as PowerKey, Motion, Sensors, Stage, Store, Touch, TouchGesture},
     },
 };
@@ -264,6 +265,8 @@ struct Panel {
     lifted: Option<(Point, u64)>,
     /// The display's level against the stored one, which the window shows by scaling colours.
     light: f32,
+    /// How far the display moves the picture, as the panel's flush would.
+    shift: Point,
 }
 
 /// The touch marker's radius, and how long it fades after a lift, in microseconds.
@@ -281,19 +284,21 @@ impl Panel {
             contact: None,
             lifted: None,
             light: 1.0,
+            shift: Point::zero(),
         }
     }
 
     fn set_masked(&mut self, masked: bool) {
         self.masked = masked;
-        to_pixels(&self.fb, self.masked.then_some(&self.mask), &mut self.base);
+        self.refresh();
         self.compose(0);
     }
 
     /// Follows the stage's contact, and puts a marker where it is: a disc while a finger is
     /// down, and a ring that fades after it lifts, so a one-step tap still shows in a recording.
     fn touch(&mut self, stage: &Stage, now: u64) {
-        let contact = stage.contact();
+        // The stage reports the contact on its unshifted picture; the finger is on the panel.
+        let contact = stage.contact().map(|point| point + stage.shift());
         if let (None, Some(was)) = (contact, self.contact) {
             self.lifted = Some((was, now));
         }
@@ -351,6 +356,12 @@ impl Panel {
         }
     }
 
+    /// Takes what the window shows from the framebuffer again.
+    fn refresh(&mut self) {
+        let knock_out = self.masked.then_some(&self.mask[..]);
+        to_pixels(&self.fb, knock_out, self.shift, &mut self.base);
+    }
+
     /// Which pixels an image of the panel should leave out.
     fn knock_out(&self) -> Option<&[bool]> {
         self.masked.then_some(&self.mask)
@@ -360,7 +371,13 @@ impl Panel {
     /// how long that took, or `None` when there was nothing to draw.
     fn draw(&mut self, stage: &Stage, whole: bool) -> Option<(u32, Duration)> {
         let changed = stage.changed();
+        let moved = stage.shift() != self.shift;
+        self.shift = stage.shift();
         if !whole && changed.is_empty() {
+            if moved {
+                self.refresh();
+                self.compose(0);
+            }
             return None;
         }
         // One buffer, so each step repaints only its own damage, as the firmware's buffers
@@ -374,7 +391,7 @@ impl Panel {
             changed.pixels()
         };
         let took = drawing.elapsed();
-        to_pixels(&self.fb, self.masked.then_some(&self.mask), &mut self.base);
+        self.refresh();
         self.compose(0);
         Some((pixels_drawn, took))
     }
@@ -744,10 +761,15 @@ fn panel_mask() -> Vec<bool> {
 }
 
 /// What the window shows of `fb`, with the corners in `knock_out` grey.
-fn to_pixels(fb: &FB, knock_out: Option<&[bool]>, pixels: &mut [u32]) {
+/// What the panel shows of `fb`, moved by `shift` with its edge repeated past it, as the
+/// display's flush sends it.
+fn to_pixels(fb: &FB, knock_out: Option<&[bool]>, shift: Point, pixels: &mut [u32]) {
     for (index, pixel) in pixels.iter_mut().enumerate() {
         *pixel = if knock_out.is_none_or(|mask| mask[index]) {
-            let point = Point::new((index % WIDTH) as i32, (index / WIDTH) as i32);
+            let point = Point::new(
+                shift::source((index % WIDTH) as i32, shift.x, WIDTH as i32),
+                shift::source((index / WIDTH) as i32, shift.y, HEIGHT as i32),
+            );
             let color = Rgb888::from(fb.pixel(point).expect("inside the panel"));
             u32::from_be_bytes([0, color.r(), color.g(), color.b()])
         } else {

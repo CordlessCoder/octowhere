@@ -341,7 +341,8 @@ fn draw_action_button<D: CoverageTarget<Color = Color>>(
 pub fn draw_field<D: CoverageTarget<Color = Color>>(target: &mut D) -> Result<(), D::Error> {
     let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
     for rows in [198..202, 314..318] {
-        super::smooth::disc_rows(field, rows, CENTER, 232.0, chrome::WHITE)?;
+        let reach = 233.0 + super::shift::REACH as f32;
+        super::smooth::disc_rows(field, rows, CENTER, reach, chrome::WHITE)?;
     }
     for x in [TEXT_LEFT - 14, 400] {
         for top in [202, 302] {

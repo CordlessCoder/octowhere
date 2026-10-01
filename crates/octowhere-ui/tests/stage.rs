@@ -460,14 +460,30 @@ impl Buffers {
     }
 }
 
-/// How many pixels on the round panel differ. The square's corners are never seen or cleared,
-/// and a page moving across them leaves what it drew there.
+/// How many pixels differ on the round panel, out to as far past its edge as the pixel shift
+/// can bring onto it. The square's corners beyond are never seen or cleared, and a page moving
+/// across them leaves what it drew there.
 fn differing(a: &FB, b: &FB) -> usize {
+    differing_within(a, b, 233.0 + octowhere_ui::ui::shift::REACH as f32)
+}
+
+/// [`differing`], but on the glass alone while the start-up shows, since it always shows
+/// unshifted.
+fn differing_as_shown(stage: &Stage, a: &FB, b: &FB) -> usize {
+    let reach = if stage.starting_up() {
+        0.0
+    } else {
+        octowhere_ui::ui::shift::REACH as f32
+    };
+    differing_within(a, b, 233.0 + reach)
+}
+
+fn differing_within(a: &FB, b: &FB, radius: f32) -> usize {
     (0..466 * 466)
         .map(|index| Point::new(index % 466, index / 466))
         .filter(|&point| {
             let (x, y) = (point.x as f32 + 0.5 - 233.0, point.y as f32 + 0.5 - 233.0);
-            x * x + y * y <= 233.0 * 233.0
+            x * x + y * y <= radius * radius
         })
         .filter(|&point| a.pixel(point) != b.pixel(point))
         .count()
@@ -1555,9 +1571,13 @@ fn start_up_damage_redraws_what_changed() {
         let mut check = |driver: &Driver, when: &str| {
             let partial = buffers.draw(&driver.stage, driver.stage.changed());
             let whole = render(&driver.stage);
-            assert_eq!(differing(partial, &whole), 0, "{failing:?} {when}");
             assert_eq!(
-                differing(&buffers.panel, &whole),
+                differing_as_shown(&driver.stage, partial, &whole),
+                0,
+                "{failing:?} {when}"
+            );
+            assert_eq!(
+                differing_as_shown(&driver.stage, &buffers.panel, &whole),
                 0,
                 "{failing:?} {when}, on the panel"
             );
@@ -1811,9 +1831,13 @@ fn demonstration_damage_redraws_what_changed() {
     for step in 0..360 {
         let partial = buffers.draw(&driver.stage, driver.stage.changed());
         let whole = render(&driver.stage);
-        assert_eq!(differing(partial, &whole), 0, "step {step}");
         assert_eq!(
-            differing(&buffers.panel, &whole),
+            differing_as_shown(&driver.stage, partial, &whole),
+            0,
+            "step {step}"
+        );
+        assert_eq!(
+            differing_as_shown(&driver.stage, &buffers.panel, &whole),
             0,
             "step {step}, on the panel"
         );
@@ -2718,5 +2742,107 @@ fn the_boot_key_changes_nothing_yet() {
         assert!(driver.stage.power_off().is_none());
         assert_eq!(driver.stage.rest(), Rest::Awake);
         assert_eq!(driver.stage.screen(), Screen::Compass);
+    }
+}
+
+/// Pixel shift: the picture moves a step when a new page settles, and holds while it slides
+/// and after.
+#[test]
+fn a_page_change_moves_the_picture_once_it_settles() {
+    let mut driver = driver_on(Screen::Clock);
+    assert_eq!(driver.stage.shift(), Point::zero());
+    driver.touch(Some(Point::new(420, 233)));
+    driver.touch(Some(Point::new(300, 233)));
+    assert_eq!(
+        driver.stage.shift(),
+        Point::zero(),
+        "not while the page slides"
+    );
+    driver.touch(Some(Point::new(60, 233)));
+    driver.lift();
+    driver.settle();
+    assert_eq!(driver.stage.screen(), Screen::Compass);
+    assert_eq!(driver.stage.shift(), Point::new(3, 0));
+    driver.wait(5_000_000);
+    assert_eq!(driver.stage.shift(), Point::new(3, 0));
+}
+
+/// Opening the panel and closing it each move the picture a step.
+#[test]
+fn the_panel_settling_open_or_shut_moves_the_picture() {
+    let mut driver = open_panel(Screen::Clock);
+    assert_eq!(driver.stage.shift(), Point::new(3, 0));
+    driver.swipe(Point::new(233, 420), Point::new(233, 60), 250_000);
+    driver.settle();
+    driver.wait(500_000);
+    assert_eq!(driver.stage.shift(), Point::new(2, 2));
+}
+
+/// A touch counts where the picture showed under it, not where the panel was touched.
+#[test]
+fn a_touch_lands_on_the_shifted_picture() {
+    let mut driver = open_panel(Screen::Clock);
+    let offset = driver.stage.shift();
+    assert_ne!(offset, Point::zero());
+    driver.touch(Some(Point::new(150, 150)));
+    assert_eq!(driver.stage.contact(), Some(Point::new(150, 150) - offset));
+}
+
+/// With nothing to hide a move, the picture moves at a minute's change once it has held for
+/// ten.
+#[test]
+fn an_unchanging_screen_moves_after_ten_minutes() {
+    let mut driver = resting_on(Screen::Clock, Timeout::Never, false);
+    driver.wait(9 * 60_000_000);
+    assert_eq!(driver.stage.shift(), Point::zero());
+    driver.wait(2 * 60_000_000);
+    assert_eq!(driver.stage.shift(), Point::new(3, 0));
+    driver.wait(8 * 60_000_000);
+    assert_eq!(driver.stage.shift(), Point::new(3, 0));
+}
+
+/// The always-on face moves a step with each redraw, and a wake from it moves another.
+#[test]
+fn the_always_on_face_moves_with_each_redraw_and_a_wake() {
+    let mut driver = resting_on(Screen::Clock, Timeout::Seconds15, true);
+    wait_until(&mut driver, 22_000_000, |rest| rest == Rest::AlwaysOn);
+    let entered = driver.stage.shift();
+    assert_ne!(entered, Point::zero(), "the face's first redraw moves it");
+    until_redrawn(&mut driver, 61_000_000);
+    let minute = driver.stage.shift();
+    assert_ne!(minute, entered);
+    driver.double_tap();
+    driver.wait(100_000);
+    assert_eq!(driver.stage.rest(), Rest::Awake);
+    assert_ne!(driver.stage.shift(), minute);
+}
+
+/// The start-up shows unshifted.
+#[test]
+fn the_start_up_shows_unshifted() {
+    let mut driver = Driver::starting();
+    boot_all(&mut driver, None);
+    assert!(driver.stage.starting_up());
+    assert_eq!(driver.stage.shift(), Point::zero());
+}
+
+/// The clock's band reaches past the glass as far as the shift moves it, so a shifted band still
+/// meets the edge.
+#[test]
+fn the_band_reaches_past_the_glass_by_the_shifts_reach() {
+    let mut driver = driver_on(Screen::Clock);
+    driver.wait(2_000_000);
+    let fb = render(&driver.stage);
+    let band = fb.pixel(Point::new(233, 250));
+    assert_ne!(band, Some(chrome::BLACK));
+    let reach = octowhere_ui::ui::shift::REACH;
+    for y in [200, 233, 280, 315] {
+        // The glass's first column on this row, and the band's within a pixel of the reach
+        // before it, the last one past the edge's antialiasing.
+        let dy = y as f32 + 0.5 - 233.0;
+        let glass = libm::ceilf(233.0 - libm::sqrtf(233.0 * 233.0 - dy * dy)) as i32;
+        let from = (glass - reach + 1).max(0);
+        assert_eq!(fb.pixel(Point::new(from, y)), band, "row {y}");
+        assert_eq!(fb.pixel(Point::new(465 - from, y)), band, "row {y}");
     }
 }

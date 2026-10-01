@@ -44,7 +44,8 @@ const TILE: Tile = Tile {
 /// The band ends on the page's own circle, just inside the glass, so a swipe carries
 /// its ends round with the page.
 const BAND_ROWS: core::ops::Range<i32> = 198..318;
-const BAND_RADIUS: f32 = 232.0;
+/// The band reaches past the glass by the pixel shift's reach, so it meets the edge shifted.
+const BAND_RADIUS: f32 = 233.0 + super::shift::REACH as f32;
 const BAND: Rectangle = Rectangle::new(Point::new(0, 198), Size::new(466, 120));
 /// Where each line's ink and reveal blocks can land, whatever it shows, with a pixel spare.
 /// A part whose region the damage misses is skipped without laying its text out.
