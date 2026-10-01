@@ -34,13 +34,11 @@ do not confuse the two.
   lists 3 dBi; TE's figure governs. Near 869 MHz its plots show VSWR about 1.35 and efficiency
   about 33%. 1.4 dBi is -0.75 dBd, so +17 dBm conducted is about 16 dBm e.r.p. at the peak, far
   under band O's 27 dBm. Band M's 14 dBm e.r.p. allows up to 14 dBm conducted.
-- **PA pin.** The carrier board cannot answer it: the module exposes one `ANT` pin and chooses the
-  PA inside. The module's datasheet specifies every transmit current "on PA Boost", at +7 to
-  +20 dBm, and claims +20 dBm, which only `PA_BOOST` gives, so the antenna is most likely on
-  `PA_BOOST`. The firmware never calls `configure_tx`, so today it transmits at `RegPaConfig`'s
-  reset value `0x0F`: +14 dBm on `RFO`. That fits the link test's RSSI of about -100 dBm between
-  two boards on one bench, far weaker than that range should give. A transmit on `PA_BOOST` at low
-  power, compared with the reset setting, settles it.
+- **PA pin.** The antenna is on `PA_BOOST` (2026-10-01, `docs/logs/lora/pa-2026-10-01/`). Two
+  boards on one bench hear each other at about -22 to -32 dBm at +17 dBm on it, and its strength
+  follows its setting; `RFO` arrives about 70 dB lower whatever its setting. The module exposes
+  one `ANT` pin and chooses the PA inside, so only a transmit could answer it. The link test sent
+  at `RegPaConfig`'s reset value, +14 dBm on `RFO`, which is why it heard about -100 dBm.
 - **Why duty cycle.** Polite spectrum access (listen before talk with adaptive frequency agility)
   caps cumulative transmit time at 100 s an hour per 200 kHz (EN 300 220-2 Table 18), which is 2.8%.
   Band O is 250 kHz wide, so agility cannot add a second 200 kHz. The duty-cycle option allows 10%.
@@ -502,7 +500,6 @@ protocol does not need this.
 
 ## Open
 
-- Confirming the PA pin on the bench (see "Radio").
 - The limit after which a rekey drops the old key.
 - A shorter floor once CAD is measured (see "CAD is required at this size").
 - Measuring GNSS time sync (see "Time sync").

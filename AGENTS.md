@@ -304,7 +304,9 @@ battery whose charging flips each round, and logs each start-up frame's and the 
 step and draw (`startup-handover-bench`, summarised by `tools/startup-handover-summary.py`;
 results in `docs/logs/display/startup-handover-2026-10-01.md`). And
 `bench/gnss-stuck` holds the GNSS module in reset twice and switches its NMEA output off, for
-`gnss_task`'s recovery to clear (`gnss-stuck-bench`).
+`gnss_task`'s recovery to clear (`gnss-stuck-bench`). And `bench/mesh-pa` sends every round,
+cycling the transmitter through both PA pins at two powers each, and logs what each node hears
+(`mesh-pa-bench`; results in `docs/logs/lora/pa-2026-10-01/`).
 
 ## Concurrency
 
@@ -478,7 +480,8 @@ is polled instead, 1 ms apart; one of the two boards needs it (`docs/hardware-no
 The `lora-link-tx` and `lora-link-rx` features build the older link test in `radio_task` instead,
 sending eight bytes of `OWLK` plus a big-endian sequence number every 250 ms. Transmit waits on `DIO0`'s edge. Receive stays in continuous receive and waits
 on `DIO0`'s level, which holds until `RxDone` is cleared. A two-board round trip is recorded in
-`docs/logs/lora/round-trip-2026-09-22.log`, with RSSI around -100 dBm. The receiver logged every
+`docs/logs/lora/round-trip-2026-09-22.log`, with RSSI around -100 dBm: it sent on `RFO`, which
+the antenna is not on. The receiver logged every
 other sequence number there. Both ends then ran inside the 250 ms sensor loop, and the receiver
 listened only in part of it. Since the move the transmit end has run alone, and the two-board
 test has not been rerun.
