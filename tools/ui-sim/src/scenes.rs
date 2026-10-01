@@ -3,7 +3,10 @@
 
 use embedded_graphics::prelude::Point;
 
-use crate::caption::say;
+use crate::{
+    buttons::{self, Button},
+    caption::say,
+};
 use octowhere_ui::ui::{
     clock::{ClockState, DateTime, ZoneMode, ZoneState},
     compass::CompassView,
@@ -12,7 +15,7 @@ use octowhere_ui::ui::{
     rest::{AlwaysOn, Timeout},
     screens::PeripheralState,
     screens::{Battery, Gnss, Screen},
-    script::Driver,
+    script::{self, Driver},
     second::Store,
     stage::Stage,
     stage::{Key, Motion, Sensors},
@@ -463,6 +466,41 @@ fn drain(driver: &mut Driver, from: u8, to: u8, charging: bool) {
 }
 
 /// A tap, and a pause to see what it did.
+/// Presses `button` as a finger does, so a recording shows it held: a short press reaches the
+/// stage as the key comes back up, a long one once it has been held for the second the power
+/// controller is set to, and the finger lets go a little after.
+fn press(driver: &mut Driver, button: Button, key: Key) {
+    buttons::hold(button, true);
+    driver.wait(match key {
+        Key::Short => ms(150),
+        Key::Long => ms(1_000),
+    });
+    if let Key::Short = key {
+        buttons::hold(button, false);
+    }
+    match button {
+        Button::Power => driver.key(key),
+        Button::Boot => driver.boot_key(key),
+    };
+    if let Key::Long = key {
+        driver.wait(ms(300));
+        buttons::hold(button, false);
+    }
+}
+
+/// Drags a finger from `from` through each of `waypoints`, reaching each over its time and
+/// staying put on one that repeats the point before, then lifts it.
+fn drag(driver: &mut Driver, from: Point, waypoints: &[(Point, Micros)]) {
+    let mut path = vec![from];
+    let mut at = from;
+    for &(to, duration) in waypoints {
+        let steps = (duration / script::FRAME).max(1) as i32;
+        path.extend((1..=steps).map(|step| at + (to - at) * step / steps));
+        at = to;
+    }
+    driver.stroke(&path);
+}
+
 fn slow_tap(driver: &mut Driver, x: i32, y: i32) {
     driver.tap(Point::new(x, y));
     driver.wait(ms(1_500));
@@ -751,6 +789,18 @@ fn tour(driver: &mut Driver) {
     }
     say("THEN THE CLOCK, AS AFTER ANY START-UP.");
     driver.wait(ms(4_000));
+    say("A PRESS OF PWR RESTS THE SCREEN AT ONCE, HERE ON THE ALWAYS-ON FACE.");
+    press(driver, Button::Power, Key::Short);
+    driver.wait(ms(3_500));
+    say("ANOTHER PRESS WAKES IT.");
+    press(driver, Button::Power, Key::Short);
+    driver.wait(ms(3_000));
+    say("HELD FOR A SECOND, PWR ASKS WHETHER TO POWER OFF.");
+    press(driver, Button::Power, Key::Long);
+    driver.wait(ms(2_000));
+    say("SLIDING THE HANDLE ACROSS POWERS THE DEVICE OFF.");
+    driver.swipe(Point::new(113, 258), Point::new(400, 258), ms(800));
+    driver.wait(ms(2_500));
 }
 
 fn settings(driver: &mut Driver) {
@@ -887,17 +937,22 @@ fn startup_failed(driver: &mut Driver) {
 fn power_off(driver: &mut Driver) {
     start(driver, Screen::Clock);
     driver.wait(ms(1_000));
-    driver.key(Key::Long);
-    driver.wait(ms(1_000));
-    // Let go short of the target: the handle goes back to its start.
-    driver.swipe(Point::new(113, 258), Point::new(290, 258), ms(700));
+    press(driver, Button::Power, Key::Long);
+    driver.wait(ms(700));
+    // Drag the handle partway, think better of it and bring it back before letting go.
+    let (start, partway) = (Point::new(113, 258), Point::new(290, 258));
+    drag(
+        driver,
+        start,
+        &[(partway, ms(700)), (partway, ms(300)), (start, ms(600))],
+    );
     driver.wait(ms(1_000));
     driver.tap(Point::new(133, 118));
     driver.wait(ms(1_000));
-    driver.key(Key::Short);
-    driver.wait(ms(1_000));
-    driver.key(Key::Long);
-    driver.wait(ms(1_200));
+    press(driver, Button::Power, Key::Short);
+    driver.wait(ms(850));
+    press(driver, Button::Power, Key::Long);
+    driver.wait(ms(900));
     driver.swipe(Point::new(113, 258), Point::new(400, 258), ms(800));
     driver.wait(ms(1_000));
 }
@@ -909,9 +964,9 @@ fn power_off_dim_cancel(driver: &mut Driver) {
         ..PeripheralState::default()
     });
     start(driver, Screen::Clock);
-    driver.wait(ms(16_000));
-    driver.key(Key::Long);
-    driver.wait(ms(1_500));
+    driver.wait(ms(15_000));
+    press(driver, Button::Power, Key::Long);
+    driver.wait(ms(1_200));
     driver.tap(Point::new(133, 118));
     driver.wait(ms(6_500));
 }
