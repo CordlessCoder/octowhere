@@ -18,6 +18,7 @@
 //!
 //! The panel shows only its inscribed circle. The window paints the corners outside it grey, and
 //! screenshots and GIFs leave them transparent. An MP4 has no transparency and keeps the grey.
+//! Pixels the circle's edge crosses blend the panel with the grey by how much of them it covers.
 //! `--unmasked`, or M in the window, shows the whole framebuffer instead, to see what is drawn
 //! where nobody will see it.
 //!
@@ -257,8 +258,10 @@ struct Panel {
     base: Vec<u32>,
     /// `base` with the touch marker over it.
     pixels: Vec<u32>,
-    /// Whether each pixel shows on the panel.
+    /// Whether each pixel shows on the panel, even in part.
     mask: Vec<bool>,
+    /// The pixels the glass's edge crosses, and how much of each it shows, out of 255.
+    edge: Vec<(usize, u8)>,
     masked: bool,
     /// Where a finger is down, or where one lifted and when, while its marker fades.
     contact: Option<Point>,
@@ -275,11 +278,18 @@ const MARKER_FADE: u64 = 300_000;
 
 impl Panel {
     fn new(masked: bool) -> Self {
+        let coverage = panel_coverage();
         Self {
             fb: FB::boxed(),
             base: vec![OFF_PANEL; WIDTH * HEIGHT],
             pixels: vec![OFF_PANEL; WIDTH * HEIGHT],
-            mask: panel_mask(),
+            mask: coverage.iter().map(|&shown| shown > 0).collect(),
+            edge: coverage
+                .iter()
+                .enumerate()
+                .filter(|&(_, &shown)| shown > 0 && shown < 255)
+                .map(|(index, &shown)| (index, shown))
+                .collect(),
             masked,
             contact: None,
             lifted: None,
@@ -323,6 +333,20 @@ impl Panel {
                 let [_, r, g, b] = pixel.to_be_bytes();
                 let dim = |channel: u8| (f32::from(channel) * self.light) as u8;
                 *pixel = u32::from_be_bytes([0, dim(r), dim(g), dim(b)]);
+            }
+        }
+        // After the dim, which does not reach the grey past the glass.
+        if self.masked {
+            let [_, gr, gg, gb] = OFF_PANEL.to_be_bytes();
+            for &(index, shown) in &self.edge {
+                let [_, r, g, b] = self.pixels[index].to_be_bytes();
+                let mix = |panel: u8, grey: u8| {
+                    ((u32::from(panel) * u32::from(shown)
+                        + u32::from(grey) * (255 - u32::from(shown))
+                        + 127)
+                        / 255) as u8
+                };
+                self.pixels[index] = u32::from_be_bytes([0, mix(r, gr), mix(g, gg), mix(b, gb)]);
             }
         }
         let (center, fill, ring) = match (self.contact, self.lifted) {
@@ -749,13 +773,16 @@ fn interact(mut window: Window, masked: bool, extension: &str) {
 }
 
 /// Whether each pixel's centre falls on the round panel.
-fn panel_mask() -> Vec<bool> {
+/// How much of each pixel the round glass shows, out of 255, from how far its centre lies
+/// inside the circle.
+fn panel_coverage() -> Vec<u8> {
     let radius = WIDTH as f32 / 2.0;
     (0..WIDTH * HEIGHT)
         .map(|index| {
             let x = (index % WIDTH) as f32 + 0.5 - radius;
             let y = (index / WIDTH) as f32 + 0.5 - radius;
-            x * x + y * y <= radius * radius
+            let inside = (radius - x.hypot(y) + 0.5).clamp(0.0, 1.0);
+            (inside * 255.0).round() as u8
         })
         .collect()
 }
