@@ -41,7 +41,6 @@ heapless = { version = "0.9.3", features = ["nightly"] }
 esp-storage = { version = "0.10.0", features = ["esp32s3"] }
 # Unreleased main: 1.0.0 needs embassy-sync 0.6, and main also fixes a chunk buffer overflow.
 ekv = { git = "https://github.com/embassy-rs/ekv", rev = "a0e2c7e", features = ["crc", "max-chunk-size-512"] }
-embedded-storage = "0.3.2"
 
 [features]
 default = []

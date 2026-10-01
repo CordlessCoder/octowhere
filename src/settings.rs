@@ -11,7 +11,6 @@ use defmt::warn;
 use ekv::{Config, Database, MountError, ReadError, flash::PageID};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_time::{Duration, Timer};
-use embedded_storage::nor_flash::{NorFlash as _, ReadNorFlash as _};
 use esp_bootloader_esp_idf::partitions::{self, DataPartitionSubType, PartitionType};
 use esp_storage::{FlashStorage, FlashStorageError};
 use octowhere_ui::{
@@ -127,7 +126,8 @@ impl ekv::flash::Flash for Partition {
 
     async fn write(&mut self, page: PageID, offset: usize, data: &[u8]) -> Result<(), Self::Error> {
         let at = self.at(page, offset);
-        self.flash.write(at, data)
+        // Not `write`, which reads, erases and rewrites the whole sector around `data`.
+        self.flash.write_nor(at, data)
     }
 }
 
