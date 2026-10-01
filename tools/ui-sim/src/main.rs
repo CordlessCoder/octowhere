@@ -35,8 +35,8 @@
 //! - Z: the clock's zone, through unknown, automatic in Dublin, and chosen by hand in New York
 //!   and Kolkata. R: the clock, through set from GNSS, running unconfirmed, stopped and
 //!   unreadable.
-//! - B: the supply, through USB and charging, battery only, and USB with no battery. G: GNSS fix
-//!   or none.
+//! - B: the supply, through USB and charging, battery only, and USB with no battery. - / =:
+//!   the battery's level down / up 5 %, 1 % with Shift. G: GNSS fix or none.
 //! - Hold H: a hand covering the screen, which goes to the clock face.
 //! - K: the power key. Released within a second it is a short press; held a second, a long one.
 //!   Once powered off, held 512 ms it powers the board on, through the start-up. O: the BOOT
@@ -142,36 +142,42 @@ struct Readings {
     clock: usize,
     /// A zone chosen in the settings panel, which the sensor task would report from then on.
     chosen: Option<ZoneState>,
-    /// Which of [`BATTERIES`] the power controller reports.
-    battery: usize,
+    /// Which of [`SUPPLIES`] the power controller reports, and the battery's level.
+    supply: usize,
+    level: u8,
     /// Whether GNSS has a fix.
     fix: bool,
 }
 
-/// The supplies B steps through.
-const BATTERIES: [Option<Battery>; 3] = [
-    Some(Battery {
-        present: true,
-        percent: 87,
-        millivolts: 4020,
-        charging: true,
-        usb: true,
-    }),
-    Some(Battery {
-        present: true,
-        percent: 64,
-        millivolts: 3850,
-        charging: false,
-        usb: false,
-    }),
-    Some(Battery {
-        present: false,
-        percent: 0,
-        millivolts: 0,
-        charging: false,
-        usb: true,
-    }),
+/// The supplies B steps through: whether a battery is fitted, whether USB is in, and whether
+/// the battery charges.
+const SUPPLIES: [(bool, bool, bool); 3] = [
+    (true, true, true),
+    (true, false, false),
+    (false, true, false),
 ];
+
+/// A cell's voltage at each level, roughly, between which [`millivolts`] interpolates.
+const DISCHARGE: [(u8, u16); 6] = [
+    (0, 3300),
+    (10, 3600),
+    (20, 3700),
+    (50, 3800),
+    (80, 3950),
+    (100, 4150),
+];
+
+/// The voltage the settings' battery screen shows at `percent`.
+fn millivolts(percent: u8) -> u16 {
+    let above = DISCHARGE
+        .iter()
+        .position(|&(at, _)| at >= percent)
+        .unwrap_or(DISCHARGE.len() - 1)
+        .max(1);
+    let ((p0, v0), (p1, v1)) = (DISCHARGE[above - 1], DISCHARGE[above]);
+    let along = u32::from(percent.clamp(p0, p1) - p0);
+    (u32::from(v0) + u32::from(v1 - v0) * along / u32::from(p1 - p0)) as u16
+}
 
 /// The clock's states R steps through: whether GNSS has set it, whether it stopped, and whether
 /// it can be read.
@@ -236,7 +242,9 @@ impl Readings {
                 self.zone = (self.zone + 1) % ZONES.len();
                 self.chosen = None;
             }
-            Key::B => self.battery = (self.battery + 1) % BATTERIES.len(),
+            Key::B => self.supply = (self.supply + 1) % SUPPLIES.len(),
+            Key::Minus => self.level = self.level.saturating_sub(tilt as u8),
+            Key::Equal => self.level = (self.level + tilt as u8).min(100),
             Key::G => self.fix = !self.fix,
             Key::R => self.clock = (self.clock + 1) % CLOCKS.len(),
             _ => return false,
@@ -252,6 +260,18 @@ impl Readings {
             mode,
             zone: octowhere_ui::tz::DATABASE.find(name).map(|zone| zone.id),
         })
+    }
+
+    fn battery(&self) -> Battery {
+        let (present, usb, charging) = SUPPLIES[self.supply];
+        let level = if present { self.level } else { 0 };
+        Battery {
+            present,
+            percent: level,
+            millivolts: if present { millivolts(level) } else { 0 },
+            charging,
+            usb,
+        }
     }
 
     fn motion(&self) -> Motion {
@@ -657,7 +677,8 @@ fn interact(mut window: Window, masked: bool, extension: &str) {
         zone: 1,
         clock: 0,
         chosen: None,
-        battery: 0,
+        supply: 0,
+        level: 87,
         fix: true,
     };
     let mut panel = Panel::new(masked);
@@ -671,7 +692,7 @@ fn interact(mut window: Window, masked: bool, extension: &str) {
     let (mut recordings, mut encoders) = (0, Vec::new());
     let mut drawn = String::new();
     let mut title_changed = false;
-    let mut zone_changed = false;
+    let mut sensors_changed = false;
     // When K went down, and whether it has been held long enough to count as a long press.
     let (mut power_key, mut boot_key) = (Held::default(), Held::default());
     // When the button went down while the controller watched for gestures.
@@ -719,9 +740,18 @@ fn interact(mut window: Window, masked: bool, extension: &str) {
                     title_changed = true;
                 }
                 key => {
-                    let clock = (readings.zone, readings.clock);
+                    let reported = |readings: &Readings| {
+                        (
+                            readings.zone,
+                            readings.clock,
+                            readings.supply,
+                            readings.level,
+                            readings.fix,
+                        )
+                    };
+                    let before = reported(&readings);
                     readings_changed |= readings.press(key, shift);
-                    zone_changed |= (readings.zone, readings.clock) != clock;
+                    sensors_changed |= reported(&readings) != before;
                 }
             }
         }
@@ -740,10 +770,10 @@ fn interact(mut window: Window, masked: bool, extension: &str) {
                 };
             readings_changed = false;
         }
-        let sensors_due = now >= next_sensors || zone_changed;
+        let sensors_due = now >= next_sensors || sensors_changed;
         if sensors_due {
             next_sensors = now + SENSOR_PERIOD_US;
-            zone_changed = false;
+            sensors_changed = false;
         }
         let contact = window
             .get_mouse_pos(MouseMode::Discard)
@@ -830,7 +860,7 @@ fn interact(mut window: Window, masked: bool, extension: &str) {
                     zone: zone.zone.or(readings.zone_state().zone),
                     ..zone
                 });
-                zone_changed = true;
+                sensors_changed = true;
             }
         }
 
@@ -918,7 +948,7 @@ fn sensors(readings: &Readings) -> Sensors {
             stopped,
         },
         zone: readings.zone_state(),
-        battery: BATTERIES[readings.battery],
+        battery: Some(readings.battery()),
         gnss: Gnss {
             fix: readings.fix,
             in_use: if readings.fix { 9 } else { 0 },
