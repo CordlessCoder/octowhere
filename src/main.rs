@@ -464,6 +464,7 @@ macro_rules! start_display_core {
                     fb: FB::alloc(&PSRAM_HEAP),
                     dirty: Dirty::new(),
                     drawn: false,
+                    shift: Point::zero(),
                     brightness: None,
                     display_on: None,
                     #[cfg(feature = "damage-debug")]
@@ -474,6 +475,7 @@ macro_rules! start_display_core {
                     fb: FB::alloc(&PSRAM_HEAP),
                     dirty: Dirty::new(),
                     drawn: false,
+                    shift: Point::zero(),
                     brightness: None,
                     display_on: None,
                     #[cfg(feature = "damage-debug")]
@@ -576,6 +578,7 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
 
     let mut prev_swap_spi = Duration::MIN;
     let mut first_flush = true;
+    let mut sent_shift = Point::zero();
     loop {
         settings::hold_display_core_if_asked();
         let state = swap.get();
@@ -584,6 +587,7 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
             timings,
             dirty,
             drawn: _,
+            shift,
             brightness,
             display_on,
             #[cfg(feature = "damage-debug")]
@@ -596,7 +600,8 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
             warn!("[DISPLAY] display on failed");
         }
         let is_first_flush = first_flush;
-        if dirty.is_empty() && !is_first_flush {
+        let moved = *shift != sent_shift;
+        if dirty.is_empty() && !is_first_flush && !moved {
             timings.vsync_wait = Duration::MIN;
         } else {
             if is_first_flush {
@@ -624,14 +629,18 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
 
         #[cfg(feature = "timing-log")]
         let (mut regions, mut pixels) = (0u32, 0u32);
-        if is_first_flush || dirty.is_full() {
+        if is_first_flush || moved || dirty.is_full() {
             #[cfg(feature = "damage-debug")]
             let debug_full = debug_changed.is_full();
             #[cfg(not(feature = "damage-debug"))]
             let debug_full = false;
-            fb.flush(&mut display, debug_full)
+            fb.flush_moved(&mut display, *shift, debug_full)
                 .await
                 .expect("display flush failed");
+            if moved {
+                info!("[DISPLAY] shift {} {}", shift.x, shift.y);
+            }
+            sent_shift = *shift;
             #[cfg(feature = "timing-log")]
             {
                 (regions, pixels) = (1, board::LCD_WIDTH as u32 * board::LCD_HEIGHT as u32);
@@ -647,16 +656,9 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
                     regions += 1;
                     pixels += region.size.width * region.size.height;
                 }
-                fb.flush_region(
-                    &mut display,
-                    region.top_left.x as u16,
-                    region.top_left.y as u16,
-                    region.size.width as u16,
-                    region.size.height as u16,
-                    overlay,
-                )
-                .await
-                .expect("display region flush failed");
+                fb.flush_region(&mut display, region, *shift, overlay)
+                    .await
+                    .expect("display region flush failed");
             }
         };
 
@@ -1593,6 +1595,9 @@ struct SwapState<A: Allocator = alloc::alloc::Global> {
     dirty: Dirty,
     /// `fb` holds a whole frame. Until it does, it is drawn in full.
     drawn: bool,
+    /// How far the display moves the picture against burn-in. A frame whose shift differs
+    /// from the last one sent goes out whole.
+    shift: Point,
     /// The display level to set as this frame goes out.
     brightness: Option<u8>,
     /// Switch the panel on before this frame goes out, or off once it has.
@@ -2271,6 +2276,7 @@ async fn frame_loop(
                 dirty,
                 timings,
                 drawn,
+                shift,
                 brightness,
                 display_on,
                 #[cfg(feature = "damage-debug")]
@@ -2381,6 +2387,7 @@ async fn frame_loop(
             }
             *brightness = update.brightness;
             *display_on = update.display_on;
+            *shift = stage.shift();
             if let Some(on) = update.display_on {
                 info!("[DISPLAY] panel {=str}", if on { "on" } else { "off" });
             }
