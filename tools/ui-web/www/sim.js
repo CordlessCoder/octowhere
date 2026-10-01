@@ -527,6 +527,48 @@ function embedded() {
   });
 }
 
+// The module's size, which build.sh writes in. Unbuilt, it is not a number and the progress
+// shows the bytes alone.
+const MODULE_BYTES = Number("__MODULE_BYTES__");
+const CELLS = 20;
+
+const cells = document.getElementById("loading-cells");
+for (let i = 0; i < CELLS; i++) cells.append(document.createElement("span"));
+
+function showDownload(received) {
+  const kb = (bytes) => `${Math.round(bytes / 1024).toLocaleString("en")} KB`;
+  const known = Number.isFinite(MODULE_BYTES) && MODULE_BYTES > 0;
+  const part = known ? Math.min(1, received / MODULE_BYTES) : 0;
+  [...cells.children].forEach((cell, i) => cell.classList.toggle("on", i < Math.floor(part * CELLS)));
+  document.getElementById("loading-bytes").textContent =
+    known ? `${kb(received)} / ${kb(MODULE_BYTES)}` : kb(received);
+}
+
+// Fetches the module, counting its bytes as they arrive while the browser compiles them.
+async function fetched(imports) {
+  const response = await fetch("octowhere-ui.wasm");
+  if (!response.ok) throw new Error(`octowhere-ui.wasm: ${response.status} ${response.statusText}`);
+  const [counted, compiled] = response.body.tee();
+  (async () => {
+    const reader = counted.getReader();
+    let received = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      received += value.length;
+      showDownload(received);
+    }
+  })();
+  const module = new Response(compiled, { headers: { "Content-Type": "application/wasm" } });
+  try {
+    return await WebAssembly.instantiateStreaming(module, imports);
+  } catch {
+    // A browser without streaming compilation.
+    const bytes = await (await fetch("octowhere-ui.wasm")).arrayBuffer();
+    return WebAssembly.instantiate(bytes, imports);
+  }
+}
+
 async function load() {
   const imports = {
     env: {
@@ -541,13 +583,7 @@ async function load() {
   if (location.protocol === "file:") {
     ({ instance } = await WebAssembly.instantiate(await embedded(), imports));
   } else {
-    try {
-      ({ instance } = await WebAssembly.instantiateStreaming(fetch("octowhere-ui.wasm"), imports));
-    } catch {
-      // A server that sends the module without the application/wasm type.
-      const bytes = await (await fetch("octowhere-ui.wasm")).arrayBuffer();
-      ({ instance } = await WebAssembly.instantiate(bytes, imports));
-    }
+    ({ instance } = await fetched(imports));
   }
   wasm = instance.exports;
   document.getElementById("loading").hidden = true;

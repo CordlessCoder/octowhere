@@ -212,7 +212,19 @@ main {
 .off[hidden], .loading[hidden] { display: none; }
 .off p, .loading p { margin: 0; }
 
-.off-title, .loading p {
+/* The download as a segmented rail, a cell per twentieth. */
+.cells { display: grid; grid-template-columns: repeat(20, 6px); gap: 3px; }
+.cells span { height: 12px; border: 1px solid var(--gray); }
+.cells span.on { background: var(--white); border-color: var(--white); }
+
+.loading .loaded {
+  color: var(--gray);
+  font: 500 12px/1.4 var(--mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+.off-title, .loading p:first-child {
   color: var(--white);
   font: 700 18px/1 var(--sans);
   font-stretch: 125%;

@@ -46,7 +46,11 @@
           <p>Hold PWR to power it on</p>
           <button id="power-on" type="button">Power on</button>
         </div>
-        <div class="loading" id="loading"><p>LOADING</p></div>
+        <div class="loading" id="loading">
+          <p>LOADING</p>
+          <div class="cells" id="loading-cells" aria-hidden="true"></div>
+          <p class="loaded" id="loading-bytes">The firmware's drawing code</p>
+        </div>
       </div>
     </div>
     <p class="hint" id="hint" aria-live="polite">Loading the firmware.</p>
@@ -205,13 +209,8 @@
 
 <footer>
   <p>Built from <a id="revision" href="https://github.com/CordlessCoder/octowhere">__REVISION__</a>.
-    Time zone boundaries from
-    <a href="https://github.com/evansiroky/timezone-boundary-builder">timezone-boundary-builder</a>,
-    derived from OpenStreetMap data, © OpenStreetMap contributors, under the
-    <a href="https://opendatacommons.org/licenses/odbl/1-0/">Open Database License 1.0</a>; the
-    simplified database built from them is in the repository's
-    <a href="https://github.com/CordlessCoder/octowhere/tree/master/crates/tz/data">crates/tz/data</a>.
     Zone rules from the <a href="https://www.iana.org/time-zones">IANA time zone database</a>.
+    The page leaves out the zone boundaries the device finds its zone with.
     The page is set in Archivo and Martian Mono, under the
     <a href="fonts/Archivo-OFL.txt">SIL Open Font License</a>.</p>
 </footer>
