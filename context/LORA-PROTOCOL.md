@@ -2,8 +2,8 @@
 
 The product is a closed group of up to 32 equivalent nodes that share positions and carry messages
 between members, including private ones. GPS supplies both position and the time reference; LoRa
-carries the traffic. This document is the agreed design. None of it is implemented yet. What exists
-on the radio today is the link test described in [`AGENTS.md`](../AGENTS.md).
+carries the traffic. This document is the agreed design. Steps 1 and 2 of the build order below
+are implemented; [`AGENTS.md`](../AGENTS.md), "Radio", says how.
 
 The first version of this design (commit `e57fe0a`) was eight nodes and positions only. The owner
 extended it on 2026-09-29 to 32 nodes, messages and private messages, moved it to band O, and kept
@@ -173,9 +173,10 @@ GPS ranks above any node's clock, and between node clocks the lower root id rank
   timing from its own fix never sets its clock from another's.
 - **Arrival timing.** A sender starts its packet at its slot's start, and its id and the header's
   base timestamp name the slot. The receiver takes the time `DIO0` signals RxDone, subtracts the
-  packet's airtime, and has that slot's start on its own timer. The latencies on both sides that do
-  not vary, the transmitter's start and the receiver's interrupt, are measured and taken out, so a
-  hop adds no bias.
+  packet's airtime, and has that slot's start on its own timer. The latencies on both sides, the
+  transmitter's start and the receiver seeing RxDone, make each hop's clock late. Two boards
+  indoors put it at about 1.3 ms a hop, one of them polling the radio's flags 1 ms apart
+  (2026-10-01), against the ±250 ms guard; it is not taken out yet.
 - **Sweeps.** A node with no timebase listens continuously for three rounds, 135 s, which spans
   every node's floor round. A node not timing from its own fix sweeps again every 10 minutes, to
   find a timebase ranked above its own, and whenever it has heard no packet with fewer hops in its
@@ -477,7 +478,8 @@ and the restore after are each short with the bus free between them.
 
 1. The radio in its own task, and a cross-core I2C lock. Done.
 2. Radio settings above, and slots on GPS time with the header and record format, carrying
-   positions and neighbours, with a timebase taken from other nodes without a fix.
+   positions and neighbours, with a timebase taken from other nodes without a fix. Done, with ids
+   from the MAC and a development key until step 3.
 3. Pairing, the member table and ids.
 4. The cancel rule and neighbour-only listening.
 5. CAD with slot phase refined from arrival times.

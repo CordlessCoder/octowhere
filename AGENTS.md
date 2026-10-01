@@ -18,6 +18,10 @@ initialization or peripheral mappings.
   helper. The IMU comes from `ph-qmi8658` rather than a local module.
 - `crates/octowhere-motion/` owns compass calibration, sensor fusion, and IMU unit conversion.
   It has no board or renderer dependency and builds for the host.
+- `crates/octowhere-mesh/` owns the location mesh in `context/LORA-PROTOCOL.md`: the slot
+  schedule, the packet's header and records, sealing them with AES-SIV, the table of positions
+  and the timebase. It has no radio or board dependency and builds for the host. `src/mesh.rs`
+  runs it on the radio.
 - `crates/octowhere-ui/` owns screen state, drawing and touch handling. It has no board dependency,
   so it also builds for the host. `src/ui/` there owns dirty tracking, geometry,
   gestures and paging, the clock and compass screens with
@@ -130,6 +134,10 @@ cargo +stable test --manifest-path crates/octowhere-motion/Cargo.toml \
   --target x86_64-unknown-linux-gnu --locked
 cargo +stable clippy --manifest-path crates/octowhere-motion/Cargo.toml \
   --target x86_64-unknown-linux-gnu --locked --all-targets -- -D warnings
+cargo +stable test --manifest-path crates/octowhere-mesh/Cargo.toml \
+  --target x86_64-unknown-linux-gnu --locked
+cargo +stable clippy --manifest-path crates/octowhere-mesh/Cargo.toml \
+  --target x86_64-unknown-linux-gnu --locked --all-targets -- -D warnings
 cargo +stable test --manifest-path crates/tz/Cargo.toml --target x86_64-unknown-linux-gnu
 cargo +stable clippy --manifest-path crates/tz/Cargo.toml \
   --target x86_64-unknown-linux-gnu --all-targets -- -D warnings
@@ -193,7 +201,7 @@ Weigh that cost before adding one.
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 1,299,216 bytes, 8.29% of the 15,663,104-byte app partition that
+The image is currently 1,337,184 bytes, 8.54% of the 15,663,104-byte app partition that
 `partitions.csv` gives it. Measure with `espflash save-image --chip esp32s3 --flash-size 16mb
 --partition-table partitions.csv <elf> <out>`; without those two options it assumes 4 MB of flash
 and the default table. The time zone
@@ -340,8 +348,10 @@ Core 1 owns the display SPI/DMA path.
   reports only the gestures it recognises; a double tap wakes the screen, and a reset takes the
   controller out of it again.
 - `radio_task`, on `BUS_EXECUTOR`, owns the LoRa radio, its `DIO0` line and the RF switch. It
-  runs the link test when a `lora-link-*` feature is on, and otherwise holds the radio idle. It
-  is spawned only when the radio answered at boot.
+  runs the link test when a `lora-link-*` feature is on, and otherwise the mesh (`src/mesh.rs`),
+  which takes the latest fix from `mesh::FIX`, set by `gnss_task`, the RTC's time from
+  `mesh::RTC_TIME`, set by `sensor_task`, and GPS time from `GPS_TIME`. It is spawned only when
+  the radio answered at boot.
 - `zone_task`, in thread mode, looks the zone up again whenever a fix moves about a kilometre
   in automatic mode, a zone at a time with a yield between, takes the settings panel's choice
   from `ZONE_CHOICE`, publishes the zone through `ZONE_STATE`, and queues a new zone for
@@ -449,7 +459,8 @@ the QSPI, display, framebuffer, and UI layers.
 The SX1272 sits on its own SPI bus with `NSS` on GPIO18 and `DIO0` on GPIO44. It is configured in
 `async_main` as `Sx127xLoraConfig::for_variant::<Sx1272>()` with `auto_optimize` and `use_crc` on,
 which leaves the driver defaults in place: 868 MHz, SF7, 125 kHz, CR 4/5, explicit header, 8-symbol
-preamble, sync word `0x12`. Nothing has been tuned for range or airtime yet.
+preamble, sync word `0x12`. The mesh then tunes it to band O's 869.4625 MHz and +17 dBm on
+`PA_BOOST`; the link test keeps 868 MHz and the reset power, +14 dBm on `RFO`.
 
 The antenna path is the part that catches people. A transmit and a receive select different RF
 switch positions, and both are TCA9554 outputs rather than radio pins, so `LoraPath::transmit` and
@@ -457,16 +468,22 @@ switch positions, and both are TCA9554 outputs rather than radio pins, so `LoraP
 loudly; it transmits or listens through the wrong path. That also couples the radio to the shared
 I2C bus, so any timing the protocol depends on includes an I2C transaction and waiting for the bus.
 
-What exists today is a link test, not a protocol. The `lora-link-tx` and `lora-link-rx` features
-build the two ends in `radio_task`, sending eight bytes of `OWLK` plus a big-endian sequence
-number every 250 ms. Transmit waits on `DIO0`'s edge. Receive stays in continuous receive and waits
+`radio_task` runs the mesh, `src/mesh.rs` on `crates/octowhere-mesh`: step 2 of the protocol's
+build order, slots carrying positions and neighbours with a timebase taken from other nodes
+without a fix. Until pairing (step 3) a node's id is its MAC's low five bits and every node seals
+under one development key compiled in. Without a fix a node has no position of its own, so its
+packets carry only the neighbours record. A board whose `DIO0` does not follow the radio's flags
+is polled instead, 1 ms apart; one of the two boards needs it (`docs/hardware-notes.md`).
+
+The `lora-link-tx` and `lora-link-rx` features build the older link test in `radio_task` instead,
+sending eight bytes of `OWLK` plus a big-endian sequence number every 250 ms. Transmit waits on `DIO0`'s edge. Receive stays in continuous receive and waits
 on `DIO0`'s level, which holds until `RxDone` is cleared. A two-board round trip is recorded in
 `docs/logs/lora/round-trip-2026-09-22.log`, with RSSI around -100 dBm. The receiver logged every
 other sequence number there. Both ends then ran inside the 250 ms sensor loop, and the receiver
 listened only in part of it. Since the move the transmit end has run alone, and the two-board
 test has not been rerun.
 
-The protocol that replaces it is designed and written down in
+The protocol is designed and written down in
 [`context/LORA-PROTOCOL.md`](context/LORA-PROTOCOL.md). Read that before touching the radio. It
 settles medium access, packet layout, freshness, crypto and pairing. Its "Firmware structure"
 section says what the firmware changed for it.
@@ -578,8 +595,8 @@ pin, and the firmware reaches them as `octowhere::fontdue`. `tca9554` is forked 
 atomic register masks with a mutex-guarded cache and a `RawMutex` type parameter, and is a patch
 in the root manifest. Dropping either will not compile.
 
-`octowhere-ui`, `octowhere-tz`, `octowhere-motion`, `lc76g`, `sx127x-lora` and `sx127x-common`
-are local path crates. `octowhere-tz` lives in `crates/tz`, and the firmware reaches it as
+`octowhere-ui`, `octowhere-tz`, `octowhere-motion`, `octowhere-mesh`, `lc76g`, `sx127x-lora` and
+`sx127x-common` are local path crates. `octowhere-tz` lives in `crates/tz`, and the firmware reaches it as
 `octowhere::tz`.
 `crates/sx127x-lora` publishes the package name `sx127xlora`, so the manifest key and the directory
 differ. Check [`Cargo.toml`](Cargo.toml) before relying on a fork-only API or changing a dependency.

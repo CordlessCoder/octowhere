@@ -91,6 +91,8 @@ use tca9554::Tca9554;
 
 use esp_alloc as _;
 use esp_backtrace as _;
+
+mod mesh;
 esp_bootloader_esp_idf::esp_app_desc!();
 
 struct SecondCore<A: Allocator + 'static = alloc::alloc::Global> {
@@ -1031,11 +1033,15 @@ async fn sensor_task(task: SensorTask) {
             }
             .to_unix()
         });
+        let stopped = rtc.as_ref().is_some_and(|rtc| rtc.oscillator_stopped());
         state.clock = ClockState {
             utc,
             set_from_gnss: clock_set,
-            stopped: rtc.as_ref().is_some_and(|rtc| rtc.oscillator_stopped()),
+            stopped,
         };
+        if let Some(utc) = utc.filter(|_| !stopped) {
+            mesh::RTC_TIME.lock(|time| time.set(Some((utc, Instant::now()))));
+        }
 
         if let Some(fix) = state.gnss.fix {
             state.position = Some((fix.latitude.get(), fix.longitude.get()));
@@ -1240,6 +1246,17 @@ async fn gnss_task(task: GnssTask) {
                 && state.utc != before
             {
                 let fix = unix_micros(utc);
+                if let Some(position) = state.fix {
+                    mesh::FIX.lock(|latest| {
+                        latest.set(Some(mesh::Fix {
+                            latitude: position.latitude.get(),
+                            longitude: position.longitude.get(),
+                            stamp: (fix / 1_000_000) as u32,
+                            quality: position.quality,
+                            hdop_milli: position.hdop.map(|hdop| hdop.get()),
+                        }))
+                    });
+                }
                 let offset = seconds.add(seen.as_micros(), fix);
                 GPS_TIME.lock(|time| {
                     time.set(Some(GpsTime {
@@ -1521,7 +1538,7 @@ async fn radio_task(task: RadioTask) {
     }
 
     #[cfg(not(any(feature = "lora-link-tx", feature = "lora-link-rx")))]
-    core::future::pending::<()>().await;
+    mesh::Mesh::new(lora, dio0, path).await.run().await;
 }
 
 fn bench_repeat<R>(mut the_thing: impl FnMut() -> R, name: &str) -> (R, Duration) {
