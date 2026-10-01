@@ -110,6 +110,9 @@ main {
   top: 16px;
   display: flex;
   flex-direction: column;
+  /* The stage's width, so the hint and the strip wrap under it instead of widening it. */
+  width: calc(var(--panel) * 600 / 466 + 40px);
+  max-width: 100%;
   min-width: 0;
 }
 
@@ -221,7 +224,8 @@ main {
 .hint {
   margin: 0;
   padding: 12px 16px;
-  min-height: calc(2 * 1.4em + 24px);
+  /* Room for the longest hint, so a change of hint moves nothing below it. */
+  min-height: calc(var(--hint-lines, 2) * 1.4em + 24px);
   background: var(--white);
   color: var(--black);
   font: 500 15px/1.4 var(--sans);

@@ -415,6 +415,23 @@ function resize() {
   const css = whole ? (scale * 466) / ratio : roomPanel;
   document.documentElement.style.setProperty("--panel", `${css}px`);
   canvas.classList.toggle("pixelated", whole && scale >= 2);
+  reserveHint();
+}
+
+// Sets the hint's height to the most lines any hint takes at the stage's width.
+function reserveHint() {
+  const shown = hint.textContent;
+  const lineHeight = parseFloat(getComputedStyle(hint).lineHeight);
+  const padding = parseFloat(getComputedStyle(hint).paddingTop) * 2;
+  hint.style.minHeight = "0";
+  let lines = 1;
+  for (const text of [...Object.values(HINTS), ...VIEWS.filter(Boolean)]) {
+    hint.textContent = text;
+    lines = Math.max(lines, Math.round((hint.offsetHeight - padding) / lineHeight));
+  }
+  hint.textContent = shown;
+  hint.style.minHeight = "";
+  document.documentElement.style.setProperty("--hint-lines", lines);
 }
 window.addEventListener("resize", resize);
 
@@ -543,6 +560,8 @@ document.getElementById("skip").addEventListener("click", () => start(false));
 document.getElementById("power-on").addEventListener("click", () => start(true));
 
 resize();
+// The page's fonts change how the hints wrap once they arrive.
+document.fonts?.ready.then(reserveHint);
 load().catch((error) => {
   console.error(error);
   document.querySelector("#loading p").textContent = "COULD NOT LOAD";
