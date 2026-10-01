@@ -21,6 +21,8 @@
 //! The panel shows only its inscribed circle. The window paints the corners outside it grey, and
 //! screenshots and GIFs leave them transparent. An MP4 has no transparency and keeps the grey.
 //! Pixels the circle's edge crosses blend the panel with the grey by how much of them it covers.
+//! The board's PWR and BOOT keys show past the glass's right edge, where they sit on the device,
+//! and light while held, by K and O in the window or by a scene's press.
 //! `--unmasked`, or M in the window, shows the whole framebuffer instead, to see what is drawn
 //! where nobody will see it.
 //!
@@ -77,6 +79,7 @@ use octowhere_ui::{
     },
 };
 
+mod buttons;
 mod caption;
 mod record;
 mod scenes;
@@ -264,6 +267,12 @@ struct Panel {
     mask: Vec<bool>,
     /// The pixels the glass's edge crosses, and how much of each it shows, out of 255.
     edge: Vec<(usize, u8)>,
+    /// The board's keys past the glass, which of them are held, the pixels past the glass they
+    /// reach, and whether each pixel shows anything: the glass or a key.
+    buttons: buttons::Buttons,
+    held: [bool; 2],
+    beyond: Vec<usize>,
+    shown: Vec<bool>,
     masked: bool,
     /// Where a finger is down, or where one lifted and when, while its marker fades.
     contact: Option<Point>,
@@ -281,6 +290,16 @@ const MARKER_FADE: u64 = 300_000;
 impl Panel {
     fn new(masked: bool) -> Self {
         let coverage = panel_coverage();
+        let buttons = buttons::Buttons::new();
+        let beyond = buttons
+            .reach()
+            .filter(|&index| coverage[index] == 0)
+            .collect();
+        let shown = coverage
+            .iter()
+            .enumerate()
+            .map(|(index, &glass)| glass > 0 || buttons.reaches(index))
+            .collect();
         Self {
             fb: FB::boxed(),
             base: vec![OFF_PANEL; WIDTH * HEIGHT],
@@ -292,6 +311,10 @@ impl Panel {
                 .filter(|&(_, &shown)| shown > 0 && shown < 255)
                 .map(|(index, &shown)| (index, shown))
                 .collect(),
+            buttons,
+            held: [false; 2],
+            beyond,
+            shown,
             masked,
             contact: None,
             lifted: None,
@@ -308,7 +331,8 @@ impl Panel {
 
     /// Follows the stage's contact, and puts a marker where it is: a disc while a finger is
     /// down, and a ring that fades after it lifts, so a one-step tap still shows in a recording.
-    fn touch(&mut self, stage: &Stage, now: u64) {
+    fn touch(&mut self, stage: &Stage, now: u64, held: [bool; 2]) {
+        self.held = held;
         // The stage reports the contact on its unshifted picture; the finger is on the panel.
         let contact = stage.contact().map(|point| point + stage.shift());
         if let (None, Some(was)) = (contact, self.contact) {
@@ -337,10 +361,13 @@ impl Panel {
                 *pixel = u32::from_be_bytes([0, dim(r), dim(g), dim(b)]);
             }
         }
-        // After the dim, which does not reach the grey past the glass.
+        // After the dim, which does not reach past the glass.
         if self.masked {
-            let [_, gr, gg, gb] = OFF_PANEL.to_be_bytes();
+            for &index in &self.beyond {
+                self.pixels[index] = self.buttons.outside(index, self.held);
+            }
             for &(index, shown) in &self.edge {
+                let [_, gr, gg, gb] = self.buttons.outside(index, self.held).to_be_bytes();
                 let [_, r, g, b] = self.pixels[index].to_be_bytes();
                 let mix = |panel: u8, grey: u8| {
                     ((u32::from(panel) * u32::from(shown)
@@ -390,7 +417,7 @@ impl Panel {
 
     /// Which pixels an image of the panel should leave out.
     fn knock_out(&self) -> Option<&[bool]> {
-        self.masked.then_some(&self.mask)
+        self.masked.then_some(&self.shown)
     }
 
     /// Draws the stage's damage, or all of it when `whole`. Says how many pixels it drew and
@@ -488,6 +515,7 @@ fn main() {
 /// without drawing it.
 fn recorded_length(scene: &scenes::Scene) -> u64 {
     caption::clear();
+    buttons::clear();
     let (mut first, mut played, mut last) = (None, 0, 0);
     let mut driver = Driver::new();
     driver.observe(|_, now| {
@@ -507,6 +535,7 @@ fn record(scene: &scenes::Scene, path: PathBuf, masked: bool) {
     let mut panel = Panel::new(masked);
     let mut column = scene.captioned.then(caption::Column::new);
     caption::clear();
+    buttons::clear();
     let width = WIDTH + column.as_ref().map_or(0, |_| caption::COLUMN);
     let frame = |panel: &Panel, column: &mut Option<caption::Column>| match column {
         Some(column) => {
@@ -526,7 +555,7 @@ fn record(scene: &scenes::Scene, path: PathBuf, masked: bool) {
         match &mut recording {
             None => {
                 panel.draw(stage, true);
-                panel.touch(stage, now);
+                panel.touch(stage, now, buttons::held());
                 // The column shows in every frame.
                 let knock_out = panel.knock_out().map(|mask| {
                     mask.as_chunks::<WIDTH>()
@@ -552,7 +581,7 @@ fn record(scene: &scenes::Scene, path: PathBuf, masked: bool) {
                 // Samples due before this step show the step before.
                 recording.sample(now - 1, &frame(&panel, &mut column));
                 panel.draw(stage, false);
-                panel.touch(stage, now);
+                panel.touch(stage, now, buttons::held());
                 recording.sample(now, &frame(&panel, &mut column));
             }
         }
@@ -578,6 +607,7 @@ fn play(window: &mut Window, scene: &scenes::Scene, masked: bool) {
     };
     loop {
         let mut panel = Panel::new(masked);
+        buttons::clear();
         let start = Instant::now();
         let (mut played, mut last) = (0, 0);
         let mut driver = Driver::new();
@@ -585,7 +615,7 @@ fn play(window: &mut Window, scene: &scenes::Scene, masked: bool) {
             panel.draw(stage, now == script::FRAME);
             played += (now - last) / caption::speed();
             last = now;
-            panel.touch(stage, played);
+            panel.touch(stage, played, buttons::held());
             let due = start + Duration::from_micros(played);
             thread::sleep(due.saturating_duration_since(Instant::now()));
             show(window, &panel.pixels);
@@ -780,7 +810,11 @@ fn interact(mut window: Window, masked: bool, extension: &str) {
             window.set_title(&format!("{drawn}{unmasked}{recording}"));
             title_changed = false;
         }
-        panel.touch(&stage, now);
+        panel.touch(
+            &stage,
+            now,
+            [window.is_key_down(Key::K), window.is_key_down(Key::O)],
+        );
         if let Some(recording) = &mut recording {
             recording.sample(now, &panel.pixels);
         }
