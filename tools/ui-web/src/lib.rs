@@ -13,7 +13,7 @@ use embedded_graphics::{
 };
 use octowhere_ui::{
     board::{LCD_HEIGHT, LCD_WIDTH},
-    chrome::{Clip, FB},
+    chrome::{self, Clip, FB},
     ui::{
         clock::{ClockState, ZoneMode, ZoneState},
         compass::CompassView,
@@ -303,6 +303,11 @@ struct Sim {
     /// The start-up's reports not yet stepped in.
     reports: Vec<(Part, u64)>,
     powered_off: bool,
+    /// The stage's time at the last step.
+    now: u64,
+    /// What the last step sent the panel, as the display core's flush would: x, y, width and
+    /// height, on the panel.
+    flushed: Vec<[i32; 4]>,
     /// When PWR went down while powered off, on the page's clock.
     power_on_since: Option<u64>,
 }
@@ -340,6 +345,8 @@ impl Sim {
                 Vec::new()
             },
             powered_off: false,
+            now: 0,
+            flushed: Vec::new(),
             power_on_since: None,
         }
     }
@@ -368,6 +375,7 @@ impl Sim {
         }
         let origin = *self.origin.get_or_insert(page_us);
         let now = page_us - origin + 1;
+        self.now = now;
         if self.readings.spinning {
             self.readings.heading += SPIN_STEP;
             self.readings_changed = true;
@@ -454,8 +462,24 @@ impl Sim {
         let moved = self.stage.shift() != self.shift;
         self.shift = self.stage.shift();
         let whole = core::mem::take(&mut self.redraw);
+        self.flushed.clear();
         if !whole && changed.is_empty() && !moved {
             return false;
+        }
+        if whole || changed.is_full() || moved {
+            self.flushed.push([0, 0, WIDTH as i32, HEIGHT as i32]);
+        } else {
+            let shift = self.shift;
+            self.flushed
+                .extend(changed.rectangles(chrome::FLUSH_OVERHEAD).map(|region| {
+                    let corner = region.top_left + shift;
+                    [
+                        corner.x,
+                        corner.y,
+                        region.size.width as i32,
+                        region.size.height as i32,
+                    ]
+                }));
         }
         // One buffer, so each step repaints only its own damage, as the firmware's buffers
         // would with the step before added.
@@ -614,6 +638,55 @@ pub extern "C" fn light() -> f32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn status() -> u32 {
     with(|sim| sim.status())
+}
+
+/// What the last step flushed, as [`flushed_count`] runs of x, y, width and height on the
+/// panel: the whole panel after a full redraw or a move, and otherwise the regions the display
+/// core sends. It stays at this address until the next step.
+#[unsafe(no_mangle)]
+pub extern "C" fn flushed() -> *const i32 {
+    with(|sim| sim.flushed.as_ptr().cast())
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn flushed_count() -> u32 {
+    with(|sim| sim.flushed.len() as u32)
+}
+
+/// Pixel shift: the picture's position in the round in bits 0–3, plus 16 while it is pinned.
+#[unsafe(no_mangle)]
+pub extern "C" fn shift_state() -> u32 {
+    with(|sim| {
+        let state = sim.stage.shift_state();
+        state.position() as u32 | u32::from(state.is_pinned()) << 4
+    })
+}
+
+/// How far the picture shows moved on the panel, across and down. The start-up shows unmoved.
+#[unsafe(no_mangle)]
+pub extern "C" fn shift_x() -> i32 {
+    with(|sim| sim.stage.shift().x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn shift_y() -> i32 {
+    with(|sim| sim.stage.shift().y)
+}
+
+/// How long ago, in ms, the picture last moved.
+#[unsafe(no_mangle)]
+pub extern "C" fn shift_age() -> f64 {
+    with(|sim| sim.now.saturating_sub(sim.stage.shift_state().moved_at()) as f64 / 1_000.0)
+}
+
+/// Holds the picture at position `index` of the round, or with a negative `index` lets the
+/// stage move it again.
+#[unsafe(no_mangle)]
+pub extern "C" fn pin_shift(index: i32) {
+    with(|sim| {
+        let now = sim.now;
+        sim.stage.pin_shift(usize::try_from(index).ok(), now);
+    });
 }
 
 /// Sets a reading, by its place in [`Reading::ALL`].

@@ -26,6 +26,7 @@
       <span class="mark br" aria-hidden="true"></span>
       <div class="bezel" id="bezel">
         <canvas id="panel" width="466" height="466" aria-label="The device's touchscreen"></canvas>
+        <canvas id="damage" width="466" height="466" aria-hidden="true"></canvas>
         <svg class="keys" id="keys" viewBox="-300 -300 600 600">
           <circle class="rim" r="246"></circle>
           <g class="key" data-key="power" role="button" tabindex="0" aria-label="PWR key: press to rest the screen, hold a second to power off">
@@ -60,10 +61,6 @@
       <div><dt>CLOCK</dt><dd id="state-clock">--</dd></div>
       <div><dt>SUPPLY</dt><dd id="state-supply">--</dd></div>
     </dl>
-    <div class="view">
-      <label class="check"><input type="checkbox" id="corners"><span>Show the corners the round glass hides</span></label>
-      <button type="button" id="screenshot">Save a screenshot</button>
-    </div>
   </section>
 
   <section class="controls" aria-label="Controls">
@@ -175,6 +172,31 @@
       </label>
     </section>
 
+    <section class="module" aria-labelledby="display-title">
+      <header>
+        <svg class="sigil" data-glyph="shift" id="display-sigil" aria-hidden="true"></svg>
+        <h2 id="display-title">DISPLAY</h2>
+        <output class="reading" id="display-reading">--</output>
+      </header>
+      <div class="shift">
+        <div class="pad" role="radiogroup" aria-label="Pixel shift position" id="pad"></div>
+        <div class="shift-text">
+          <span class="name">Pixel shift</span>
+          <p>The picture moves up to 3 px against burn-in, a step round these nine places when a
+            page settles, the panel opens or shuts, or the screen wakes, and otherwise after 10
+            minutes. Pick one to hold it there.</p>
+          <p class="meta" id="shift-moved">--</p>
+          <label class="check"><input type="checkbox" id="shift-auto" checked><span>Move it on its own</span></label>
+        </div>
+      </div>
+      <label class="check"><input type="checkbox" id="damage-view"><span>Outline what each frame sends to the panel</span></label>
+      <p class="meta" id="damage-stats">--</p>
+      <label class="check"><input type="checkbox" id="corners"><span>Show the corners the round glass hides</span></label>
+      <div class="row">
+        <button type="button" id="screenshot">Save a screenshot</button>
+      </div>
+    </section>
+
     <details class="module keyboard">
       <summary><h2>GESTURES AND KEYS</h2></summary>
       <dl>
@@ -200,6 +222,7 @@
         <dt>K</dt><dd>Hold for PWR</dd>
         <dt>O</dt><dd>Hold for BOOT</dd>
         <dt>H</dt><dd>Hold to cover the screen</dd>
+        <dt>F</dt><dd>Outline what each frame sends</dd>
         <dt>M</dt><dd>Show the corners</dd>
         <dt>P</dt><dd>Save a screenshot</dd>
       </dl>

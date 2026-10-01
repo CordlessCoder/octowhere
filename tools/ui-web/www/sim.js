@@ -231,6 +231,8 @@ const GLYPHS = {
   arrow: [0b00100, 0b01110, 0b10101, 0b00100, 0b00100],
   gnss: [0b00100, 0b01010, 0b10101, 0b01010, 0b00100],
   battery: [0b01110, 0b11111, 0b10001, 0b11111, 0b11111],
+  // The page's own, in the same grammar: pixel shift's nine places.
+  shift: [0b10101, 0b00000, 0b10101, 0b00000, 0b10101],
 };
 
 // Drawn as the firmware's icon tiles are: a frame a quarter of the module, at least 2 px, round
@@ -310,6 +312,117 @@ function showState(status) {
   document.getElementById("state-rest").textContent = status & 16 ? "POWERED OFF" : RESTS[(status >> 1) & 3];
 }
 
+// --- Pixel shift and the damage view ---------------------------------------------------------
+
+// The firmware's round of places (ui::shift::POSITIONS), in order.
+const POSITIONS = [[0, 0], [3, 0], [2, 2], [0, 3], [-2, 2], [-3, 0], [-2, -2], [0, -3], [2, -2]];
+const pad = document.getElementById("pad");
+const padCells = [];
+for (let row = -1; row <= 1; row++) {
+  for (let column = -1; column <= 1; column++) {
+    const index = POSITIONS.findIndex(([x, y]) => Math.sign(x) === column && Math.sign(y) === row);
+    const [x, y] = POSITIONS[index];
+    const cell = document.createElement("button");
+    cell.type = "button";
+    cell.setAttribute("role", "radio");
+    cell.setAttribute("aria-label", `Hold at ${x}, ${y}`);
+    cell.textContent = String(index);
+    cell.addEventListener("click", () => {
+      wasm.pin_shift(index);
+      showShift();
+    });
+    pad.append(cell);
+    padCells[index] = cell;
+  }
+}
+const shiftAuto = document.getElementById("shift-auto");
+shiftAuto.addEventListener("change", () => {
+  if (shiftAuto.checked) wasm.pin_shift(-1);
+  else wasm.pin_shift(wasm.shift_state() & 15);
+  showShift();
+});
+
+const signed = (value) => (value > 0 ? `+${value}` : value < 0 ? `\u2212${-value}` : "0");
+
+function showShift() {
+  const state = wasm.shift_state();
+  const position = state & 15;
+  const pinned = (state & 16) !== 0;
+  padCells.forEach((cell, index) => cell.setAttribute("aria-checked", String(index === position)));
+  pad.classList.toggle("pinned", pinned);
+  shiftAuto.checked = !pinned;
+  document.getElementById("display-reading").textContent = `${signed(wasm.shift_x())} ${signed(wasm.shift_y())}`;
+  document.getElementById("display-sigil").style.color = pinned ? "var(--violet)" : "var(--white)";
+  const seconds = Math.floor(wasm.shift_age() / 1000);
+  const age = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+  document.getElementById("shift-moved").textContent =
+    `PLACE ${position}  /  ${pinned ? "HELD" : "MOVED"} ${age} AGO`;
+}
+
+// The flushes as the firmware's damage-debug outlines them, each fading over this long.
+const DAMAGE_FADE_MS = 600;
+const damage = document.getElementById("damage");
+const damageContext = damage.getContext("2d");
+const damageView = document.getElementById("damage-view");
+let flushes = [];
+let lastFlush = null;
+damage.hidden = true;
+damageView.addEventListener("change", () => {
+  damage.hidden = !damageView.checked;
+  flushes = [];
+});
+
+function recordFlush(now) {
+  const count = wasm.flushed_count();
+  if (count === 0) return;
+  const runs = new Int32Array(wasm.memory.buffer, wasm.flushed(), count * 4);
+  const rects = [];
+  let pixels = 0;
+  for (let i = 0; i < count; i++) {
+    const rect = Array.from(runs.subarray(i * 4, i * 4 + 4));
+    rects.push(rect);
+    pixels += rect[2] * rect[3];
+  }
+  lastFlush = { count, pixels };
+  if (damageView.checked) flushes.push({ at: now, rects });
+}
+
+function drawDamage(now) {
+  if (!damageView.checked) return;
+  flushes = flushes.filter((flush) => now - flush.at < DAMAGE_FADE_MS);
+  damageContext.clearRect(0, 0, damage.width, damage.height);
+  const full = (w, h) => w === damage.width && h === damage.height;
+  flushes.forEach((flush, index) => {
+    const fade = 1 - (now - flush.at) / DAMAGE_FADE_MS;
+    const latest = index === flushes.length - 1;
+    for (const [x, y, w, h] of flush.rects) {
+      // Only the latest regions are filled, so a run of flushes does not wash the panel out.
+      damageContext.strokeStyle = `rgba(255, 255, 255, ${fade})`;
+      if (full(w, h)) {
+        // The frame's edge is behind the round glass, so a full flush rings the glass instead.
+        damageContext.lineWidth = 3;
+        damageContext.beginPath();
+        damageContext.arc(w / 2, h / 2, w / 2 - 2, 0, 2 * Math.PI);
+        damageContext.stroke();
+        continue;
+      }
+      if (latest) {
+        damageContext.fillStyle = "rgba(255, 255, 255, 0.16)";
+        damageContext.fillRect(x, y, w, h);
+      }
+      damageContext.lineWidth = 1;
+      damageContext.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+    }
+  });
+}
+
+function showDamageStats() {
+  const stats = document.getElementById("damage-stats");
+  if (!lastFlush) return;
+  const regions = lastFlush.count === 1 ? "1 REGION" : `${lastFlush.count} REGIONS`;
+  stats.textContent = `LAST FLUSH  /  ${regions}  /  ${lastFlush.pixels.toLocaleString("en")} PX`;
+}
+
 // --- The keyboard, as the desktop simulator has it -----------------------------------------
 
 function cycle(name, values) {
@@ -354,6 +467,10 @@ document.addEventListener("keydown", (event) => {
     _: () => nudge("level", -step),
     "=": () => nudge("level", step),
     "+": () => nudge("level", step),
+    f: () => {
+      damageView.checked = !damageView.checked;
+      damageView.dispatchEvent(new Event("change"));
+    },
     m: () => {
       const corners = document.getElementById("corners");
       corners.checked = !corners.checked;
@@ -381,6 +498,7 @@ window.addEventListener("blur", () => {
 
 document.getElementById("corners").addEventListener("change", (event) => {
   canvas.classList.toggle("corners", event.target.checked);
+  damage.classList.toggle("corners", event.target.checked);
 });
 
 function screenshot() {
@@ -407,7 +525,7 @@ function resize() {
   // stage pads it by 20 px a side, and on a wide screen the hint, the state strip and the
   // view controls stay in sight below it.
   const width = (columns ? inner - 24 - 360 : inner) - 40;
-  const height = columns ? window.innerHeight - 290 : Infinity;
+  const height = columns ? window.innerHeight - 210 : Infinity;
   const room = Math.min(width, height);
   const roomPanel = Math.max(120, (room * 466) / BEZEL);
   const scale = Math.floor((roomPanel * ratio) / 466);
@@ -501,10 +619,14 @@ function frame(now) {
     context.putImageData(image, 0, 0);
   }
   canvas.style.filter = `brightness(${wasm.light()})`;
+  recordFlush(now);
+  drawDamage(now);
   showStatus(wasm.status());
   showProgress();
   if (now - lastSync > 200) {
     sync();
+    showShift();
+    showDamageStats();
     lastSync = now;
   }
   requestAnimationFrame(frame);

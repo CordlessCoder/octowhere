@@ -148,7 +148,7 @@ main {
   height: calc(var(--panel) * 600 / 466);
 }
 
-#panel, .off, .loading {
+#panel, #damage, .off, .loading {
   position: absolute;
   left: calc(var(--panel) * 67 / 466);
   top: calc(var(--panel) * 67 / 466);
@@ -166,7 +166,10 @@ main {
 
 #panel.pixelated { image-rendering: pixelated; }
 
-#panel.corners { border-radius: 0; }
+#panel.corners, #damage.corners { border-radius: 0; }
+
+#damage { pointer-events: none; image-rendering: pixelated; }
+#damage[hidden] { display: none; }
 
 .keys {
   position: absolute;
@@ -272,16 +275,6 @@ main {
   .state { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .state div:nth-child(3) { border-left: 0; }
   .state div:nth-child(n + 3) { border-top: 1px solid var(--rule); }
-}
-
-.view {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  align-items: center;
-  gap: 10px 16px;
-  padding: 12px 0 0;
-  color: var(--gray);
 }
 
 /* --- Modules ------------------------------------------------------------------------------- */
@@ -528,3 +521,33 @@ footer p { max-width: 100ch; margin: 0; padding-top: 14px; border-top: 1px solid
 }
 
 .keyboard dl + dl { padding-top: 12px; border-top: 1px solid var(--rule); }
+
+/* --- Display -------------------------------------------------------------------------------- */
+
+.shift { display: grid; grid-template-columns: auto 1fr; gap: 16px; align-items: start; }
+
+.shift-text { display: flex; flex-direction: column; gap: 8px; }
+.shift-text p { margin: 0; color: var(--gray); font-size: 13px; line-height: 1.45; }
+
+.meta {
+  margin: 0;
+  color: var(--gray);
+  font: 500 12px/1.4 var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The nine places as they lie: the middle, and eight round it. */
+.pad { display: grid; grid-template-columns: repeat(3, 34px); grid-auto-rows: 34px; gap: 4px; }
+
+.pad button {
+  padding: 0;
+  font: 500 11px/1 var(--mono);
+  color: var(--gray);
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  padding: 3px 4px;
+}
+
+.pad button[aria-checked="true"] { background: var(--white); border-color: var(--white); color: var(--black); }
+.pad.pinned button[aria-checked="true"] { background: var(--violet); border-color: var(--violet); }
