@@ -193,7 +193,7 @@ Weigh that cost before adding one.
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 1,299,120 bytes, 8.29% of the 15,663,104-byte app partition that
+The image is currently 1,299,216 bytes, 8.29% of the 15,663,104-byte app partition that
 `partitions.csv` gives it. Measure with `espflash save-image --chip esp32s3 --flash-size 16mb
 --partition-table partitions.csv <elf> <out>`; without those two options it assumes 4 MB of flash
 and the default table. The time zone
@@ -294,7 +294,9 @@ it held the display core (`settings-save-bench`, summarised by `tools/settings-s
 `bench/startup-handover`, which replays the start-up 6 s after each handover with a synthetic
 battery whose charging flips each round, and logs each start-up frame's and the clock entry's
 step and draw (`startup-handover-bench`, summarised by `tools/startup-handover-summary.py`;
-results in `docs/logs/display/startup-handover-2026-10-01.md`).
+results in `docs/logs/display/startup-handover-2026-10-01.md`). And
+`bench/gnss-stuck` holds the GNSS module in reset twice and switches its NMEA output off, for
+`gnss_task`'s recovery to clear (`gnss-stuck-bench`).
 
 ## Concurrency
 
