@@ -107,6 +107,9 @@ The `esp` toolchain from [`rust-toolchain.toml`](rust-toolchain.toml) and the ta
 [`.cargo/config.toml`](.cargo/config.toml) are selected automatically.
 
 ```text
+cargo +stable fmt --all --check
+cargo +stable fmt --all --manifest-path host-tests/Cargo.toml --check
+cargo +stable fmt --all --manifest-path tools/ui-sim/Cargo.toml --check
 cargo build --release --offline
 cargo clippy --release --offline -- -D warnings
 cargo +stable test --manifest-path host-tests/Cargo.toml \
@@ -127,6 +130,10 @@ cargo +stable clippy --manifest-path crates/tz/Cargo.toml \
 cargo +stable clippy --release --manifest-path tools/ui-sim/Cargo.toml \
   --target x86_64-unknown-linux-gnu --locked -- -D warnings
 ```
+
+`--all` takes `cargo fmt` into the local path crates, so the root's line covers every crate
+under `crates/`; `host-tests` and `tools/ui-sim` are outside the firmware's graph and need
+their own. Drop `--check` to apply it.
 
 The firmware's clippy run does not reach `crates/octowhere-ui`, because a path dependency is not
 a workspace member. Its own clippy line above is what lints it. The stable clippy there is newer

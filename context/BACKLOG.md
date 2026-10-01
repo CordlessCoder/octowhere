@@ -5,8 +5,6 @@ until the feature set is complete, because profiling an incomplete firmware pric
 
 ## Next
 
-- Apply rustfmt across the entire repository, including standalone crates and host tools, then keep
-  the formatting check clean.
 - Finish the approved architecture cleanup (owner, 2026-09-28): remove the u8g2-era assets,
   unused dependencies and helpers, and unused sensor snapshot fields; move motion processing into
   `octowhere-motion`. Those changes are in the current branch. Then move the generic I²C peripheral

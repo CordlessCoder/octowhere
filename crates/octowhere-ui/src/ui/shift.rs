@@ -101,7 +101,14 @@ mod tests {
     #[test]
     fn a_rows_columns_split_as_each_pixel_takes_its_source() {
         for dx in -REACH..=REACH {
-            for (x0, x1) in [(0, 466), (0, 2), (2, 10), (400, 466), (464, 466), (100, 300)] {
+            for (x0, x1) in [
+                (0, 466),
+                (0, 2),
+                (2, 10),
+                (400, 466),
+                (464, 466),
+                (100, 300),
+            ] {
                 let (left, from, right) = columns(x0, x1, 466, dx);
                 for (i, x) in (x0..x1).enumerate() {
                     let expected = source(x, dx, 466);
