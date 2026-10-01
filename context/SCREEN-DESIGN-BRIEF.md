@@ -609,11 +609,10 @@ plumbing it is firmware work. There are three grades.
 - Settings live in an ekv database in flash. Clearing erases all six stored keys. The device
   returns to its defaults: automatic zone, brightness 120, a 1 min timeout, and ALWAYS ON off.
 - Adding a setting is a new key.
-- Every write erases a 4 KiB flash page, and the display core waits through it. The first saved
-  brightness held the screen for 331 ms. The same freeze follows tapping to keep a brightness,
+- A save erases one or more 4 KiB flash pages, and the display waits through it: about 23 ms
+  usually, up to 85 ms. It follows tapping to keep a brightness, a timeout or ALWAYS ON,
   storing a zone, or clearing. The panel with the new value reaches the screen before the
-  write starts, so the pause follows the confirmation. Removing it is in the firmware
-  backlog.
+  write starts, so the pause follows the confirmation.
 
 ## What the renderer draws
 

@@ -16,23 +16,17 @@ until the feature set is complete, because profiling an incomplete firmware pric
   (`tools/design-compare.py`), reviewed by the owner in `ui-sim`, and measured on the board
   before it is committed. Built: the shared pieces (`VIOLET`, `DEEP_BLUE`, several scatter
   fields on one grid), the start-up (S1 self-test, G19 identity, G17 card), the K1 clock,
-  the H2b always-on face, S1 settings with D3 inner screens, and C1 compass. The new settings screens
-  pass host tests and the firmware build. Their on-target draw times are recorded in
-  `docs/logs/display/settings-draw-2026-09-26.md`; they still need owner review in `ui-sim`
-  and a legibility and touch check on the board. C1 passes host tests and a firmware build.
-  The owner approved its `ui-sim` preview, and its on-target draw times are in
-  `docs/logs/display/compass-c1-draw-2026-09-26.md`. C1 still needs a physical-panel
-  legibility and touch check.
-- Shorten settings saves, ahead of other work that touches settings (design response,
-  2026-09-24). Settings are in ekv now, and each write transaction starts a new file that
-  erases a whole 4 KiB page first, so every save erases. The first saved brightness took
-  331 ms, all of it with core 1 held, so the display stopped updating for that long. The frame
-  loop now queues the write only once the frame confirming it has been flushed, so the freeze
-  follows the confirmation rather than hiding it. The sequential-storage map it replaced took
-  about 1.3 ms for a write into a sector with room (`bench/zone-lookup`). Options: hold core 1
-  only around each flash operation rather than the whole transaction, erase a spare page ahead
-  of time, defer the write until the panel is idle, or batch saves. Every tap on ALWAYS ON
-  saves, so it pays this each time.
+  the H2b always-on face, S1 settings with D3 inner screens, and C1 compass. Their on-target
+  draw times are in `docs/logs/display/settings-draw-2026-09-26.md` and
+  `docs/logs/display/compass-c1-draw-2026-09-26.md`. The owner found every screen good and
+  legible on the panel (2026-10-01).
+- Shorten settings saves further, if the remaining pause shows. Since `bde7924` each write is
+  programmed rather than rewriting its sector, and a save holds the display core for about
+  23 ms at the median, 85 ms at most, from 272 and 2,011 ms (`bench/settings-save`,
+  2026-10-01). Erases are nearly all of it: 1 to 7 a save, about 11 ms each. Holding the core
+  only around each erase would cap the pause at one erase, at the cost of a wait for a frame
+  per operation; erasing a page ahead of time, or deferring the write until the panel is idle,
+  are the other options.
 - The scatter (`ui::scatter`) damages only the marks that appear or go, and the identity
   draws about 5 ms a frame once its band settles, 4.3 to 16.4 ms while it types in. What is
   left is overhead that does not shrink with the damage: working out which points show,

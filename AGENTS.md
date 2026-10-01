@@ -272,7 +272,9 @@ its settled fields with a turning synthetic heading and logs every draw's time
 (`compass-field-bench`, summarised by `tools/compass-field-summary.py`); and
 `bench/flush-shift`, which times flushes on core 1 with no wait for TE, whole and in regions,
 at each pixel shift position, beside the region flush from before pixel shift
-(`flush-shift-bench`, summarised by `tools/flush-shift-summary.py`).
+(`flush-shift-bench`, summarised by `tools/flush-shift-summary.py`); and `bench/settings-save`,
+which saves a key nothing reads every 3 s and logs each save's flash operations and how long
+it held the display core (`settings-save-bench`, summarised by `tools/settings-save-summary.py`).
 
 ## Concurrency
 
