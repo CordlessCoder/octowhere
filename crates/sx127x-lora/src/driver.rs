@@ -813,7 +813,6 @@ impl<SPI: SpiDevice, V: Sx127xVariant> Sx127xLora<SPI, V> {
             self.frequency().await?,
             self.read(PKT_RSSI_VALUE).await? as i16,
             snr_raw,
-            self.read(RSSI_VALUE).await? as i16,
         ))
     }
 
