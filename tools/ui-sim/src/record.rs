@@ -218,8 +218,9 @@ fn encode_gif(
 
 /// Streams a raw frame per frame period to `ffmpeg`, which encodes H.264 at its slowest preset,
 /// since a smaller file is worth the wait. Colour is kept at full resolution (4:4:4): 4:2:0
-/// smears the panel's thin coloured lines and text. Browsers mostly play only 4:2:0, so these
-/// files are for players built on ffmpeg or VLC (owner).
+/// smears the panel's thin coloured lines and text, and sending each pixel as a 2 × 2 block to
+/// keep its colour breaks players' own scaling (owner). Players built on ffmpeg or VLC take it,
+/// as do Chromium and Firefox on Linux; Safari and Windows' decoders were not tried.
 fn encode_mp4(
     path: &Path,
     width: usize,

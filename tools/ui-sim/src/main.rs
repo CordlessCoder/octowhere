@@ -11,9 +11,8 @@
 //! none of the host's speed. A scene that captions its steps records with a column beside the
 //! panel for them. In a terminal, `--record` shows bars for the frames rendered and encoded,
 //! against the scene's length from a first run that does not draw. `--scenes` lists them.
-//! MP4 is encoded by `ffmpeg`, which must be on
-//! the path, as H.264 with full colour resolution (4:4:4): players built on ffmpeg or VLC take
-//! it, but most browsers do not.
+//! MP4 is encoded by `ffmpeg`, which must be on the path, as H.264 with full colour resolution
+//! (4:4:4).
 //!
 //! A white disc marks where a finger is down, and fades as a ring for 300 ms after it lifts, so
 //! a recording shows taps and drags.
