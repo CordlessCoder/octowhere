@@ -325,16 +325,32 @@ const HINTS = {
   compass: "The compass. Turn it with the heading control, or swipe back to the clock.",
 };
 
+// What shows over the faces, by the status's bits 5–8.
+const VIEWS = [
+  null,
+  "Settings. Tap a cell to change it, swipe sideways for the second page, or drag up to close.",
+  "Brightness. Drag to try a level, then tap to keep it, or tap CANCEL.",
+  "Device. Drag up for the details, the start-up replay and clearing the settings, or tap BACK.",
+  "Clear settings. Slide the handle into the target to erase them, or tap CANCEL.",
+  "Time zone. Drag to an offset and tap for its zones, then drag to a zone and tap to choose it.",
+  "Replay. Drag to the start-up or a part's failure, then tap to play it, or tap BACK.",
+  "Screen timeout. Drag to choose how long the screen stays awake, then tap to keep it.",
+  "Always on. Drag to choose the face's level, or OFF to let the screen go dark, then tap.",
+  "Power off. Slide the handle into the target to power off, or tap CANCEL. It cancels after 10 s.",
+];
+
 function showStatus(status) {
   if (status === lastStatus) return;
   lastStatus = status;
   const rest = (status >> 1) & 3;
+  const view = VIEWS[(status >> 5) & 15];
   let text;
   if (status & 16) text = HINTS.powered;
   else if (status & 1) text = HINTS.starting;
   else if (rest === 1) text = HINTS.dimming;
   else if (rest === 2) text = HINTS.alwaysOn;
   else if (rest === 3) text = HINTS.dark;
+  else if (view) text = view;
   else text = status & 8 ? HINTS.compass : HINTS.clock;
   hint.textContent = text;
   off.hidden = !(status & 16);

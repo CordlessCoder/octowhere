@@ -19,6 +19,7 @@ use octowhere_ui::{
         compass::CompassView,
         rest::Rest,
         screens::{Battery, Gnss, PeripheralState, Screen},
+        second::Page,
         shift,
         stage::{Input, Key, Motion, Sensors, Stage, Store, Touch, TouchGesture},
         startup::{Outcome, Part, Report},
@@ -485,10 +486,26 @@ impl Sim {
             Screen::Clock => 0,
             Screen::Compass => 1,
         };
+        let view = if self.stage.power_off().is_some() {
+            9
+        } else if let Some(page) = self.stage.page() {
+            match page {
+                Page::Brightness(_) => 2,
+                Page::Device(_) => 3,
+                Page::Clear(_) => 4,
+                Page::Picker(_) => 5,
+                Page::Replay(_) => 6,
+                Page::Timeout(_) => 7,
+                Page::AlwaysOn(_) => 8,
+            }
+        } else {
+            u32::from(self.stage.panel_offset() > 0)
+        };
         u32::from(self.stage.starting_up())
             | rest << 1
             | screen << 3
             | u32::from(self.powered_off) << 4
+            | view << 5
     }
 }
 
@@ -590,7 +607,10 @@ pub extern "C" fn light() -> f32 {
 }
 
 /// Where the device is: bit 0 while it starts up, bits 1–2 its rest (awake, dimming, on the
-/// always-on face, dark), bit 3 on the compass, bit 4 once powered off.
+/// always-on face, dark), bit 3 on the compass, bit 4 once powered off, and bits 5–8 what
+/// shows over the faces: nothing (0), the settings panel (1), a screen it opened (2
+/// brightness, 3 device, 4 clear, 5 zone picker, 6 replay, 7 timeout, 8 always on), or the
+/// power-off confirmation (9).
 #[unsafe(no_mangle)]
 pub extern "C" fn status() -> u32 {
     with(|sim| sim.status())
