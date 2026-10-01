@@ -157,7 +157,7 @@ const DOT_FROM: u32 = ROW_FROM + 1;
 const DOT_PERIOD: u32 = 30;
 const DOT: Rectangle = Rectangle::new(Point::new(SQUARE_LEFT + 10, ROW_TOP + 10), Size::new(5, 5));
 
-// The scatter: an upper field that turns a step on five late frames, and a lower one that
+// The scatter: an upper field that turns a little on every late frame, and a lower one that
 // holds still, from the end of the opening.
 
 const UPPER: Field = Field {
@@ -180,10 +180,12 @@ const LOWER_LOOK: Look = Look {
     facing: 2.55,
     density: 0.40,
 };
+/// The upper field turns by `TURNED` in equal steps on frames `TURN_FROM..=TURN_UNTIL`, the
+/// design's five steps of 0.09 rad on frames 66, 77, 88, 99 and 110 spread over every frame
+/// (owner, 2026-10-01).
 const TURN_FROM: u32 = 66;
-const TURN_EVERY: u32 = 11;
-const TURNS: u32 = 5;
-const TURN: f32 = 0.09;
+const TURN_UNTIL: u32 = 110;
+const TURNED: f32 = 0.45;
 const SCATTER_LEVEL: u8 = 69;
 /// The chance at which the scatter's marks take its brighter purples: the densest tenth of its
 /// marks lie at it or above.
@@ -192,12 +194,8 @@ const DENSE: f32 = 0.71;
 /// From this frame only the scatter's turns and the clock's digits change. Before it, a frame
 /// redraws everything.
 const SETTLED: u32 = PIN_FROM + 11;
-const _: () = assert!(
-    ARMS_UNTIL <= SETTLED
-        && FLICKER_FROM + 11 <= SETTLED
-        && ROW_FROM + 5 <= SETTLED
-        && TURN_FROM + TURN_EVERY >= SETTLED
-);
+const _: () =
+    assert!(ARMS_UNTIL <= SETTLED && FLICKER_FROM + 11 <= SETTLED && ROW_FROM + 5 <= SETTLED);
 
 /// How a flickering element shows, some frames after its flicker starts: on for two, off for
 /// two, on for one, off for two, on for two, partly on for two, then on.
@@ -233,12 +231,11 @@ fn scatter() -> Scatter {
 }
 
 fn looks(frame: u32) -> [Look; 2] {
-    let turns = frame
-        .checked_sub(TURN_FROM)
-        .map_or(0, |since| (since / TURN_EVERY + 1).min(TURNS));
+    let steps = TURN_UNTIL + 1 - TURN_FROM;
+    let taken = (frame + 1).saturating_sub(TURN_FROM).min(steps);
     [
         Look {
-            facing: UPPER_LOOK.facing + TURN * turns as f32,
+            facing: UPPER_LOOK.facing + TURNED * taken as f32 / steps as f32,
             ..UPPER_LOOK
         },
         LOWER_LOOK,
@@ -990,10 +987,23 @@ mod tests {
     }
 
     #[test]
-    fn the_upper_field_turns_on_five_frames_and_the_lower_never() {
+    fn the_upper_field_turns_on_every_late_frame_as_far_as_the_designs_steps_and_the_lower_never() {
         let turned: alloc::vec::Vec<u32> = (1..FRAMES)
             .filter(|&frame| looks(frame) != looks(frame - 1))
             .collect();
-        assert_eq!(turned, [66, 77, 88, 99, 110]);
+        assert_eq!(
+            turned,
+            (TURN_FROM..=TURN_UNTIL).collect::<alloc::vec::Vec<_>>()
+        );
+        let facing = |frame| looks(frame)[0].facing;
+        let step = facing(TURN_FROM) - facing(TURN_FROM - 1);
+        for frame in TURN_FROM..=TURN_UNTIL {
+            assert!(
+                (facing(frame) - facing(frame - 1) - step).abs() < 1e-5,
+                "{frame}"
+            );
+        }
+        assert!((facing(FRAMES - 1) - (UPPER_LOOK.facing + 5.0 * 0.09)).abs() < 1e-5);
+        assert!((0..FRAMES).all(|frame| looks(frame)[1] == LOWER_LOOK));
     }
 }
