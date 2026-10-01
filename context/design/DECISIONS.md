@@ -98,3 +98,10 @@ Recorded 2026-09-26. These override the hand-off where they differ.
     compact labels on the always-on face. BOOT and the fault screen are unchanged. After a
     failed boot the subtitle keeps `SELF TEST n/6 OK` (owner). Its pixel shift is not built:
     the owner will take it up separately, now that no ring stands in its way.
+22. **The design accepts both updates as built** (design, 2026-10-01), in
+    `handoffs/DESIGN-RESPONSE-2026-10-01.md`: the compass field from `compass_noise.py` over its
+    screenshot, `---` centred, rectangular halos, the entry's palette strengths, the halftone's
+    lobes, tones, 4 px marks and breathing, the scrolling zone lines, the toned clock and
+    identity scatters, the ticker's centring, `SELF TEST n/6 OK`, and the always-on face's
+    columns and blocks. The captures become the visual baseline once the design has seen them;
+    it has not yet. Its pixel-shift recommendations are for that separate pass, not settled.
