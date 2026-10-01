@@ -192,14 +192,28 @@ K1 (`design/renderer/concept/family-pass-v1-out/clock-K1-*`) on the round 4 spec
   outline, and the fill inset 3 px, 172 × 24, growing from the left to
   round(172 × level / 100) px. The entry grows it from the left, out-back over 80 ms. While
   charging, that length splits into upright slices in the identity barcode's narrow and broad
-  widths, 20 at 87 %, their gaps taking the barcode's share and moved by the 2026-09-27
-  update's loop: a 2.4 s pass, then 4 s at rest on its dispersed layout (owner). The endpoint
-  never moves (`ui/charging.rs`, which matches the update's `title_pattern` at every checked
-  length and phase). A change of the charging flag between two readings of a known level
-  wipes the solid layer along the fill in 450 ms: plugged in, its end draws back from the
-  level to the fill's start, uncovering the slices from the end; unplugged, it grows back from
-  the start over them (owner, 2026-09-29, so the wipe runs the way the bar does). The design
-  has no render of this wipe; `ui-sim --record clock-charging` shows it. The loop runs while the face shows, dimmed or not, and redraws the fill alone.
+  widths, 20 at 87 %, their gaps taking the barcode's share. They rest on the 2026-09-27
+  update's dispersed layout, and the endpoint never moves (`ui/charging.rs`, which matches the
+  update's `title_pattern` there). The motion follows the bars of the Marathon logo animation,
+  measured frame by frame (owner, 2026-10-01, after `handoffs/BARCODE-MOTION-REVIEW-2026-10-01.md`):
+  - **The loop** is two beats of 2.3 s. Each holds the slices apart for 1.5 s, docks pairs in
+    5 frames, holds them 15 frames and splits them back in 5. The joined pose repeats the logo's
+    eleven gaps along the fill, each scaled by the logo's joined-over-open ratio, so pairs
+    close, voids open beside them and most slices move; the second beat uses the ratios
+    mirrored. A dock and a split take the logo's 0.14, 0.29, 0.71, 0.86, 1 of the way a frame.
+  - **Plugged in**, the solid closes in from both ends to the fill's middle, the fill holds
+    empty for 3 frames, then a seed grows in the middle over 3 frames, splits into the end
+    slices, which fly out to the ends, and the inner slices appear at their places in the
+    logo's order (0.8 s). The owner dropped the logo's hairlines, which belong to its wider
+    composition.
+  - **Unplugged**, a beat under way finishes first, the build runs backwards, and the solid
+    grows back out from the middle. Plugged in again partway, either turns forwards from where
+    it is.
+  - The solid's wipe and the end slices' flight share the logo's flight curve, `ease::FLIGHT`,
+    over 13 frames (433 ms).
+
+  The design has no render of this motion; `ui-sim --record clock-charging` shows it. The loop
+  runs while the face shows, dimmed or not, and redraws the fill alone.
   NO DATA holds the slices still, as the update's renders do.
 - **The rail** opens from its middle outward, starting with the zone's line in the entry but taking 400 ms, a cell each side at a steady rate, and closes with the zone's line as the page leaves (owner). Its cells are `GRAY` dimmed to 29 %.
 - **The entry** follows the round 4 spec's windows and curves: the icon's rows over 150 ms by

@@ -105,3 +105,20 @@ Recorded 2026-09-26. These override the hand-off where they differ.
     identity scatters, the ticker's centring, `SELF TEST n/6 OK`, and the always-on face's
     columns and blocks. The captures become the visual baseline once the design has seen them;
     it has not yet. Its pixel-shift recommendations are for that separate pass, not settled.
+23. **Pixel shift's scope and cadence** (owner, 2026-10-01), settling what entry 22 left open.
+    It applies to every screen, the always-on face included, with the 2026-10-01 handoff's
+    nine positions. The active screens move as round 3 §4 says: at a page change settling,
+    the panel opening or closing, or a wake, and failing those at a minute change once 10
+    minutes have passed since the last move. The always-on face moves at every minute's
+    redraw. The start-up holds at (0, 0) and shifting starts once it hands over. Bands cut at
+    radius 232 are painted out to 236, and core 1 repeats the framebuffer's edge pixel where a
+    shifted source falls outside it, so a shifted band always meets the glass.
+24. **The charging bars dock and split as the logo's do** (owner, 2026-10-01), from
+    `handoffs/BARCODE-MOTION-REVIEW-2026-10-01.md` and the Marathon logo animation itself, which
+    the owner supplied with `handoffs/reference-joining-splitting.png`. The design's recipe kept
+    every gap at 4 px or more, so the slices only re-spaced. Now the joined poses repeat the
+    logo's gaps, docks and splits take its measured frames, and charging starts with the
+    logo's build (without its hairlines) and stops with the build run backwards. The solid
+    wipes in to the fill's middle before the build and back out from it after, on the curve the
+    logo's end bars fly on. `SCREEN-DESIGN-BRIEF.md` has the timings. Placement, envelope,
+    percentage and the low and unknown treatment are unchanged. The design has not seen it.

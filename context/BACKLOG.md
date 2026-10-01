@@ -39,15 +39,13 @@ until the feature set is complete, because profiling an incomplete firmware pric
   [`design/specs/DISPLAY-AND-MOTION-SPEC.md`](design/specs/DISPLAY-AND-MOTION-SPEC.md),
   a part at a time (owner, 2026-09-25). Only pixel shift is left; the compass's changes of
   state, the start-up, the timeout with the always-on face, and the panel cells are built.
-  - Pixel shift is deferred (owner, 2026-09-25): with the screen timeout in, retention is
-    unlikely to matter. When it is built, the whole picture moves, ring included, and core 1
-    applies the offset while it copies each flush chunk into its DMA buffers, so core 0, the
-    bottleneck, draws exactly as it does unshifted (owner). This overrides the spec's fixed
-    ring. The ring moves inward so the shifted ring stays on the glass (outer edge 230 rather
-    than 232 is the least that fits a 3 px offset), and everything cut at radius 232 follows
-    it. Panel pixels whose source falls outside the framebuffer are sent black, the clear
-    reaches 3 px past the visible circle, touch subtracts the offset, and the stage picks the
-    position and the moment (a full redraw), with the start-up at the middle position.
+  - Pixel shift is next after the charging motion (owner, 2026-10-01; `design/DECISIONS.md`
+    entry 23 has its scope and cadence). The whole picture moves, and core 1 applies the
+    offset while it copies each flush chunk into its DMA buffers, so core 0, the bottleneck,
+    draws exactly as it does unshifted (owner). A move is a full flush with no redraw; core 1
+    flushes in full whenever a frame's offset differs from the last one it sent. Bands cut at
+    radius 232 are painted to 236, core 1 repeats the framebuffer's edge pixel past its edge,
+    touch subtracts the offset, and the stage picks the position and the moment.
   - The scatter (`ui::scatter`) damages only the marks that appear or go, and the identity
     draws about 5 ms a frame once its band settles, 4.3 to 16.4 ms while it types in. What is
     left is overhead that does not shrink with the damage: working out which points show,
@@ -295,6 +293,14 @@ Candidates to measure:
   above. Its outline accumulation is the other candidate.
 - Screen-rotation maths from the magnetometer: heading, `atan2`, vector normalisation. `rsqrt0.s`
   is the candidate there.
+- libm's `f32` trigonometry works in `f64`, which this core emulates in software: `sincosf`,
+  `sinf`, `cosf`, `asinf` and `hypotf` reach `__muldf3` and the other double routines through
+  their kernels and `rem_pio2f`. On the draw path, `compass_screen::tick_shape` and
+  `letter_place` call `sincosf` for every tick and letter of the turning dial, and
+  `smooth::disc_row` and `chrome::glyph_reach` call `hypotf`; the motion task calls `asinf`
+  (found from the release ELF's literal pools, 2026-10-01). Unmeasured: bound it on the compass
+  field bench by replacing the dial's `sincosf` with a table of the 360 whole degrees first.
+  `HardIron`'s fit and the NMEA coordinates use `f64` directly and run once per sample or fix.
 - ChaCha20 for the protocol, which is software today, and the SIMD extension could vectorise it. It
   runs once per packet, so it only matters if profiling says so. X25519 runs once per pairing and
   does not qualify.
