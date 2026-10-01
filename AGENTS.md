@@ -25,7 +25,8 @@ initialization or peripheral mappings.
   travel over the faces; `second`, the screens it opens; `picker`, the zone picker; `text`,
   placing text by its ink), `startup`, the self-test, identity, logo card and fault screen that
   open the firmware, `scatter`, the identity's halftone scatter, kept apart for other screens
-  to use, `rest`, the screen timeout, the dim and the fades between levels, `always_on`, the
+  to use, `rest`, the screen timeout, the dim and the fades between levels, `shift`, the pixel
+  shift's positions against burn-in and the column split the flush shares, `always_on`, the
   face the screen rests on, `power_off`, the power key's confirmation, `stage`, which holds the screen state and turns touch and readings into redraws and settings to store, and `script`, which steps a stage on a simulated clock for
   tests and scenes. `src/chrome.rs` is the font and draw-target layer, and `src/framebuffer.rs`
   holds the pixels. The firmware re-exports
@@ -169,7 +170,7 @@ Weigh that cost before adding one.
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 1,300,832 bytes, 8.31% of the 15,663,104-byte app partition that
+The image is currently 1,303,488 bytes, 8.32% of the 15,663,104-byte app partition that
 `partitions.csv` gives it. Measure with `espflash save-image --chip esp32s3 --flash-size 16mb
 --partition-table partitions.csv <elf> <out>`; without those two options it assumes 4 MB of flash
 and the default table. The time zone
@@ -316,7 +317,10 @@ Core 1 owns the display SPI/DMA path.
   does nothing with them yet.
 - `second_core` on core 1 waits for display TE with a timeout, flushes the handed-off regions
   through `Co5300Display`, sets the display level a frame carries before flushing it, and
-  returns the other framebuffer. A frame can also switch the panel out of sleep before it goes
+  returns the other framebuffer. It moves the picture by the frame's pixel shift as it copies
+  each row into its DMA buffers, repeating the framebuffer's edge past it, and flushes in full
+  when a frame's shift differs from the last one sent; an unshifted full flush keeps the
+  straight copy. A frame can also switch the panel out of sleep before it goes
   out, or into sleep after. The panel comes up dark. TE pulses when the panel's scan
   reaches `TE_LINE` in `src/drivers/co5300.rs`, so a flush runs behind the scan. A full flush
   takes about as long as the scan, so moving the line, or waiting for TE's level instead of its
@@ -383,8 +387,9 @@ poisons the thread and a later `get()` panics.
   It keeps only two glyphs' coverage, so it takes text drawn left to right through
   `CoverageTarget::begin_glyph`. `FontdueRenderer::draw_outline_on_baseline` draws text's
   outline from its coverage grown by a radius; no screen uses it yet.
-- `screens::render` clears the round panel's visible circle, in runs of rows that may reach
-  `CLEAR_SLACK` columns past it so that each run is one fill; below `Clip`, one fill a row
+- `screens::render` clears the round panel's visible circle and the 3 px past it that the
+  pixel shift can bring on, in runs of rows that may reach `CLEAR_SLACK` columns further so
+  that each run is one fill; below `Clip`, one fill a row
   made most of a partial redraw's calls. The rest of the square's corners are never cleared
   or seen. The clear also leaves the settled compass's slab and the clock's band
   interior, wherever its page is, because those screens paint them solid.
@@ -538,6 +543,13 @@ are local path crates. `octowhere-tz` lives in `crates/tz`, and the firmware rea
 `octowhere::tz`.
 `crates/sx127x-lora` publishes the package name `sx127xlora`, so the manifest key and the directory
 differ. Check [`Cargo.toml`](Cargo.toml) before relying on a fork-only API or changing a dependency.
+
+The ESP32-S3's FPU is single precision, so `f64` arithmetic is emulated in software. Code
+that runs on the board uses `f32` and libm's `f` functions, even where it ports a design
+script written in doubles; a test against the script's output checks the result instead
+(owner). The compass calibration fit in `octowhere-motion` keeps `f64` on purpose and says
+why. libm's `f32` trigonometry still computes in `f64` inside, and `context/BACKLOG.md` has
+that lead.
 
 `src/lib.rs` deliberately carries `#![expect(unused)]` while the firmware is being built. `PERF:` comments
 mark measured or suspected hot spots and open questions; they are context, not a task list.

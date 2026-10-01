@@ -35,33 +35,22 @@ until the feature set is complete, because profiling an incomplete firmware pric
   only around each flash operation rather than the whole transaction, erase a spare page ahead
   of time, defer the write until the panel is idle, or batch saves. Every tap on ALWAYS ON
   saves, so it pays this each time.
-- Build the rest of the round 3 design,
-  [`design/specs/DISPLAY-AND-MOTION-SPEC.md`](design/specs/DISPLAY-AND-MOTION-SPEC.md),
-  a part at a time (owner, 2026-09-25). Only pixel shift is left; the compass's changes of
-  state, the start-up, the timeout with the always-on face, and the panel cells are built.
-  - Pixel shift is next after the charging motion (owner, 2026-10-01; `design/DECISIONS.md`
-    entry 23 has its scope and cadence). The whole picture moves, and core 1 applies the
-    offset while it copies each flush chunk into its DMA buffers, so core 0, the bottleneck,
-    draws exactly as it does unshifted (owner). A move is a full flush with no redraw; core 1
-    flushes in full whenever a frame's offset differs from the last one it sent. Bands cut at
-    radius 232 are painted to 236, core 1 repeats the framebuffer's edge pixel past its edge,
-    touch subtracts the offset, and the stage picks the position and the moment.
-  - The scatter (`ui::scatter`) damages only the marks that appear or go, and the identity
-    draws about 5 ms a frame once its band settles, 4.3 to 16.4 ms while it types in. What is
-    left is overhead that does not shrink with the damage: working out which points show,
-    about 1.8 ms a frame in the step; the scatter's draw asking `Clip::visible` for each
-    point, about 1.7 ms; the clear, 1.6 ms for about 2,000 pixels; and the hatch's and the
-    microtext's fills, which the clip rejects one at a time. A 6 × 2 `fill_solid` on the
-    framebuffer costs about 1.7 µs even where the cache holds its lines, so small fills are
-    call overhead rather than memory, on every screen. Since the multi-field scatter, the
-    step also tracks each mark's kind and tests the glass per point, and its settled median
-    rose from 1.84 to 2.28 ms; testing the glass as a column range per row, dropping its two
-    small allocations a call, and reusing the static lower field's work are the candidates.
-    For the draw, drawing from the step's shown bitset or walking the damage's spans per grid
-    row would replace the per-point `Clip::visible`. The clear could skip undamaged rows or
-    run from the spans. A lean `fill_solid` for narrow rectangles (integer clamp, one row
-    offset, direct stores) would help every screen. `bench/scatter` times each part
-    (`scatter-bench`), and at start-up the scatter, its arithmetic and small fills alone.
+- The scatter (`ui::scatter`) damages only the marks that appear or go, and the identity
+  draws about 5 ms a frame once its band settles, 4.3 to 16.4 ms while it types in. What is
+  left is overhead that does not shrink with the damage: working out which points show,
+  about 1.8 ms a frame in the step; the scatter's draw asking `Clip::visible` for each
+  point, about 1.7 ms; the clear, 1.6 ms for about 2,000 pixels; and the hatch's and the
+  microtext's fills, which the clip rejects one at a time. A 6 × 2 `fill_solid` on the
+  framebuffer costs about 1.7 µs even where the cache holds its lines, so small fills are
+  call overhead rather than memory, on every screen. Since the multi-field scatter, the
+  step also tracks each mark's kind and tests the glass per point, and its settled median
+  rose from 1.84 to 2.28 ms; testing the glass as a column range per row, dropping its two
+  small allocations a call, and reusing the static lower field's work are the candidates.
+  For the draw, drawing from the step's shown bitset or walking the damage's spans per grid
+  row would replace the per-point `Clip::visible`. The clear could skip undamaged rows or
+  run from the spans. A lean `fill_solid` for narrow rectangles (integer clamp, one row
+  offset, direct stores) would help every screen. `bench/scatter` times each part
+  (`scatter-bench`), and at start-up the scatter, its arithmetic and small fills alone.
   - The start-up's fault screen draws a frame in about 25 ms, at most 28. The band and the
     strip are painted once, black with their text knocked out (`chrome::Knockout`). The
     clear of the rows outside them is 7 ms, the band with the giant name 7.2 and the strip

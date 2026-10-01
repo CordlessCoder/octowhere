@@ -32,9 +32,8 @@ what data and settings exist. Read it with:
   round 3, the compass's changes of state, the start-up, screen timeout with the always-on
   face, pixel shift and two panel cells.
 
-Everything those specs describe is implemented and has been approved on the panel, except
-round 3's pixel shift, which the owner deferred (see "Owner decisions that bind later
-screens"). The 2026-09-26 hand-off changes how they look; their behaviour stands where the
+Everything those specs describe is implemented and has been approved on the panel. The
+2026-09-26 hand-off changes how they look; their behaviour stands where the
 hand-off does not change it.
 Where a spec and this brief disagree about what is built, the spec's own Decisions section and
 the responses are newer, except for round 3: its spec has no decisions section, and the owner's
@@ -43,9 +42,8 @@ later decisions are in this brief's "as built" sections.
 ## This round
 
 Round 3 answered the owner's last three questions: smoother changes between the compass's
-states, pixel shift against burn-in, and a screen timeout with dimming. Its spec is built
-except pixel shift, and the sections below marked "as built" record where the build
-interpreted it.
+states, pixel shift against burn-in, and a screen timeout with dimming. Its spec is built,
+and the sections below marked "as built" record where the build interpreted it.
 
 The owner sets the next round's questions. One topic they have named is where outlined text
 belongs in the screens and animations. The primitive exists and is costed under "What the
@@ -520,8 +518,17 @@ show it with a 15 s timeout. Where the build differs from the spec or interprets
   selected demo failure is orange and says DEMO. The clear warning reads `ERASES ZONE, LAST
   FIX ZONE,` `BRIGHTNESS, TIMEOUT` `AND ALWAYS ON` on three lines. These screens have host
   captures but still need owner review and measurement on the board.
-- **Pixel shift** is not built yet, so nothing moves at a wake or on the always-on face's
-  minute.
+- **Pixel shift** moves the whole picture along round 3's nine positions, (0, 0) then eight
+  round a 3 px circle, a step at a time (`ui::shift`; `design/DECISIONS.md` entry 23). The
+  faces, the panel and its screens move when a new page settles, when the panel settles open
+  or shut, and at a wake, and failing those at a minute's change once 10 minutes have passed
+  since the last move. The always-on face moves at each of its redraws. The start-up shows
+  unmoved, and so does a replay of it from DEVICE, so its authored composition never moves
+  mid-way; the handover to the clock is where the held position returns. The display core
+  moves the picture as it sends it, repeating the framebuffer's edge past it, so a move is a
+  full flush and costs no draw. Touch is taken minus the offset. The clock's band, the clear
+  warning's rules and the screen clear reach r 236, the glass plus the shift's 3 px, so a
+  shifted band still meets the glass's edge. Nothing else reaches the edge.
 
 ## Gestures as built
 
@@ -753,9 +760,9 @@ C1's settled states, entry points and a swipe frame were measured in
 - Cover means "go to the clock face" everywhere, discarding any edit in progress. It is the only
   cover gesture.
 - Settings live on the panel. A new setting is a new cell or lives under an existing one.
-- Pixel shift is deferred, since the timeout makes burn-in unlikely. When it is built, the
-  whole picture moves, the bands included, so layouts will keep a margin
-  inside the glass's edge. The margin is not settled yet.
+- Pixel shift moves the whole picture up to 3 px, the bands included. Anything drawn to the
+  glass's edge reaches 3 px past it (r 236), and anything meant to stay clear of the edge
+  keeps 3 px from it.
 
 ## Colour
 

@@ -116,7 +116,7 @@ shadows the standard library.
 
 - Shortening the full-panel flush is closed, including DMA straight from PSRAM and PSRAM at
   120 MHz. `BACKLOG.md`, "Deferred", has why.
-- Pixel shift, when built, moves the whole frame in core 1's flush copy, never on core 0.
+- Pixel shift moves the whole frame in core 1's flush copy, never on core 0.
   `BACKLOG.md` has the design.
 - Compass behaviour: the slab never moves between states, HOLD LEVEL has a 750 ms grace, a
   cover re-arms after 260 ms without a report or on a finger, and a cover goes to the clock
