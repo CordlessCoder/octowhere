@@ -467,6 +467,25 @@ impl Charge {
         };
     }
 
+    /// Builds the gauge in from an empty fill at `at`, as the clock face comes in after the
+    /// start-up: the bands' build while charging, otherwise the solid growing out from the
+    /// fill's middle over bands that stay blank.
+    pub fn enter(&mut self, at: Micros) {
+        self.held = 0;
+        self.runs_from = at;
+        let to = if self.charging == Some(true) {
+            1.0
+        } else {
+            0.0
+        };
+        self.wipe = Wipe {
+            from: 1.0,
+            to,
+            start: at,
+            length: if to == 0.0 { WIPE } else { 0 },
+        };
+    }
+
     /// How far the bands show through the solid layer, from 0, covered, to 1. The solid is
     /// centred on the fill.
     #[must_use]
@@ -746,6 +765,44 @@ mod tests {
         assert_eq!(charge.phase(dock), OPEN + OPEN_FRAMES);
         let again = looping + u64::from(LOOP_FRAMES) * FRAME;
         assert_eq!(charge.phase(again), OPEN);
+    }
+
+    #[test]
+    fn entering_while_charging_builds_the_bands_from_an_empty_fill() {
+        let mut charge = Charge::default();
+        charge.read(battery(87, true), 0);
+        let at = 1_000_000;
+        charge.enter(at);
+        for k in 0..BUILD_FRAMES {
+            let now = at + u64::from(k) * FRAME;
+            assert_eq!(marks(150, charge.phase(now)), marks(150, k), "{k}");
+            assert_eq!(charge.exposed(now), 1.0, "{k}");
+        }
+        assert!(marks(150, charge.phase(at - 1)).is_empty());
+        assert_eq!(charge.phase(at + u64::from(OPEN) * FRAME), OPEN);
+        assert!(charge.is_moving(at));
+    }
+
+    #[test]
+    fn entering_unplugged_grows_the_solid_from_the_middle_over_blank_bands() {
+        let mut charge = Charge::default();
+        charge.read(battery(87, false), 0);
+        let at = 1_000_000;
+        charge.enter(at);
+        assert_eq!(charge.exposed(at), 1.0);
+        let mut was = 1.0;
+        for now in (at..=at + WIPE).step_by(FRAME as usize) {
+            assert!(marks(150, charge.phase(now)).is_empty());
+            assert!(charge.exposed(now) <= was);
+            was = charge.exposed(now);
+        }
+        assert_eq!(charge.exposed(at + WIPE), 0.0);
+        assert!(charge.is_moving(at + WIPE / 2));
+        assert!(!charge.is_moving(at + WIPE));
+        // Plugging in afterwards still wipes in and builds.
+        charge.read(battery(87, true), at + 2 * WIPE);
+        assert_eq!(charge.exposed(at + 3 * WIPE), 1.0);
+        assert_eq!(charge.phase(at + 3 * WIPE), 0);
     }
 
     /// A charge that has looped since `0`, and when its loop started.

@@ -2713,6 +2713,80 @@ fn charging_builds_the_slices_out_from_the_middle_and_unplugging_covers_them_fro
     assert_eq!(dark(&covering, 265..280), 15, "with nothing beside it");
 }
 
+/// After the start-up the gauge builds in from an empty fill rather than rising: the slices'
+/// build while charging, otherwise the solid growing out from the middle.
+#[test]
+fn after_the_start_up_the_gauge_builds_in_from_the_middle() {
+    for charging in [true, false] {
+        let mut driver = Driver::starting();
+        driver.sensors(Sensors {
+            clock: clock_at(12, 7, 42),
+            zone: zone("Europe/Dublin", ZoneMode::Automatic),
+            battery: Some(Battery {
+                present: true,
+                percent: 87,
+                millivolts: 3900,
+                charging,
+                usb: charging,
+            }),
+            ..Sensors::default()
+        });
+        boot_all(&mut driver, None);
+        let mut buffers = Buffers::new();
+        let mut step = |driver: &mut Driver| {
+            driver.step(Input::default());
+            let partial = buffers.draw(&driver.stage, driver.stage.changed());
+            let whole = render(&driver.stage);
+            assert_eq!(
+                differing_as_shown(&driver.stage, partial, &whole),
+                0,
+                "{charging}"
+            );
+            whole
+        };
+        let mut shown = step(&mut driver);
+        for _ in 0..400 {
+            if !driver.stage.starting_up() {
+                break;
+            }
+            shown = step(&mut driver);
+        }
+        assert!(!driver.stage.starting_up());
+        // The fill runs from x 265 to 415 at 87 %, on rows 284 to 307.
+        let dark = |fb: &FB, xs: core::ops::Range<i32>| {
+            xs.filter(|&x| fb.pixel(Point::new(x, 295)) == Some(chrome::BLACK))
+                .count()
+        };
+        assert_eq!(
+            dark(&shown, 265..415),
+            150,
+            "{charging}: the fill starts empty"
+        );
+        let handed_over = driver.now();
+        let mut at = |driver: &mut Driver, after: Micros| {
+            let mut shown = None;
+            while driver.now() < handed_over + after {
+                shown = Some(step(driver));
+            }
+            shown.unwrap()
+        };
+        if charging {
+            let seeded = at(&mut driver, 160_000 + 150_000);
+            assert!(dark(&seeded, 330..360) < 30, "a seed grows in the middle");
+            assert_eq!(dark(&seeded, 265..300), 35, "with nothing at the ends yet");
+            let built = at(&mut driver, 160_000 + 1_000_000);
+            assert_ne!(built.pixel(Point::new(265, 295)), Some(chrome::BLACK));
+            assert!(dark(&built, 265..415) > 0, "the slices reach the start");
+        } else {
+            let growing = at(&mut driver, 160_000 + 250_000);
+            assert_eq!(dark(&growing, 320..360), 0, "the middle is solid");
+            assert_eq!(dark(&growing, 265..280), 15, "with nothing beside it");
+            let grown = at(&mut driver, 160_000 + 600_000);
+            assert_eq!(dark(&grown, 265..415), 0, "the solid fills it");
+        }
+    }
+}
+
 /// The step that cancels onto the always-on face draws that face, not the page under it.
 #[test]
 fn a_cancel_onto_the_always_on_face_draws_it_at_once() {

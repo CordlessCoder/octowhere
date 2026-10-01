@@ -332,6 +332,9 @@ pub struct Stage {
     rest_tap: Option<Micros>,
     /// The clock face's time and date type in as its next entry starts.
     clock_types_in: bool,
+    /// Whether the clock face's next entry is the start-up's handover, which builds the battery
+    /// gauge in rather than raising it.
+    clock_builds_gauge: bool,
     /// The start-up once it has finished, which a replay counts its parts from.
     last_boot: Option<Startup>,
     rest: Rest,
@@ -416,6 +419,7 @@ impl Stage {
             swallowed: false,
             rest_tap: None,
             clock_types_in: false,
+            clock_builds_gauge: false,
             last_boot: None,
             rest: Rest::Awake,
             active_since: 0,
@@ -1210,6 +1214,7 @@ impl Stage {
                     self.settle_clock(now);
                 }
                 self.clock_types_in = after_card;
+                self.clock_builds_gauge = entry;
                 self.level = level;
                 level
             }
@@ -1757,6 +1762,10 @@ impl Stage {
                 if keys.mode == clock_screen::Mode::NoData {
                     // A fault shows at once.
                     (times.icon, times.label) = (None, None);
+                }
+                if core::mem::take(&mut self.clock_builds_gauge) {
+                    self.charge.enter(from + CLOCK_ENTRY.battery);
+                    times.battery = None;
                 }
                 self.clock_settled.insert(ClockSettled {
                     times,
