@@ -193,7 +193,7 @@ Weigh that cost before adding one.
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 1,299,072 bytes, 8.29% of the 15,663,104-byte app partition that
+The image is currently 1,299,120 bytes, 8.29% of the 15,663,104-byte app partition that
 `partitions.csv` gives it. Measure with `espflash save-image --chip esp32s3 --flash-size 16mb
 --partition-table partitions.csv <elf> <out>`; without those two options it assumes 4 MB of flash
 and the default table. The time zone
@@ -290,7 +290,11 @@ its settled fields with a turning synthetic heading and logs every draw's time
 at each pixel shift position, beside the region flush from before pixel shift
 (`flush-shift-bench`, summarised by `tools/flush-shift-summary.py`); and `bench/settings-save`,
 which saves a key nothing reads every 3 s and logs each save's flash operations and how long
-it held the display core (`settings-save-bench`, summarised by `tools/settings-save-summary.py`).
+it held the display core (`settings-save-bench`, summarised by `tools/settings-save-summary.py`); and
+`bench/startup-handover`, which replays the start-up 6 s after each handover with a synthetic
+battery whose charging flips each round, and logs each start-up frame's and the clock entry's
+step and draw (`startup-handover-bench`, summarised by `tools/startup-handover-summary.py`;
+results in `docs/logs/display/startup-handover-2026-10-01.md`).
 
 ## Concurrency
 
