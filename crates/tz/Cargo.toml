@@ -6,4 +6,10 @@ description = "Time zones for octowhere: the zone under a position, and local ti
 
 [workspace]
 
+[features]
+default = ["boundaries"]
+# The zones' boundaries, and finding the zone under a position from them. Without it only the
+# tables before the boundaries are built in, and zones are found by name.
+boundaries = []
+
 [dependencies]

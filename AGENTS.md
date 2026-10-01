@@ -41,7 +41,9 @@ initialization or peripheral mappings.
   data built into the binary. `tools/tz-data.py` rebuilds `crates/tz/data/zones.bin` and the
   crate's test vectors from timezone-boundary-builder's boundaries and the IANA rules; its header
   has the command. The boundaries are ODbL, and `crates/tz/data/NOTICE.md` carries the
-  attribution the licence asks for.
+  attribution the licence asks for. Its default `boundaries` feature, which `octowhere-ui`
+  forwards, holds the boundaries and the lookups by position; without it only the tables before
+  them are built in, which `tools/ui-web` uses.
 - `src/gnss_time.rs` estimates when each UTC second begins on the local timer, from when the
   GNSS module's bursts arrive. It has no board dependency, and `host-tests` tests it.
 - `src/settings.rs` keeps settings in flash across restarts, in an ekv database: the time zone
@@ -131,6 +133,10 @@ cargo +stable clippy --manifest-path crates/octowhere-motion/Cargo.toml \
 cargo +stable test --manifest-path crates/tz/Cargo.toml --target x86_64-unknown-linux-gnu
 cargo +stable clippy --manifest-path crates/tz/Cargo.toml \
   --target x86_64-unknown-linux-gnu --all-targets -- -D warnings
+cargo +stable test --manifest-path crates/tz/Cargo.toml --target x86_64-unknown-linux-gnu \
+  --no-default-features
+cargo +stable clippy --manifest-path crates/tz/Cargo.toml \
+  --target x86_64-unknown-linux-gnu --all-targets --no-default-features -- -D warnings
 cargo +stable clippy --release --manifest-path tools/ui-sim/Cargo.toml \
   --target x86_64-unknown-linux-gnu --locked -- -D warnings
 cargo +stable clippy --release --manifest-path tools/ui-web/Cargo.toml \
@@ -187,7 +193,7 @@ Weigh that cost before adding one.
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 1,299,040 bytes, 8.29% of the 15,663,104-byte app partition that
+The image is currently 1,299,072 bytes, 8.29% of the 15,663,104-byte app partition that
 `partitions.csv` gives it. Measure with `espflash save-image --chip esp32s3 --flash-size 16mb
 --partition-table partitions.csv <elf> <out>`; without those two options it assumes 4 MB of flash
 and the default table. The time zone
