@@ -161,7 +161,7 @@ const sliders = [
   ["heading", (v) => `${String(Math.round(v)).padStart(3, "0")}°`],
   ["pitch", (v) => `${v > 0 ? "+" : ""}${Math.round(v)}°`],
   ["roll", (v) => `${v > 0 ? "+" : ""}${Math.round(v)}°`],
-  ["level", (v) => `${Math.round(v)} %`],
+  ["level", (v) => `${Math.round(v)}%`],
 ];
 for (const [name, format] of sliders) {
   const input = document.getElementById(name);
@@ -169,6 +169,8 @@ for (const [name, format] of sliders) {
   input.addEventListener("input", () => {
     set(name, input.value);
     out.textContent = format(Number(input.value));
+    fill(input);
+    showReadings();
   });
 }
 
@@ -196,6 +198,7 @@ function sync() {
     const value = wasm.get(READING[name]);
     if (document.activeElement !== input) input.value = value;
     document.getElementById(`${name}-out`).textContent = format(value);
+    fill(input);
   }
   for (const box of document.querySelectorAll("input[type=checkbox][data-reading]")) {
     box.checked = wasm.get(Number(box.dataset.reading)) !== 0;
@@ -211,6 +214,100 @@ function sync() {
   }
   // Without a battery there is no level to set.
   document.getElementById("level").disabled = wasm.get(READING.supply) === 2;
+  showReadings();
+}
+
+// How far along its range a slider's value is, for its violet part.
+function fill(input) {
+  const part = (input.value - input.min) / (input.max - input.min);
+  input.style.setProperty("--filled", `${part * 100}%`);
+}
+
+// --- The modules' symbols and readings, and the state strip -------------------------------
+
+// The firmware's 5 × 5 glyphs, bit 4 the leftmost, from crates/octowhere-ui/src/ui.
+const GLYPHS = {
+  device: [0b00100, 0b00000, 0b01100, 0b00100, 0b01110],
+  arrow: [0b00100, 0b01110, 0b10101, 0b00100, 0b00100],
+  gnss: [0b00100, 0b01010, 0b10101, 0b01010, 0b00100],
+  battery: [0b01110, 0b11111, 0b10001, 0b11111, 0b11111],
+};
+
+// Drawn as the firmware's icon tiles are: a frame a quarter of the module, at least 2 px, round
+// black, with the glyph's modules inside the padding.
+function drawSigil(svg) {
+  const [module, padding, frame] = [5, 3, 2];
+  const side = 2 * padding + 5 * module;
+  const rect = (x, y, size, fill) =>
+    `<rect x="${x}" y="${y}" width="${size}" height="${size}" fill="${fill}"/>`;
+  let shapes = rect(0, 0, side, "currentColor") + rect(frame, frame, side - 2 * frame, "#000");
+  GLYPHS[svg.dataset.glyph].forEach((bits, row) => {
+    for (let column = 0; column < 5; column++) {
+      if (bits & (0b10000 >> column)) {
+        shapes += rect(padding + column * module, padding + row * module, module, "currentColor");
+      }
+    }
+  });
+  svg.setAttribute("viewBox", `0 0 ${side} ${side}`);
+  svg.innerHTML = shapes;
+}
+for (const svg of document.querySelectorAll(".sigil")) drawSigil(svg);
+
+// The colour each role takes, as the firmware's screens give them.
+const ROLE_COLOURS = { live: "var(--blue)", attention: "var(--orange)", unknown: "var(--gray)", neutral: "var(--white)" };
+
+function showReading(id, sigil, text, role) {
+  const reading = document.getElementById(id);
+  reading.textContent = text;
+  reading.dataset.role = role;
+  if (sigil) document.getElementById(sigil).style.color = ROLE_COLOURS[role];
+}
+
+const CLOCKS = ["GNSS", "RTC", "STOPPED", "NO DATA"];
+
+// What the readings make of each module, by the meanings the screens give their colours.
+function showReadings() {
+  const get = (name) => wasm.get(READING[name]);
+  const heading = String(Math.round(get("heading")) % 360).padStart(3, "0");
+  const calibration = get("calibration");
+  if (!get("live")) showReading("compass-reading", "compass-sigil", "NO DATA", "unknown");
+  else if (calibration < 100) {
+    showReading("compass-reading", "compass-sigil", `${String(calibration).padStart(3, "0")}%`, "attention");
+  } else if (get("upright")) showReading("compass-reading", "compass-sigil", "---", "unknown");
+  else if (get("disturbed")) showReading("compass-reading", "compass-sigil", `${heading}°`, "attention");
+  else showReading("compass-reading", "compass-sigil", `${heading}°`, "live");
+
+  const clock = get("clock");
+  const clockRole = ["live", "neutral", "attention", "unknown"][clock];
+  showReading("time-reading", null, CLOCKS[clock], clockRole);
+  document.getElementById("time-sigil").style.color = ROLE_COLOURS[get("fix") ? "live" : "unknown"];
+
+  const supply = get("supply");
+  const level = get("level");
+  if (supply === 2) showReading("power-reading", "power-sigil", "NO BAT", "unknown");
+  else {
+    const text = `${level}%${supply === 0 ? " CHG" : ""}`;
+    showReading("power-reading", "power-sigil", text, level <= 15 ? "attention" : "neutral");
+  }
+  document.getElementById("state-clock").textContent = CLOCKS[clock];
+  document.getElementById("state-supply").textContent =
+    supply === 2 ? "USB, NO BAT" : `${supply === 0 ? "USB" : "BAT"} ${level}%${supply === 0 ? " CHG" : ""}`;
+}
+
+// What shows and how it rests, by the status's bits, for the state strip.
+const VIEW_NAMES = [
+  null, "SETTINGS", "BRIGHTNESS", "DEVICE", "CLEAR", "TIME ZONE", "REPLAY", "TIMEOUT", "ALWAYS ON",
+  "POWER OFF",
+];
+const RESTS = ["AWAKE", "DIMMING", "ALWAYS ON", "DARK"];
+
+function showState(status) {
+  let screen;
+  if (status & 16) screen = "--";
+  else if (status & 1) screen = "START-UP";
+  else screen = VIEW_NAMES[(status >> 5) & 15] ?? (status & 8 ? "COMPASS" : "CLOCK");
+  document.getElementById("state-screen").textContent = screen;
+  document.getElementById("state-rest").textContent = status & 16 ? "POWERED OFF" : RESTS[(status >> 1) & 3];
 }
 
 // --- The keyboard, as the desktop simulator has it -----------------------------------------
@@ -301,9 +398,17 @@ document.getElementById("screenshot").addEventListener("click", screenshot);
 // and sharp, unless that would leave it much smaller than the room it has; then it fills the
 // room, scaled smoothly.
 function resize() {
-  const device = document.querySelector(".device");
+  const main = document.querySelector("main");
   const ratio = window.devicePixelRatio || 1;
-  const room = Math.min(device.parentElement.clientWidth - 32, window.innerHeight * 0.82);
+  const style = getComputedStyle(main);
+  const inner = main.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+  const columns = style.gridTemplateColumns.split(" ").length > 1;
+  // Beside the controls, the device keeps room for them; above them it takes the width. The
+  // stage pads it by 20 px a side, and on a wide screen the hint, the state strip and the
+  // view controls stay in sight below it.
+  const width = (columns ? inner - 24 - 360 : inner) - 40;
+  const height = columns ? window.innerHeight - 290 : Infinity;
+  const room = Math.min(width, height);
   const roomPanel = Math.max(120, (room * 466) / BEZEL);
   const scale = Math.floor((roomPanel * ratio) / 466);
   const whole = scale >= 1 && scale * 466 >= 0.8 * roomPanel * ratio;
@@ -354,6 +459,7 @@ function showStatus(status) {
   else text = status & 8 ? HINTS.compass : HINTS.clock;
   hint.textContent = text;
   off.hidden = !(status & 16);
+  showState(status);
 }
 
 // --- Running -------------------------------------------------------------------------------

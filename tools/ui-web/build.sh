@@ -27,7 +27,7 @@ fi
     base64 -w0 dist/octowhere-ui.wasm
     printf '";\n'
 } >dist/octowhere-ui.wasm.js
-cp www/* dist/
+cp -r www/. dist/
 revision=$(git describe --always --dirty --abbrev=7 2>/dev/null || echo unknown)
 sed -i "s|__REVISION__|$revision|" dist/index.html
 echo "built dist/ at $revision"
