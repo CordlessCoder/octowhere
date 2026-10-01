@@ -1,5 +1,6 @@
-//! Renders the clock and the compass in each of their states, to 466×466 PNGs through the
-//! firmware's own drawing code. From the repository root:
+//! Renders every screen in each of its states, to 466×466 PNGs through the firmware's own
+//! drawing code, and lays a frame of each state out in `screen-atlas.png` with the revision that
+//! drew it, so two revisions' atlases compare tile for tile. From the repository root:
 //!
 //! ```text
 //! cargo +stable run --manifest-path crates/octowhere-ui/Cargo.toml \
@@ -9,7 +10,10 @@
 //! The output directory defaults to `target/renders` under the crate. The readings are
 //! synthetic fixtures, chosen to exercise the drawing rather than to look like a real fix.
 
-use std::{fs::File, io::BufWriter, path::PathBuf};
+#[path = "render/atlas.rs"]
+mod atlas;
+
+use std::{collections::HashMap, fs::File, io::BufWriter, path::PathBuf};
 
 use embedded_graphics::{
     pixelcolor::{Rgb888, RgbColor},
@@ -247,13 +251,18 @@ fn main() {
     frames.extend(startup_frames());
     frames.extend(always_on_frames());
 
+    let mut drawn = HashMap::new();
     for (name, stage) in frames {
         let mut fb = FB::boxed();
         stage.draw(&mut *fb);
         let path = out.join(format!("{name}.png"));
         write_png(&fb, &path);
         println!("{}", path.display());
+        drawn.insert(name, fb);
     }
+    let path = out.join("screen-atlas.png");
+    atlas::write(&drawn, &atlas::revision(), &path);
+    println!("{}", path.display());
 }
 
 /// The settings panel and the screens it opens, reached by the gestures that reach them.

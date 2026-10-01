@@ -156,8 +156,10 @@ The UI runs on the host through `crates/octowhere-ui`. Its tests drive a `Stage`
 matches a full one. `tools/ui-sim` plays scenes written on the same driver, from its
 `scenes.rs`, and records them to GIF or MP4 the same every run, which is the way to share an
 animation. Its MP4s are 4:4:4 H.264, which keeps the panel's thin coloured lines sharp but plays
-in ffmpeg- and VLC-based players rather than most browsers (owner). The `render` example writes every screen to PNG, and `tools/ui-sim` is also the
-interactive window. Both render through the firmware's own drawing code, so they show what the
+in ffmpeg- and VLC-based players rather than most browsers (owner). The `render` example writes every screen to PNG, and lays a frame of each state out in one `screen-atlas.png`
+headed by the revision that drew it; the tiles' order is fixed in `examples/render/atlas.rs`,
+so two revisions' atlases compare tile for tile until a tile is added. `tools/ui-sim` is also
+the interactive window. Both render through the firmware's own drawing code, so they show what the
 panel will show, but they say nothing about draw time on the target. Commands are in the headers
 of `examples/render.rs` and `tools/ui-sim/src/main.rs`. Keep the crate free of board
 dependencies: that is what lets the host build it, and its manifest enforces it.

@@ -138,7 +138,9 @@ the panel. Touch targets are no smaller than about 10 mm.
   (`NEAREST FIRST  03 / 23`). Above the slab, where D3 put it, it met the zone before the
   selected one.
 
-Captures drawn by the firmware's own code come from `crates/octowhere-ui/examples/render.rs`.
+Captures drawn by the firmware's own code come from `crates/octowhere-ui/examples/render.rs`,
+which also lays a frame of each state out in `screen-atlas.png`, kept in
+`context/screen-captures/`, by section like the design's screen family board.
 It draws the faces' stills and `panel-rest`, `settings-always-on`, `panel-end`,
 `panel-scrolling`, `panel-pulling`, `panel-device`, `panel-device-end`, `settings-brightness`,
 `settings-timeout`, `settings-clear`, `picker-offset`,
