@@ -451,6 +451,19 @@ impl Stage {
         }
     }
 
+    /// Where the picture is in pixel shift's round. The start-up shows unmoved whatever it says.
+    #[must_use]
+    pub fn shift_state(&self) -> Shift {
+        self.shift
+    }
+
+    /// Holds the picture at `shift::POSITIONS[index]`, or with `None` lets the stage move it
+    /// again, for a simulator to look at one position. The display must flush in full after a
+    /// change, as it does whenever the offset changes.
+    pub fn pin_shift(&mut self, index: Option<usize>, now: Micros) {
+        self.shift.pin(index, now);
+    }
+
     /// Whether the start-up sequence still shows.
     #[must_use]
     pub fn starting_up(&self) -> bool {

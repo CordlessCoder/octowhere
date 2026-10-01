@@ -26,11 +26,12 @@ pub const REACH: i32 = 3;
 /// it, failing a moment that hides the move sooner.
 pub const HOLD: Micros = 10 * 60 * 1_000_000;
 
-/// Where the picture is in its round, and when it last moved.
+/// Where the picture is in its round, when it last moved, and whether it is held there.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Shift {
     index: u8,
     moved_at: Micros,
+    pinned: bool,
 }
 
 impl Shift {
@@ -41,10 +42,44 @@ impl Shift {
         Point::new(i32::from(x), i32::from(y))
     }
 
-    /// Moves one step round.
+    /// Where the picture is, as an index into [`POSITIONS`].
+    #[must_use]
+    pub fn position(self) -> usize {
+        usize::from(self.index)
+    }
+
+    /// When the picture last moved.
+    #[must_use]
+    pub fn moved_at(self) -> Micros {
+        self.moved_at
+    }
+
+    /// Whether [`pin`](Self::pin) holds the picture where it is.
+    #[must_use]
+    pub fn is_pinned(self) -> bool {
+        self.pinned
+    }
+
+    /// Moves one step round, unless pinned.
     pub fn advance(&mut self, now: Micros) {
+        if self.pinned {
+            return;
+        }
         self.index = (self.index + 1) % POSITIONS.len() as u8;
         self.moved_at = now;
+    }
+
+    /// Holds the picture at `POSITIONS[index]` from `now`, or with `None` lets it move round
+    /// again from where it is.
+    pub fn pin(&mut self, index: Option<usize>, now: Micros) {
+        match index {
+            Some(index) => {
+                self.index = (index % POSITIONS.len()) as u8;
+                self.moved_at = now;
+                self.pinned = true;
+            }
+            None => self.pinned = false,
+        }
     }
 
     /// Whether the picture has stayed put for `HOLD`.
@@ -88,6 +123,17 @@ mod tests {
             assert!(shift.offset().x.abs() <= REACH && shift.offset().y.abs() <= REACH);
         }
         assert_eq!(shift.offset(), Point::zero());
+    }
+
+    #[test]
+    fn a_pinned_picture_holds_until_let_go() {
+        let mut shift = Shift::default();
+        shift.pin(Some(5), 10);
+        shift.advance(20);
+        assert_eq!((shift.position(), shift.moved_at()), (5, 10));
+        shift.pin(None, 30);
+        shift.advance(40);
+        assert_eq!((shift.position(), shift.moved_at()), (6, 40));
     }
 
     #[test]

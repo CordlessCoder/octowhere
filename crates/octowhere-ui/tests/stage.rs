@@ -2852,6 +2852,24 @@ fn the_panel_settling_open_or_shut_moves_the_picture() {
     assert_eq!(driver.stage.shift(), Point::new(2, 2));
 }
 
+/// A pinned picture stays where it was put through a page change, and moves again once let go.
+#[test]
+fn a_pinned_picture_holds_through_a_page_change() {
+    let mut driver = driver_on(Screen::Clock);
+    let now = driver.now();
+    driver.stage.pin_shift(Some(4), now);
+    assert_eq!(driver.stage.shift(), Point::new(-2, 2));
+    driver.swipe(Point::new(420, 233), Point::new(60, 233), 250_000);
+    driver.settle();
+    assert_eq!(driver.stage.screen(), Screen::Compass);
+    assert_eq!(driver.stage.shift(), Point::new(-2, 2));
+    let now = driver.now();
+    driver.stage.pin_shift(None, now);
+    driver.swipe(Point::new(60, 233), Point::new(420, 233), 250_000);
+    driver.settle();
+    assert_eq!(driver.stage.shift(), Point::new(-3, 0));
+}
+
 /// A touch counts where the picture showed under it, not where the panel was touched.
 #[test]
 fn a_touch_lands_on_the_shifted_picture() {
