@@ -456,6 +456,9 @@ fn log_raw_nmea(data: &[u8], line: &mut [u8; 256], line_len: &mut usize) {
     }
 }
 
+#[cfg(feature = "flush-shift-bench")]
+mod flush_bench;
+
 macro_rules! start_display_core {
     ($peripherals:ident, $framebuffer_thread:ident) => {
         let swap: &'static mut Swap<SwapState<_>> = SWAP.init_with(|| {
@@ -575,6 +578,11 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
         .await
         .expect("display init failed");
     info!("[DISPLAY] OK");
+    #[cfg(feature = "flush-shift-bench")]
+    {
+        let state = swap.get();
+        flush_bench::run(&mut display, &mut state.fb).await;
+    }
 
     let mut prev_swap_spi = Duration::MIN;
     let mut first_flush = true;
