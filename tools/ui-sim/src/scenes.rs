@@ -684,8 +684,8 @@ fn tour(driver: &mut Driver) {
     });
     show(driver, "ALWAYS ON, NO DATA.", |s| s.clock.utc = None);
     show(driver, "ALWAYS ON, LOCAL TIME AGAIN.", |s| s.zone = zone);
-    say("A TOUCH WAKES THE SCREEN.");
-    slow_tap(driver, 233, 300);
+    say("A DOUBLE TAP WAKES THE SCREEN. A SINGLE TAP OR A SWIPE DOES NOT.");
+    driver.double_tap();
     driver.wait(ms(2_000));
 
     say("THE ZONE BACK TO AUTOMATIC, FROM THE GNSS POSITION.");
