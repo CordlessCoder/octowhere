@@ -60,13 +60,17 @@ decisions, and `SCREEN-DESIGN-BRIEF.md` has the details as built.
   writes it with the other stills.
 - **A web simulator, `tools/ui-web/`**, runs the firmware's own drawing code in a browser.
   `tools/ui-web/build.sh` writes the page to `tools/ui-web/dist/`, and `dist/index.html` opens
-  from disk.
+  from disk. The archive this came in carries it built, in `simulator/`.
   - Touch and drag the round screen as on the device.
   - PWR and BOOT are pressable arcs on the bezel, filling as a hold nears its long press.
   - Labelled controls set every reading: heading, pitch, roll, calibration, interference, held
     upright, motion sensors answering, the clock's source, the zone, GNSS fix, the supply, and
     the battery's level.
-  - A hint under the screen says what the device is doing and what to try next.
+  - A hint under the screen says what the device is doing and what to try next, and a strip
+    under it names the screen, the rest state, the clock's source and the supply.
+  - The DISPLAY group shows pixel shift's place and offset and when it last moved, and holds the
+    picture at any of the nine places. It also outlines what each frame sends the panel, as the
+    board's damage-debug build does.
   - Once powered off, holding PWR for 512 ms powers it on through the start-up, as the board's
     power controller does. The desktop simulator does the same.
   - The readings are synthetic, as in every capture.
@@ -86,5 +90,5 @@ identity's turn: `startup.mp4`, frames 66 to 110 of the identity. Pixel shift:
 
 1. Review entries 24 to 26. The design has seen none of the three.
 2. Review pixel shift as built against your sequence, in particular the always-on face's
-   cadence and the start-up holding at (0, 0).
+   cadence and the start-up holding at (0, 0). The simulator's DISPLAY group holds any place.
 3. Take `screen-atlas.png` as the baseline that later updates are compared against.
