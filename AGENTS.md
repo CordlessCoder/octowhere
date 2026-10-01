@@ -177,7 +177,7 @@ Weigh that cost before adding one.
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 1,303,488 bytes, 8.32% of the 15,663,104-byte app partition that
+The image is currently 1,298,816 bytes, 8.29% of the 15,663,104-byte app partition that
 `partitions.csv` gives it. Measure with `espflash save-image --chip esp32s3 --flash-size 16mb
 --partition-table partitions.csv <elf> <out>`; without those two options it assumes 4 MB of flash
 and the default table. The time zone
@@ -500,6 +500,10 @@ and a release needs a licensed one. KH Interference Regular sets the identity's 
 Sans Light sets the clock's band lines, the offset picker's lower neighbour and the always-on face's
 battery value. Maratype sets the identity's title and nothing else: the owner rejected it on every
 other screen. `embedded-layout` supplies the current text alignment helpers.
+
+Every font is built from its full font file, and the macro's `chars:` list picks the glyphs it
+keeps (owner). Do not add a pre-subset file under `assets/`; widen `chars:` for a new
+character instead. A character outside the list draws as the font's missing glyph.
 
 ## Design language
 

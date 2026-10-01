@@ -118,10 +118,7 @@ until the feature set is complete, because profiling an incomplete firmware pric
   thin across many short spans. The candidates are a GDMA memory-to-memory clear, or core 1
   clearing a buffer after flushing it. Either changes the buffer hand-off in `util::Swap`, and
   partial redraws rely on a buffer keeping its own pixels, so only damaged spans may be cleared.
-- Build Shapiro from its full font file with fontdue's `chars:` option, as both PP Fraktion
-  Mono weights already are, instead of the hand-made ASCII subset under `assets/`. Regular moved
-  for the device page's `©`. Subsetting Bold to the glyphs in use would also recover some of the 54 KB it
-  added.
+- Subset PP Fraktion Mono Bold to the glyphs in use, to recover some of the 54 KB it added.
 - Bring the self-test's parts up concurrently (owner, 2026-09-28). `bring_up` joins the GNSS
   settle with one future that probes the clock, touch, IMU and magnetometer in turn, so each
   part's own waits (touch's 100 ms settle, the magnetometer's trim reads) add up. Give each part

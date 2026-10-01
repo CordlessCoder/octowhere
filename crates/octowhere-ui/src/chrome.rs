@@ -725,8 +725,9 @@ impl<T: CoverageTarget<Color = Color>> CoverageTarget for Knockout<'_, T> {
 // on every glyph drawn.
 fontdue_macros::fontdue_font_from_file!(
     MarathonShapiroFont,
-    "../../../assets/MarathonShapiro-Wide65_subset.ttf",
-    scale: 24.0
+    "../../../assets/MarathonShapiro_Wide65.ttf",
+    scale: 24.0,
+    chars: " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
 );
 
 fontdue_macros::fontdue_font_from_file!(
