@@ -474,8 +474,9 @@ I2C bus, so any timing the protocol depends on includes an I2C transaction and w
 build order, slots carrying positions and neighbours with a timebase taken from other nodes
 without a fix. Until pairing (step 3) a node's id is its MAC's low five bits and every node seals
 under one development key compiled in. Without a fix a node has no position of its own, so its
-packets carry only the neighbours record. A board whose `DIO0` does not follow the radio's flags
-is polled instead, 1 ms apart; one of the two boards needs it (`docs/hardware-notes.md`).
+packets carry only the neighbours record. A board whose `DIO0` rises with no flag raised has its
+flags polled instead, 1 ms apart; one board did until a joint was reworked
+(`docs/hardware-notes.md`).
 
 The `lora-link-tx` and `lora-link-rx` features build the older link test in `radio_task` instead,
 sending eight bytes of `OWLK` plus a big-endian sequence number every 250 ms. Transmit waits on `DIO0`'s edge. Receive stays in continuous receive and waits

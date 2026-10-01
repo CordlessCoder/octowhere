@@ -20,6 +20,7 @@ use octowhere_mesh::{
     table::{Merge, Table},
 };
 use sx127xlora::{
+    driver::Sx127xError,
     registers::{FIFO_ADDR_PTR, FIFO_TX_BASE_ADDR, FIFO_TX_BASE_ADDR_VALUE, IRQ_FLAGS},
     types::{DeviceMode, OCP, PowerRamp, RxDone, TxConfig, TxDone},
 };
@@ -34,8 +35,9 @@ const FREQUENCY_HZ: u32 = 869_462_500;
 /// How long before its slot the node loads its packet and switches the antenna to transmit.
 const PREPARE_US: i64 = 30_000;
 /// How long after a packet ends `DIO0`'s RxDone is seen, plus how long after its slot's start a
-/// sender's transmission begins. Measured as half how late a root hears the nodes timing from it.
-const ARRIVAL_LATENCY_US: i64 = 0;
+/// sender's transmission begins: half how late a root hears the nodes timing from it, on two
+/// boards whose `DIO0` follows the radio (2026-10-01). Polling the flags adds half a poll.
+const ARRIVAL_LATENCY_US: i64 = 1_050;
 /// The longest a transmission can take, with margin for `DIO0`.
 const SEND_TIMEOUT_US: i64 = 500_000;
 /// Positions a packet carries at most: as many as fit beside the neighbours record.
@@ -228,17 +230,18 @@ impl Mesh {
     async fn receive(&mut self) -> bool {
         let done = local();
         let packet = self.lora.rx_packet().await;
+        let flags = self.lora.read(IRQ_FLAGS).await.ok();
         let _ = self.lora.clear_all_interrupts().await;
         let packet = match packet {
             Ok(packet) => packet,
             Err(error) => {
-                let flags = self.lora.read(IRQ_FLAGS).await.ok();
                 warn!(
                     "[MESH] receive failed: {} flags={}",
                     defmt::Debug2Format(&error),
                     flags
                 );
-                if flags == Some(0) && self.dio0_follows {
+                // The driver finds no RxDone, so DIO0 rose for nothing.
+                if matches!(error, Sx127xError::PacketNotReady) && self.dio0_follows {
                     warn!(
                         "[MESH] DIO0 is high with no flag raised; polling the radio's flags from here"
                     );
@@ -258,7 +261,12 @@ impl Mesh {
             return false;
         };
         let header = plain.header;
-        let start = done - airtime_us(len) - ARRIVAL_LATENCY_US;
+        let polled = if self.dio0_follows {
+            0
+        } else {
+            POLL_US as i64 / 2
+        };
+        let start = done - airtime_us(len) - ARRIVAL_LATENCY_US - polled;
         let arrival = self.clock.arrival(&header, start, done);
         self.table.heard(
             header.sender,

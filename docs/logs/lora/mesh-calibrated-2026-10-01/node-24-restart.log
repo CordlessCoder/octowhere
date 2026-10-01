@@ -1,0 +1,22 @@
+[2026-10-01T20:12:30Z INFO ] Serial port: '/dev/ttyACM1'
+[2026-10-01T20:12:30Z INFO ] Connecting...
+[2026-10-01T20:12:30Z INFO ] Using flash stub
+I (436) esp_image: segment 4: paddr=00154f94 vaddr=4037a660 size2.249755 [INFO ] [BOOT] Gnss Answered in 622ms (octowhere octowhere/src/main.rs:1713)
+2.288750 [INFO ] [GNSS] reference time 2026-10-01 20:12:27 sent=true (octowhere octowhere/src/main.rs:2170)
+2.288828 [INFO ] [BOOT] answered: power=true clock=true touch=true motion=true magnet=true gnss=true (octowhere octowhere/src/main.rs:2026)
+2.291232 [INFO ] [LORA] init_ok (octowhere octowhere/src/main.rs:2314)
+2.291292 [INFO ] [TOUCH] OK resolution=466x466 firmware=0x1000001 checksum=0x693275ee (octowhere octowhere/src/main.rs:2065)
+2.292910 [INFO ] [MESH] id=24 tuned=true powered=true listening for 135s first (octowhere octowhere/src/mesh.rs:103)
+2.293627 [INFO ] [MEM] internal_used=10624 psram_used=868736 (octowhere octowhere/src/main.rs:2100)
+42.270705 [INFO ] [DISPLAY] shift 3 0 (octowhere octowhere/src/main.rs:643)
+95.301489 [INFO ] [DISPLAY] shift 2 2 (octowhere octowhere/src/main.rs:643)
+104.749949 [INFO ] [MESH] heard id=28 timebase=Node(24) hops=1 taken=Adopted late_us=None len=30 rssi=-29 snr=6 entries=0 new=0 neighbours=0x01000000 (octowhere octowhere/src/mesh.rs:286)
+104.750220 [INFO ] [MESH] timebase root=24 hops=0 (octowhere octowhere/src/mesh.rs:421)
+144.021577 [INFO ] [MESH] round=39797459 sending=true (octowhere octowhere/src/mesh.rs:149)
+144.123861 [INFO ] [MESH] sent round=39797459 len=30 entries=0 neighbours=0x10000000 late_us=68 switched=true started=true done=true flags=Some(8) (octowhere octowhere/src/mesh.rs:352)
+155.281089 [INFO ] [DISPLAY] shift 0 3 (octowhere octowhere/src/main.rs:643)
+189.021571 [INFO ] [MESH] round=39797460 sending=true (octowhere octowhere/src/mesh.rs:149)
+189.124512 [INFO ] [MESH] sent round=39797460 len=30 entries=0 neighbours=0x10000000 late_us=51 switched=true started=true done=true flags=Some(8) (octowhere octowhere/src/mesh.rs:352)
+215.466199 [INFO ] [DISPLAY] shift -2 2 (octowhere octowhere/src/main.rs:643)
+234.021579 [INFO ] [MESH] round=39797461 sending=false (octowhere octowhere/src/mesh.rs:149)
+239.752159 [INFO ] [MESH] heard id=28 timebase=Node(24) hops=1 taken=Ignored late_us=Some(2232) len=30 rssi=-30 snr=7 entries=0 new=0 neighbours=0x01000000 (octowhere octowhere/src/mesh.rs:286)

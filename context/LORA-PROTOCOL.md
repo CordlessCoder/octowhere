@@ -175,9 +175,10 @@ GPS ranks above any node's clock, and between node clocks the lower root id rank
 - **Arrival timing.** A sender starts its packet at its slot's start, and its id and the header's
   base timestamp name the slot. The receiver takes the time `DIO0` signals RxDone, subtracts the
   packet's airtime, and has that slot's start on its own timer. The latencies on both sides, the
-  transmitter's start and the receiver seeing RxDone, make each hop's clock late. Two boards
-  indoors put it at about 1.3 ms a hop, one of them polling the radio's flags 1 ms apart
-  (2026-10-01), against the ±250 ms guard; it is not taken out yet.
+  transmitter's start and the receiver seeing RxDone, would make each hop's clock late by about
+  1.05 ms, so the receiver takes that out (measured on two boards, 2026-10-01). A root then hears
+  the nodes timing from it within about 0.15 ms, which is their crystals' drift since they last
+  heard it.
 - **Sweeps.** A node with no timebase listens continuously for three rounds, 135 s, which spans
   every node's floor round. A node not timing from its own fix sweeps again every 10 minutes, to
   find a timebase ranked above its own, and whenever it has heard no packet with fewer hops in its
