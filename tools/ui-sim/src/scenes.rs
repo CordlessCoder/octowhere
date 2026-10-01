@@ -256,15 +256,17 @@ fn clock_charging(driver: &mut Driver) {
     start(driver, Screen::Clock);
     on_battery(driver, 87, false);
     driver.wait(ms(1_500));
+    // The build, then a whole loop: both beats dock and split.
     on_battery(driver, 87, true);
-    driver.wait(ms(3_000));
+    driver.wait(ms(6_500));
+    // The build runs back, and the solid starts out from the middle.
     on_battery(driver, 87, false);
-    driver.wait(ms(1_500));
-    // Unplugged again halfway through the wipe: the solid turns back from where it is.
+    driver.wait(ms(1_050));
+    // Plugged in again halfway through the wipe: the solid turns back and the slices build in.
     on_battery(driver, 87, true);
-    driver.wait(ms(220));
+    driver.wait(ms(2_000));
     on_battery(driver, 87, false);
-    driver.wait(ms(1_500));
+    driver.wait(ms(2_000));
 }
 
 fn swipe_to_compass(driver: &mut Driver) {

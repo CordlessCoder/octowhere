@@ -1,5 +1,7 @@
 //! The settle every sliding surface shares: a cubic ease-out over a fixed time, so a page,
-//! the panel and the grid all land on a known frame.
+//! the panel and the grid all land on a known frame. Also the flight: the curve the Marathon
+//! logo animation's end bars travel on, measured a frame at a time at 30 fps, which the charging
+//! gauge's ends and its solid wipe follow.
 
 use super::gesture::Micros;
 
@@ -34,9 +36,33 @@ impl Ease {
     }
 }
 
+/// How far along its way a flight is, a frame at a time: a slow start, one long jump, and a
+/// long tail.
+pub const FLIGHT: [f32; 14] = [
+    0.0, 0.025, 0.066, 0.139, 0.279, 0.672, 0.82, 0.885, 0.926, 0.951, 0.975, 0.984, 0.992, 1.0,
+];
+
+/// `FLIGHT` at `u`, from 0 to 1 over its frames, straight between them.
+#[must_use]
+pub fn flight(u: f32) -> f32 {
+    let at = u.clamp(0.0, 1.0) * (FLIGHT.len() - 1) as f32;
+    let i = (libm::floorf(at) as usize).min(FLIGHT.len() - 2);
+    FLIGHT[i] + (FLIGHT[i + 1] - FLIGHT[i]) * (at - i as f32)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_flight_runs_from_0_to_1_without_turning_back() {
+        assert_eq!((flight(0.0), flight(1.0)), (0.0, 1.0));
+        assert!(FLIGHT.windows(2).all(|pair| pair[1] > pair[0]));
+        for (i, &at) in FLIGHT.iter().enumerate() {
+            let u = i as f32 / (FLIGHT.len() - 1) as f32;
+            assert!((flight(u) - at).abs() < 1e-6);
+        }
+    }
 
     #[test]
     fn it_arrives_after_the_settle_whatever_the_distance() {

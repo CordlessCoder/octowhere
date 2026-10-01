@@ -133,7 +133,7 @@ pub fn solid_band() -> Rectangle {
 /// band label and lines, the first token line, the zone's lines, the scatter's bloom, its
 /// breath and the battery fill's growth; how many rows of the icon's modules show, 0 to 5. Also the reveals of the time, across hours, minutes and seconds, and of the date line,
 /// which run only when a fix or a zone change replaces the time. The face applies each part's
-/// curve. `bands` is the charging slices' phase in their loop, and `exposed` how far they
+/// curve. `bands` is the charging slices' frame in their build or loop, and `exposed` how far they
 /// show through the solid fill, from 0, covered, to 255.
 /// The time and date are centre content, so a page's entry and exit leave them whole.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -165,7 +165,7 @@ impl Accents {
         battery: u8::MAX,
         time: u8::MAX,
         date: u8::MAX,
-        bands: 0,
+        bands: charging::OPEN,
         exposed: 0,
     };
     pub const HIDDEN: Self = Self {
@@ -179,7 +179,7 @@ impl Accents {
         battery: 0,
         time: u8::MAX,
         date: u8::MAX,
-        bands: 0,
+        bands: charging::OPEN,
         exposed: 0,
     };
 
@@ -386,7 +386,7 @@ struct Parts {
 }
 
 /// The battery gauge: its colour, how many columns its fill reaches, the charging slices'
-/// phase, and how many columns of the fill, back from its end, show the slices rather than
+/// frame, and how many columns of the fill, back from its end, show the slices rather than
 /// solid. With no level it shows the hatch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Gauge {
@@ -619,10 +619,10 @@ impl Parts {
         let gauge = Gauge {
             color: gauge,
             length,
-            // A clock fault keeps its slices still, and covered slices have no phase to show.
+            // A clock fault keeps its slices still, and covered slices have no frame to show.
             phase: match () {
-                () if exposed == 0 => 0,
-                () if mode == Mode::NoData => charging::ASSEMBLED_PHASE,
+                () if exposed == 0 => charging::OPEN,
+                () if mode == Mode::NoData => charging::OPEN,
                 () => accents.bands,
             },
             exposed,
@@ -939,15 +939,21 @@ fn draw_gauge<D: CoverageTarget<Color = Color>>(
             Size::new(width, rows.len() as u32),
         )
     };
-    // The slices lie over a solid layer whose end is `exposed` columns back from the fill's.
+    // The slices lie over a solid layer centred on the fill, `exposed` columns narrower than it.
     let solid = gauge.length - gauge.exposed;
+    let (cover_from, cover_to) = (gauge.exposed / 2, gauge.exposed / 2 + solid);
     let rows = 0..FILL.size.height;
-    target.fill_solid(&columns(0, solid, rows.clone()), gauge.color)?;
+    target.fill_solid(&columns(cover_from, solid, rows.clone()), gauge.color)?;
     if gauge.exposed > 0 {
-        for (from, width) in charging::slices(gauge.length, gauge.phase) {
-            let start = from.max(solid);
-            if let Some(width) = (from + width).checked_sub(start).filter(|&width| width > 0) {
-                target.fill_solid(&columns(start, width, rows.clone()), gauge.color)?;
+        for mark in charging::marks(gauge.length, gauge.phase) {
+            let right = mark.left + mark.width;
+            for (from, to) in [
+                (mark.left, right.min(cover_from)),
+                (mark.left.max(cover_to), right),
+            ] {
+                if to > from {
+                    target.fill_solid(&columns(from, to - from, rows.clone()), gauge.color)?;
+                }
             }
         }
     }

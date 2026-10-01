@@ -6,7 +6,7 @@ use embedded_graphics::prelude::Point;
 
 use super::{
     always_on,
-    charging::Charge,
+    charging::{self, Charge},
     clock::{ClockState, ZoneMode, ZoneState},
     clock_screen,
     compass::CompassView,
@@ -1806,7 +1806,7 @@ impl Stage {
             bands: if exposed > 0 {
                 self.charge.phase(now)
             } else {
-                0
+                charging::OPEN
             },
             exposed,
             breath: self.breath,

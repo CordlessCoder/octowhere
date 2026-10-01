@@ -2632,10 +2632,10 @@ fn a_cancel_onto_a_dimming_screen_resumes_it_where_it_was() {
     }
 }
 
-/// Plugged in, the solid layer draws back along the fill from its end, so the slices show from
-/// the end first.
+/// Plugging in closes the solid fill in on its middle and builds the slices out from there;
+/// unplugging runs the build back and grows the solid out from the middle again.
 #[test]
-fn the_charging_wipe_runs_along_the_fill_from_its_end() {
+fn charging_builds_the_slices_out_from_the_middle_and_unplugging_covers_them_from_it() {
     let mut driver = Driver::on(Screen::Clock);
     let reading = |charging| Sensors {
         clock: clock_at(12, 8, 5),
@@ -2652,27 +2652,41 @@ fn the_charging_wipe_runs_along_the_fill_from_its_end() {
     driver.sensors(reading(false));
     driver.wait(1_000_000);
     driver.sensors(reading(true));
-    driver.wait(200_000);
+    driver.wait(150_000);
     // The fill runs from x 265 to 415 at 87 %, on rows 284 to 307.
     let dark = |fb: &FB, xs: core::ops::Range<i32>| {
         xs.filter(|&x| fb.pixel(Point::new(x, 295)) == Some(chrome::BLACK))
             .count()
     };
-    let halfway = render(&driver.stage);
-    assert_eq!(dark(&halfway, 265..320), 0, "the start is still solid");
-    assert!(dark(&halfway, 360..415) > 0, "the end shows slices");
-    for row in 284..308 {
-        assert_eq!(
-            halfway.pixel(Point::new(400, row)),
-            halfway.pixel(Point::new(400, 295)),
-            "every row of a column shows the same"
-        );
-    }
-    driver.wait(400_000);
-    assert!(
-        dark(&render(&driver.stage), 265..320) > 0,
-        "the slices reach the start"
+    let closing = render(&driver.stage);
+    assert!(dark(&closing, 265..290) > 0 && dark(&closing, 390..415) > 0);
+    assert_eq!(dark(&closing, 320..360), 0, "the middle is still solid");
+    driver.wait(350_000);
+    assert_eq!(
+        dark(&render(&driver.stage), 265..415),
+        150,
+        "the solid has gone"
     );
+    driver.wait(100_000);
+    let seeded = render(&driver.stage);
+    assert!(dark(&seeded, 265..330) == 65 && dark(&seeded, 360..415) == 55);
+    assert!(dark(&seeded, 330..360) < 30, "a seed grows in the middle");
+    driver.wait(800_000);
+    let built = render(&driver.stage);
+    assert_ne!(built.pixel(Point::new(265, 295)), Some(chrome::BLACK));
+    assert!(dark(&built, 265..415) > 0, "the slices reach the start");
+    driver.sensors(reading(false));
+    driver.wait(400_000);
+    let unbuilding = render(&driver.stage);
+    assert!(
+        dark(&unbuilding, 265..415) > dark(&built, 265..415),
+        "slices have gone"
+    );
+    assert_eq!(unbuilding.pixel(Point::new(265, 295)), Some(chrome::BLACK));
+    driver.wait(700_000);
+    let covering = render(&driver.stage);
+    assert_eq!(dark(&covering, 320..360), 0, "the middle is solid again");
+    assert_eq!(dark(&covering, 265..280), 15, "with nothing beside it");
 }
 
 /// The step that cancels onto the always-on face draws that face, not the page under it.
