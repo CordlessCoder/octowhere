@@ -794,11 +794,16 @@ pub const MARATYPE: usize = 4;
 pub const FRAKTION_SANS_LIGHT: usize = 5;
 pub const INTERFERENCE: usize = 6;
 
+/// Each channel scaled to the format's depth and rounded down, in integers, since the compass
+/// calls this as it draws.
 pub const fn color_from_rgb(r: u8, g: u8, b: u8) -> Color {
+    const fn scale(c: u8, max: u8) -> u8 {
+        (c as u16 * max as u16 / 255) as u8
+    }
     Color::new(
-        (r as f64 / 255. * Color::MAX_R as f64) as u8,
-        (g as f64 / 255. * Color::MAX_G as f64) as u8,
-        (b as f64 / 255. * Color::MAX_B as f64) as u8,
+        scale(r, Color::MAX_R),
+        scale(g, Color::MAX_G),
+        scale(b, Color::MAX_B),
     )
 }
 
