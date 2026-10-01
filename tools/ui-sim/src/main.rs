@@ -10,7 +10,8 @@
 //! Both step it on the firmware's frame period, so a recording is the same every run and shows
 //! none of the host's speed. A scene that captions its steps records with a column beside the
 //! panel for them. `--scenes` lists them. MP4 is encoded by `ffmpeg`, which must be on
-//! the path.
+//! the path, as H.264 with full colour resolution (4:4:4): players built on ffmpeg or VLC take
+//! it, but most browsers do not.
 //!
 //! A white disc marks where a finger is down, and fades as a ring for 300 ms after it lifts, so
 //! a recording shows taps and drags.

@@ -22,8 +22,8 @@ const FRAMES_PER_SECOND: u64 = 1_000_000 / FRAME_US;
 const FRAME_CS: u16 = 2;
 /// The most samples one frame's delay can hold.
 const MAX_SAMPLES: u16 = u16::MAX / FRAME_CS;
-/// NeuQuant's trade of quality for speed, used when a frame has over 256 colours.
-const QUANTIZE_SPEED: i32 = 10;
+/// NeuQuant's trade of quality for speed, used when a frame has over 256 colours: its best.
+const QUANTIZE_SPEED: i32 = 1;
 
 pub struct Recording {
     next_sample: u64,
@@ -126,13 +126,19 @@ fn encode_gif(
             Some(previous) => changed(width, previous, &pixels).unwrap_or((0, 0, 1, 1)),
         };
         // A knocked-out pixel is transparent in every frame, so one covering an earlier frame
-        // still shows nothing.
+        // still shows nothing. So is one that has not changed, which leaves the frame before
+        // showing through and compresses to almost nothing.
         let mut rgba: Vec<u8> = (top..bottom)
             .flat_map(|y| y * width + left..y * width + right)
             .flat_map(|index| {
                 let [_, r, g, b] = pixels[index].to_be_bytes();
-                let shown = knock_out.as_ref().is_none_or(|mask| mask[index]);
-                [r, g, b, if shown { 0xff } else { 0 }]
+                let shown = knock_out.as_ref().is_none_or(|mask| mask[index])
+                    && previous
+                        .as_ref()
+                        .is_none_or(|previous| previous[index] != pixels[index]);
+                // Every transparent pixel is the same, so the quantizer gives them one entry,
+                // which is the one the frame marks transparent.
+                if shown { [r, g, b, 0xff] } else { [0; 4] }
             })
             .collect();
         let mut frame = Frame::from_rgba_speed(
@@ -151,7 +157,10 @@ fn encode_gif(
     Ok(())
 }
 
-/// Streams a raw frame per frame period to `ffmpeg`, which encodes H.264.
+/// Streams a raw frame per frame period to `ffmpeg`, which encodes H.264 at its slowest preset,
+/// since a smaller file is worth the wait. Colour is kept at full resolution (4:4:4): 4:2:0
+/// smears the panel's thin coloured lines and text. Browsers mostly play only 4:2:0, so these
+/// files are for players built on ffmpeg or VLC (owner).
 fn encode_mp4(
     path: &Path,
     width: usize,
@@ -169,9 +178,19 @@ fn encode_mp4(
         ])
         .args(["-video_size", &format!("{width}x{HEIGHT}")])
         .args(["-framerate", &FRAMES_PER_SECOND.to_string(), "-i", "-"])
-        .args(["-c:v", "libx264", "-tune", "animation", "-crf", "18"])
-        // 4:2:0 with the index at the front is what browsers and players all take.
-        .args(["-pix_fmt", "yuv420p", "-movflags", "+faststart"])
+        .args([
+            "-c:v",
+            "libx264",
+            "-preset",
+            "placebo",
+            "-tune",
+            "animation",
+            "-crf",
+            "18",
+        ])
+        // The screen holds still for seconds at a time, so key frames can be far apart.
+        .args(["-x264-params", "keyint=500:min-keyint=50"])
+        .args(["-pix_fmt", "yuv444p", "-movflags", "+faststart"])
         .arg(path)
         .stdin(Stdio::piped())
         .spawn()
