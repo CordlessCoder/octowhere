@@ -56,6 +56,11 @@ look is in [`design/`](design/README.md).
 - The PMIC's I2C init fails about one boot in three right after flashing. Retry before
   suspecting a change.
 - `pkill -f` with a pattern that matches its own command line kills the calling shell.
+- Give a worktree its own target directory. Cargo hashes a path crate without its location, so
+  a worktree building into the main checkout's `target/` overwrites its artifacts, and the main
+  checkout then takes them as fresh wherever its sources are older. A later build there compiled
+  against a commit-old `settings.rs`; `cargo clean --release -p octowhere -p octowhere-mesh`
+  cleared it.
 - `tools/flash-until.sh` on `bench/fontdue-pin` flashes and ends the capture on a marker or a
   panic. A normal boot prints `[DISPLAY] OK`.
 - `bench/clock-draw` carries `tools/clock-bench.sh`, which flashes that bench and saves its log,

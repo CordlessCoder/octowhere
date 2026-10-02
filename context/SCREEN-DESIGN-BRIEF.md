@@ -756,7 +756,7 @@ C1's settled states, entry points and a swipe frame were measured in
   separate region sent to the panel costs about as much as 1,000 more pixels.
 - A new screen redraws in full on every change until its own change tracking is written. The
   design should say which elements change and how often, as the specs' change tables do.
-- The flash image is 1,400,240 bytes, 8.94 % of the app partition. Flash is not a constraint.
+- The flash image is 1,400,960 bytes, 8.94 % of the app partition. Flash is not a constraint.
 
 ## Owner decisions that bind later screens
 
