@@ -759,20 +759,22 @@ impl Mesh {
         if let Some(heard) = self.shown.heard.get_mut(usize::from(header.sender)) {
             *heard = Some(done);
         }
-        self.table.heard(
-            header.sender,
-            round_at(named_slot(header.base, header.sender)),
-        );
+        let round = round_at(named_slot(header.base, header.sender));
+        self.table.heard(header.sender, round);
         let now = self
             .clock
             .at(done)
             .map(|(time, _)| (time / 1_000_000) as u32);
         let (mut entries, mut news, mut neighbours, mut moved) = (0, 0, 0, false);
+        let mut carried = [None; IDS as usize];
         for record in plain.records() {
             match record {
                 Record::Positions(positions) => {
                     for entry in positions {
                         entries += 1;
+                        if let Some(stamp) = carried.get_mut(usize::from(entry.id)) {
+                            *stamp = Some(entry.stamp);
+                        }
                         if matches!(self.table.merge(entry, now), Merge::New | Merge::Newer) {
                             news += 1;
                         }
@@ -804,6 +806,8 @@ impl Mesh {
                 Record::Other(..) => {}
             }
         }
+        self.table
+            .covered_by(header.sender, &carried, neighbours, round);
         self.shown.positions(&self.table);
         self.publish();
         info!(

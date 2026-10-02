@@ -144,6 +144,36 @@ impl Table {
             .fold(0, |set, id| set | 1 << id)
     }
 
+    /// Takes what a packet from `sender` heard in `round` carried, after its entries were
+    /// merged: `carried` holds the stamp of each id's entry in it, and `neighbours` the ids it
+    /// reports hearing. Where it reports every neighbour this node has, its listeners already
+    /// heard the entries it carried, so they are no longer news from here. The id that appeared
+    /// is still news: the packet cannot say this node heard it. Returns whether the packet
+    /// reported every neighbour.
+    pub fn covered_by(
+        &mut self,
+        sender: u8,
+        carried: &[Option<u32>; SLOTS],
+        neighbours: u32,
+        round: i64,
+    ) -> bool {
+        let mine = self.neighbours(round) & !(1 << sender | 1 << self.own);
+        if mine & !neighbours != 0 {
+            return false;
+        }
+        for (id, stamp) in carried.iter().enumerate() {
+            if id == usize::from(self.own) {
+                continue;
+            }
+            if let (Some(stamp), Some(entry)) = (stamp, self.entries[id])
+                && entry.stamp == *stamp
+            {
+                self.sent[id] = Some(entry);
+            }
+        }
+        true
+    }
+
     /// Whether an entry is worth sending ahead of the rotation.
     fn is_fresh(&self, entry: &Entry) -> bool {
         match &self.sent[usize::from(entry.id)] {
@@ -344,6 +374,60 @@ mod tests {
             (3, [2, 4, 6]),
             "then the rotation, after the last id sent"
         );
+    }
+
+    #[test]
+    fn a_packet_that_reaches_every_neighbour_cancels_relaying_what_it_carried() {
+        let mut table = Table::new(1);
+        let quiet = 2;
+        let mut carried = [None; SLOTS];
+        table.heard(4, 100);
+        table.heard(7, 100);
+        table.sent(&[]);
+        table.merge(entry(7, 1_000, DUBLIN), None);
+        carried[7] = Some(1_000);
+        assert!(table.wants_to_send(quiet), "7's position is news");
+
+        table.covered_by(4, &carried, 1 << 1, 100);
+        assert!(table.wants_to_send(quiet), "4 does not report hearing 7");
+        table.covered_by(4, &carried, 1 << 7, 100);
+        assert!(
+            !table.wants_to_send(quiet),
+            "4 reached everyone this node hears"
+        );
+
+        table.merge(entry(7, 2_000, NORTH), None);
+        carried[7] = Some(1_000);
+        table.covered_by(4, &carried, 1 << 7, 100);
+        assert!(table.wants_to_send(quiet), "4 carried an older entry");
+        assert!(
+            table.wants_to_send(table_floor(1)),
+            "a floor is never cancelled"
+        );
+    }
+
+    #[test]
+    fn a_packet_from_the_only_neighbour_cancels_echoing_its_own_entry() {
+        let mut table = Table::new(1);
+        let mut carried = [None; SLOTS];
+        table.heard(4, 100);
+        table.sent(&[]);
+        table.merge(entry(4, 1_000, DUBLIN), None);
+        carried[4] = Some(1_000);
+        table.covered_by(4, &carried, 0, 100);
+        assert!(!table.wants_to_send(2));
+    }
+
+    #[test]
+    fn a_new_neighbour_is_news_whatever_its_packet_carried() {
+        let mut table = Table::new(1);
+        table.heard(4, 100);
+        table.covered_by(4, &[None; SLOTS], 0, 100);
+        assert!(table.wants_to_send(2));
+    }
+
+    fn table_floor(id: u8) -> i64 {
+        (0..3).find(|&round| is_floor(round, id)).unwrap()
     }
 
     #[test]

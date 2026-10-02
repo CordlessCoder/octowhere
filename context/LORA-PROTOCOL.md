@@ -121,6 +121,10 @@ said and that packet's sender reports every neighbour this node has (the neighbo
 Without the cancel, all nodes react to the same event at once. Without the neighbour condition, a
 cancel starves a node that only this one reaches. A floor transmission is never cancelled.
 
+As built, the rule works entry by entry. Each entry such a packet carried at the stamp this node
+holds counts as sent, and so does its member record, so the node still sends whatever news is
+left. A node heard for the first time stays news, since the packet cannot say this node heard it.
+
 ### Time sync
 
 The ±250 ms guard is an assumption carried from the first version of this design, not a
