@@ -301,7 +301,8 @@ in for the mesh on the host. Where the build interpreted the hand-off:
   then says so. If that acknowledgement is lost, the adding device has not stored the member
   and shows CHECK MEMBER; the member reaches its table later through member records. The
   joining device shows GROUP STORED / PEER RECEIPT NOT CONFIRMED. A device founding a group
-  stores no group in that case, while the joining device has one.
+  has no group yet in that case. It shows CHECK MEMBER too, and the group appears once it hears
+  the joining device on the mesh, within about 5 minutes.
 - **CANCEL** sends the cancel and stays to show what the mesh reports, normally CANCELLED,
   rather than going straight back to the group: the mesh may already be storing. While it
   stores, the top button is left out, since the mesh can no longer cancel.

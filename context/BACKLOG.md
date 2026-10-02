@@ -88,9 +88,6 @@ until the feature set is complete, because profiling an incomplete firmware pric
     name keyboard's 39 × 53 px keys with a finger is accurate and responsive (owner, 2026-10-02).
   - The joining device cannot tell it was returning, so its RESTORED screen never shows. The
     group it receives would need to say so.
-  - A device founding a group whose last acknowledgement is lost stores no group, while the
-    joining device stores one with the founder in it. The founder's CHECK MEMBER is true, but
-    nothing reconciles the two.
   - Reading a screen back with `touch-inject` takes about 11 s and interrupts the board. The
     link is the ESP32-S3's own USB Serial/JTAG controller, full-speed USB, whose JTAG side
     takes one 4-bit command per clock (the owner's probe-rs fork,

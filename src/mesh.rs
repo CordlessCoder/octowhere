@@ -30,7 +30,7 @@ use octowhere_mesh::{
     clock::{Clock, Taken},
     members::{Group, Member, Merged, Name},
     packet::{Builder, Entry, Hdop, Header, MAX_PACKET, Plain, Quality, Record, Source, Timebase},
-    pair::{Identity, MAX_FRAME, Pairing, Phase, Role},
+    pair::{End, Identity, MAX_FRAME, Pairing, Phase, Role},
     schedule::{
         GUARD_US, ROUND_US, airtime_us, base_of, named_slot, next_any_slot, next_slot, round_at,
     },
@@ -76,6 +76,10 @@ const POLL_US: u64 = 1_000;
 const STORE_TIMEOUT: Duration = Duration::from_secs(10);
 /// The longest a pairing listens before it runs its timers again.
 const PAIR_LISTEN_US: i64 = 250_000;
+/// How long a device that founded a group, without hearing the last acknowledgement, listens
+/// for the joining device under the group's key. That device waits 30 s for done, sweeps for
+/// three rounds and sends by its next floor round, about 5 minutes in all.
+const FOUNDING_WAIT_US: i64 = 10 * 60 * 1_000_000;
 const IRQ_TX_DONE: u8 = 0x08;
 const IRQ_RX_DONE: u8 = 0x40;
 
@@ -389,6 +393,10 @@ pub struct Mesh {
     path: LoraPath,
     me: Identity,
     group: Option<Group>,
+    /// A group this device founded in a pairing whose last acknowledgement it never heard, and
+    /// the local time it stops listening for the joining device. A packet under the group's key
+    /// shows that device stored it.
+    founding: Option<Box<(Group, i64)>>,
     /// The ids whose member records changed and are not yet queued to be stored, as a set.
     unsaved: u32,
     /// The group's key or this node's id changed, so the whole group is to be stored.
@@ -429,6 +437,7 @@ impl Mesh {
             path,
             me: start.me,
             group,
+            founding: None,
             unsaved: 0,
             unsaved_group: false,
             clock: Clock::new(own, now),
@@ -485,6 +494,14 @@ impl Mesh {
                         command
                     }
                 }
+            } else if self.founding.is_some() {
+                match select(self.await_joiner(), COMMANDS.receive()).await {
+                    Either::First(()) => continue,
+                    Either::Second(command) => {
+                        self.idle_receive().await;
+                        command
+                    }
+                }
             } else {
                 let _ = self.lora.set_device_mode(DeviceMode::SLEEP).await;
                 COMMANDS.receive().await
@@ -505,6 +522,7 @@ impl Mesh {
             }
             Command::Join => self.pair(Role::Join).await,
             Command::Leave => {
+                self.founding = None;
                 let left = leave(&mut self.group).await;
                 if left {
                     self.unsaved = 0;
@@ -516,7 +534,11 @@ impl Mesh {
                 self.shown.answer(Answer::Left(left));
             }
             Command::Rename(name) => {
-                let saved = rename(&mut self.me, self.group.as_mut(), name).await;
+                let group = match &mut self.founding {
+                    Some(founding) => Some(&mut founding.0),
+                    None => self.group.as_mut(),
+                };
+                let saved = rename(&mut self.me, group, name).await;
                 info!("[MESH] renamed {} saved={}", name, saved);
                 if saved && let Some(group) = &self.group {
                     self.unsaved |= 1 << group.own();
@@ -690,6 +712,12 @@ impl Mesh {
         let Some((packet, done)) = self.read_packet().await else {
             return false;
         };
+        self.take(&packet, done)
+    }
+
+    /// Takes a packet whose RxDone was seen at local time `done`. Returns whether it moved the
+    /// node to its timebase, or to another id.
+    fn take(&mut self, packet: &RxPacket, done: i64) -> bool {
         let Some(group) = &mut self.group else {
             return false;
         };
@@ -856,6 +884,9 @@ impl Mesh {
     /// Runs a pairing in `role` on the pairing channel until it ends, then returns to the mesh's
     /// channel. A node that joins, or founds a group, starts its timebase afresh.
     async fn pair(&mut self, role: Role) {
+        if self.founding.take().is_some() {
+            info!("[MESH] no longer listening for the device a founding left unconfirmed");
+        }
         self.shown.sessions += 1;
         let session = self.shown.sessions;
         let (Some(nonce), Some(founding)) = (random::<16>(), random::<32>()) else {
@@ -1003,25 +1034,72 @@ impl Mesh {
                 }
             }
         }
-        if let Phase::Done(_) = pairing.phase()
-            && let Some(group) = pairing.group()
-        {
-            let own = group.own();
-            self.group = Some(group.clone());
-            self.unsaved = 0;
-            self.unsaved_group = false;
-            if role == Role::Join || !had_group {
-                self.clock = Clock::new(own, local());
-                self.table = Table::new(own);
-                self.after = i64::MIN;
-                self.timebase_shown = None;
-                self.shown.heard = [None; IDS as usize];
-                self.shown.positions = [None; IDS as usize];
+        match (pairing.phase(), pairing.group()) {
+            (Phase::Done(_), Some(group)) => {
+                self.group = Some(group.clone());
+                self.unsaved = 0;
+                self.unsaved_group = false;
+                if role == Role::Join || !had_group {
+                    self.restart(group.own());
+                }
             }
+            (Phase::Ended(End::Unconfirmed), Some(group)) if !had_group => {
+                info!("[MESH] listening for the joining device under the founded group's key");
+                self.founding = Some(Box::new((group.clone(), local() + FOUNDING_WAIT_US)));
+            }
+            _ => {}
         }
         if !self.tune(FREQUENCY_HZ, SYNC_WORD, POWER_DBM).await {
             warn!("[MESH] tuning back to the mesh's channel failed");
         }
+    }
+
+    /// Starts the timebase, the table and what the screens show of them afresh, at id `own`.
+    fn restart(&mut self, own: u8) {
+        self.clock = Clock::new(own, local());
+        self.table = Table::new(own);
+        self.after = i64::MIN;
+        self.timebase_shown = None;
+        self.shown.heard = [None; IDS as usize];
+        self.shown.positions = [None; IDS as usize];
+    }
+
+    /// Listens throughout for a packet under the group a founding left unconfirmed, until its
+    /// wait ends. One means the joining device stored the group, which this device then takes
+    /// up and stores.
+    async fn await_joiner(&mut self) {
+        let Some(end) = self.founding.as_ref().map(|founding| founding.1) else {
+            return;
+        };
+        if self.lora.rx(None).await.is_err() {
+            warn!("[MESH] receive start failed");
+        }
+        while self.wait_for(IRQ_RX_DONE, end).await {
+            let Some((packet, done)) = self.read_packet().await else {
+                continue;
+            };
+            let Some(founded) = self.founding.as_ref().map(|founding| &founding.0) else {
+                return;
+            };
+            let mut bytes = packet.payload;
+            if seal::open(founded.key(), &mut bytes[..packet.length]).is_err() {
+                info!("[MESH] not ours len={} rssi={}", packet.length, packet.rssi);
+                continue;
+            }
+            let (founded, _) = *self.founding.take().expect("checked above");
+            info!("[MESH] heard the joining device; the founded group is this device's");
+            let own = founded.own();
+            self.group = Some(founded);
+            self.unsaved = 0;
+            self.unsaved_group = true;
+            self.restart(own);
+            self.take(&packet, done);
+            let _ = self.lora.set_device_mode(DeviceMode::STDBY).await;
+            return;
+        }
+        info!("[MESH] the joining device was not heard; this device founded no group");
+        self.founding = None;
+        let _ = self.lora.set_device_mode(DeviceMode::STDBY).await;
     }
 
     /// Waits until local time `deadline` for the radio to raise `flag`, the one `DIO0` is mapped
