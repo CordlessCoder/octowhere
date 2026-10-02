@@ -491,9 +491,16 @@ impl Stage {
 
     /// Takes what the firmware has published of the mesh.
     pub fn set_mesh(&mut self, mesh: MeshView) {
-        self.peripherals.members = mesh.group.as_ref().map(|group| group.count() as u8);
-        self.peripherals.name = mesh.name;
-        *self.mesh = mesh;
+        self.update_mesh(|view| *view = mesh);
+    }
+
+    /// Lets `write` change the mesh's view where the stage keeps it, and returns what it
+    /// returns.
+    pub fn update_mesh<R>(&mut self, write: impl FnOnce(&mut MeshView) -> R) -> R {
+        let result = write(&mut self.mesh);
+        self.peripherals.members = self.mesh.group.as_ref().map(|group| group.count() as u8);
+        self.peripherals.name = self.mesh.name;
+        result
     }
 
     #[must_use]

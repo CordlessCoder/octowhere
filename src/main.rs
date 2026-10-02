@@ -2518,8 +2518,7 @@ async fn frame_loop(
                 Either4::Third(state) => (None, None, Some(state), None, None, None),
             };
             // A change that came with another wake is taken here too.
-            if let Some((view, seen)) = mesh::view_since(mesh_seen) {
-                stage.set_mesh(view);
+            if let Some(seen) = stage.update_mesh(|view| mesh::view_since(mesh_seen, view)) {
                 mesh_seen = seen;
             }
             match touch_read {

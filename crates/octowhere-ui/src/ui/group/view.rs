@@ -36,7 +36,7 @@ pub struct MemberView {
     pub position: Position,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GroupView {
     /// This device's id.
     pub own: u8,
@@ -134,6 +134,19 @@ impl Default for MeshView {
 }
 
 impl MeshView {
+    /// Makes this view a copy of `other` a field at a time, which keeps a whole view's copy off
+    /// the stack.
+    pub fn copy_from(&mut self, other: &Self) {
+        self.radio = other.radio;
+        self.mac = other.mac;
+        self.name = other.name;
+        self.group = other.group;
+        self.sessions = other.sessions;
+        self.pairing.clone_from(&other.pairing);
+        self.answered = other.answered;
+        self.answer = other.answer;
+    }
+
     /// The pairing asked for after `sessions` had started, once the mesh has taken it up.
     #[must_use]
     pub fn session_after(&self, sessions: u32) -> Option<&PairingView> {

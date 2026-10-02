@@ -89,7 +89,7 @@ pub static RTC_TIME: BlockingMutex<CriticalSectionRawMutex, Cell<Option<(i64, In
 /// What the user asks of the mesh.
 pub static COMMANDS: Channel<CriticalSectionRawMutex, Command, 4> = Channel::new();
 /// What the screens show of the mesh, as last published, and a signal that it changed.
-static VIEW: BlockingMutex<CriticalSectionRawMutex, RefCell<Option<MeshView>>> =
+static VIEW: BlockingMutex<CriticalSectionRawMutex, RefCell<Option<Box<MeshView>>>> =
     BlockingMutex::new(RefCell::new(None));
 pub static VIEW_CHANGED: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 /// Counts the views published, so a reader can tell when there is a new one.
@@ -154,25 +154,47 @@ pub fn request(request: Request) -> bool {
     COMMANDS.try_send(request.into()).is_ok()
 }
 
-/// The mesh as last published, if it changed after the view counted `seen`, and its count.
-pub fn view_since(seen: u32) -> Option<(MeshView, u32)> {
+/// Copies the mesh as last published into `into`, if it changed after the view counted `seen`,
+/// and returns its count.
+pub fn view_since(seen: u32, into: &mut MeshView) -> Option<u32> {
     let count = VIEWS.load(Ordering::Acquire);
     if count == seen {
         return None;
     }
-    VIEW.lock(|view| view.borrow().clone())
-        .map(|view| (view, count))
+    VIEW.lock(|view| view.borrow().as_deref().map(|view| into.copy_from(view)))?;
+    Some(count)
 }
 
-fn publish(view: MeshView) {
+/// A view to fill, on the heap. A view is a couple of kilobytes, and the radio's task runs on
+/// whatever stack the frame loop left, so none is built or copied on the stack.
+#[inline(never)]
+fn blank_view() -> Box<MeshView> {
+    Box::default()
+}
+
+/// Gives `group` a group with no members, outside [`Shown::fill`], so its frame does not hold
+/// one on every call.
+#[cold]
+#[inline(never)]
+fn blank_group(group: &mut Option<GroupView>) -> &mut GroupView {
+    group.insert(GroupView {
+        own: 0,
+        members: [None; IDS as usize],
+    })
+}
+
+/// Publishes `view` when it differs from what the screens were last shown. It trades places
+/// with the view it replaces, so it holds an older one after.
+fn publish(view: &mut Box<MeshView>) {
     let changed = VIEW.lock(|current| {
         let mut current = current.borrow_mut();
-        let changed = current.as_ref() != Some(&view);
-        if changed {
-            *current = Some(view);
-            VIEWS.fetch_add(1, Ordering::Release);
+        match &mut *current {
+            Some(current) if **current == **view => return false,
+            Some(current) => core::mem::swap(current, view),
+            None => *current = Some(core::mem::replace(view, blank_view())),
         }
-        changed
+        VIEWS.fetch_add(1, Ordering::Release);
+        true
     });
     if changed {
         VIEW_CHANGED.signal(());
@@ -182,7 +204,9 @@ fn publish(view: MeshView) {
 /// Publishes the stored identity and group before the radio is known, for the screens to show
 /// from the start.
 pub fn publish_start(start: &Start) {
-    publish(Shown::new(false).view(&start.me, start.group.as_deref(), local()));
+    let mut view = blank_view();
+    Shown::new(false).fill(&mut view, &start.me, start.group.as_deref(), local());
+    publish(&mut view);
 }
 
 /// What the screens are shown beyond the group itself.
@@ -226,47 +250,46 @@ impl Shown {
         }
     }
 
-    /// The view of `me` in `group` at local time `now`. Times in UTC become local times on the
-    /// stage's clock, which is the same as this one.
-    fn view(&self, me: &Identity, group: Option<&Group>, now: i64) -> MeshView {
+    /// Makes `view` the view of `me` in `group` at local time `now`. Times in UTC become local
+    /// times on the stage's clock, which is the same as this one.
+    fn fill(&self, view: &mut MeshView, me: &Identity, group: Option<&Group>, now: i64) {
+        view.radio = self.radio;
+        view.mac = me.mac;
+        view.name = me.name;
+        view.sessions = self.sessions;
+        view.pairing.clone_from(&self.pairing);
+        view.answered = self.answered;
+        view.answer = self.answer;
+        let Some(group) = group else {
+            view.group = None;
+            return;
+        };
         let utc = utc_now(now);
         let local_at = |stamp: u32| utc.map(|utc| now - (utc - i64::from(stamp)) * 1_000_000);
-        let group = group.map(|group| {
-            let mut members = [None; IDS as usize];
-            for (id, member) in group.members() {
-                let index = usize::from(id);
-                members[index] = Some(MemberView {
-                    name: member.name,
-                    mac: member.mac,
-                    // A device that knew no UTC dated the record 0.
-                    joined: (member.joined != 0)
-                        .then(|| local_at(member.joined))
-                        .flatten(),
-                    heard: if id == group.own() {
-                        None
-                    } else {
-                        self.heard[index]
-                    },
-                    position: match self.positions[index] {
-                        None => Position::Never,
-                        Some(stamp) => local_at(stamp).map_or(Position::Unknown, Position::At),
-                    },
-                });
-            }
-            GroupView {
-                own: group.own(),
-                members,
-            }
-        });
-        MeshView {
-            radio: self.radio,
-            mac: me.mac,
-            name: me.name,
-            group,
-            sessions: self.sessions,
-            pairing: self.pairing.clone(),
-            answered: self.answered,
-            answer: self.answer,
+        let shown = match &mut view.group {
+            Some(shown) => shown,
+            None => blank_group(&mut view.group),
+        };
+        shown.own = group.own();
+        for (index, slot) in shown.members.iter_mut().enumerate() {
+            let id = index as u8;
+            *slot = group.member(id).map(|member| MemberView {
+                name: member.name,
+                mac: member.mac,
+                // A device that knew no UTC dated the record 0.
+                joined: (member.joined != 0)
+                    .then(|| local_at(member.joined))
+                    .flatten(),
+                heard: if id == group.own() {
+                    None
+                } else {
+                    self.heard[index]
+                },
+                position: match self.positions[index] {
+                    None => Position::Never,
+                    Some(stamp) => local_at(stamp).map_or(Position::Unknown, Position::At),
+                },
+            });
         }
     }
 }
@@ -377,6 +400,8 @@ pub struct Mesh {
     timebase_shown: Option<Timebase>,
     /// What the screens are shown.
     shown: Shown,
+    /// The view [`publish`] fills.
+    view: Box<MeshView>,
 }
 
 impl Mesh {
@@ -411,6 +436,7 @@ impl Mesh {
             after: i64::MIN,
             timebase_shown: None,
             shown: Shown::new(true),
+            view: blank_view(),
         };
         let tuned = mesh.tune(FREQUENCY_HZ, SYNC_WORD, POWER_DBM).await;
         info!("[MESH] tuned={}", tuned);
@@ -418,8 +444,11 @@ impl Mesh {
         mesh
     }
 
-    fn publish(&self) {
-        publish(self.shown.view(&self.me, self.group.as_ref(), local()));
+    #[inline(never)]
+    fn publish(&mut self) {
+        self.shown
+            .fill(&mut self.view, &self.me, self.group.as_ref(), local());
+        publish(&mut self.view);
     }
 
     async fn tune(&mut self, frequency: u32, sync_word: u8, power: u8) -> bool {
@@ -891,7 +920,8 @@ impl Mesh {
                     Phase::Done(_) => pairing.group(),
                     _ => self.group.as_ref(),
                 };
-                publish(self.shown.view(&self.me, group, now));
+                self.shown.fill(&mut self.view, &self.me, group, now);
+                publish(&mut self.view);
             }
             if pairing.is_over(now) {
                 break;
@@ -1084,8 +1114,10 @@ pub async fn offline(start: Start) {
     let mut me = start.me;
     let mut group = start.group.map(|group| *group);
     let mut shown = Shown::new(false);
+    let mut view = blank_view();
     loop {
-        publish(shown.view(&me, group.as_ref(), local()));
+        shown.fill(&mut view, &me, group.as_ref(), local());
+        publish(&mut view);
         match COMMANDS.receive().await {
             Command::Leave => {
                 let left = leave(&mut group).await;
