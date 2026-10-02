@@ -102,7 +102,7 @@ initialization or peripheral mappings.
   a record. Its partition is historical.
 - [`context/LORA-PROTOCOL.md`](context/LORA-PROTOCOL.md) is the agreed design for the location
   mesh of up to 32 nodes: band and radio settings, gossip digest, GPS-anchored TDMA, packet
-  layout, messages, crypto and pairing. Nothing in it is implemented yet.
+  layout, messages, crypto and pairing. Steps 1 and 2 of its build order are implemented.
 - [`context/palette-reference.md`](context/palette-reference.md) records the colour values from the
   reference board and the role each one plays in `chrome.rs`.
 
