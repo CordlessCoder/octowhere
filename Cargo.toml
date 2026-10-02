@@ -59,6 +59,9 @@ lora-link-rx = []
 rtc-inject = []
 # Lets a debugger give the mesh pairing commands; see `tools/pair-inject.py`.
 pair-inject = []
+# Lets a debugger touch and cover the screen, press the power key and read the screen back; see
+# `tools/touch-inject.py`.
+touch-inject = []
 
 [patch.crates-io]
 tca9554 = { git = "https://github.com/CordlessCoder/tca9554-rs", rev = "dd76e69" }

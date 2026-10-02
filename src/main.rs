@@ -93,6 +93,8 @@ use esp_alloc as _;
 use esp_backtrace as _;
 
 mod mesh;
+#[cfg(feature = "touch-inject")]
+mod touch_inject;
 esp_bootloader_esp_idf::esp_app_desc!();
 
 struct SecondCore<A: Allocator + 'static = alloc::alloc::Global> {
@@ -2448,6 +2450,8 @@ async fn frame_loop(
     let mut power_off_after: Option<u8> = None;
     // The count of the mesh's views the stage has.
     let mut mesh_seen = 0;
+    #[cfg(feature = "touch-inject")]
+    let mut injector = touch_inject::Injector::default();
     loop {
         let start = Instant::now();
         {
@@ -2479,6 +2483,10 @@ async fn frame_loop(
             if let Some(due) = stage.next_change() {
                 let until = Duration::from_micros(due.saturating_sub(Instant::now().as_micros()));
                 wait_timeout = wait_timeout.min(until);
+            }
+            #[cfg(feature = "touch-inject")]
+            if injector.is_stroking() {
+                wait_timeout = wait_timeout.min(TOUCH_REPOLL);
             }
             let (touch_read, sensor_state, motion_state, boot, key, boot_key) = match select4(
                 take_touch_read(),
@@ -2541,6 +2549,15 @@ async fn frame_loop(
                 Some(Ok(TouchData::CoverGesture)) => Some(Touch::Cover),
                 _ => None,
             };
+            let key = key.map(|key| match key {
+                PowerKey::Short => StageKey::Short,
+                PowerKey::Long => StageKey::Long,
+            });
+            #[cfg(feature = "touch-inject")]
+            let (touch, key) = {
+                let (injected, pressed) = injector.next();
+                (touch.or(injected), key.or(pressed))
+            };
             let update = stage.step(StageInput {
                 now: Instant::now().as_micros(),
                 touch,
@@ -2560,10 +2577,7 @@ async fn frame_loop(
                     }
                 }),
                 boot,
-                key: key.map(|key| match key {
-                    PowerKey::Short => StageKey::Short,
-                    PowerKey::Long => StageKey::Long,
-                }),
+                key,
                 boot_key,
             });
             let wake_gestures = stage.watches_for_wake();
@@ -2625,6 +2639,8 @@ async fn frame_loop(
                 repaint.make_full();
                 *drawn = true;
             }
+            #[cfg(feature = "touch-inject")]
+            touch_inject::drawing(fb.buffer());
             if repaint.is_full() {
                 stage.draw(fb);
             } else if !repaint.is_empty() {
