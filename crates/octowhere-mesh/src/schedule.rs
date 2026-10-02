@@ -55,6 +55,20 @@ pub fn next_any_slot(t: i64) -> (u8, i64) {
     }
 }
 
+/// The id and start of the first slot starting at or after `t` of an id in the set `ids`, or
+/// `None` for an empty set.
+#[must_use]
+pub fn next_slot_in(t: i64, ids: u32) -> Option<(u8, i64)> {
+    let mut slot = next_any_slot(t);
+    for _ in 0..IDS {
+        if ids & 1 << slot.0 != 0 {
+            return Some(slot);
+        }
+        slot = next_any_slot(slot.1 + 1);
+    }
+    None
+}
+
 /// A packet's base timestamp: the whole second its slot starts in.
 #[must_use]
 pub fn base_of(start: i64) -> u32 {
@@ -101,6 +115,23 @@ mod tests {
             next_any_slot(slot_start(100, 31) + 1),
             (0, slot_start(101, 0))
         );
+    }
+
+    #[test]
+    fn the_next_slot_in_a_set_skips_the_ids_outside_it() {
+        let start = slot_start(100, 5);
+        let ids = 1 << 3 | 1 << 9;
+        assert_eq!(next_slot_in(start, ids), Some((9, slot_start(100, 9))));
+        assert_eq!(
+            next_slot_in(slot_start(100, 9) + 1, ids),
+            Some((3, slot_start(101, 3)))
+        );
+        assert_eq!(next_slot_in(start, 1 << 5), Some((5, start)));
+        assert_eq!(
+            next_slot_in(start + 1, 1 << 5),
+            Some((5, slot_start(101, 5)))
+        );
+        assert_eq!(next_slot_in(start, 0), None);
     }
 
     #[test]

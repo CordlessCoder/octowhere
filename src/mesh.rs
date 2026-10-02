@@ -32,7 +32,7 @@ use octowhere_mesh::{
     packet::{Builder, Entry, Hdop, Header, MAX_PACKET, Plain, Quality, Record, Source, Timebase},
     pair::{End, Identity, MAX_FRAME, Pairing, Phase, Role},
     schedule::{
-        GUARD_US, ROUND_US, airtime_us, base_of, named_slot, next_any_slot, next_slot, round_at,
+        GUARD_US, ROUND_US, airtime_us, base_of, named_slot, next_slot, next_slot_in, round_at,
     },
     seal::{self, Key, SIV_LEN},
     table::{Merge, Table},
@@ -585,7 +585,7 @@ impl Mesh {
         self.clock.tick(now, rtc_now(now));
         let timebase = self.clock.at(now).map(|(_, timebase)| timebase);
         if timebase != self.timebase_shown {
-            log_timebase(timebase, self.clock.is_sweeping());
+            log_timebase(timebase, self.clock.is_sweeping(now));
             self.timebase_shown = timebase;
         }
         let Some((time, _)) = self.clock.at(now) else {
@@ -601,7 +601,12 @@ impl Mesh {
         }
         self.after = start + 1;
         let sending = self.table.wants_to_send(round);
-        info!("[MESH] round={} sending={}", round, sending);
+        info!(
+            "[MESH] round={} sending={} sweeping={}",
+            round,
+            sending,
+            self.clock.is_sweeping(local())
+        );
         if sending {
             self.send(round, start, timebase, send_at).await;
         }
@@ -636,25 +641,27 @@ impl Mesh {
     }
 
     /// Listens until local time `end`: throughout while sweeping or without a timebase, and
-    /// otherwise in a window round each other id's slot. Returns whether a packet moved the node
-    /// to another timebase or another id, which moves every slot.
+    /// otherwise in a window round the slot of each other member and of each id heard lately.
+    /// Returns whether a packet moved the node to another timebase or another id, which moves
+    /// every slot.
     async fn listen(&mut self, end: i64) -> bool {
         loop {
             let now = local();
             if now >= end {
                 return false;
             }
-            let own = self.group.as_ref().map_or(0, Group::own);
             let (open, close) = match self.clock.at(now) {
-                Some((time, _)) if !self.clock.is_sweeping() => {
+                Some((time, _)) if !self.clock.is_sweeping(now) => {
                     let offset = now - time;
-                    let mut slot = next_any_slot(time - GUARD_US - airtime_us(MAX_PACKET) + 1);
-                    if slot.0 == own {
-                        slot = next_any_slot(slot.1 + 1);
+                    let from = time - GUARD_US - airtime_us(MAX_PACKET) + 1;
+                    match next_slot_in(from, self.listened(round_at(from))) {
+                        Some((_, start)) => {
+                            let open = start - GUARD_US + offset;
+                            let close = start + GUARD_US + airtime_us(MAX_PACKET) + offset;
+                            (open.max(now), close.min(end))
+                        }
+                        None => (end, end),
                     }
-                    let open = slot.1 - GUARD_US + offset;
-                    let close = slot.1 + GUARD_US + airtime_us(MAX_PACKET) + offset;
-                    (open.max(now), close.min(end))
                 }
                 _ => (now, end),
             };
@@ -678,6 +685,16 @@ impl Mesh {
             }
             let _ = self.lora.set_device_mode(DeviceMode::STDBY).await;
         }
+    }
+
+    /// The ids whose slots the node listens to outside a sweep in `round`: the group's other
+    /// members, and any other id heard in the rounds a neighbour counts for. A member the group
+    /// does not know of yet is found by a sweep.
+    fn listened(&self, round: i64) -> u32 {
+        let Some(group) = &self.group else {
+            return 0;
+        };
+        (group.ids() | self.table.neighbours(round)) & !(1 << group.own())
     }
 
     /// Reads the packet `DIO0` reported, and when its RxDone was seen.

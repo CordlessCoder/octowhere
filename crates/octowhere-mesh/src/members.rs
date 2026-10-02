@@ -207,6 +207,12 @@ impl Group {
         (0..IDS).filter_map(|id| Some((id, self.member(id)?)))
     }
 
+    /// The ids members hold, as a set.
+    #[must_use]
+    pub fn ids(&self) -> u32 {
+        self.members().fold(0, |set, (id, _)| set | 1 << id)
+    }
+
     #[must_use]
     pub fn count(&self) -> usize {
         self.members.iter().flatten().count()

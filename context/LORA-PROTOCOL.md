@@ -196,10 +196,14 @@ GPS ranks above any node's clock, and between node clocks the lower root id rank
   the nodes timing from it within about 0.15 ms, which is their crystals' drift since they last
   heard it.
 - **Sweeps.** A node with no timebase listens continuously for three rounds, 135 s, which spans
-  every node's floor round. A node not timing from its own fix sweeps again every 10 minutes, to
-  find a timebase ranked above its own, and whenever it has heard no packet with fewer hops in its
-  timebase for 7 rounds. If that sweep hears none either, the node becomes its own root, keeping
-  its clock. It keeps transmitting in its own slots during a sweep.
+  every node's floor round. So does a node that has heard no packet with fewer hops in its
+  timebase for 7 rounds, and if that sweep hears none either, the node becomes its own root,
+  keeping its clock. Every node also sweeps for one round every 13 rounds, about 10 minutes
+  (owner, 2026-10-02). A node not timing from its own fix looks for a timebase ranked above its
+  own, and every node looks for members it does not know of (see "Listening"). 13 rounds is not
+  a whole number of floors, so successive sweeps fall on each of the floor's three rounds in
+  turn. A fix cuts a three-round sweep short to one round, since only the search for members is
+  left of it. A node keeps transmitting in its own slots during a sweep.
 - **Starting one.** A node that hears nobody in its first sweep starts its own timebase from its
   RTC's time, as its root. Groups started this way merge as their sweeps find each other, to the
   lowest root. A node that gets a fix moves to GPS time, and the nodes timing from it find it again
@@ -213,13 +217,17 @@ window below its base timestamp.
 
 ### Listening
 
-A node listens to the slot of every neighbour, every round. A neighbour is a node heard within the
-last 7 rounds (315 s): long enough to span two floor transmissions, so one lost packet does not drop
-it.
+A node listens, every round, to the slot of every member its group holds and of every neighbour
+(owner, 2026-10-02). A neighbour is a node heard within the last 7 rounds (315 s): long enough to
+span two floor transmissions, so one lost packet does not drop it. A member out of range costs
+its window every round, and is heard again at its first transmission back in range.
 
-To find nodes that came into range, a node also listens to each other id's slot in that id's floor
-rounds. A node coming into range is heard within 135 s. It costs about a third of the non-neighbour
-slots each round: with 8 neighbours, 8 + 8 = 16 slots.
+A member added elsewhere, which the node does not know of yet, is found by the one-round sweep
+every 13 rounds (see "Keeping time without a fix"), the sweep that also finds timebases. Once
+heard it is a neighbour, and its member record follows in its packets. New members are rare, so
+finding one may take a while: up to about 30 minutes for one that sends only in its floor rounds,
+and up to one sweep's wait, about 10 minutes, for one that sends every round. The sweep keeps the
+receiver on 7.7% of the time, about 18 mAh a day.
 
 Listening costs the guard and the packet per slot, at 9.7 mA (125 kHz, LNA boost off, its reset
 state):
