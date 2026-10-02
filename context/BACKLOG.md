@@ -77,30 +77,28 @@ until the feature set is complete, because profiling an incomplete firmware pric
   line as proper settings, reading the current scan line (45h), partial and scroll areas, idle
   mode, deep standby, and high-brightness and contrast controls.
 - Build the protocol in [`LORA-PROTOCOL.md`](LORA-PROTOCOL.md), in its "Build order". Steps 1
-  and 2 are done, and step 3's radio side: pairing, the member table and its storage, paired
-  between the two boards (`docs/logs/lora/pairing-2026-10-02/`). Step 3's screens are next.
-- Build step 3's screens from the pairing hand-off,
-  `design/handoffs/octowhere-pairing-handoff-2026-10-02/` (local, not in git; `design/DECISIONS.md`
-  entry 27). Its `IMPLEMENTATION-HANDOFF.md` gives the order, starting with the local group and
-  name data and the page paths, and `specs/STATE-MAP.md` maps every state to its render under
-  `renders/`. What the backend has and what it lacks:
-  - Commands go in through `mesh::COMMANDS` (add, join, choose, accept, decline, mismatch,
-    cancel, leave, rename). Join is refused in a group, so the screens' leave-first flow sends
-    leave, waits for it, then join. A cover and the power key send cancel.
-  - Nothing comes out yet. The screens need a published snapshot: the pairing's role, `Phase`,
-    deadline, candidates' MACs, the peer's MAC, the code, whether the peer has confirmed, and
-    parts done of total; and the group's members with id, name, MAC and join time, this
-    device's id, name and MAC, whether the radio answered at boot, and each member's last direct
-    packet (`Table::heard` keeps rounds) and position age. The hand-off's runtime data contract
-    lists the rest.
-  - `octowhere-ui` has no board dependency. `octowhere-mesh` has none either, so the UI can take
-    its types (`Phase`, `End`, `Done`, `Name`) directly.
-  - The outcomes map onto the hand-off's states: `End::Unconfirmed` is ADD's confirmation-lost,
-    `Done::Joined { confirmed: false }` JOIN's; `End::Full` is ADD blocked before discovery.
-    Code derivation takes 22 ms, so PREPARING never needs to show.
-  - The keyboard's rules are the UI's: reject an all-space name and trim trailing spaces before
-    sending rename.
-  - The screen timeout holds during a pairing (hand-off default).
+  to 3 are done: pairing, the member table, its storage and the screens, paired between the two
+  boards by the mesh's commands and through the screens (`docs/logs/lora/pairing-2026-10-02/`,
+  `docs/logs/lora/pairing-screens-2026-10-02/`). Step 4 is next.
+- Finish what step 3's screens leave open (`SCREEN-DESIGN-BRIEF.md`, "Group and pairing as
+  built"):
+  - A person's finger on the name keyboard's 39 × 53 px keys, and every group screen's
+    legibility on the panel. The screens were driven on the boards only by `touch-inject`.
+  - The joining device cannot tell it was returning, so its RESTORED screen never shows. The
+    group it receives would need to say so.
+  - A device founding a group whose last acknowledgement is lost stores no group, while the
+    joining device stores one with the founder in it. The founder's CHECK MEMBER is true, but
+    nothing reconciles the two.
+  - Reading a screen back with `touch-inject` takes about 11 s and interrupts the board. The
+    USB JTAG reads PSRAM at about 40 KB/s on a running core (64 KB took 1.7 s). Halting the
+    core for the whole read (owner's suggestion) was not measured: `probe-rs debug` needs a
+    terminal. If the link is the limit, the lever is sending less: run-length coded at four
+    bytes a run, four of the boards' frames came to 32 to 64 KB, about 1 to 1.6 s at that
+    rate. An RTT channel (owner's
+    suggestion) could carry that frame up, and carry every injected input down in place of
+    the per-feature statics of `rtc-inject`, `pair-inject` and `touch-inject`. RTT goes over
+    the same JTAG memory reads, so it does not speed a read by itself. Whether probe-rs runs
+    RTT on this chip is not checked.
 
 - Make the partial flush cheaper. With the compass redrawing only what changed, a one-degree turn
   flushes about 28,000 pixels in about 42 regions and takes about 10 ms, against 14.8 ms for the

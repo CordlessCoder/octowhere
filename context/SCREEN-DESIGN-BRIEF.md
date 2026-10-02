@@ -33,6 +33,9 @@ what data and settings exist. Read it with:
 - [`design/specs/DISPLAY-AND-MOTION-SPEC.md`](design/specs/DISPLAY-AND-MOTION-SPEC.md):
   round 3, the compass's changes of state, the start-up, screen timeout with the always-on
   face, pixel shift and two panel cells.
+- [`design/handoffs/octowhere-pairing-handoff-2026-10-02/`](design/handoffs/octowhere-pairing-handoff-2026-10-02/IMPLEMENTATION-HANDOFF.md):
+  the group, name and pairing screens, built. "Group and pairing as built" records where the
+  build interpreted it.
 
 Everything those specs describe is implemented and has been approved on the panel. The
 2026-09-26 hand-off changes how they look; their behaviour stands where the
@@ -46,7 +49,8 @@ later decisions are in this brief's "as built" sections.
 The last round was pairing and the group, the screens for step 3 of the location mesh. Its brief
 is `design/handoffs/PAIRING-ROUND-BRIEF-2026-10-02.md`, and the owner approved its hand-off,
 `design/handoffs/octowhere-pairing-handoff-2026-10-02/` (`design/DECISIONS.md` entry 27). The
-radio side is built; the screens are not.
+radio side and the screens are built, and "Group and pairing as built" says where the build
+interpreted the hand-off.
 
 Round 3 answered the owner's last three questions: smoother changes between the compass's
 states, pixel shift against burn-in, and a screen timeout with dimming. Its spec is built,
@@ -126,11 +130,12 @@ the panel. Touch targets are no smaller than about 10 mm.
   panel's COMPASS cell.
 - **Settings panel:** S1's eight indexed rows on two pages, four rows per page. A horizontal
   drag switches the whole page. Page 1 is ZONE, BRIGHTNESS, TIMEOUT, ALWAYS ON; page 2 is
-  COMPASS, GNSS, BATTERY, DEVICE. ZONE opens the picker, BRIGHTNESS the editor and TIMEOUT the
+  COMPASS, GROUP, NAME, DEVICE. ZONE opens the picker, BRIGHTNESS the editor and TIMEOUT the
   timeout screen. ALWAYS ON opens a screen on the timeout screen's stepper, with OFF, DIM and
   each level from 5 % to 50 %, a choice every 20 px of drag counted from where the drag starts;
-  the cell reads `OFF`, or `ON` with `DIM` or the level. COMPASS restarts calibration and closes to the compass. GNSS, BATTERY
-  and DEVICE open the device page, which ends with the attribution, `CLEAR SETTINGS` and
+  the cell reads `OFF`, or `ON` with `DIM` or the level. COMPASS restarts calibration and closes to the compass. GROUP opens
+  the group screen and NAME the keyboard ("Group and pairing as built").
+  DEVICE opens the device page, which ends with the attribution, `CLEAR SETTINGS` and
   `REPLAY START-UP`, which opens a chooser: the identity and logo card again, or a marked
   demonstration of one part failing. The inner screens use D3's violet active fields and
   orange failure demonstration; CLEAR keeps its orange two-stage drag.
@@ -268,6 +273,69 @@ its orange drag. The routes, saves, cancel and cover behavior are unchanged. Hos
 settings scene from `ui-sim`. On-target draw times are in
 `docs/logs/display/settings-draw-2026-09-26.md`. Legibility and touch have not yet been checked
 on the physical panel.
+
+## Group and pairing as built
+
+The screens are `crates/octowhere-ui/src/ui/group/`. GROUP and NAME replace GNSS and BATTERY
+on the panel's second page: GROUP shows `NN MEMBERS` in white or `NO GROUP` in gray, and NAME
+the name in violet with the NAME glyph. The rows keep the panel's own geometry, whose middle
+rows are wider than the hand-off's concept of the page. Each group screen builds a list of what
+it draws each step, and a step damages only the items that differ, so a countdown repaints its
+digits and a scroll its rows. The scatter is the panel's. The firmware publishes what the
+screens show (`group::view`): this device's name and address, the stored group's members, when
+each was last heard directly and when its position was observed, the radio's state at boot,
+and the pairing under way. The screens ask the mesh through `Request`, and `group::sim` stands
+in for the mesh on the host. Where the build interpreted the hand-off:
+
+- **No names before the code.** Announcements carry only keys and addresses (owner), so a
+  device found shows its 12-digit address and NAME NOT SENT YET, and the code screens name the
+  other device by its address. The adding device learns the joining device's name with its
+  confirmation, and the joining device learns the adding device's with the group.
+- **Phases.** Exchanging keys over the air takes up to 30 s and shows PREPARING. The adding
+  device stores the member when the last part is acknowledged, so its phase after the transfer
+  is STORING / WRITING MEMBER, where the render has WAITING / FINAL REPLY PENDING. The joining
+  device shows STORING / WRITING MEMBERSHIP, then WAITING / FINAL REPLY PENDING until the last
+  word comes.
+- **Commit order**, which the hand-off asked for. The joining device stores the group, then
+  acknowledges the last part; the adding device stores the member on that acknowledgement,
+  then says so. If that acknowledgement is lost, the adding device has not stored the member
+  and shows CHECK MEMBER; the member reaches its table later through member records. The
+  joining device shows GROUP STORED / PEER RECEIPT NOT CONFIRMED. A device founding a group
+  stores no group in that case, while the joining device has one.
+- **CANCEL** sends the cancel and stays to show what the mesh reports, normally CANCELLED,
+  rather than going straight back to the group: the mesh may already be storing. While it
+  stores, the top button is left out, since the mesh can no longer cancel.
+- **Not shown.** The joining device cannot tell that it was returning, so the joining side
+  never shows RESTORED. It shows the GROUP OF TWO form of JOINED whenever the group it joined
+  has two members. JOIN never shows GROUP FULL: the protocol has no capacity rejection for the
+  joining device.
+- **Outcomes without a render.** A failed key check (KEY CHECK FAILED) and an unusable group
+  (TRANSFER FAILED) are red. Contact lost before the transfer says KEY EXCHANGE DID NOT FINISH.
+  The other device's reported mismatch shows PEER DECLINED, as the paired render has it; its
+  timeout shows TIME EXPIRED and its failed store SAVE FAILED. The mesh's refusals show IN A
+  GROUP and UNAVAILABLE (no random source).
+- **NO RADIO** shows when START is tapped without a radio. Leaving first checks the radio
+  before it erases anything.
+- **Keyboard.** SAVE returns to where the keyboard opened once the write lands, and an
+  unchanged name returns without a write; the fixtures' NAME SAVED and ORIGINAL KEPT lines are
+  not shown. While saving the line under the keys says SAVING, a blank name A NAME NEEDS A
+  CHARACTER and a seventeenth character 16/16 / NAME IS FULL. An empty draft shows the caret at
+  the centre. The middle letter row's half-pixel left edges are rounded up, to 58 + 39 n.
+- **Ages.** `08S` under a minute, `05M 20S` under ten, `40M` under an hour, `02H 15M` under a
+  day and `03D` after. DIRECT is blue while the member was heard within seven rounds (315 s).
+  A member added while its adding device had no UTC shows JOINED TIME UNKNOWN.
+- **Members.** The list settles on whole rows after a drag. Its footer counts rows from 1,
+  this device included.
+- **Names in explanations** (MY NAME, GROUP CREATED) are in Fraktion Sans Light, as the
+  renders have them; Sans Light now carries all printable ASCII so that case shows.
+- **Timeout.** A pairing holds the screen awake from START to its end. A cover and either
+  power key press cancel it first.
+
+Host stills of every state are in the `render` example, named after the hand-off's renders
+where they match, and the atlas's GROUP + NAME and PAIRING sections. The boards' own
+framebuffers through a pairing, a rename and a cover are in
+`docs/logs/lora/pairing-screens-2026-10-02/`. A finger on the 39 px keys and legibility on the
+panel have not been checked by a person.
 
 ## The compass's states and changes, as built
 
@@ -604,12 +672,17 @@ plumbing it is firmware work. There are three grades.
    - GNSS: fix, satellites in use and in view, and the last fix's position.
    - The display brightness, and the firmware version (`0.1.0`, the crate's version string).
    - Touch contacts and the cover report.
+   - From the mesh: this device's name and hardware address, and whether the radio answered
+     at boot; the stored group's members with their ids, names, addresses and join times, when
+     each was last heard directly and when its newest position was observed; how the last
+     leave or rename went; and the pairing under way, with its role, phase, deadline, the
+     devices found, the other device's address and its name once sent, the code, and the
+     group's size and this device's id once the pairing holds them.
 2. **Known to the firmware, not passed to the screens:** GNSS time to the millisecond, fix
    quality, and when the clock was last set from GNSS. Also the compass calibration's internals.
-   From the mesh: this device's id, the members it has heard and when, their positions and
-   how old each is, and whether the radio came up at boot.
+   From the mesh: the members' positions themselves, the timebase, and the packets' signal.
 3. **Does not exist:** raise to wake, or any wake but a double tap or the power key (the
-   IMU's wake-on-motion and the BOOT key are unused); a 12-hour clock (ruled out by the clock spec); units, languages, sounds or vibration; pairing, groups, member names,
+   IMU's wake-on-motion and the BOOT key are unused); a 12-hour clock (ruled out by the clock spec); units, languages, sounds or vibration; removing a member,
    Wi-Fi or Bluetooth; alarms, timers, step counting and notifications.
 
 ## Settings
@@ -623,6 +696,8 @@ plumbing it is firmware work. There are three grades.
 | Compass calibration | no. It is learned at run time and restarted from the COMPASS cell | COMPASS |
 | Screen timeout | yes | TIMEOUT, then the timeout screen |
 | Always-on face | yes | ALWAYS ON |
+| This device's name | yes, kept by CLEAR SETTINGS | NAME, then the keyboard |
+| The group: its key, this device's id and the members | yes, kept by CLEAR SETTINGS | GROUP |
 
 - Settings live in an ekv database in flash. Clearing erases all six stored keys. The device
   returns to its defaults: automatic zone, brightness 120, a 1 min timeout, and ALWAYS ON off.

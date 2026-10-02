@@ -53,6 +53,11 @@ look is in [`design/`](design/README.md).
   affected.
 - Opening the serial port resets the chip, even with DTR and RTS held low. To inspect a hang,
   halt it with `probe-rs` over the USB JTAG first (`probe-rs list` shows "ESP JTAG").
+- Driving the screens with `touch-inject`: a resting screen takes no contacts, so wake it with
+  `short` first, and set TIMEOUT to NEVER for a long session. The panel opens on the page it
+  was last left on, so check the page before tapping a row. A `shot` takes about 11 s and
+  interrupts the board: during one, the other board dropped it from its devices found. Keep
+  shots out of a pairing's search, and take at most a couple in the code's 60 s.
 - The PMIC's I2C init fails about one boot in three right after flashing. Retry before
   suspecting a change.
 - `pkill -f` with a pattern that matches its own command line kills the calling shell.

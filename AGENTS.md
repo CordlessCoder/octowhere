@@ -32,7 +32,10 @@ initialization or peripheral mappings.
   open the firmware, `scatter`, the identity's halftone scatter, kept apart for other screens
   to use, `rest`, the screen timeout, the dim and the fades between levels, `shift`, the pixel
   shift's positions against burn-in and the column split the flush shares, `always_on`, the
-  face the screen rests on, `power_off`, the power key's confirmation, `stage`, which holds the screen state and turns touch and readings into redraws and settings to store, and `script`, which steps a stage on a simulated clock for
+  face the screen rests on, `power_off`, the power key's confirmation, `group`, the group,
+  name and pairing screens, drawn from a list of what each shows (`layout`), with the mesh's
+  published state and the requests they make of it in `view`, and a simulated mesh for the
+  host in `sim`, `stage`, which holds the screen state and turns touch and readings into redraws and settings to store, and `script`, which steps a stage on a simulated clock for
   tests and scenes. `src/chrome.rs` is the font and draw-target layer, and `src/framebuffer.rs`
   holds the pixels. The firmware re-exports
   its `chrome`, `framebuffer`, `motion` and `ui` modules. The UI keeps re-exporting the motion
@@ -108,8 +111,7 @@ initialization or peripheral mappings.
   a record. Its partition is historical.
 - [`context/LORA-PROTOCOL.md`](context/LORA-PROTOCOL.md) is the agreed design for the location
   mesh of up to 32 nodes: band and radio settings, gossip digest, GPS-anchored TDMA, packet
-  layout, messages, crypto and pairing. Steps 1 and 2 of its build order are implemented, and
-  step 3 but for its screens.
+  layout, messages, crypto and pairing. Steps 1 to 3 of its build order are implemented.
 - [`context/palette-reference.md`](context/palette-reference.md) records the colour values from the
   reference board and the role each one plays in `chrome.rs`.
 
@@ -208,7 +210,7 @@ Weigh that cost before adding one.
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 1,400,960 bytes, 8.94% of the 15,663,104-byte app partition that
+The image is currently 1,468,944 bytes, 9.38% of the 15,663,104-byte app partition that
 `partitions.csv` gives it. Measure with `espflash save-image --chip esp32s3 --flash-size 16mb
 --partition-table partitions.csv <elf> <out>`; without those two options it assumes 4 MB of flash
 and the default table. The time zone
@@ -364,7 +366,10 @@ Core 1 owns the display SPI/DMA path.
   runs the link test when a `lora-link-*` feature is on, and otherwise the mesh (`src/mesh.rs`),
   which takes the latest fix from `mesh::FIX`, set by `gnss_task`, the RTC's time from
   `mesh::RTC_TIME`, set by `sensor_task`, and GPS time from `GPS_TIME`. It is spawned only when
-  the radio answered at boot.
+  the radio answered at boot; otherwise `mesh::offline`, in thread mode, keeps the name and can
+  leave the group, and tells the screens there is no radio. Either publishes what the screens
+  show of the mesh, which the frame loop takes on `mesh::VIEW_CHANGED`, and the frame loop
+  passes the stage's requests to `mesh::COMMANDS`.
 - `zone_task`, in thread mode, looks the zone up again whenever a fix moves about a kilometre
   in automatic mode, a zone at a time with a yield between, takes the settings panel's choice
   from `ZONE_CHOICE`, publishes the zone through `ZONE_STATE`, and queues a new zone for
@@ -423,7 +428,8 @@ poisons the thread and a later `get()` panics.
 - Damage is `chrome::Dirty`, spans of columns per pair of rows at the panel's 2 × 2 write grain
   (`ui/dirty.rs`). `Stage::changed` holds what a step changed: on a settled face, the old and
   new places of each part that changed; on the settled panel, the cells that changed or the
-  scrolling grid; elsewhere, the whole panel.
+  scrolling grid; on a group screen, the items of its list that differ from the last step's;
+  elsewhere, the whole panel.
 - Each framebuffer repaints the previous step's damage and its own, since it last held the frame
   before that, drawing through `chrome::Clip`. The flush sends only the step's own damage, since
   the panel already shows the step before. A buffer not yet drawn is drawn in full. The spans are
@@ -492,8 +498,9 @@ asleep. Without a fix a node has no position of its own. Commands reach the mesh
 `mesh::COMMANDS`: start a pairing to add or join, choose a device found, answer the code, cancel,
 leave the group, rename. A pairing takes the radio to band O's upper channel at +2 dBm until it
 ends; the protocol's "The exchange as built" has the frames and their order, and
-`docs/logs/lora/pairing-2026-10-02/` the first pairings between the two boards. No screen sends
-the commands yet, so `pair-inject` lets `tools/pair-inject.py` send them over the USB JTAG. The
+`docs/logs/lora/pairing-2026-10-02/` the first pairings between the two boards. The group
+screens send the commands, and `pair-inject` lets `tools/pair-inject.py` send them over the USB
+JTAG too; `docs/logs/lora/pairing-screens-2026-10-02/` has a pairing through the screens. The
 mesh asks `settings_task` to store the group through `GROUP_WRITES` and waits for
 `GROUP_SAVED` where a pairing's commit depends on it. Keys and nonces come from the hardware's
 true random source, which `async_main` enables with the ADC's noise and leaves on. A board whose `DIO0` rises with no flag raised has its
@@ -553,8 +560,11 @@ All default off. None belongs in normal firmware behavior.
 - `rtc-inject` lets `tools/rtc-inject.py` set the RTC over the USB JTAG with probe-rs, either as
   though GNSS set it or as the RTC's own unconfirmed time, without a reset. After one, GNSS no
   longer sets the clock until the firmware restarts.
-- `pair-inject` lets `tools/pair-inject.py` give the mesh its commands over the USB JTAG, in
-  place of the screens: add, join, choose, accept, decline, mismatch, cancel, leave and rename.
+- `pair-inject` lets `tools/pair-inject.py` give the mesh its commands over the USB JTAG,
+  beside the screens: add, join, choose, accept, decline, mismatch, cancel, leave and rename.
+- `touch-inject` lets `tools/touch-inject.py` tap, swipe and cover the screen and press the
+  power key over the USB JTAG, and read the framebuffer drawn last back to a PNG, for driving
+  the screens on a board nobody holds. A read takes about 11 s and interrupts the board.
 - `lora-link-tx` and `lora-link-rx` build the two ends of a link test. They are mutually exclusive
   and `main.rs` refuses both with a `compile_error!`.
 - `fontdue-target-bench` diverts `async_main` into the on-target font benchmark, which never
@@ -568,8 +578,9 @@ The active UI uses the compile-time fontdue renderer in
 and PPFraktion font data under `assets/`. KH Interference Bold sets the large readings, the clock's
 label, the compass caption and the settings' row names and selected values; its asset is a trial,
 and a release needs a licensed one. KH Interference Regular sets the identity's subtitle. Fraktion
-Sans Light sets the clock's band lines, the offset picker's lower neighbour and the always-on face's
-battery value. Maratype sets the identity's title and nothing else: the owner rejected it on every
+Sans Light sets the clock's band lines, the offset picker's lower neighbour, the always-on face's
+battery value and the group screens' explanations. Fraktion Mono Regular sets names, addresses
+and the name keyboard, so that a name keeps its case. Maratype sets the identity's title and nothing else: the owner rejected it on every
 other screen. `embedded-layout` supplies the current text alignment helpers.
 
 Every font is built from its full font file, and the macro's `chars:` list picks the glyphs it

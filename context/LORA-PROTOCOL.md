@@ -2,9 +2,8 @@
 
 The product is a closed group of up to 32 equivalent nodes that share positions and carry messages
 between members, including private ones. GPS supplies both position and the time reference; LoRa
-carries the traffic. This document is the agreed design. Steps 1 and 2 of the build order below
-are implemented, and step 3 is but for its screens; [`AGENTS.md`](../AGENTS.md), "Radio", says
-how.
+carries the traffic. This document is the agreed design. Steps 1 to 3 of the build order below
+are implemented; [`AGENTS.md`](../AGENTS.md), "Radio", says how.
 
 The first version of this design (commit `e57fe0a`) was eight nodes and positions only. The owner
 extended it on 2026-09-29 to 32 nodes, messages and private messages, moved it to band O, and kept
@@ -561,8 +560,9 @@ and the restore after are each short with the bus free between them.
 2. Radio settings above, and slots on GPS time with the header and record format, carrying
    positions and neighbours, with a timebase taken from other nodes without a fix. Done, with ids
    from the MAC and a development key until step 3.
-3. Pairing, the member table and ids. The exchange, the member table, member records in the mesh's
-   packets and their storage are built; the screens are not.
+3. Pairing, the member table and ids. Done: the exchange, the member table, member records in
+   the mesh's packets, their storage, and the screens (`SCREEN-DESIGN-BRIEF.md`, "Group and
+   pairing as built").
 4. The cancel rule and neighbour-only listening.
 5. CAD with slot phase refined from arrival times.
 6. Messages, then private messages.
