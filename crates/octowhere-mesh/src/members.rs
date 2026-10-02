@@ -153,6 +153,8 @@ pub struct Group {
     members: [Option<Member>; SLOTS],
     /// Where the rotation of member records resumes.
     rotation: u8,
+    /// The ids whose records changed here and have not been sent since, as a set.
+    unsent: u32,
 }
 
 impl Group {
@@ -166,6 +168,7 @@ impl Group {
             own: 0,
             members,
             rotation: 0,
+            unsent: 0,
         }
     }
 
@@ -178,6 +181,7 @@ impl Group {
             own,
             members,
             rotation: 0,
+            unsent: 0,
         })
     }
 
@@ -245,6 +249,7 @@ impl Group {
     /// Puts a member pairing enrolled at `id`.
     pub fn enrol(&mut self, id: u8, member: Member) {
         self.members[usize::from(id)] = Some(member);
+        self.unsent |= 1 << id;
     }
 
     /// Renames this node, at UTC `now`.
@@ -254,6 +259,7 @@ impl Group {
             .expect("a group holds its own node's record");
         me.name = name;
         me.changed = now.max(me.changed + 1);
+        self.unsent |= 1 << self.own;
     }
 
     /// Merges a member record heard from another node, at UTC `now`.
@@ -294,6 +300,7 @@ impl Group {
                 me.changed = now.max(me.changed + 1);
                 self.members[usize::from(to)] = Some(me);
                 self.own = to;
+                self.unsent |= 1 << to;
                 Merged::Renumbered { from: id, to }
             }
             // The device that held it moves itself once it hears this record.
@@ -303,11 +310,36 @@ impl Group {
             self.members[usize::from(other)] = None;
         }
         self.members[usize::from(id)] = Some(record);
+        if matches!(outcome, Merged::Changed { .. }) {
+            self.unsent |= 1 << id;
+        }
         outcome
     }
 
-    /// The next member record to send, in rotation through the members, this node included.
+    /// Whether a record changed here and has not been sent since.
+    #[must_use]
+    pub fn has_unsent(&self) -> bool {
+        self.unsent != 0
+    }
+
+    /// Counts the record at `id` as sent, when a packet that reached this node's neighbours
+    /// carried it as this node holds it.
+    pub fn covered(&mut self, id: u8, record: &Member) {
+        if self.member(id) == Some(record) {
+            self.unsent &= !(1 << id);
+        }
+    }
+
+    /// The next member record to send: one that changed and has not been sent since, or else
+    /// the next in rotation through the members, this node included.
     pub fn next_record(&mut self) -> (u8, Member) {
+        while self.unsent != 0 {
+            let id = self.unsent.trailing_zeros() as u8;
+            self.unsent &= !(1 << id);
+            if let Some(&member) = self.member(id) {
+                return (id, member);
+            }
+        }
         for step in 0..IDS {
             let id = (self.rotation + step) % IDS;
             if let Some(&member) = self.member(id) {
@@ -458,6 +490,30 @@ pub(crate) mod tests {
         let mut g = group(3, &[(0, 1), (3, 2), (31, 3)]);
         let ids: [u8; 4] = core::array::from_fn(|_| g.next_record().0);
         assert_eq!(ids, [0, 3, 31, 0]);
+    }
+
+    #[test]
+    fn a_changed_record_goes_ahead_of_the_rotation_once() {
+        let mut g = group(3, &[(0, 1), (3, 2), (31, 3)]);
+        assert!(!g.has_unsent());
+        g.rename(Name::new(b"New").unwrap(), 50);
+        assert_eq!(
+            g.merge(31, member(3, 200), 1_000),
+            Merged::Changed { vacated: None }
+        );
+        assert!(g.has_unsent());
+        let ids: [u8; 4] = core::array::from_fn(|_| g.next_record().0);
+        assert_eq!(ids, [3, 31, 0, 3]);
+        assert!(!g.has_unsent());
+
+        assert_eq!(
+            g.merge(0, member(1, 300), 1_000),
+            Merged::Changed { vacated: None }
+        );
+        g.covered(0, &member(1, 299));
+        assert!(g.has_unsent(), "an older record covers nothing");
+        g.covered(0, &member(1, 300));
+        assert!(!g.has_unsent());
     }
 
     #[test]

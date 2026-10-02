@@ -588,7 +588,9 @@ and the restore after are each short with the bus free between them.
 3. Pairing, the member table and ids. Done: the exchange, the member table, member records in
    the mesh's packets, their storage, and the screens (`SCREEN-DESIGN-BRIEF.md`, "Group and
    pairing as built").
-4. The cancel rule and neighbour-only listening.
+4. The cancel rule and neighbour-only listening. Built as listening to members and neighbours
+   with periodic sweeps (see "Listening"), the cancel rule entry by entry (below), and a changed
+   member record sent in the node's next slot.
 5. CAD with slot phase refined from arrival times.
 6. Messages, then private messages.
 7. Pruning relays from the gossiped graph.

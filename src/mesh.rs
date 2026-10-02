@@ -600,7 +600,8 @@ impl Mesh {
             return;
         }
         self.after = start + 1;
-        let sending = self.table.wants_to_send(round);
+        let sending =
+            self.table.wants_to_send(round) || self.group.as_ref().is_some_and(Group::has_unsent);
         info!(
             "[MESH] round={} sending={} sweeping={}",
             round,
@@ -767,6 +768,7 @@ impl Mesh {
             .map(|(time, _)| (time / 1_000_000) as u32);
         let (mut entries, mut news, mut neighbours, mut moved) = (0, 0, 0, false);
         let mut carried = [None; IDS as usize];
+        let mut heard_record = None;
         for record in plain.records() {
             match record {
                 Record::Positions(positions) => {
@@ -782,6 +784,7 @@ impl Mesh {
                 }
                 Record::Neighbours(set) => neighbours = set,
                 Record::Member(id, member) => {
+                    heard_record = Some((id, member));
                     match group.merge(id, member, now.unwrap_or_else(|| utc_seconds(done))) {
                         Merged::Unchanged => {}
                         Merged::Changed { vacated } => {
@@ -806,8 +809,13 @@ impl Mesh {
                 Record::Other(..) => {}
             }
         }
-        self.table
-            .covered_by(header.sender, &carried, neighbours, round);
+        if self
+            .table
+            .covered_by(header.sender, &carried, neighbours, round)
+            && let Some((id, member)) = heard_record
+        {
+            group.covered(id, &member);
+        }
         self.shown.positions(&self.table);
         self.publish();
         info!(
