@@ -94,7 +94,10 @@ until the feature set is complete, because profiling an incomplete firmware pric
     takes one 4-bit command per clock (the owner's probe-rs fork,
     `probe-rs-espressif/src/espusbjtag/protocol.rs`). probe-rs halts the core for every Xtensa
     memory read, so holding a halt across the whole read changed nothing: 10.0 s halted and
-    10.2 s running for the 434,312-byte frame, 42 KB/s (`bench/jtag-read`). Each 32-bit word
+    10.2 s running for the 434,312-byte frame, 42 KB/s, on the fork's `c029e0a3`
+    (`bench/jtag-read`). Its new tip `e1c448a8d`, after the JTAG queue refactor, takes 11.8 to
+    12.4 s, 35 KB/s, alternating the two builds on one board; four reads cost 7.7 s of host CPU
+    against 5.2 s. Each 32-bit word
     is a NAR and an NDR scan, about 40 captured bits, and the driver blocks on the IN endpoint
     every 544 captured bits, about 13 words a round trip. Levers, estimated rather than
     measured: the driver's own comment quotes the TRM as allowing 128 bytes of capture before
