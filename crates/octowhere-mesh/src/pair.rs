@@ -348,6 +348,20 @@ impl Pairing {
         self.peer.map(|peer| peer.mac)
     }
 
+    /// The other device's name, once it has sent it: the joining device's comes with its
+    /// confirmation, the adding device's with the group.
+    #[must_use]
+    pub fn peer_name(&self) -> Option<Name> {
+        match self.role {
+            Role::Add => self.their_name,
+            Role::Join => {
+                let group = self.group.as_ref()?;
+                let id = group.by_mac(&self.peer?.mac)?;
+                group.member(id).map(|member| member.name)
+            }
+        }
+    }
+
     /// The group to store while the phase is [`Phase::Storing`], and the group as it ends.
     #[must_use]
     pub fn group(&self) -> Option<&Group> {
@@ -1096,6 +1110,8 @@ mod tests {
         );
         assert_eq!(joiner.peer(), Some(a.mac));
         assert_eq!(adder.peer(), Some(j.mac));
+        assert_eq!(joiner.peer_name(), Some(a.name));
+        assert_eq!(adder.peer_name(), Some(j.name));
         let (theirs, ours) = (adder.group().unwrap(), joiner.group().unwrap());
         assert_eq!(ours.key().bytes(), theirs.key().bytes());
         assert_eq!(ours.own(), 2);
