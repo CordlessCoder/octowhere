@@ -435,7 +435,8 @@ screen. A device always willing to pair is a permanent unauthenticated attack su
 defeat the point.
 
 The ESP32-S3 has no ECC accelerator, so X25519 runs in software. It runs at pairing and once per
-new member for the pairwise key.
+new member for the pairwise key. On the board the frame that runs it, and derives the code and
+the key, takes 22 ms (`docs/logs/lora/pairing-2026-10-02/`), so no screen needs to wait on it.
 
 #### The exchange as built
 

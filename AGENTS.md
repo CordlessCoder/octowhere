@@ -475,6 +475,9 @@ The SX1272 sits on its own SPI bus with `NSS` on GPIO18 and `DIO0` on GPIO44. It
 which leaves the driver defaults in place: 868 MHz, SF7, 125 kHz, CR 4/5, explicit header, 8-symbol
 preamble, sync word `0x12`. The mesh then tunes it to band O's 869.4625 MHz and +17 dBm on
 `PA_BOOST`; the link test keeps 868 MHz and the reset power, +14 dBm on `RFO`.
+The driver is built with its `half_duplex` feature, which gives a packet the radio's whole
+256-byte FIFO. Without it the FIFO is split between transmit and receive and the driver refuses
+any packet over 128 bytes, in either direction; a pairing's group transfer met it first.
 
 The antenna path is the part that catches people. A transmit and a receive select different RF
 switch positions, and both are TCA9554 outputs rather than radio pins, so `LoraPath::transmit` and
@@ -488,7 +491,8 @@ under the group key pairing gave the node. A node in no group sends nothing and 
 asleep. Without a fix a node has no position of its own. Commands reach the mesh through
 `mesh::COMMANDS`: start a pairing to add or join, choose a device found, answer the code, cancel,
 leave the group, rename. A pairing takes the radio to band O's upper channel at +2 dBm until it
-ends; the protocol's "The exchange as built" has the frames and their order. No screen sends
+ends; the protocol's "The exchange as built" has the frames and their order, and
+`docs/logs/lora/pairing-2026-10-02/` the first pairings between the two boards. No screen sends
 the commands yet, so `pair-inject` lets `tools/pair-inject.py` send them over the USB JTAG. The
 mesh asks `settings_task` to store the group through `GROUP_WRITES` and waits for
 `GROUP_SAVED` where a pairing's commit depends on it. Keys and nonces come from the hardware's

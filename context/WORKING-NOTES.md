@@ -46,6 +46,11 @@ look is in [`design/`](design/README.md).
 - Do not use `--no-reset`. With `--non-interactive` it left the board frozen in download mode
   and the owner had to reconnect it; alone, under `script` for a pty, it did the same on
   2026-09-30. Capture with a reset read.
+- With both boards attached, a capture's reset makes them enumerate again, and their `ttyACM`
+  numbers can swap. `espflash monitor` reopens the number it started on, so it goes on capturing
+  the other board. Name a log by the hardware address the firmware prints (`[MESH]` lines carry
+  it), not by the port it was opened on. `probe-rs` takes `--probe 303a:1001:<MAC>` and is not
+  affected.
 - Opening the serial port resets the chip, even with DTR and RTS held low. To inspect a hang,
   halt it with `probe-rs` over the USB JTAG first (`probe-rs list` shows "ESP JTAG").
 - The PMIC's I2C init fails about one boot in three right after flashing. Retry before
