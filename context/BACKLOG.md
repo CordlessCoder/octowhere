@@ -85,6 +85,11 @@ until the feature set is complete, because profiling an incomplete firmware pric
   neighbours with a sweep every 13 rounds, the cancel rule, and a changed member record sent in
   the next slot (`docs/logs/lora/founding-and-listening-2026-10-02/`). Step 5, CAD, needs the
   slot timing it depends on measured first ("Time sync" there).
+- A REFRESH DEVICES control on the group screens (owner, 2026-10-03), for a user who knows new
+  devices are near: it starts a three-round sweep, which spans every node's floor round. It needs
+  a place in the group screens' design first. A refresh on the device whose timebase ranks
+  higher still brings the other over, by the notice (`LORA-PROTOCOL.md`, "Keeping time without a
+  fix").
 - Finish what step 3's screens leave open (`SCREEN-DESIGN-BRIEF.md`, "Group and pairing as
   built"):
   - Every group screen's legibility on the panel, which nobody has judged yet. Typing on the
