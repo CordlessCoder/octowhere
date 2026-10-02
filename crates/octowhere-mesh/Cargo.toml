@@ -13,5 +13,9 @@ defmt = ["dep:defmt"]
 [dependencies]
 aes-siv = { version = "0.8.0", default-features = false, features = ["zeroize"] }
 defmt = { version = "1.1.1", optional = true }
+hkdf = "0.13.0"
+hmac = "0.13.0"
 libm = "0.2.16"
+sha2 = { version = "0.11.0", default-features = false }
+x25519-dalek = { version = "3.0.0", default-features = false, features = ["static_secrets", "zeroize"] }
 

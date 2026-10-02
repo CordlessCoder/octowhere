@@ -73,6 +73,15 @@ impl Table {
         self.entries.iter().flatten()
     }
 
+    /// Moves this node to id `own`. Whatever the table held for that id was another device's.
+    pub fn renumber(&mut self, own: u8) {
+        let mine = self.entries[usize::from(self.own)].take();
+        self.sent[usize::from(self.own)] = None;
+        self.own = own;
+        self.entries[usize::from(own)] = mine.map(|entry| Entry { id: own, ..entry });
+        self.sent[usize::from(own)] = None;
+    }
+
     /// Takes this node's own position from its latest fix.
     pub fn set_own(&mut self, entry: Entry) {
         debug_assert_eq!(entry.id, self.own);

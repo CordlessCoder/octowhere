@@ -61,6 +61,17 @@ impl Clock {
         }
     }
 
+    /// Moves the node to id `own`. A clock it was the root of stays its own.
+    pub fn renumber(&mut self, own: u8) {
+        if let Some((_, timebase)) = &mut self.clock
+            && timebase.source == Source::Node(self.own)
+            && timebase.hops == 0
+        {
+            timebase.source = Source::Node(own);
+        }
+        self.own = own;
+    }
+
     /// Takes the node's GPS time: local time minus UTC, and the local time a fix last refined it.
     pub fn gps(&mut self, offset: i64, refined: i64) {
         self.gps = Some((offset, refined));
@@ -328,6 +339,23 @@ mod tests {
             }
         );
         assert_eq!(clock.local(UTC), Some(UTC + skew));
+    }
+
+    #[test]
+    fn a_root_that_moves_id_keeps_its_clock() {
+        let mut clock = Clock::new(24, 0);
+        clock.tick(SWEEP_US, Some(UTC));
+        clock.renumber(5);
+        assert_eq!(
+            clock.at(SWEEP_US).unwrap(),
+            (
+                UTC,
+                Timebase {
+                    source: Source::Node(5),
+                    hops: 0
+                }
+            )
+        );
     }
 
     #[test]

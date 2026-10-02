@@ -2,6 +2,7 @@
 //! body. `seal` puts the synthetic IV in front of it.
 
 use crate::bits::{BitReader, BitWriter, Full};
+use crate::members::{Member, RECORD_MAX_LEN};
 use crate::seal::SIV_LEN;
 
 pub const VERSION: u8 = 1;
@@ -341,6 +342,21 @@ impl<'a> Builder<'a> {
         Ok(())
     }
 
+    /// Writes a member record for `id`.
+    pub fn member(&mut self, id: u8, member: &Member) -> Result<(), Full> {
+        let mut body = [0; RECORD_MAX_LEN];
+        let len = member.encode(id, &mut body);
+        if 2 + len > self.room() {
+            return Err(Full);
+        }
+        let at = self.len;
+        self.buf[at] = record::MEMBER;
+        self.buf[at + 1] = len as u8;
+        self.buf[at + 2..at + 2 + len].copy_from_slice(&body[..len]);
+        self.len += 2 + len;
+        Ok(())
+    }
+
     /// The plaintext's length.
     #[must_use]
     pub fn finish(self) -> usize {
@@ -388,6 +404,7 @@ pub enum Record<'a> {
     Positions(Positions<'a>),
     /// The ids the sender heard in its recent rounds.
     Neighbours(u32),
+    Member(u8, Member),
     /// A record of a type this version does not read, or one too short for its type.
     Other(u8, &'a [u8]),
 }
@@ -414,6 +431,10 @@ impl<'a> Iterator for Records<'a> {
             record::NEIGHBOURS if body.len() >= 4 => Record::Neighbours(u32::from_le_bytes(
                 body[..4].try_into().expect("four bytes"),
             )),
+            record::MEMBER => match Member::decode(body) {
+                Some((id, member)) => Record::Member(id, member),
+                None => Record::Other(kind, body),
+            },
             _ => Record::Other(kind, body),
         })
     }
@@ -492,6 +513,20 @@ mod tests {
         };
         assert_eq!(read, entries.map(Entry::quantized));
         assert!(records.next().is_none());
+    }
+
+    #[test]
+    fn a_member_record_reads_back() {
+        let member = crate::members::tests::member(4, 1_790_000_001);
+        let mut buf = [0; MAX_PLAIN];
+        let mut builder = Builder::new(&mut buf, &header());
+        builder.member(12, &member).unwrap();
+        let len = builder.finish();
+        let plain = Plain::parse(&buf[..len]).unwrap();
+        assert!(matches!(
+            plain.records().next(),
+            Some(Record::Member(12, read)) if read == member
+        ));
     }
 
     #[test]

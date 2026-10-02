@@ -16,7 +16,7 @@ use octowhere_mesh::{
     schedule::{
         GUARD_US, ROUND_US, airtime_us, base_of, named_slot, next_any_slot, next_slot, round_at,
     },
-    seal::{self, GroupKey, SIV_LEN},
+    seal::{self, Key, SIV_LEN},
     table::{Merge, Table},
 };
 use sx127xlora::{
@@ -32,7 +32,7 @@ use super::{GPS_TIME, LoraPath, SensorLora};
 
 /// The group key until pairing gives the node one. Anyone with the source can read and forge every
 /// packet sealed under it.
-const DEVELOPMENT_KEY: GroupKey = GroupKey::new(*b"octowhere development group key!");
+const DEVELOPMENT_KEY: Key = Key::new(*b"octowhere development group key!");
 /// Band O's lower 125 kHz channel.
 const FREQUENCY_HZ: u32 = 869_462_500;
 /// Off the SX127x's reset value `0x12`, which another network on this channel uses, and off
@@ -295,7 +295,7 @@ impl Mesh {
                     }
                 }
                 Record::Neighbours(set) => neighbours = set,
-                Record::Other(..) => {}
+                Record::Member(..) | Record::Other(..) => {}
             }
         }
         info!(

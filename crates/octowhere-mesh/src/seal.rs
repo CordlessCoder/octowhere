@@ -1,4 +1,4 @@
-//! Sealing a packet under the group key with AES-SIV (RFC 5297, AES-CMAC-SIV with a 256-bit key),
+//! Sealing a packet under a key with AES-SIV (RFC 5297, AES-CMAC-SIV with a 256-bit key),
 //! with no associated data. The synthetic IV leads the packet and is its authentication tag.
 
 use aes_siv::{KeyInit, siv::Aes128Siv};
@@ -6,14 +6,19 @@ use aes_siv::{KeyInit, siv::Aes128Siv};
 /// The synthetic IV's length.
 pub const SIV_LEN: usize = 16;
 
-/// A group key: the CMAC key, then the CTR key.
-#[derive(Clone)]
-pub struct GroupKey([u8; 32]);
+/// An AES-SIV key: the group's, or a pairing's. The CMAC key, then the CTR key.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Key([u8; 32]);
 
-impl GroupKey {
+impl Key {
     #[must_use]
     pub const fn new(bytes: [u8; 32]) -> Self {
         Self(bytes)
+    }
+
+    #[must_use]
+    pub fn bytes(&self) -> &[u8; 32] {
+        &self.0
     }
 
     fn cipher(&self) -> Aes128Siv {
@@ -28,7 +33,7 @@ pub struct Inauthentic;
 
 /// Seals the plaintext in `packet[SIV_LEN..SIV_LEN + plain_len]` in place, writes its IV in front,
 /// and returns the packet's length.
-pub fn seal(key: &GroupKey, packet: &mut [u8], plain_len: usize) -> usize {
+pub fn seal(key: &Key, packet: &mut [u8], plain_len: usize) -> usize {
     let len = SIV_LEN + plain_len;
     let (siv, plain) = packet[..len].split_at_mut(SIV_LEN);
     let tag = key
@@ -40,7 +45,7 @@ pub fn seal(key: &GroupKey, packet: &mut [u8], plain_len: usize) -> usize {
 }
 
 /// Opens a sealed packet in place, returning its plaintext.
-pub fn open<'a>(key: &GroupKey, packet: &'a mut [u8]) -> Result<&'a [u8], Inauthentic> {
+pub fn open<'a>(key: &Key, packet: &'a mut [u8]) -> Result<&'a [u8], Inauthentic> {
     if packet.len() < SIV_LEN {
         return Err(Inauthentic);
     }
@@ -67,7 +72,7 @@ mod tests {
     /// RFC 5297, appendix A.1, which has one header; it checks the primitive `seal` uses.
     #[test]
     fn the_cipher_is_rfc_5297s() {
-        let key = GroupKey::new(hex(
+        let key = Key::new(hex(
             "fffefdfc fbfaf9f8 f7f6f5f4 f3f2f1f0 f0f1f2f3 f4f5f6f7 f8f9fafb fcfdfeff",
         ));
         let ad: [u8; 24] = hex("10111213 14151617 18191a1b 1c1d1e1f 20212223 24252627");
@@ -82,7 +87,7 @@ mod tests {
 
     #[test]
     fn a_sealed_packet_opens_only_untouched_and_under_its_key() {
-        let key = GroupKey::new([7; 32]);
+        let key = Key::new([7; 32]);
         let mut packet = [0u8; 64];
         packet[SIV_LEN..SIV_LEN + 20].copy_from_slice(b"twenty bytes of text");
         let len = seal(&key, &mut packet, 20);
@@ -101,14 +106,14 @@ mod tests {
 
         let mut other = packet;
         assert_eq!(
-            open(&GroupKey::new([8; 32]), &mut other[..len]),
+            open(&Key::new([8; 32]), &mut other[..len]),
             Err(Inauthentic)
         );
     }
 
     #[test]
     fn a_plaintext_shorter_than_a_block_seals() {
-        let key = GroupKey::new([1; 32]);
+        let key = Key::new([1; 32]);
         let mut packet = [0u8; SIV_LEN + 3];
         packet[SIV_LEN..].copy_from_slice(b"abc");
         let len = seal(&key, &mut packet, 3);

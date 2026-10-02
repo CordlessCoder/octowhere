@@ -6,7 +6,9 @@
 
 pub mod bits;
 pub mod clock;
+pub mod members;
 pub mod packet;
+pub mod pair;
 pub mod schedule;
 pub mod seal;
 pub mod table;
