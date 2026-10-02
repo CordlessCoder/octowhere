@@ -97,9 +97,13 @@ until the feature set is complete, because profiling an incomplete firmware pric
     10.2 s running for the 434,312-byte frame, 42 KB/s, on the fork's `c029e0a3`
     (`bench/jtag-read`). Its new tip `e1c448a8d` takes 11.8 to 12.4 s, 35 KB/s, alternating the two
     builds on one board, and a 64 KB read loses the same 20%. The probe-rs session bisected it
-    to upstream's `c0b48362f` (#4318): a transfer now ends in Run-Test/Idle, one clock more,
-    and at a nibble a clock that cost 15% more USB transfers on a 64 KB read. The fork's queue
-    refactor (#4315) adds about 0.5 s of host CPU a frame on top. Each 32-bit word
+    to upstream's `c0b48362f` (#4318), which makes a 64 KB read take 15% more USB transfers;
+    its mechanism is only partly identified. Its changelog's extra clock per transfer is about
+    2 of the roughly 9.5 clocks a word it added, out of about 63; the rest likely comes from its
+    fixed path between TAP states, not yet diffed. The fork's queue refactor (#4315) adds about
+    0.5 s of host CPU a frame on top. Separately, and older: the IR is shifted again for every
+    word though it always selects NAR, about 9 of the 63 clocks; caching the selected IR is on
+    the probe-rs session's list (estimated from the path tables, not measured). Each 32-bit word
     is a NAR and an NDR scan, about 40 captured bits, and the driver blocks on the IN endpoint
     every 544 captured bits, about 13 words a round trip. Levers, estimated rather than
     measured: the driver's own comment quotes the TRM as allowing 128 bytes of capture before
