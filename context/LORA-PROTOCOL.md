@@ -42,6 +42,12 @@ do not confuse the two.
   lists 3 dBi; TE's figure governs. Near 869 MHz its plots show VSWR about 1.35 and efficiency
   about 33%. 1.4 dBi is -0.75 dBd, so +17 dBm conducted is about 16 dBm e.r.p. at the peak, far
   under band O's 27 dBm. Band M's 14 dBm e.r.p. allows up to 14 dBm conducted.
+- **Close neighbours.** Two nodes under a metre apart at +17 dBm hear each other at about
+  -21 dBm, which overloads the receiver: about 1% of packets fail their CRC, against none at
+  -45 dBm (`docs/logs/lora/crc-2026-10-02/`), with the AGC on. A node still sends at full power
+  to neighbours it hears strongly (owner, 2026-10-02). Otherwise two clusters of users, each
+  standing close together, would each turn down for their own close neighbours, and the two
+  clusters would never hear each other.
 - **PA pin.** The antenna is on `PA_BOOST` (2026-10-01, `docs/logs/lora/pa-2026-10-01/`). Two
   boards on one bench hear each other at about -22 to -32 dBm at +17 dBm on it, and its strength
   follows its setting; `RFO` arrives about 70 dB lower whatever its setting. The module exposes
@@ -584,10 +590,6 @@ protocol does not need this.
 
 ## Open
 
-- Two nodes under a metre apart at +17 dBm hear each other at about -21 dBm, which overloads the
-  receiver: about 1% of packets fail their CRC, against none at -45 dBm
-  (`docs/logs/lora/crc-2026-10-02/`). Nodes worn together will meet it. Sending at lower power
-  to neighbours heard strongly would avoid it.
 - The limit after which a rekey drops the old key.
 - A shorter floor once CAD is measured (see "CAD is required at this size").
 - Measuring GNSS time sync (see "Time sync").
