@@ -12,6 +12,8 @@
 
 #[path = "render/atlas.rs"]
 mod atlas;
+#[path = "render/group.rs"]
+mod group;
 
 use std::{collections::HashMap, fs::File, io::BufWriter, path::PathBuf};
 
@@ -250,6 +252,7 @@ fn main() {
     frames.extend(settings_frames());
     frames.extend(startup_frames());
     frames.extend(always_on_frames());
+    frames.extend(group::frames());
 
     let mut drawn = HashMap::new();
     for (name, stage) in frames {

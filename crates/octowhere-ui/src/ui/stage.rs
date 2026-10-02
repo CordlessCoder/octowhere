@@ -13,6 +13,11 @@ use super::{
     compass_screen::{self, Accents, DialFootprint, Mode},
     ease::Ease,
     gesture::{Drag, GestureEvent, GestureTracker, Micros, SILENT_LIFT},
+    group::{
+        self, Flow,
+        layout::List,
+        view::{MeshView, Request},
+    },
     identity,
     pager::Pager,
     panel::{self, Cell},
@@ -222,6 +227,8 @@ pub struct Update {
     pub display_on: Option<bool>,
     /// Power the board off. It comes once, with the display dark and switching off.
     pub power_off: bool,
+    /// Ask the mesh this.
+    pub mesh: Option<Request>,
 }
 
 /// Where the drag in progress goes, decided when it leaves the tap slop.
@@ -273,6 +280,8 @@ enum Drawn {
     Clock(clock_screen::Face),
     Panel((PeripheralState, i32, panel::Accents)),
     Page(Page, second::Accents, PeripheralState),
+    /// The group screens' drawing, which is compared item by item.
+    Group(alloc::boxed::Box<List>),
 }
 
 pub struct Stage {
@@ -316,6 +325,10 @@ pub struct Stage {
     panel_accents: panel::Accents,
     /// A screen the panel opened, and when.
     page: Option<(Page, Micros)>,
+    /// What the firmware last published of the mesh, which the group screens show.
+    mesh: alloc::boxed::Box<MeshView>,
+    /// When the group screen showing next changes on its own.
+    group_due: Option<Micros>,
     page_accents: second::Accents,
     /// The start-up sequence, until it hands over to the clock face.
     startup: Option<Startup>,
@@ -410,6 +423,8 @@ impl Stage {
             panel_settled: None,
             panel_accents: panel::Accents::HIDDEN,
             page: None,
+            mesh: alloc::boxed::Box::default(),
+            group_due: None,
             page_accents: second::Accents::FULL,
             startup: None,
             startup_view: None,
@@ -464,6 +479,18 @@ impl Stage {
         self.shift.pin(index, now);
     }
 
+    /// Takes what the firmware has published of the mesh.
+    pub fn set_mesh(&mut self, mesh: MeshView) {
+        self.peripherals.members = mesh.group.as_ref().map(|group| group.count() as u8);
+        self.peripherals.name = mesh.name;
+        *self.mesh = mesh;
+    }
+
+    #[must_use]
+    pub fn mesh(&self) -> &MeshView {
+        &self.mesh
+    }
+
     /// Whether the start-up sequence still shows.
     #[must_use]
     pub fn starting_up(&self) -> bool {
@@ -493,6 +520,7 @@ impl Stage {
             });
         let silent_lift = self.raw_touch[0].map(|_| self.touched_at + SILENT_LIFT);
         let page = self.page.as_ref().and_then(|(page, _)| page.next_change());
+        let group = self.page.as_ref().and(self.group_due);
         [
             self.startup_due,
             rest,
@@ -500,6 +528,7 @@ impl Stage {
             self.gesture.lift_due(),
             silent_lift,
             page,
+            group,
         ]
         .into_iter()
         .flatten()
@@ -746,6 +775,13 @@ impl Stage {
         let event = self.gesture(touch, now);
         let mut effects = Effects::default();
         self.route_event(&event, now, &mut effects, &mut update);
+        if let Some((Page::Group(flow), _)) = &mut self.page {
+            let (exit, moving) = flow.step(&self.mesh, now, &mut effects.mesh);
+            self.fading |= moving;
+            if exit == group::Exit::Panel {
+                self.page = None;
+            }
+        }
 
         if let Some(touch) = touch
             && self.new_cover(touch, now)
@@ -826,14 +862,26 @@ impl Stage {
         let grid_only = current.2 != previous.2
             && (current.0, current.1, current.3) == (previous.0, previous.1, previous.3);
         full |= current != previous && !grid_only;
-        self.track_damage(full);
+        let group_list = match &self.page {
+            Some((Page::Group(flow), _)) => Some(alloc::boxed::Box::new(flow.view(
+                &self.mesh,
+                now,
+                &self.renderer,
+            ))),
+            _ => None,
+        };
+        self.group_due = group_list.as_ref().and_then(|list| list.due());
+        self.track_damage(full, group_list);
 
         let moved = current != previous
             || self.pager.is_moving()
             || self.sheet.is_moving()
             || self.grid.snap.is_some();
         let cover = touch == Some(Touch::Cover);
-        if contact || cover || moved || self.heading_moved(face_shows) {
+        // A pairing holds the screen awake until it ends.
+        let pairing =
+            matches!(&self.page, Some((Page::Group(flow), _)) if flow.holds_awake(&self.mesh));
+        if contact || cover || moved || pairing || self.heading_moved(face_shows) {
             self.restart(now);
         }
         if let (Rest::Awake, Some(timeout)) = (self.rest, self.peripherals.timeout.duration())
@@ -871,6 +919,10 @@ impl Stage {
             .is_some_and(|power_off| power_off.confirmed().is_some())
         {
             return;
+        }
+        // Either press ends a pairing before it rests the screen or asks to power off.
+        if let Some((Page::Group(flow), _)) = &mut self.page {
+            flow.interrupt(&self.mesh, &mut update.mesh);
         }
         let (prior, prior_level) = (self.rest, self.shown_level);
         let resting = prior != Rest::Awake;
@@ -1299,8 +1351,9 @@ impl Stage {
         });
     }
 
-    /// Works out what the step changed, from what each settled screen showed before.
-    fn track_damage(&mut self, full: bool) {
+    /// Works out what the step changed, from what each settled screen showed before. A group
+    /// screen passes the list it draws this step.
+    fn track_damage(&mut self, full: bool, group_list: Option<alloc::boxed::Box<List>>) {
         let view = self.pager.view();
         let faces_settled = self.page.is_none()
             && self.sheet.is_closed()
@@ -1314,6 +1367,8 @@ impl Stage {
                 self.peripherals.battery,
                 self.clock_accents,
             )))
+        } else if let Some(list) = group_list {
+            Some(Drawn::Group(list))
         } else if let Some((page, _)) = &self.page {
             Some(Drawn::Page(
                 page.clone(),
@@ -1344,6 +1399,9 @@ impl Stage {
             }
             (Some(Drawn::Panel(before)), Some(Drawn::Panel(after))) => {
                 self.panel_damage(&before, after);
+            }
+            (Some(Drawn::Group(before)), Some(Drawn::Group(after))) => {
+                after.damage(&before, &self.renderer, &mut self.changed);
             }
             (
                 Some(Drawn::Page(page, accents, state)),
@@ -1417,6 +1475,13 @@ impl Stage {
         effects: &mut Effects,
         update: &mut Update,
     ) {
+        if let Some((Page::Group(flow), _)) = &mut self.page {
+            let exit = flow.handle(event, &self.mesh, now, &self.renderer, &mut effects.mesh);
+            if exit == group::Exit::Panel {
+                self.page = None;
+            }
+            return;
+        }
         if let Some((page, _)) = &mut self.page {
             let next = page.handle(event, &self.peripherals, effects);
             match next {
@@ -1530,7 +1595,9 @@ impl Stage {
             Cell::AlwaysOn => {
                 Page::AlwaysOn(second::AlwaysOnChooser::new(self.peripherals.always_on))
             }
-            Cell::Gnss | Cell::Battery | Cell::Device => Page::Device(second::Device::default()),
+            Cell::Group => Page::Group(Flow::group()),
+            Cell::Name => Page::Group(Flow::name(&self.mesh)),
+            Cell::Device => Page::Device(second::Device::default()),
             Cell::Compass => {
                 update.recalibrate = true;
                 // The motion task resets the calibration on its next sample; the panel and the
@@ -1548,6 +1615,9 @@ impl Stage {
 
     /// Takes what a screen asked for into the update, and shows a stored setting at once.
     fn apply(&mut self, effects: Effects, update: &mut Update) {
+        if effects.mesh.is_some() {
+            update.mesh = effects.mesh;
+        }
         if let Some(level) = effects.brightness {
             self.level = level;
             update.brightness = Some(level);
@@ -1587,7 +1657,10 @@ impl Stage {
 
     /// Returns to the clock face from anywhere, discarding any edit in progress.
     fn go_home(&mut self, now: Micros, effects: &mut Effects) {
-        if let Some((page, _)) = self.page.take() {
+        if let Some((mut page, _)) = self.page.take() {
+            if let Page::Group(flow) = &mut page {
+                flow.interrupt(&self.mesh, &mut effects.mesh);
+            }
             page.discard(effects);
             self.sheet.set(true);
         }
@@ -1932,8 +2005,12 @@ impl Stage {
         }
         if let Some((page, _)) = &self.page {
             screens::clear(target).expect("clearing the panel failed");
-            page.draw(&self.peripherals, self.page_accents, &self.renderer, target)
-                .expect("drawing a screen failed");
+            match (page, &self.drawn) {
+                (Page::Group(_), Some(Drawn::Group(list))) => list.draw(&self.renderer, target),
+                (Page::Group(_), _) => Ok(()),
+                _ => page.draw(&self.peripherals, self.page_accents, &self.renderer, target),
+            }
+            .expect("drawing a screen failed");
             return;
         }
         let view = self.pager.view();

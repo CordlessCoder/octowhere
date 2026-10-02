@@ -17,6 +17,7 @@ use octowhere_ui::{
     ui::{
         clock::{ClockState, ZoneMode, ZoneState},
         compass::CompassView,
+        group::sim::Sim as Mesh,
         rest::Rest,
         screens::{Battery, Gnss, PeripheralState, Screen},
         second::Page,
@@ -310,6 +311,8 @@ struct Sim {
     flushed: Vec<[i32; 4]>,
     /// When PWR went down while powered off, on the page's clock.
     power_on_since: Option<u64>,
+    /// A mesh with no radio behind it, whose other device pairs with whatever this one asks.
+    mesh: Mesh,
 }
 
 impl Sim {
@@ -348,6 +351,7 @@ impl Sim {
             now: 0,
             flushed: Vec::new(),
             power_on_since: None,
+            mesh: Mesh::new(None),
         }
     }
 
@@ -424,6 +428,9 @@ impl Sim {
             self.pressed_at = None;
             Some(Touch::Contacts([contact, None]))
         };
+        if self.mesh.step(now) {
+            self.stage.set_mesh(self.mesh.view().clone());
+        }
         let update = self.stage.step(Input {
             now,
             touch,
@@ -436,6 +443,9 @@ impl Sim {
             boot_key: self.boot_key.press(held.boot, now),
         });
         self.samples_fast = update.samples_fast;
+        if let Some(request) = update.mesh {
+            self.mesh.request(request, now);
+        }
         if update.recalibrate {
             self.readings.calibration = 0;
             self.readings_changed = true;
@@ -521,6 +531,7 @@ impl Sim {
                 Page::Replay(_) => 6,
                 Page::Timeout(_) => 7,
                 Page::AlwaysOn(_) => 8,
+                Page::Group(_) => 10,
             }
         } else {
             u32::from(self.stage.panel_offset() > 0)

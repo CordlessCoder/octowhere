@@ -82,6 +82,7 @@ pub struct Effects {
     /// Show the display at this level now.
     pub brightness: Option<u8>,
     pub store: Option<Store>,
+    pub mesh: Option<super::group::view::Request>,
 }
 
 /// Where a second-level screen goes after a step.
@@ -103,6 +104,8 @@ pub enum Page {
     Replay(ReplayChooser),
     Timeout(TimeoutChooser),
     AlwaysOn(AlwaysOnChooser),
+    /// The group screens, which the stage steps and draws itself, since they need the mesh.
+    Group(super::group::Flow),
 }
 
 /// How far a second-level screen's icon and hint have come in since it opened.
@@ -144,6 +147,7 @@ impl Page {
             Self::Timeout(chooser) => chooser.handle(event, effects),
             Self::AlwaysOn(chooser) => chooser.handle(event, effects),
             Self::Picker(picker) => picker.handle(event, peripherals, effects),
+            Self::Group(_) => Next::Stay,
         }
     }
 
@@ -200,6 +204,7 @@ impl Page {
             Self::Timeout(chooser) => chooser.draw(accents, font, target),
             Self::AlwaysOn(chooser) => chooser.draw(accents, font, target),
             Self::Picker(picker) => picker.draw(peripherals, accents, font, target),
+            Self::Group(_) => Ok(()),
         }
     }
 }

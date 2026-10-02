@@ -8,6 +8,7 @@ use embedded_graphics::prelude::Point;
 
 use super::{
     gesture::Micros,
+    group::sim::Sim,
     screens::{PeripheralState, Screen},
     stage::{Input, Key, Motion, Sensors, Stage, Touch, TouchGesture, Update},
     startup::{Outcome, Part, Report},
@@ -31,6 +32,8 @@ pub struct Driver<'a> {
     /// whose device is held rather than lying still.
     motion: Option<Motion>,
     hand: Option<fn(Motion, Micros) -> Motion>,
+    /// A simulated mesh, which takes the stage's requests and publishes to it every step.
+    pub mesh: Option<Sim>,
 }
 
 impl<'a> Driver<'a> {
@@ -43,6 +46,7 @@ impl<'a> Driver<'a> {
             observer: None,
             motion: None,
             hand: None,
+            mesh: None,
         }
     }
 
@@ -112,7 +116,15 @@ impl<'a> Driver<'a> {
                 input.sensors = Some(advanced);
             }
         }
+        if let Some(mesh) = &mut self.mesh
+            && mesh.step(self.now)
+        {
+            self.stage.set_mesh(mesh.view().clone());
+        }
         let update = self.stage.step(input);
+        if let (Some(mesh), Some(request)) = (&mut self.mesh, update.mesh) {
+            mesh.request(request, self.now);
+        }
         if let Some(observer) = &mut self.observer {
             observer(&self.stage, self.now);
         }

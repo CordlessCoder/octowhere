@@ -8,6 +8,7 @@ pub mod dirty;
 pub mod ease;
 pub mod geometry;
 pub mod gesture;
+pub mod group;
 pub mod icon;
 pub mod identity;
 pub use octowhere_motion::{compass, fusion, imu};

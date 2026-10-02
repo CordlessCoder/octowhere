@@ -765,7 +765,7 @@ fontdue_macros::fontdue_font_from_file!(
     FraktionSansLightFont,
     "../../../assets/PPFraktion-Free for personal use v1.1/Sans/PPFraktionSans-Light.otf",
     scale: 24.0,
-    chars: " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_"
+    chars: " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
 );
 
 // Only the identity's title is set in it.

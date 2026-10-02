@@ -1784,6 +1784,7 @@ dependencies = [
  "fontdue-macros",
  "heapless 0.9.3",
  "libm",
+ "octowhere-mesh",
  "octowhere-motion",
  "octowhere-tz",
 ]

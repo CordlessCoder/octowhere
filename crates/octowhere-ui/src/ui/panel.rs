@@ -80,8 +80,6 @@ pub const BRIGHTNESS: Glyph = [0b00001, 0b00011, 0b00111, 0b01111, 0b11111];
 pub const TIMEOUT: Glyph = [0b11111, 0b01110, 0b00100, 0b01110, 0b11111];
 pub const ALWAYS_ON: Glyph = [0b00000, 0b01110, 0b11011, 0b01110, 0b00000];
 const CALIBRATING: Glyph = [0b01110, 0b10001, 0b10000, 0b10001, 0b01110];
-const GNSS: Glyph = [0b00100, 0b01010, 0b10101, 0b01010, 0b00100];
-const BATTERY: Glyph = [0b01110, 0b11111, 0b10001, 0b11111, 0b11111];
 pub const DEVICE: Glyph = [0b00100, 0b00000, 0b01100, 0b00100, 0b01110];
 
 /// The cells, in reading order across the two pages.
@@ -93,8 +91,8 @@ pub enum Cell {
     Timeout,
     AlwaysOn,
     Compass,
-    Gnss,
-    Battery,
+    Group,
+    Name,
     Device,
 }
 
@@ -105,8 +103,8 @@ impl Cell {
         Self::Timeout,
         Self::AlwaysOn,
         Self::Compass,
-        Self::Gnss,
-        Self::Battery,
+        Self::Group,
+        Self::Name,
         Self::Device,
     ];
 
@@ -127,8 +125,8 @@ impl Cell {
             Self::Timeout => "TIMEOUT",
             Self::AlwaysOn => "ALWAYS ON",
             Self::Compass => "COMPASS",
-            Self::Gnss => "GNSS",
-            Self::Battery => "BATTERY",
+            Self::Group => "GROUP",
+            Self::Name => "NAME",
             Self::Device => "DEVICE",
         }
     }
@@ -303,34 +301,20 @@ fn content(cell: Cell, peripherals: &PeripheralState) -> Content {
                 &icon::NO_DATA
             }
         }
-        Cell::Gnss => {
-            let gnss = &peripherals.gnss;
-            if gnss.fix {
-                _ = write!(value, "FIX  {}", gnss.in_use);
-                icon = chrome::BLUE;
-            } else {
-                _ = value.push_str("NO FIX");
-                value_color = chrome::GRAY;
-            }
-            &GNSS
-        }
-        Cell::Battery => {
-            match peripherals.battery {
-                Some(battery) => {
-                    tag = battery.usb.then_some("USB");
-                    if battery.present {
-                        _ = write!(value, "{}%", battery.percent.min(100));
-                    } else {
-                        _ = value.push_str("NONE");
-                        value_color = chrome::GRAY;
-                    }
-                }
+        Cell::Group => {
+            match peripherals.members {
+                Some(count) => _ = write!(value, "{count:02} MEMBERS"),
                 None => {
-                    _ = value.push_str("--");
-                    value_color = chrome::GRAY;
+                    _ = value.push_str("NO GROUP");
+                    (icon, value_color) = (chrome::GRAY, chrome::GRAY);
                 }
             }
-            &BATTERY
+            &super::group::GROUP
+        }
+        Cell::Name => {
+            _ = value.push_str(peripherals.name.as_str());
+            (icon, value_color) = (chrome::VIOLET, chrome::VIOLET);
+            &super::group::NAME
         }
         Cell::Device => {
             _ = value.push_str(peripherals.firmware);
@@ -636,10 +620,7 @@ mod tests {
             cell_at(Point::new(300, 115), MAX_SCROLL),
             Some(Cell::Compass)
         );
-        assert_eq!(
-            cell_at(Point::new(300, 260), MAX_SCROLL),
-            Some(Cell::Battery)
-        );
+        assert_eq!(cell_at(Point::new(300, 260), MAX_SCROLL), Some(Cell::Name));
         assert_eq!(cell_at(Point::new(420, 100), 0), None);
         assert_eq!(cell_at(Point::new(150, 30), 0), None);
     }

@@ -72,6 +72,7 @@ use octowhere_ui::{
     ui::{
         clock::{ClockState, ZoneMode, ZoneState},
         compass::CompassView,
+        group::sim::Sim as Mesh,
         screens::{Battery, Gnss, PeripheralState},
         script::{self, Driver},
         shift,
@@ -665,6 +666,8 @@ fn interact(mut window: Window, masked: bool, extension: &str) {
         firmware: "0.1.0",
         ..PeripheralState::default()
     });
+    // No radio behind it: its other device pairs with whatever this one asks.
+    let mut mesh = Mesh::new(None);
     let mut readings = Readings {
         heading: 37.0,
         pitch: 0,
@@ -808,6 +811,7 @@ fn interact(mut window: Window, masked: bool, extension: &str) {
                     firmware: "0.1.0",
                     ..PeripheralState::default()
                 });
+                stage.set_mesh(mesh.view().clone());
                 readings.chosen = None;
                 reports = scenes::ANSWERING
                     .iter()
@@ -826,6 +830,9 @@ fn interact(mut window: Window, masked: bool, extension: &str) {
             }
             _ => None,
         };
+        if mesh.step(now) {
+            stage.set_mesh(mesh.view().clone());
+        }
         let update = if powered_off {
             Update::default()
         } else {
@@ -844,6 +851,10 @@ fn interact(mut window: Window, masked: bool, extension: &str) {
             powered_off = true;
         }
         samples_fast = update.samples_fast;
+        if let Some(request) = update.mesh {
+            println!("mesh {request:?}");
+            mesh.request(request, now);
+        }
         if update.recalibrate {
             readings.calibration = 0;
             readings_changed = true;

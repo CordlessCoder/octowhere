@@ -82,6 +82,10 @@ pub struct PeripheralState {
     pub always_on: AlwaysOn,
     /// The firmware's version.
     pub firmware: &'static str,
+    /// The stored group's size, while there is one.
+    pub members: Option<u8>,
+    /// This device's stored name.
+    pub name: super::group::view::Name,
 }
 
 impl Default for PeripheralState {
@@ -95,6 +99,8 @@ impl Default for PeripheralState {
             timeout: Timeout::default(),
             always_on: AlwaysOn::Off,
             firmware: "",
+            members: None,
+            name: super::group::view::MeshView::default().name,
         }
     }
 }

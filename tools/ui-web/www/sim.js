@@ -299,7 +299,7 @@ function showReadings() {
 // What shows and how it rests, by the status's bits, for the state strip.
 const VIEW_NAMES = [
   null, "SETTINGS", "BRIGHTNESS", "DEVICE", "CLEAR", "TIME ZONE", "REPLAY", "TIMEOUT", "ALWAYS ON",
-  "POWER OFF",
+  "POWER OFF", "GROUP",
 ];
 const RESTS = ["AWAKE", "DIMMING", "ALWAYS ON", "DARK"];
 
@@ -577,6 +577,7 @@ const VIEWS = [
   "Screen timeout. Drag to choose how long the screen stays awake, then tap to keep it.",
   "Always on. Drag to choose the face's level, or OFF to let the screen go dark, then tap.",
   "Power off. Slide the handle into the target to power off, or tap CANCEL. It cancels after 10 s.",
+  "Group and name. The other device is simulated: after START it appears, shows the same code and confirms it.",
 ];
 
 function showStatus(status) {
