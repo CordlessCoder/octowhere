@@ -15,7 +15,7 @@ fixed slots over contention.
 | --- | --- |
 | Band | O, 869.40–869.65 MHz: 500 mW e.r.p., ≤ 10% duty cycle or polite spectrum access |
 | Channel | 869.4625 MHz, 125 kHz |
-| Modulation | SF7, CR 4/5, explicit header, CRC on, 8-symbol preamble, sync word `0x12` |
+| Modulation | SF7, CR 4/5, explicit header, CRC on, 8-symbol preamble, sync word `0x6C` |
 | Output | +17 dBm on `PA_BOOST`, about 90 mA while transmitting |
 | Access | duty cycle, not polite spectrum access |
 
@@ -27,6 +27,12 @@ do not confuse the two.
   overlaps 869.525 MHz, which is LoRaWAN's default second receive window (gateways transmit there at
   high power) and Meshtastic's EU default at 250 kHz. The sync word filters their packets out, but
   their airtime still collides with ours.
+- **Sync word.** `0x6C` (owner, 2026-10-02). The SX127x's reset value `0x12` is what most private
+  LoRa setups use, and a network on this channel sends with it: two boards decoded its 34- and
+  66-byte packets near -112 dBm. LoRaWAN uses `0x34` and Meshtastic `0x2B`. The sync word is two
+  symbols between the preamble and the header, not a byte of the payload, so a node cannot sync
+  on a `0x12` inside another network's packet. It only keeps other networks' packets from being
+  decoded; their airtime still collides with ours.
 - **Power.** The SX1272 allows +17 dBm continuously and limits +20 dBm to 1% duty (datasheet section
   5.4.3). The antenna is TE 2195835-3 (Digi-Key `17-2195835-3-ND`, datasheet
   `docs/datasheets/ENG_DS_2195835_A1.pdf`), a flexible PCB antenna for 863–928 MHz on a 150 mm

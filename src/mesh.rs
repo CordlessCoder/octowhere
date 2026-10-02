@@ -21,7 +21,10 @@ use octowhere_mesh::{
 };
 use sx127xlora::{
     driver::Sx127xError,
-    registers::{FIFO_ADDR_PTR, FIFO_TX_BASE_ADDR, FIFO_TX_BASE_ADDR_VALUE, IRQ_FLAGS},
+    registers::{
+        FIFO_ADDR_PTR, FIFO_TX_BASE_ADDR, FIFO_TX_BASE_ADDR_VALUE, IRQ_FLAGS,
+        SYNC_WORD as SYNC_WORD_REGISTER,
+    },
     types::{DeviceMode, OCP, PowerRamp, RxDone, TxConfig, TxDone},
 };
 
@@ -32,6 +35,9 @@ use super::{GPS_TIME, LoraPath, SensorLora};
 const DEVELOPMENT_KEY: GroupKey = GroupKey::new(*b"octowhere development group key!");
 /// Band O's lower 125 kHz channel.
 const FREQUENCY_HZ: u32 = 869_462_500;
+/// Off the SX127x's reset value `0x12`, which another network on this channel uses, and off
+/// LoRaWAN's `0x34` and Meshtastic's `0x2B`. Neither nibble is zero.
+const SYNC_WORD: u8 = 0x6C;
 /// How long before its slot the node loads its packet and switches the antenna to transmit.
 const PREPARE_US: i64 = 30_000;
 /// How long after a packet ends `DIO0`'s RxDone is seen, plus how long after its slot's start a
@@ -96,7 +102,8 @@ pub struct Mesh {
 impl Mesh {
     pub async fn new(mut lora: SensorLora, dio0: Input<'static>, path: LoraPath) -> Self {
         let own = provisional_id();
-        let tuned = lora.set_frequency(FREQUENCY_HZ).await.is_ok();
+        let tuned = lora.set_frequency(FREQUENCY_HZ).await.is_ok()
+            && lora.write(SYNC_WORD_REGISTER, SYNC_WORD).await.is_ok();
         // +17 dBm on PA_BOOST, which the module's antenna is most likely on.
         let powered = match TxConfig::new(OCP::new(true, 120), 17, PowerRamp::Us40, false) {
             Ok(config) => lora.configure_tx(config).await.is_ok(),
