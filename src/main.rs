@@ -198,6 +198,10 @@ static SETTINGS_WRITES: Channel<CriticalSectionRawMutex, settings::Write, 4> = C
 /// saved or not. Equal, nothing queued is left to save.
 static SETTINGS_QUEUED: AtomicU32 = AtomicU32::new(0);
 static SETTINGS_DONE: AtomicU32 = AtomicU32::new(0);
+/// The mesh's state for `settings_task` to save, counted in `SETTINGS_QUEUED` with the settings.
+static GROUP_WRITES: Channel<CriticalSectionRawMutex, settings::GroupWrite, 2> = Channel::new();
+/// Whether the last of `GROUP_WRITES` reached the flash.
+static GROUP_SAVED: Signal<CriticalSectionRawMutex, bool> = Signal::new();
 /// Power key presses, from `sensor_task`, which owns the PMIC, for the frame loop.
 static KEY_PRESSES: Channel<CriticalSectionRawMutex, PowerKey, 2> = Channel::new();
 /// BOOT key presses, from `boot_key_task`, for the frame loop.
@@ -867,21 +871,60 @@ async fn boot_key_task(mut key: Input<'static>) {
     }
 }
 
-/// Saves settings as they change. Each write holds the display core for its length.
+/// Saves settings and the mesh's state as they change. Each write holds the display core for
+/// its length.
 #[embassy_executor::task]
 async fn settings_task(mut store: Store) {
     loop {
-        let write = SETTINGS_WRITES.receive().await;
+        let write = select(SETTINGS_WRITES.receive(), GROUP_WRITES.receive()).await;
         let started = Instant::now();
-        let saved = settings::with_display_core_held(|| store.save(write)).await;
+        let saved = match &write {
+            Either::First(write) => settings::with_display_core_held(|| store.save(*write)).await,
+            Either::Second(write) => {
+                let saved = settings::with_display_core_held(|| store.save_mesh(write)).await;
+                GROUP_SAVED.signal(saved);
+                saved
+            }
+        };
         SETTINGS_DONE.fetch_add(1, Ordering::Release);
         let took = started.elapsed().as_micros();
-        if saved {
-            info!("[SETTINGS] {} saved in {}us", write, took);
-        } else {
-            warn!("[SETTINGS] {} not saved, after {}us", write, took);
+        match (write, saved) {
+            (Either::First(write), true) => info!("[SETTINGS] {} saved in {}us", write, took),
+            (Either::First(write), false) => {
+                warn!("[SETTINGS] {} not saved, after {}us", write, took);
+            }
+            (Either::Second(write), true) => info!("[SETTINGS] {} saved in {}us", write, took),
+            (Either::Second(write), false) => {
+                warn!("[SETTINGS] {} not saved, after {}us", write, took);
+            }
         }
     }
+}
+
+/// Queues a change to the mesh's state without waiting. Returns false when the queue is full.
+fn queue_group_write(write: settings::GroupWrite) -> bool {
+    match GROUP_WRITES.try_send(write) {
+        Ok(()) => {
+            SETTINGS_QUEUED.fetch_add(1, Ordering::Relaxed);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+/// Queues a change to the mesh's state, waiting for room.
+async fn send_group_write(write: settings::GroupWrite) {
+    SETTINGS_QUEUED.fetch_add(1, Ordering::Relaxed);
+    GROUP_WRITES.send(write).await;
+}
+
+/// Saves a change to the mesh's state, and says whether it reached the flash.
+async fn save_group(write: settings::GroupWrite) -> bool {
+    GROUP_SAVED.reset();
+    send_group_write(write).await;
+    with_timeout(Duration::from_secs(10), GROUP_SAVED.wait())
+        .await
+        .unwrap_or(false)
 }
 
 #[embassy_executor::task]
@@ -1462,6 +1505,7 @@ struct RadioTask {
     lora: SensorLora,
     dio0: Input<'static>,
     path: LoraPath,
+    mesh: mesh::Start,
 }
 
 /// Owns the radio. Without a link test it leaves the radio as start-up configured it.
@@ -1471,6 +1515,7 @@ async fn radio_task(task: RadioTask) {
         mut lora,
         mut dio0,
         mut path,
+        mesh,
     } = task;
 
     #[cfg(feature = "lora-link-tx")]
@@ -1538,7 +1583,7 @@ async fn radio_task(task: RadioTask) {
     }
 
     #[cfg(not(any(feature = "lora-link-tx", feature = "lora-link-rx")))]
-    mesh::Mesh::new(lora, dio0, path).await.run().await;
+    mesh::Mesh::new(lora, dio0, path, mesh).await.run().await;
 }
 
 fn bench_repeat<R>(mut the_thing: impl FnMut() -> R, name: &str) -> (R, Duration) {
@@ -1781,6 +1826,14 @@ async fn async_main(spawner: Spawner) {
     let seed = esp_hal::rng::Rng::new().random();
     let mut store = unsafe { Store::new(esp_storage::FlashStorage::new(peripherals.FLASH), seed) };
     let saved = store.load();
+    // The ADC's noise makes the RNG truly random, which the mesh's keys and nonces need. It
+    // stays on.
+    static TRNG_SOURCE: StaticCell<esp_hal::rng::TrngSource<'static>> = StaticCell::new();
+    TRNG_SOURCE.init(esp_hal::rng::TrngSource::new(
+        peripherals.RNG,
+        peripherals.ADC1,
+    ));
+    let mesh_start = mesh_start(store.load_mesh());
     info!(
         "[SETTINGS] zone mode={} manual={} automatic={} brightness={} timeout={} always_on={}",
         saved.zone_mode,
@@ -1791,6 +1844,8 @@ async fn async_main(spawner: Spawner) {
         saved.always_on.map(choice_label),
     );
     spawner.spawn(settings_task(store).unwrap());
+    #[cfg(feature = "pair-inject")]
+    spawner.spawn(mesh::inject::task().unwrap());
     // The board has no pull-up of its own on GPIO0 past reset.
     let boot_key = Input::new(
         peripherals.GPIO0,
@@ -1829,13 +1884,44 @@ async fn async_main(spawner: Spawner) {
         automatic: saved.automatic_zone,
         looked_up_at: None,
     };
-    join(bring_up(spawner, parts, zones), frame_loop(stage, fb_st)).await;
+    join(
+        bring_up(spawner, parts, zones, mesh_start),
+        frame_loop(stage, fb_st),
+    )
+    .await;
+}
+
+/// The mesh's identity and group as stored, making the identity on first boot.
+fn mesh_start(saved: settings::MeshSaved) -> mesh::Start {
+    let mac = esp_hal::efuse::base_mac_address();
+    let mac: [u8; 6] = mac.as_bytes()[..6].try_into().expect("a six-byte MAC");
+    let secret = saved.secret.or_else(|| {
+        let secret = mesh::random::<32>()?;
+        info!("[MESH] made this device's key pair");
+        queue_group_write(settings::GroupWrite::Identity(secret));
+        Some(secret)
+    });
+    let secret = secret.unwrap_or_else(|| {
+        // Without a random source the device cannot pair; this key is never stored.
+        warn!("[MESH] no random source for a key pair");
+        [0; 32]
+    });
+    mesh::Start {
+        me: octowhere_mesh::pair::Identity {
+            secret: octowhere_mesh::pair::StaticSecret::from(secret),
+            mac,
+            name: saved
+                .name
+                .unwrap_or_else(|| octowhere_mesh::members::Name::from_mac(&mac)),
+        },
+        group: saved.group,
+    }
 }
 
 /// Brings up every part behind the self-test, each against its deadline, then starts the tasks
 /// that own them and hands the touch controller to the frame loop. A part that fails is left
 /// out, and its owner runs without it.
-async fn bring_up(spawner: Spawner, parts: Parts, zones: ZoneTracker) {
+async fn bring_up(spawner: Spawner, parts: Parts, zones: ZoneTracker, mesh: mesh::Start) {
     let bus = BUS_EXECUTOR
         .init(esp_rtos::embassy::InterruptExecutor::new(
             parts.bus_interrupt,
@@ -2051,6 +2137,7 @@ async fn bring_up(spawner: Spawner, parts: Parts, zones: ZoneTracker) {
                 | (1 << board::EXIO_LORA_RESET)
                 | (1 << board::EXIO_LORA_TX_SWITCH)),
         ),
+        mesh,
     });
 
     if touch_ok {

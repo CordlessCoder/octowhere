@@ -1,10 +1,12 @@
 //! Settings kept across restarts, in an ekv database on the partition table's `storage`
-//! partition. Nothing else uses that partition.
+//! partition, and beside them the mesh's: this device's key pair and name, and its group.
+//! Nothing else uses that partition.
 //!
 //! A flash write stops the cache both cores run from, so the display core must wait in RAM
 //! for its length. Core 0 asks with [`with_display_core_held`], and the display core's loop owes
 //! a call to [`hold_display_core_if_asked`] between frames, outside any critical section.
 
+use alloc::boxed::Box;
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use defmt::warn;
@@ -13,6 +15,11 @@ use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_time::{Duration, Timer};
 use esp_bootloader_esp_idf::partitions::{self, DataPartitionSubType, PartitionType};
 use esp_storage::{FlashStorage, FlashStorageError};
+use octowhere_mesh::{
+    IDS,
+    members::{Group, Member, Name, RECORD_MAX_LEN},
+    seal::Key,
+};
 use octowhere_ui::{
     tz::DATABASE,
     ui::{
@@ -35,6 +42,23 @@ const KEY_MANUAL_ZONE: &[u8] = b"manual_zone";
 /// The screen timeout in seconds, little-endian, 0 for never.
 const KEY_TIMEOUT: &[u8] = b"timeout";
 const KEY_ZONE_MODE: &[u8] = b"zone_mode";
+/// Every settings key, ascending, which clearing deletes.
+const SETTINGS_KEYS: [&[u8]; 6] = [
+    KEY_ALWAYS_ON,
+    KEY_AUTOMATIC_ZONE,
+    KEY_BRIGHTNESS,
+    KEY_MANUAL_ZONE,
+    KEY_TIMEOUT,
+    KEY_ZONE_MODE,
+];
+/// The group key and this device's id in it.
+const KEY_GROUP: &[u8] = b"group";
+/// This device's X25519 secret. It is in the clear: `context/LORA-PROTOCOL.md` defers flash
+/// encryption.
+const KEY_IDENTITY: &[u8] = b"identity";
+const KEY_NAME: &[u8] = b"name";
+/// The first byte of each mesh value, so a later layout can tell this one apart.
+const MESH_VERSION: u8 = 1;
 const MODE_AUTOMATIC: u8 = 0;
 const MODE_MANUAL: u8 = 1;
 /// Long enough for the longest zone name.
@@ -67,6 +91,45 @@ pub enum Write {
     AlwaysOn(AlwaysOn),
     /// Forget every setting.
     Clear,
+}
+
+/// The mesh's state as stored.
+#[derive(Default)]
+pub struct MeshSaved {
+    pub secret: Option<[u8; 32]>,
+    pub name: Option<Name>,
+    pub group: Option<Box<Group>>,
+}
+
+/// One change to the mesh's state to save.
+pub enum GroupWrite {
+    Identity([u8; 32]),
+    Name(Name),
+    /// The whole group, replacing what was stored.
+    Group(Box<Group>),
+    /// Forget the group: its key, the members and this device's id.
+    Leave,
+}
+
+impl defmt::Format for GroupWrite {
+    fn format(&self, f: defmt::Formatter) {
+        match self {
+            Self::Identity(_) => defmt::write!(f, "Identity"),
+            Self::Name(name) => defmt::write!(f, "Name({})", name),
+            Self::Group(group) => {
+                defmt::write!(f, "Group(own={} members={})", group.own(), group.count())
+            }
+            Self::Leave => defmt::write!(f, "Leave"),
+        }
+    }
+}
+
+/// A member's key: `group.member.` and its id in two digits, which sorts after `group`.
+fn member_key(id: u8) -> [u8; 15] {
+    let mut key = *b"group.member.00";
+    key[13] = b'0' + id / 10;
+    key[14] = b'0' + id % 10;
+    key
 }
 
 /// Names the zone, since a `ZoneId` changes when the zone data is rebuilt.
@@ -242,6 +305,113 @@ impl Store {
         })
     }
 
+    /// Reads the mesh's state. Call it after [`Store::load`], which mounts the database.
+    pub fn load_mesh(&mut self) -> MeshSaved {
+        let Some(database) = &self.database else {
+            return MeshSaved::default();
+        };
+        embassy_futures::block_on(async {
+            let transaction = database.read_transaction().await;
+            let mut buffer = [0; VALUE_BUFFER];
+            let mut value = async |key: &[u8]| -> Option<heapless::Vec<u8, VALUE_BUFFER>> {
+                match transaction.read(key, &mut buffer).await {
+                    Ok(length) => match buffer[..length].split_first() {
+                        Some((&MESH_VERSION, rest)) => heapless::Vec::from_slice(rest).ok(),
+                        _ => {
+                            warn!("[SETTINGS] {=[u8]:a} has another layout", key);
+                            None
+                        }
+                    },
+                    Err(ReadError::KeyNotFound) => None,
+                    Err(_) => {
+                        warn!("[SETTINGS] {=[u8]:a} unreadable", key);
+                        None
+                    }
+                }
+            };
+            let group = value(KEY_GROUP).await;
+            let mut members = [None; IDS as usize];
+            if group.is_some() {
+                for id in 0..IDS {
+                    let Some(record) = value(&member_key(id)).await else {
+                        continue;
+                    };
+                    match Member::decode(&record) {
+                        Some((at, member)) if at == id => members[usize::from(id)] = Some(member),
+                        _ => warn!("[SETTINGS] member {} unreadable", id),
+                    }
+                }
+            }
+            let group = group.and_then(|group| {
+                let (key, own) = (group.get(..32)?, *group.get(32)?);
+                Group::new(Key::new(key.try_into().ok()?), own, members)
+            });
+            let secret = value(KEY_IDENTITY)
+                .await
+                .and_then(|secret| secret.as_slice().try_into().ok());
+            let name = value(KEY_NAME).await.and_then(|name| Name::new(&name));
+            MeshSaved {
+                secret,
+                name,
+                group: group.map(Box::new),
+            }
+        })
+    }
+
+    /// Saves one change to the mesh's state, and says whether it reached the flash.
+    pub fn save_mesh(&mut self, write: &GroupWrite) -> bool {
+        let Some(database) = &self.database else {
+            return false;
+        };
+        embassy_futures::block_on(async {
+            let mut transaction = database.write_transaction().await;
+            let mut value = [0; VALUE_BUFFER];
+            value[0] = MESH_VERSION;
+            // A transaction takes its keys in ascending order.
+            let written = match write {
+                GroupWrite::Identity(secret) => {
+                    value[1..33].copy_from_slice(secret);
+                    transaction.write(KEY_IDENTITY, &value[..33]).await
+                }
+                GroupWrite::Name(name) => {
+                    let name = name.as_bytes();
+                    value[1..1 + name.len()].copy_from_slice(name);
+                    transaction.write(KEY_NAME, &value[..1 + name.len()]).await
+                }
+                GroupWrite::Group(group) => {
+                    value[1..33].copy_from_slice(group.key().bytes());
+                    value[33] = group.own();
+                    let mut written = transaction.write(KEY_GROUP, &value[..34]).await;
+                    for id in 0..IDS {
+                        if written.is_err() {
+                            break;
+                        }
+                        written = match group.member(id) {
+                            Some(member) => {
+                                let mut record = [0; RECORD_MAX_LEN];
+                                let len = member.encode(id, &mut record);
+                                value[1..1 + len].copy_from_slice(&record[..len]);
+                                transaction.write(&member_key(id), &value[..1 + len]).await
+                            }
+                            None => transaction.delete(&member_key(id)).await,
+                        };
+                    }
+                    written
+                }
+                GroupWrite::Leave => {
+                    let mut written = transaction.delete(KEY_GROUP).await;
+                    for id in 0..IDS {
+                        if written.is_ok() {
+                            written = transaction.delete(&member_key(id)).await;
+                        }
+                    }
+                    written
+                }
+            };
+            written.is_ok() && transaction.commit().await.is_ok()
+        })
+    }
+
     /// Saves one change, and says whether it reached the flash.
     pub fn save(&mut self, write: Write) -> bool {
         let Some(database) = &self.database else {
@@ -249,7 +419,14 @@ impl Store {
         };
         embassy_futures::block_on(async {
             if let Write::Clear = write {
-                return database.format().await.is_ok();
+                // The group and the mesh's identity are not settings, and stay.
+                let mut transaction = database.write_transaction().await;
+                for key in SETTINGS_KEYS {
+                    if transaction.delete(key).await.is_err() {
+                        return false;
+                    }
+                }
+                return transaction.commit().await.is_ok();
             }
             let name = |zone: ZoneId| DATABASE.zone(zone).name.as_bytes();
             let mut transaction = database.write_transaction().await;

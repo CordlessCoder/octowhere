@@ -1,18 +1,26 @@
 //! Runs the location mesh on the radio: sends this node's packet in its slot, listens to the other
-//! slots, and keeps the timebase the slots are placed on. `octowhere_mesh` holds the protocol and
+//! slots, and keeps the timebase the slots are placed on. Pairing takes the radio over, on a
+//! channel of its own, until it ends. `octowhere_mesh` holds the protocol and
 //! `context/LORA-PROTOCOL.md` the design.
 
+use alloc::boxed::Box;
 use core::cell::Cell;
 
 use defmt::{info, warn};
-use embassy_futures::select::{Either, select};
-use embassy_sync::blocking_mutex::{Mutex as BlockingMutex, raw::CriticalSectionRawMutex};
-use embassy_time::{Instant, Timer};
+use embassy_futures::select::{Either, Either3, select, select3};
+use embassy_sync::{
+    blocking_mutex::{Mutex as BlockingMutex, raw::CriticalSectionRawMutex},
+    channel::Channel,
+};
+use embassy_time::{Duration, Instant, Timer};
 use esp_hal::gpio::Input;
 use lc76g::FixQuality;
+use octowhere::settings::GroupWrite;
 use octowhere_mesh::{
     clock::{Clock, Taken},
+    members::{Group, Member, Merged, Name},
     packet::{Builder, Entry, Hdop, Header, MAX_PACKET, Plain, Quality, Record, Source, Timebase},
+    pair::{Identity, MAX_FRAME, Pairing, Phase, Role},
     schedule::{
         GUARD_US, ROUND_US, airtime_us, base_of, named_slot, next_any_slot, next_slot, round_at,
     },
@@ -25,19 +33,23 @@ use sx127xlora::{
         FIFO_ADDR_PTR, FIFO_TX_BASE_ADDR, FIFO_TX_BASE_ADDR_VALUE, IRQ_FLAGS,
         SYNC_WORD as SYNC_WORD_REGISTER,
     },
-    types::{DeviceMode, OCP, PowerRamp, RxDone, TxConfig, TxDone},
+    types::{DeviceMode, OCP, PowerRamp, RxDone, RxPacket, TxConfig, TxDone},
 };
 
 use super::{GPS_TIME, LoraPath, SensorLora};
 
-/// The group key until pairing gives the node one. Anyone with the source can read and forge every
-/// packet sealed under it.
-const DEVELOPMENT_KEY: Key = Key::new(*b"octowhere development group key!");
 /// Band O's lower 125 kHz channel.
 const FREQUENCY_HZ: u32 = 869_462_500;
 /// Off the SX127x's reset value `0x12`, which another network on this channel uses, and off
 /// LoRaWAN's `0x34` and Meshtastic's `0x2B`. Neither nibble is zero.
 const SYNC_WORD: u8 = 0x6C;
+/// On PA_BOOST, which the module's antenna is on.
+const POWER_DBM: u8 = 17;
+/// Band O's upper 125 kHz channel, which pairing has to itself.
+const PAIR_FREQUENCY_HZ: u32 = 869_587_500;
+const PAIR_SYNC_WORD: u8 = 0xA6;
+/// PA_BOOST's lowest. Two devices side by side overload each other's receiver at +17 dBm.
+const PAIR_POWER_DBM: u8 = 2;
 /// How long before its slot the node loads its packet and switches the antenna to transmit.
 const PREPARE_US: i64 = 30_000;
 /// How long after a packet ends `DIO0`'s RxDone is seen, plus how long after its slot's start a
@@ -50,6 +62,10 @@ const SEND_TIMEOUT_US: i64 = 500_000;
 const MAX_ENTRIES: usize = 24;
 /// How often the radio's flags are read where `DIO0` does not follow them.
 const POLL_US: u64 = 1_000;
+/// How long a pairing waits for the group to be stored before it counts as a failure.
+const STORE_TIMEOUT: Duration = Duration::from_secs(10);
+/// The longest a pairing listens before it runs its timers again.
+const PAIR_LISTEN_US: i64 = 250_000;
 const IRQ_TX_DONE: u8 = 0x08;
 const IRQ_RX_DONE: u8 = 0x40;
 
@@ -60,6 +76,8 @@ pub static FIX: BlockingMutex<CriticalSectionRawMutex, Cell<Option<Fix>>> =
 /// not stopped.
 pub static RTC_TIME: BlockingMutex<CriticalSectionRawMutex, Cell<Option<(i64, Instant)>>> =
     BlockingMutex::new(Cell::new(None));
+/// What the user asks of the mesh.
+pub static COMMANDS: Channel<CriticalSectionRawMutex, Command, 4> = Channel::new();
 
 #[derive(Clone, Copy)]
 pub struct Fix {
@@ -72,10 +90,38 @@ pub struct Fix {
     pub hdop_milli: Option<u32>,
 }
 
-/// The node's id until pairing gives it one: the low five bits of its MAC. Two boards can share
-/// one.
-pub fn provisional_id() -> u8 {
-    esp_hal::efuse::base_mac_address().as_bytes()[5] & 0x1f
+#[derive(Clone, Copy, defmt::Format)]
+pub enum Command {
+    /// Starts pairing to add a device to the group, founding one if this node has none.
+    Add,
+    /// Starts pairing to join a group. Only a node in no group can.
+    Join,
+    /// Adding: picks a device found, by its place in the list.
+    Choose(u8),
+    /// The codes match.
+    Accept,
+    Decline,
+    /// The codes differ.
+    Mismatch,
+    Cancel,
+    /// Forgets the group.
+    Leave,
+    Rename(Name),
+}
+
+/// The mesh's state as the firmware starts.
+pub struct Start {
+    pub me: Identity,
+    pub group: Option<Box<Group>>,
+}
+
+/// Random bytes from the hardware's true random source, or `None` without it. `async_main`
+/// enables it at boot.
+pub fn random<const N: usize>() -> Option<[u8; N]> {
+    let trng = esp_hal::rng::Trng::try_new().ok()?;
+    let mut bytes = [0; N];
+    trng.read(&mut bytes);
+    Some(bytes)
 }
 
 fn local() -> i64 {
@@ -86,89 +132,190 @@ fn until(local: i64) -> Timer {
     Timer::at(Instant::from_micros(local.max(0) as u64))
 }
 
+/// UTC seconds at local time `now`, from GNSS or the RTC, or 0 with neither.
+fn utc_seconds(now: i64) -> u32 {
+    let utc = GPS_TIME
+        .lock(Cell::get)
+        .map(|gps| now - gps.offset)
+        .or_else(|| rtc_now(now));
+    utc.map_or(0, |utc| {
+        (utc / 1_000_000).clamp(0, i64::from(u32::MAX)) as u32
+    })
+}
+
 pub struct Mesh {
     lora: SensorLora,
     dio0: Input<'static>,
     /// `DIO0` rose for the last flag it was mapped to. Where it did not, the flags are polled.
     dio0_follows: bool,
     path: LoraPath,
+    me: Identity,
+    group: Option<Group>,
+    /// The group changed and is not yet queued to be stored.
+    unsaved: bool,
     clock: Clock,
     table: Table,
-    own: u8,
     /// The timebase time the next own slot is looked for from, past the last one decided.
     after: i64,
+    shown: Option<Timebase>,
 }
 
 impl Mesh {
-    pub async fn new(mut lora: SensorLora, dio0: Input<'static>, path: LoraPath) -> Self {
-        let own = provisional_id();
-        let tuned = lora.set_frequency(FREQUENCY_HZ).await.is_ok()
-            && lora.write(SYNC_WORD_REGISTER, SYNC_WORD).await.is_ok();
-        // +17 dBm on PA_BOOST, which the module's antenna is most likely on.
-        let powered = match TxConfig::new(OCP::new(true, 120), 17, PowerRamp::Us40, false) {
-            Ok(config) => lora.configure_tx(config).await.is_ok(),
-            Err(_) => false,
-        };
-        info!(
-            "[MESH] id={} tuned={} powered={} listening for {}s first",
-            own,
-            tuned,
-            powered,
-            octowhere_mesh::clock::SWEEP_US / 1_000_000
-        );
+    pub async fn new(lora: SensorLora, dio0: Input<'static>, path: LoraPath, start: Start) -> Self {
+        let group = start.group.map(|group| *group);
+        let own = group.as_ref().map_or(0, Group::own);
+        match &group {
+            Some(group) => info!(
+                "[MESH] id={} name={} members={} mac={=[u8]:02x}",
+                own,
+                group.me().name,
+                group.count(),
+                start.me.mac
+            ),
+            None => info!(
+                "[MESH] in no group, name={} mac={=[u8]:02x}",
+                start.me.name, start.me.mac
+            ),
+        }
         let now = local();
-        Self {
+        let mut mesh = Self {
             lora,
             dio0,
             dio0_follows: true,
             path,
+            me: start.me,
+            group,
+            unsaved: false,
             clock: Clock::new(own, now),
             table: Table::new(own),
-            own,
             after: i64::MIN,
-        }
+            shown: None,
+        };
+        let tuned = mesh.tune(FREQUENCY_HZ, SYNC_WORD, POWER_DBM).await;
+        info!("[MESH] tuned={}", tuned);
+        mesh
+    }
+
+    async fn tune(&mut self, frequency: u32, sync_word: u8, power: u8) -> bool {
+        let lora = &mut self.lora;
+        let _ = lora.set_device_mode(DeviceMode::STDBY).await;
+        let tuned = lora.set_frequency(frequency).await.is_ok()
+            && lora.write(SYNC_WORD_REGISTER, sync_word).await.is_ok();
+        let powered = match TxConfig::new(OCP::new(true, 120), power, PowerRamp::Us40, false) {
+            Ok(config) => lora.configure_tx(config).await.is_ok(),
+            Err(_) => false,
+        };
+        self.idle_receive().await;
+        tuned && powered
+    }
+
+    /// Puts the radio in standby with its antenna on the receive path and `DIO0` on RxDone,
+    /// whatever was interrupted.
+    async fn idle_receive(&mut self) {
+        let _ = self.lora.set_device_mode(DeviceMode::STDBY).await;
+        let _ = self.lora.clear_all_interrupts().await;
+        let _ = self.lora.map_dio0::<RxDone>().await;
+        let _ = self.path.receive().await;
     }
 
     pub async fn run(mut self) -> ! {
-        let _ = self.lora.map_dio0::<RxDone>().await;
-        let _ = self.path.receive().await;
-        let mut shown = None;
         loop {
-            let now = local();
-            self.take_readings();
-            self.clock.tick(now, rtc_now(now));
-            let timebase = self.clock.at(now).map(|(_, timebase)| timebase);
-            if timebase != shown {
-                log_timebase(timebase, self.clock.is_sweeping());
-                shown = timebase;
-            }
-            let Some((time, _)) = self.clock.at(now) else {
-                let end = self.clock.sweep_ends().unwrap_or(now + ROUND_US);
-                self.listen(end).await;
-                continue;
+            let command = if self.group.is_some() {
+                match select(self.step(), COMMANDS.receive()).await {
+                    Either::First(()) => continue,
+                    Either::Second(command) => {
+                        // The step may have stopped anywhere, a transmission included.
+                        self.idle_receive().await;
+                        command
+                    }
+                }
+            } else {
+                let _ = self.lora.set_device_mode(DeviceMode::SLEEP).await;
+                COMMANDS.receive().await
             };
-            let (round, start) = next_slot((time + PREPARE_US).max(self.after), self.own);
-            let send_at = start + (now - time);
-            if self.listen(send_at - PREPARE_US).await {
-                self.after = i64::MIN;
-                continue;
-            }
-            self.after = start + 1;
-            let sending = self.table.wants_to_send(round);
-            info!("[MESH] round={} sending={}", round, sending);
-            if sending {
-                self.send(round, start, timebase, send_at).await;
-            }
+            self.command(command).await;
         }
     }
 
-    fn take_readings(&mut self) {
+    async fn command(&mut self, command: Command) {
+        info!("[MESH] command {}", command);
+        match command {
+            Command::Add => self.pair(Role::Add).await,
+            Command::Join if self.group.is_some() => {
+                warn!("[MESH] in a group; it must leave before it can join another");
+            }
+            Command::Join => self.pair(Role::Join).await,
+            Command::Leave => {
+                if self.group.is_some() && super::save_group(GroupWrite::Leave).await {
+                    self.group = None;
+                    self.unsaved = false;
+                    info!("[MESH] left the group");
+                } else {
+                    warn!("[MESH] not left");
+                }
+            }
+            Command::Rename(name) => {
+                self.me.name = name;
+                let saved = super::save_group(GroupWrite::Name(name)).await;
+                info!("[MESH] renamed {} saved={}", name, saved);
+                if let Some(group) = &mut self.group {
+                    group.rename(name, utc_seconds(local()));
+                    self.unsaved = true;
+                }
+            }
+            Command::Choose(_)
+            | Command::Accept
+            | Command::Decline
+            | Command::Mismatch
+            | Command::Cancel => warn!("[MESH] no pairing to take it"),
+        }
+    }
+
+    /// Waits for the node's next slot and sends in it, listening meanwhile.
+    async fn step(&mut self) {
+        if self.unsaved
+            && let Some(group) = &self.group
+            && super::queue_group_write(GroupWrite::Group(Box::new(group.clone())))
+        {
+            self.unsaved = false;
+        }
+        let Some(own) = self.group.as_ref().map(Group::own) else {
+            return;
+        };
+        let now = local();
+        self.take_readings(own);
+        self.clock.tick(now, rtc_now(now));
+        let timebase = self.clock.at(now).map(|(_, timebase)| timebase);
+        if timebase != self.shown {
+            log_timebase(timebase, self.clock.is_sweeping());
+            self.shown = timebase;
+        }
+        let Some((time, _)) = self.clock.at(now) else {
+            let end = self.clock.sweep_ends().unwrap_or(now + ROUND_US);
+            self.listen(end).await;
+            return;
+        };
+        let (round, start) = next_slot((time + PREPARE_US).max(self.after), own);
+        let send_at = start + (now - time);
+        if self.listen(send_at - PREPARE_US).await {
+            self.after = i64::MIN;
+            return;
+        }
+        self.after = start + 1;
+        let sending = self.table.wants_to_send(round);
+        info!("[MESH] round={} sending={}", round, sending);
+        if sending {
+            self.send(round, start, timebase, send_at).await;
+        }
+    }
+
+    fn take_readings(&mut self, own: u8) {
         let gps = GPS_TIME.lock(Cell::get);
         if let Some(gps) = gps {
             self.clock.gps(gps.offset, gps.updated.as_micros() as i64);
             if let Some(fix) = FIX.lock(Cell::get) {
                 self.table.set_own(Entry {
-                    id: self.own,
+                    id: own,
                     latitude: fix.latitude,
                     longitude: fix.longitude,
                     stamp: fix.stamp,
@@ -191,18 +338,19 @@ impl Mesh {
 
     /// Listens until local time `end`: throughout while sweeping or without a timebase, and
     /// otherwise in a window round each other id's slot. Returns whether a packet moved the node
-    /// to another timebase, which moves every slot.
+    /// to another timebase or another id, which moves every slot.
     async fn listen(&mut self, end: i64) -> bool {
         loop {
             let now = local();
             if now >= end {
                 return false;
             }
+            let own = self.group.as_ref().map_or(0, Group::own);
             let (open, close) = match self.clock.at(now) {
                 Some((time, _)) if !self.clock.is_sweeping() => {
                     let offset = now - time;
                     let mut slot = next_any_slot(time - GUARD_US - airtime_us(MAX_PACKET) + 1);
-                    if slot.0 == self.own {
+                    if slot.0 == own {
                         slot = next_any_slot(slot.1 + 1);
                     }
                     let open = slot.1 - GUARD_US + offset;
@@ -233,14 +381,14 @@ impl Mesh {
         }
     }
 
-    /// Takes the packet `DIO0` reported. Returns whether it moved the node to its timebase.
-    async fn receive(&mut self) -> bool {
+    /// Reads the packet `DIO0` reported, and when its RxDone was seen.
+    async fn read_packet(&mut self) -> Option<(RxPacket, i64)> {
         let done = local();
         let packet = self.lora.rx_packet().await;
         let flags = self.lora.read(IRQ_FLAGS).await.ok();
         let _ = self.lora.clear_all_interrupts().await;
-        let packet = match packet {
-            Ok(packet) => packet,
+        match packet {
+            Ok(packet) => Some((packet, done)),
             Err(error) => {
                 warn!(
                     "[MESH] receive failed: {} flags={}",
@@ -254,12 +402,23 @@ impl Mesh {
                     );
                     self.dio0_follows = false;
                 }
-                return false;
+                None
             }
+        }
+    }
+
+    /// Takes the packet `DIO0` reported. Returns whether it moved the node to its timebase, or
+    /// to another id.
+    async fn receive(&mut self) -> bool {
+        let Some((packet, done)) = self.read_packet().await else {
+            return false;
+        };
+        let Some(group) = &mut self.group else {
+            return false;
         };
         let len = packet.length;
         let mut bytes = packet.payload;
-        let Ok(plain) = seal::open(&DEVELOPMENT_KEY, &mut bytes[..len]) else {
+        let Ok(plain) = seal::open(group.key(), &mut bytes[..len]) else {
             info!("[MESH] not ours len={} rssi={}", len, packet.rssi);
             return false;
         };
@@ -283,7 +442,7 @@ impl Mesh {
             .clock
             .at(done)
             .map(|(time, _)| (time / 1_000_000) as u32);
-        let (mut entries, mut news, mut neighbours) = (0, 0, 0);
+        let (mut entries, mut news, mut neighbours, mut moved) = (0, 0, 0, false);
         for record in plain.records() {
             match record {
                 Record::Positions(positions) => {
@@ -295,7 +454,26 @@ impl Mesh {
                     }
                 }
                 Record::Neighbours(set) => neighbours = set,
-                Record::Member(..) | Record::Other(..) => {}
+                Record::Member(id, member) => {
+                    match group.merge(id, member, now.unwrap_or_else(|| utc_seconds(done))) {
+                        Merged::Unchanged => {}
+                        Merged::Changed => {
+                            info!("[MESH] member {} is {} now", id, member.name);
+                            self.unsaved = true;
+                        }
+                        Merged::Renumbered { from, to } => {
+                            warn!(
+                                "[MESH] another device keeps id {}; this one moves to {}",
+                                from, to
+                            );
+                            self.clock.renumber(to);
+                            self.table.renumber(to);
+                            self.unsaved = true;
+                            moved = true;
+                        }
+                    }
+                }
+                Record::Other(..) => {}
             }
         }
         info!(
@@ -312,16 +490,18 @@ impl Mesh {
             news,
             neighbours,
         );
-        arrival.taken == Taken::Adopted
+        arrival.taken == Taken::Adopted || moved
     }
 
     /// Sends this node's packet in its slot in `round`, which starts at timebase time `start` and
     /// local time `send_at`.
     async fn send(&mut self, round: i64, start: i64, timebase: Option<Timebase>, send_at: i64) {
-        let Some(timebase) = timebase else { return };
+        let (Some(timebase), Some(group)) = (timebase, &mut self.group) else {
+            return;
+        };
         let base = base_of(start);
         let header = Header {
-            sender: self.own,
+            sender: group.own(),
             timebase,
             base,
             phase: 0,
@@ -330,6 +510,9 @@ impl Mesh {
         let mut builder = Builder::new(&mut packet[SIV_LEN..], &header);
         let neighbours = self.table.neighbours(round);
         let _ = builder.neighbours(neighbours);
+        // Ahead of the positions, so a busy table never crowds it out.
+        let (member_id, member) = group.next_record();
+        let _ = builder.member(member_id, &member);
         let mut entries = [Entry {
             id: 0,
             latitude: 0,
@@ -344,30 +527,178 @@ impl Mesh {
             warn!("[MESH] positions did not fit");
         }
         let plain_len = builder.finish();
-        let len = seal::seal(&DEVELOPMENT_KEY, &mut packet, plain_len);
+        let len = seal::seal(group.key(), &mut packet, plain_len);
 
-        if self.load(&packet[..len]).await.is_err() {
+        let Some((done, flags)) = self.transmit(&packet[..len], Some(send_at)).await else {
             warn!("[MESH] loading the packet failed");
             return;
+        };
+        self.table.sent(&entries[..n]);
+        info!(
+            "[MESH] sent round={} len={} entries={} member={} neighbours={=u32:#010x} done={} flags={}",
+            round, len, n, member_id, neighbours, done, flags
+        );
+    }
+
+    /// Sends `packet`, at local time `at` or at once. Returns whether TxDone was seen and the
+    /// flags after, and leaves the radio as [`Mesh::idle_receive`] does.
+    async fn transmit(&mut self, packet: &[u8], at: Option<i64>) -> Option<(bool, Option<u8>)> {
+        if self.load(packet).await.is_err() {
+            self.idle_receive().await;
+            return None;
         }
-        let switched = self.path.transmit().await.is_ok();
-        until(send_at).await;
-        let late = local() - send_at;
-        let started = self.lora.set_device_mode(DeviceMode::TX).await.is_ok();
-        let done = self.wait_for(IRQ_TX_DONE, send_at + SEND_TIMEOUT_US).await;
+        let _ = self.path.transmit().await;
+        if let Some(at) = at {
+            until(at).await;
+        }
+        let started = local();
+        if let Some(at) = at
+            && started - at > 1_000
+        {
+            warn!("[MESH] sent {}us late", started - at);
+        }
+        let _ = self.lora.set_device_mode(DeviceMode::TX).await;
+        let done = self.wait_for(IRQ_TX_DONE, started + SEND_TIMEOUT_US).await;
         let flags = self.lora.read(IRQ_FLAGS).await.ok();
         if self.dio0_follows && !done && flags.is_some_and(|flags| flags & IRQ_TX_DONE != 0) {
             warn!("[MESH] DIO0 did not rise for TxDone; polling the radio's flags from here");
             self.dio0_follows = false;
         }
-        let _ = self.lora.clear_all_interrupts().await;
-        let _ = self.path.receive().await;
-        let _ = self.lora.map_dio0::<RxDone>().await;
-        self.table.sent(&entries[..n]);
-        info!(
-            "[MESH] sent round={} len={} entries={} neighbours={=u32:#010x} late_us={} switched={} started={} done={} flags={}",
-            round, len, n, neighbours, late, switched, started, done, flags
-        );
+        self.idle_receive().await;
+        Some((done, flags))
+    }
+
+    /// Runs a pairing in `role` on the pairing channel until it ends, then returns to the mesh's
+    /// channel. A node that joins, or founds a group, starts its timebase afresh.
+    async fn pair(&mut self, role: Role) {
+        let (Some(nonce), Some(founding)) = (random::<16>(), random::<32>()) else {
+            warn!("[PAIR] no true random source; not pairing");
+            return;
+        };
+        if !self
+            .tune(PAIR_FREQUENCY_HZ, PAIR_SYNC_WORD, PAIR_POWER_DBM)
+            .await
+        {
+            warn!("[PAIR] tuning to the pairing channel failed");
+        }
+        let now = local();
+        let had_group = self.group.is_some();
+        let mut pairing = match role {
+            Role::Join => Pairing::join(&self.me, nonce, now),
+            Role::Add => {
+                let utc = utc_seconds(now);
+                let group = self.group.clone().unwrap_or_else(|| {
+                    Group::found(
+                        Key::new(founding),
+                        Member {
+                            public: self.me.public(),
+                            joined: utc,
+                            changed: utc,
+                            mac: self.me.mac,
+                            name: self.me.name,
+                        },
+                    )
+                });
+                Pairing::add(&self.me, group, nonce, now, utc)
+            }
+        };
+        let mut frame = [0u8; MAX_FRAME];
+        let mut shown = None;
+        let mut listening = false;
+        let mut saving: Option<Instant> = None;
+        loop {
+            let now = local();
+            if let Some(len) = pairing.poll(now, &mut frame) {
+                self.transmit(&frame[..len], None).await;
+                listening = false;
+                continue;
+            }
+            let phase = pairing.phase();
+            if shown != Some(phase) {
+                log_pairing(&pairing, phase);
+                shown = Some(phase);
+            }
+            if pairing.is_over(now) {
+                break;
+            }
+            if phase == Phase::Storing && saving.is_none() {
+                let group = pairing
+                    .group()
+                    .expect("a pairing storing has a group")
+                    .clone();
+                super::GROUP_SAVED.reset();
+                super::send_group_write(GroupWrite::Group(Box::new(group))).await;
+                saving = Some(Instant::now());
+                continue;
+            }
+            if phase == Phase::Storing
+                && saving.is_some_and(|started| started.elapsed() > STORE_TIMEOUT)
+            {
+                warn!("[PAIR] storing the group timed out");
+                pairing.stored(false, now);
+                continue;
+            }
+            if !listening {
+                if self.lora.rx(None).await.is_err() {
+                    warn!("[PAIR] receive start failed");
+                }
+                listening = true;
+            }
+            let wake = pairing.wake_at().min(now + PAIR_LISTEN_US);
+            match select3(
+                self.wait_for(IRQ_RX_DONE, wake),
+                COMMANDS.receive(),
+                super::GROUP_SAVED.wait(),
+            )
+            .await
+            {
+                Either3::First(true) => {
+                    if let Some((packet, done)) = self.read_packet().await {
+                        let mut payload = packet.payload;
+                        let started = local();
+                        pairing.receive(&mut payload[..packet.length], done);
+                        let took = local() - started;
+                        if took > 5_000 {
+                            info!("[PAIR] a frame took {}us to take", took);
+                        }
+                    }
+                }
+                Either3::First(false) => {}
+                Either3::Second(command) => {
+                    let now = local();
+                    info!("[PAIR] command {}", command);
+                    match command {
+                        Command::Choose(index) => pairing.choose(usize::from(index), now),
+                        Command::Accept => pairing.accept(now),
+                        Command::Decline => pairing.reject(false, now),
+                        Command::Mismatch => pairing.reject(true, now),
+                        Command::Cancel => pairing.cancel(now),
+                        _ => warn!("[PAIR] not while pairing"),
+                    }
+                }
+                Either3::Third(ok) => {
+                    if saving.is_some() && phase == Phase::Storing {
+                        pairing.stored(ok, local());
+                    }
+                }
+            }
+        }
+        if let Phase::Done(_) = pairing.phase()
+            && let Some(group) = pairing.group()
+        {
+            let own = group.own();
+            self.group = Some(group.clone());
+            self.unsaved = false;
+            if role == Role::Join || !had_group {
+                self.clock = Clock::new(own, local());
+                self.table = Table::new(own);
+                self.after = i64::MIN;
+                self.shown = None;
+            }
+        }
+        if !self.tune(FREQUENCY_HZ, SYNC_WORD, POWER_DBM).await {
+            warn!("[MESH] tuning back to the mesh's channel failed");
+        }
     }
 
     /// Waits until local time `deadline` for the radio to raise `flag`, the one `DIO0` is mapped
@@ -391,7 +722,7 @@ impl Mesh {
             if local() >= deadline {
                 return false;
             }
-            Timer::after(embassy_time::Duration::from_micros(POLL_US)).await;
+            Timer::after(Duration::from_micros(POLL_US)).await;
         }
     }
 
@@ -416,6 +747,27 @@ impl Mesh {
     }
 }
 
+fn log_pairing(pairing: &Pairing, phase: Phase) {
+    let left = pairing
+        .deadline()
+        .map_or(0, |deadline| (deadline - local()).max(0) / 1_000_000);
+    match phase {
+        Phase::Found => {
+            for (i, mac) in pairing.candidates().enumerate() {
+                info!("[PAIR] found {}: {=[u8]:02x}", i, mac);
+            }
+        }
+        Phase::Compare { code } => info!(
+            "[PAIR] code {=u32:06} with {=[u8]:02x}; {}s to confirm",
+            code,
+            pairing.peer().unwrap_or_default(),
+            left
+        ),
+        _ => {}
+    }
+    info!("[PAIR] {} {} ({}s left)", pairing.role(), phase, left);
+}
+
 /// The RTC's UTC in microseconds at local time `now`, to the RTC's whole second.
 fn rtc_now(now: i64) -> Option<i64> {
     RTC_TIME
@@ -434,5 +786,64 @@ fn log_timebase(timebase: Option<Timebase>, sweeping: bool) {
             source: Source::Node(root),
             hops,
         }) => info!("[MESH] timebase root={} hops={}", root, hops),
+    }
+}
+
+/// Lets a debugger give the mesh commands, until there are screens for them;
+/// `tools/pair-inject.py` does.
+#[cfg(feature = "pair-inject")]
+pub mod inject {
+    use core::sync::atomic::{AtomicU32, Ordering};
+
+    use embassy_time::{Duration, Timer};
+    use octowhere_mesh::members::Name;
+
+    use super::{COMMANDS, Command};
+
+    /// The command's code in the low byte and its argument in the next. The debugger writes it
+    /// last.
+    #[unsafe(no_mangle)]
+    static OCTOWHERE_PAIR_COMMAND: AtomicU32 = AtomicU32::new(0);
+    /// A new name's bytes, little-endian in each word; the command's argument is its length.
+    #[unsafe(no_mangle)]
+    static OCTOWHERE_PAIR_NAME: [AtomicU32; 4] = [const { AtomicU32::new(0) }; 4];
+
+    #[embassy_executor::task]
+    pub async fn task() {
+        loop {
+            Timer::after(Duration::from_millis(100)).await;
+            let word = OCTOWHERE_PAIR_COMMAND.swap(0, Ordering::Acquire);
+            let argument = (word >> 8) as u8;
+            let command = match word & 0xff {
+                0 => continue,
+                1 => Command::Add,
+                2 => Command::Join,
+                3 => Command::Choose(argument),
+                4 => Command::Accept,
+                5 => Command::Decline,
+                6 => Command::Mismatch,
+                7 => Command::Cancel,
+                8 => Command::Leave,
+                9 => {
+                    let mut bytes = [0; 16];
+                    for (i, word) in OCTOWHERE_PAIR_NAME.iter().enumerate() {
+                        bytes[4 * i..4 * i + 4]
+                            .copy_from_slice(&word.load(Ordering::Relaxed).to_le_bytes());
+                    }
+                    match Name::new(&bytes[..usize::from(argument).min(16)]) {
+                        Some(name) => Command::Rename(name),
+                        None => {
+                            defmt::warn!("[MESH] injected name refused");
+                            continue;
+                        }
+                    }
+                }
+                other => {
+                    defmt::warn!("[MESH] injected command {} unknown", other);
+                    continue;
+                }
+            };
+            COMMANDS.send(command).await;
+        }
     }
 }
