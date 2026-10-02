@@ -107,6 +107,9 @@ A node transmits in its slot when it has something to say, and stays silent othe
 - a node appeared for the first time
 - it holds a message, acknowledgement or member record not yet sent
 - the round is one of its floor rounds (below)
+- it hears no other node, so that another node's one-round sweep finds it wherever their slots
+  fall (owner, 2026-10-02). An 85-byte packet every round is about 7 mAh a day, paid only while
+  the node is alone
 
 Triggers promote a transmission to the node's next slot rather than sending immediately, so trigger
 latency is at most one round. Off-slot transmission has no audience, because the power saving
@@ -611,9 +614,11 @@ protocol does not need this.
 
 ## Open
 
-- Two nodes without a fix that start apart become separate roots, and find each other only when
-  a sweep of the lower meets a packet of the higher: up to about 30 minutes for idle nodes
-  (`docs/logs/lora/founding-and-listening-2026-10-02/`).
+- Two parts of a group without a fix, each of nodes that hear one another, on timebases started
+  apart, find each other only when a sweep in one meets a floor packet of the other: up to
+  three sweeps, about 30 minutes, for idle nodes
+  (`docs/logs/lora/founding-and-listening-2026-10-02/`). A node that hears nobody sends every
+  round, which leaves it one sweep.
 - The limit after which a rekey drops the old key.
 - A shorter floor once CAD is measured (see "CAD is required at this size").
 - Measuring GNSS time sync (see "Time sync").

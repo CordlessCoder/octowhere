@@ -185,11 +185,13 @@ impl Table {
         }
     }
 
-    /// Whether this node transmits in its slot in `round`.
+    /// Whether this node transmits in its slot in `round`. One that hears nobody sends every
+    /// round, so that another node's one-round sweep finds it, wherever their slots fall.
     #[must_use]
     pub fn wants_to_send(&self, round: i64) -> bool {
         is_floor(round, self.own)
             || self.appeared
+            || self.neighbours(round) == 0
             || self.entries().any(|entry| self.is_fresh(entry))
     }
 
@@ -320,6 +322,8 @@ mod tests {
     fn a_node_sends_on_its_floor_and_when_it_has_news() {
         let mut table = Table::new(1);
         let (floor, quiet) = (1, 2);
+        table.heard(5, quiet);
+        table.sent(&[]);
         assert!(table.wants_to_send(floor));
         assert!(!table.wants_to_send(quiet));
 
@@ -373,6 +377,22 @@ mod tests {
             (n, ids),
             (3, [2, 4, 6]),
             "then the rotation, after the last id sent"
+        );
+    }
+
+    #[test]
+    fn a_node_that_hears_nobody_sends_every_round() {
+        let mut table = Table::new(1);
+        assert!((0..3).all(|round| table.wants_to_send(round)));
+        table.heard(5, 0);
+        table.sent(&[]);
+        assert!(
+            !table.wants_to_send(2),
+            "a neighbour hears it in its floor rounds"
+        );
+        assert!(
+            table.wants_to_send(NEIGHBOUR_ROUNDS + 2),
+            "until the neighbour has gone unheard"
         );
     }
 
