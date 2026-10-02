@@ -23,10 +23,12 @@ Band names are those of ETSI EN 300 220-2 V3.3.1 (2025-03), Table 4. ERC Recomme
 of February 2025), Annex 1, calls the same band h1.7. In EN 300 220-2, band P is 869.7–870 MHz at 5 mW;
 do not confuse the two.
 
-- **Channel.** At 125 kHz band O holds two channels, about 869.4625 and 869.5875 MHz. The upper one
-  overlaps 869.525 MHz, which is LoRaWAN's default second receive window (gateways transmit there at
-  high power) and Meshtastic's EU default at 250 kHz. The sync word filters their packets out, but
-  their airtime still collides with ours.
+- **Channel.** At 125 kHz band O holds two channels, about 869.4625 and 869.5875 MHz. 869.525 MHz
+  is LoRaWAN's default second receive window, where gateways transmit at high power, and
+  Meshtastic's EU default at 250 kHz. A LoRaWAN downlink there covers the upper half of our
+  channel, and Meshtastic's covers all of it. The sync word filters their packets out, but their
+  airtime still collides with ours. Two boards monitoring the channel for three hours found
+  nothing else on it (2026-10-02, `docs/logs/lora/crc-2026-10-02/`).
 - **Sync word.** `0x6C` (owner, 2026-10-02). The SX127x's reset value `0x12` is what most private
   LoRa setups use, and a network on this channel sends with it: two boards decoded its 34- and
   66-byte packets near -112 dBm. LoRaWAN uses `0x34` and Meshtastic `0x2B`. The sync word is two
@@ -510,6 +512,10 @@ protocol does not need this.
 
 ## Open
 
+- Two nodes under a metre apart at +17 dBm hear each other at about -21 dBm, which overloads the
+  receiver: about 1% of packets fail their CRC, against none at -45 dBm
+  (`docs/logs/lora/crc-2026-10-02/`). Nodes worn together will meet it. Sending at lower power
+  to neighbours heard strongly would avoid it.
 - The limit after which a rekey drops the old key.
 - A shorter floor once CAD is measured (see "CAD is required at this size").
 - Measuring GNSS time sync (see "Time sync").
