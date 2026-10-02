@@ -6,7 +6,7 @@
 use alloc::boxed::Box;
 use core::cell::Cell;
 
-use defmt::{info, warn};
+use defmt::{debug, info, warn};
 use embassy_futures::select::{Either, Either3, select, select3};
 use embassy_sync::{
     blocking_mutex::{Mutex as BlockingMutex, raw::CriticalSectionRawMutex},
@@ -530,7 +530,6 @@ impl Mesh {
         let len = seal::seal(group.key(), &mut packet, plain_len);
 
         let Some((done, flags)) = self.transmit(&packet[..len], Some(send_at)).await else {
-            warn!("[MESH] loading the packet failed");
             return;
         };
         self.table.sent(&entries[..n]);
@@ -544,6 +543,7 @@ impl Mesh {
     /// flags after, and leaves the radio as [`Mesh::idle_receive`] does.
     async fn transmit(&mut self, packet: &[u8], at: Option<i64>) -> Option<(bool, Option<u8>)> {
         if self.load(packet).await.is_err() {
+            warn!("[MESH] loading a {}-byte packet failed", packet.len());
             self.idle_receive().await;
             return None;
         }
@@ -609,7 +609,13 @@ impl Mesh {
         loop {
             let now = local();
             if let Some(len) = pairing.poll(now, &mut frame) {
-                self.transmit(&frame[..len], None).await;
+                let sent = self.transmit(&frame[..len], None).await;
+                debug!(
+                    "[PAIR] sent kind={} len={} done={}",
+                    frame[1],
+                    len,
+                    sent.is_some_and(|(done, _)| done)
+                );
                 listening = false;
                 continue;
             }
@@ -654,6 +660,10 @@ impl Mesh {
             {
                 Either3::First(true) => {
                     if let Some((packet, done)) = self.read_packet().await {
+                        debug!(
+                            "[PAIR] heard kind={} len={} rssi={} snr={}",
+                            packet.payload[1], packet.length, packet.rssi, packet.snr
+                        );
                         let mut payload = packet.payload;
                         let started = local();
                         pairing.receive(&mut payload[..packet.length], done);
