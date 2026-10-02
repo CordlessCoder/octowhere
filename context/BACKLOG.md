@@ -81,7 +81,10 @@ until the feature set is complete, because profiling an incomplete firmware pric
 - Build the protocol in [`LORA-PROTOCOL.md`](LORA-PROTOCOL.md), in its "Build order". Steps 1
   to 3 are done: pairing, the member table, its storage and the screens, paired between the two
   boards by the mesh's commands and through the screens (`docs/logs/lora/pairing-2026-10-02/`,
-  `docs/logs/lora/pairing-screens-2026-10-02/`). Step 4 is next.
+  `docs/logs/lora/pairing-screens-2026-10-02/`). Step 4 is done too: listening to members and
+  neighbours with a sweep every 13 rounds, the cancel rule, and a changed member record sent in
+  the next slot (`docs/logs/lora/founding-and-listening-2026-10-02/`). Step 5, CAD, needs the
+  slot timing it depends on measured first ("Time sync" there).
 - Finish what step 3's screens leave open (`SCREEN-DESIGN-BRIEF.md`, "Group and pairing as
   built"):
   - Every group screen's legibility on the panel, which nobody has judged yet. Typing on the

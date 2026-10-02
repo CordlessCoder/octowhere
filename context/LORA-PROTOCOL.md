@@ -611,6 +611,9 @@ protocol does not need this.
 
 ## Open
 
+- Two nodes without a fix that start apart become separate roots, and find each other only when
+  a sweep of the lower meets a packet of the higher: up to about 30 minutes for idle nodes
+  (`docs/logs/lora/founding-and-listening-2026-10-02/`).
 - The limit after which a rekey drops the old key.
 - A shorter floor once CAD is measured (see "CAD is required at this size").
 - Measuring GNSS time sync (see "Time sync").
