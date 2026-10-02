@@ -41,14 +41,18 @@ later decisions are in this brief's "as built" sections.
 
 ## This round
 
+The last round was pairing and the group, the screens for step 3 of the location mesh. Its brief
+is `design/handoffs/PAIRING-ROUND-BRIEF-2026-10-02.md`, and the owner approved its hand-off,
+`design/handoffs/octowhere-pairing-handoff-2026-10-02/` (`design/DECISIONS.md` entry 27). The
+radio side is built; the screens are not.
+
 Round 3 answered the owner's last three questions: smoother changes between the compass's
 states, pixel shift against burn-in, and a screen timeout with dimming. Its spec is built,
 and the sections below marked "as built" record where the build interpreted it.
 
-The owner sets the next round's questions. One topic they have named is where outlined text
-belongs in the screens and animations. The primitive exists and is costed under "What the
-renderer draws", and `screen-captures/outline-*.png` show it at the sizes in use. No screen
-uses it yet.
+Another topic the owner has named is where outlined text belongs in the screens and
+animations. The primitive exists and is costed under "What the renderer draws", and
+`screen-captures/outline-*.png` show it at the sizes in use. No screen uses it yet.
 
 ## Hardware
 
@@ -68,7 +72,7 @@ The device is a round 1.75-inch touch module: a Waveshare ESP32-S3-Touch-AMOLED-
 | Touch | CST9217 capacitive, in the same 466 × 466 coordinates. Two contacts, plus a recognised "hand covers the screen" report. No hover, no pressure. A held finger stays held however still it is |
 | Buttons | A power key, read through the power controller as a short or a long press (1 s), up to about 250 ms late. A 512 ms hold powers the board on. A BOOT key, read as a short or a long press (1 s) on its own; the long press is reported once held, and nothing uses either yet |
 | Sensors | 6-axis IMU (QMI8658), magnetometer (BMM350), GNSS receiver (LC76G), real-time clock (PCF85063A), battery and USB power (AXP2101) |
-| Radio | LoRa (SX1272). The location mesh that will use it is designed but not built |
+| Radio | LoRa (SX1272). The location mesh runs on it, with a key compiled in and ids from the hardware address until pairing is built. Nothing about it reaches the screens |
 | Not driven | Audio codec, SD card slot. No speaker, buzzer or vibration motor is in use |
 
 Geometry a layout must respect:
@@ -600,8 +604,10 @@ plumbing it is firmware work. There are three grades.
    - Touch contacts and the cover report.
 2. **Known to the firmware, not passed to the screens:** GNSS time to the millisecond, fix
    quality, and when the clock was last set from GNSS. Also the compass calibration's internals.
+   From the mesh: this device's id, the members it has heard and when, their positions and
+   how old each is, and whether the radio came up at boot.
 3. **Does not exist:** raise to wake, or any wake but a double tap or the power key (the
-   IMU's wake-on-motion and the BOOT key are unused); a 12-hour clock (ruled out by the clock spec); units, languages, sounds or vibration; pairing, the location mesh,
+   IMU's wake-on-motion and the BOOT key are unused); a 12-hour clock (ruled out by the clock spec); units, languages, sounds or vibration; pairing, groups, member names,
    Wi-Fi or Bluetooth; alarms, timers, step counting and notifications.
 
 ## Settings
@@ -634,11 +640,11 @@ target that takes antialiased coverage a row at a time and blends it with what i
   - PP Fraktion Mono Regular, the full font, including `©`.
   - PP Fraktion Mono Bold. Printable ASCII and `°`.
   - KH Interference Bold, monospaced: the clock's and always-on face's digits, the compass
-    readout, captions, row names, the self-test's names and the settings' selected values. Space to `_`, so capitals, digits and punctuation.
+    readout, captions, row names, the self-test's names and the settings' selected values. It embeds space to `_` now, so capitals, digits and punctuation.
     The asset is a trial; a release needs a licensed one.
   - KH Interference Regular: the identity's subtitle only. Capitals, digits, space and `+-./`.
   - PP Fraktion Sans Light, proportional: the clock's band lines, the offset's lower
-    neighbour and the always-on face's battery value. Space to `_`.
+    neighbour and the always-on face's battery value. It embeds space to `_` now.
   - Maratype: the identity's title only, its seven letters.
   - Any other glyph in these fonts' full files can be added, at a cost in flash, not draw time.
     `assets/` also holds PP Fraktion Sans Bold and the italics. Adding a face costs flash and
@@ -748,7 +754,7 @@ C1's settled states, entry points and a swipe frame were measured in
   separate region sent to the panel costs about as much as 1,000 more pixels.
 - A new screen redraws in full on every change until its own change tracking is written. The
   design should say which elements change and how often, as the specs' change tables do.
-- The flash image is 1,218,832 bytes, 7.78 % of the app partition. Flash is not a constraint.
+- The flash image is 1,400,240 bytes, 8.94 % of the app partition. Flash is not a constraint.
 
 ## Owner decisions that bind later screens
 

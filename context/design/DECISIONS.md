@@ -132,3 +132,16 @@ Recorded 2026-09-26. These override the hand-off where they differ.
     the slices run their build from an empty fill, as when charging starts. Otherwise the
     solid grows out from the fill's middle, as when charging stops. Both start at the rise's
     160 ms. Other entries to the clock face keep the rise. The design has not seen it.
+27. **The pairing and group hand-off** (owner, 2026-10-02), in
+    `handoffs/octowhere-pairing-handoff-2026-10-02/`, approved in full, to be built. It answers
+    `handoffs/PAIRING-ROUND-BRIEF-2026-10-02.md`. GROUP and NAME replace GNSS and BATTERY on the
+    panel's second page, whose readings stay on DEVICE. A name is set on a full QWERTY keyboard
+    of all 95 printable ASCII characters, 16 at most and case kept; its 39 × 53 px letter keys
+    are an exception to the 10 mm target for that screen alone. Each user confirms the code with
+    an orange drag on their own device. A full group refuses ADD before it searches, a returning
+    device included. REMOVE shows as unavailable until private rekeying exists. The group
+    footer's outer edges are x 94 and 372, and the slider's chevron is centred by its ink. The
+    hand-off's own table of implementation defaults is not a record of owner decisions; of
+    those, the owner settled that CLEAR SETTINGS keeps the group and the name, and that a
+    pairing sends only keys, hardware addresses and its commitment unencrypted. Pairing's
+    channel and frames are in `LORA-PROTOCOL.md`, "The exchange as built".
