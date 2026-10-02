@@ -47,7 +47,9 @@ do not confuse the two.
   -45 dBm (`docs/logs/lora/crc-2026-10-02/`), with the AGC on. A node still sends at full power
   to neighbours it hears strongly (owner, 2026-10-02). Otherwise two clusters of users, each
   standing close together, would each turn down for their own close neighbours, and the two
-  clusters would never hear each other.
+  clusters would never hear each other. And a neighbour that turns down lowers the RSSI the
+  decision is made from, so two nodes would steer by each other's settings; undoing that needs
+  each packet to carry its sender's power.
 - **PA pin.** The antenna is on `PA_BOOST` (2026-10-01, `docs/logs/lora/pa-2026-10-01/`). Two
   boards on one bench hear each other at about -22 to -32 dBm at +17 dBm on it, and its strength
   follows its setting; `RFO` arrives about 70 dB lower whatever its setting. The module exposes
