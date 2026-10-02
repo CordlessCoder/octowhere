@@ -155,6 +155,10 @@ until the feature set is complete, because profiling an incomplete firmware pric
   clearing a buffer after flushing it. Either changes the buffer hand-off in `util::Swap`, and
   partial redraws rely on a buffer keeping its own pixels, so only damaged spans may be cleared.
 - Subset PP Fraktion Mono Bold to the glyphs in use, to recover some of the 54 KB it added.
+- Add the LoRa radio to the self-test (owner, 2026-10-02). Its six cells, POWER to GNSS, are
+  laid out by the S1 hand-off, so a seventh needs a place in that design first. `bring_up`
+  already brings the radio up, and spawns `mesh::offline` when it does not answer, which the
+  group screens show as NO RADIO; it reports nothing to `BOOT_REPORTS`.
 - Bring the self-test's parts up concurrently (owner, 2026-09-28). `bring_up` joins the GNSS
   settle with one future that probes the clock, touch, IMU and magnetometer in turn, so each
   part's own waits (touch's 100 ms settle, the magnetometer's trim reads) add up. Give each part
