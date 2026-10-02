@@ -334,8 +334,8 @@ in for the mesh on the host. Where the build interpreted the hand-off:
 Host stills of every state are in the `render` example, named after the hand-off's renders
 where they match, and the atlas's GROUP + NAME and PAIRING sections. The boards' own
 framebuffers through a pairing, a rename and a cover are in
-`docs/logs/lora/pairing-screens-2026-10-02/`. A finger on the 39 px keys and legibility on the
-panel have not been checked by a person.
+`docs/logs/lora/pairing-screens-2026-10-02/`. Typing on the 39 px keys with a finger is
+accurate and responsive (owner, 2026-10-02). Nobody has judged legibility on the panel yet.
 
 ## The compass's states and changes, as built
 

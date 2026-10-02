@@ -82,8 +82,8 @@ until the feature set is complete, because profiling an incomplete firmware pric
   `docs/logs/lora/pairing-screens-2026-10-02/`). Step 4 is next.
 - Finish what step 3's screens leave open (`SCREEN-DESIGN-BRIEF.md`, "Group and pairing as
   built"):
-  - A person's finger on the name keyboard's 39 × 53 px keys, and every group screen's
-    legibility on the panel. The screens were driven on the boards only by `touch-inject`.
+  - Every group screen's legibility on the panel, which nobody has judged yet. Typing on the
+    name keyboard's 39 × 53 px keys with a finger is accurate and responsive (owner, 2026-10-02).
   - The joining device cannot tell it was returning, so its RESTORED screen never shows. The
     group it receives would need to say so.
   - A device founding a group whose last acknowledgement is lost stores no group, while the
