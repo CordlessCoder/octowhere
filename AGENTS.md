@@ -570,6 +570,7 @@ All default off. None belongs in normal firmware behavior.
   longer sets the clock until the firmware restarts.
 - `pair-inject` lets `tools/pair-inject.py` give the mesh its commands over the USB JTAG,
   beside the screens: add, join, choose, accept, decline, mismatch, cancel, leave and rename.
+  Its `deaf` makes a pairing drop what it hears for a while, to lose a frame on purpose.
 - `touch-inject` lets `tools/touch-inject.py` tap, swipe and cover the screen and press the
   power key over the USB JTAG, and read the framebuffer drawn last back to a PNG, for driving
   the screens on a board nobody holds. A read takes about 11 s and interrupts the board.

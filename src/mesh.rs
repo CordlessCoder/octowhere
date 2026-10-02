@@ -959,6 +959,11 @@ impl Mesh {
             {
                 Either3::First(true) => {
                     if let Some((packet, done)) = self.read_packet().await {
+                        #[cfg(feature = "pair-inject")]
+                        if inject::is_deaf() {
+                            info!("[PAIR] deaf to kind={}", packet.payload[1]);
+                            continue;
+                        }
                         debug!(
                             "[PAIR] heard kind={} len={} rssi={} snr={}",
                             packet.payload[1], packet.length, packet.rssi, packet.snr
@@ -1145,7 +1150,7 @@ pub async fn offline(start: Start) {
 pub mod inject {
     use core::sync::atomic::{AtomicU32, Ordering};
 
-    use embassy_time::{Duration, Timer};
+    use embassy_time::{Duration, Instant, Timer};
     use octowhere_mesh::members::Name;
 
     use super::{COMMANDS, Command};
@@ -1157,6 +1162,13 @@ pub mod inject {
     /// A new name's bytes, little-endian in each word; the command's argument is its length.
     #[unsafe(no_mangle)]
     static OCTOWHERE_PAIR_NAME: [AtomicU32; 4] = [const { AtomicU32::new(0) }; 4];
+    /// The local time in milliseconds until which a pairing drops every frame it hears.
+    static DEAF_UNTIL_MS: AtomicU32 = AtomicU32::new(0);
+
+    /// Whether a pairing is to drop the frames it hears, to lose them on purpose.
+    pub fn is_deaf() -> bool {
+        (Instant::now().as_millis() as u32) < DEAF_UNTIL_MS.load(Ordering::Relaxed)
+    }
 
     #[embassy_executor::task]
     pub async fn task() {
@@ -1187,6 +1199,12 @@ pub mod inject {
                             continue;
                         }
                     }
+                }
+                10 => {
+                    let now = Instant::now().as_millis() as u32;
+                    DEAF_UNTIL_MS.store(now + 1000 * u32::from(argument), Ordering::Relaxed);
+                    defmt::info!("[PAIR] deaf for {}s", argument);
+                    continue;
                 }
                 other => {
                     defmt::warn!("[MESH] injected command {} unknown", other);

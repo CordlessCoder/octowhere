@@ -9,13 +9,15 @@
     uv run tools/pair-inject.py choose 0
     uv run tools/pair-inject.py accept | decline | mismatch | cancel | leave
     uv run tools/pair-inject.py name "Ana's watch"
+    uv run tools/pair-inject.py deaf 40
 
 The commands stand in for the screens until they are built: `add` and `join` start a pairing,
 `choose` picks a device the adding side found, `accept`, `decline` and `mismatch` answer the code,
-and `cancel` ends a pairing. `leave` forgets the group, and `name` renames this device. With two
-boards attached, `--probe` picks one by its MAC, which `probe-rs list` shows. The ELF must be the
-one flashed, since the addresses come from it. The firmware logs `[MESH] command …` when it takes
-one.
+and `cancel` ends a pairing. `leave` forgets the group, and `name` renames this device. `deaf`
+makes a pairing drop every frame it hears for that many seconds, up to 255, to lose an
+acknowledgement on purpose. With two boards attached, `--probe` picks one by its MAC, which
+`probe-rs list` shows. The ELF must be the one flashed, since the addresses come from it. The
+firmware logs `[MESH] command …` when it takes one.
 """
 
 import argparse
@@ -25,7 +27,7 @@ import sys
 from elftools.elf.elffile import ELFFile
 
 CODES = {"add": 1, "join": 2, "choose": 3, "accept": 4, "decline": 5, "mismatch": 6,
-         "cancel": 7, "leave": 8, "name": 9}
+         "cancel": 7, "leave": 8, "name": 9, "deaf": 10}
 COMMAND = "OCTOWHERE_PAIR_COMMAND"
 NAME = "OCTOWHERE_PAIR_NAME"
 
@@ -51,7 +53,8 @@ def write(probe, address, value):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("command", choices=CODES)
-    parser.add_argument("argument", nargs="?", help="the index for `choose`, the name for `name`")
+    parser.add_argument("argument", nargs="?",
+                        help="the index for `choose`, the name for `name`, seconds for `deaf`")
     parser.add_argument("--probe", default="303a:1001")
     parser.add_argument("--elf", default="target/xtensa-esp32s3-none-elf/release/octowhere")
     args = parser.parse_args()
@@ -60,6 +63,10 @@ def main():
     argument = 0
     if args.command == "choose":
         argument = int(args.argument or 0)
+    elif args.command == "deaf":
+        argument = int(args.argument or 0)
+        if not 0 <= argument <= 255:
+            sys.exit("`deaf` takes 0 to 255 seconds")
     elif args.command == "name":
         name = (args.argument or "").encode("ascii")
         if not 1 <= len(name) <= 16 or not all(0x20 <= c < 0x7F for c in name):
