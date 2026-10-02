@@ -275,6 +275,12 @@ impl Grid {
 
 /// What the settled screen showed after a step, for the next step's damage. The screens settle
 /// under exclusive conditions, so at most one has a snapshot.
+/// An empty list on the heap, built outside the step so its frame never holds one.
+#[inline(never)]
+fn new_list() -> alloc::boxed::Box<List> {
+    alloc::boxed::Box::default()
+}
+
 enum Drawn {
     Compass(CompassView, Accents),
     Clock(clock_screen::Face),
@@ -310,6 +316,9 @@ pub struct Stage {
     breath: u8,
     breathing: bool,
     drawn: Option<Drawn>,
+    /// A group screen's list from before the last, which the next step fills again. A list is
+    /// several kilobytes, so the stack never holds one.
+    spare_list: Option<alloc::boxed::Box<List>>,
     /// The pixels the last step changed. Boxed so the frame loop's stack never holds it.
     changed: alloc::boxed::Box<Dirty>,
     dial_footprint: DialFootprint,
@@ -413,6 +422,7 @@ impl Stage {
             breath: u8::MAX,
             breathing: false,
             drawn: None,
+            spare_list: None,
             changed: alloc::boxed::Box::new(Dirty::new()),
             dial_footprint: DialFootprint::default(),
             clock_settled: None,
@@ -863,11 +873,11 @@ impl Stage {
             && (current.0, current.1, current.3) == (previous.0, previous.1, previous.3);
         full |= current != previous && !grid_only;
         let group_list = match &self.page {
-            Some((Page::Group(flow), _)) => Some(alloc::boxed::Box::new(flow.view(
-                &self.mesh,
-                now,
-                &self.renderer,
-            ))),
+            Some((Page::Group(flow), _)) => {
+                let mut list = self.spare_list.take().unwrap_or_else(new_list);
+                flow.view(&mut list, &self.mesh, now, &self.renderer);
+                Some(list)
+            }
             _ => None,
         };
         self.group_due = group_list.as_ref().and_then(|list| list.due());
@@ -1402,6 +1412,7 @@ impl Stage {
             }
             (Some(Drawn::Group(before)), Some(Drawn::Group(after))) => {
                 after.damage(&before, &self.renderer, &mut self.changed);
+                self.spare_list = Some(before);
             }
             (
                 Some(Drawn::Page(page, accents, state)),

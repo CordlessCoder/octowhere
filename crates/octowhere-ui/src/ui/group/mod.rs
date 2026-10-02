@@ -695,15 +695,16 @@ impl Flow {
         (Exit::Stay, false)
     }
 
-    #[must_use]
+    /// Makes `list` what the screen shows now.
     pub fn view(
         &self,
+        list: &mut List,
         mesh: &MeshView,
         now: Micros,
         font: &FontdueRenderer<'static, Color>,
-    ) -> List {
-        let mut list = List::new();
-        let l = &mut list;
+    ) {
+        list.clear();
+        let l = list;
         match &self.screen {
             Screen::Hub => match &mesh.group {
                 None => {
@@ -967,7 +968,6 @@ impl Flow {
             ),
             Screen::Pairing(session) => pairing(l, session, mesh, now),
         }
-        list
     }
 }
 

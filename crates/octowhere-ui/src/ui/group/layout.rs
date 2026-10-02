@@ -180,6 +180,12 @@ impl List {
         Self::default()
     }
 
+    pub fn clear(&mut self) {
+        self.items.clear();
+        self.clip = None;
+        self.due = None;
+    }
+
     #[must_use]
     pub fn items(&self) -> &[Item] {
         &self.items
