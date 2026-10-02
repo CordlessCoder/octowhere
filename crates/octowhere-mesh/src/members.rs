@@ -135,7 +135,10 @@ impl Member {
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Merged {
     Unchanged,
-    Changed,
+    /// The record at its id changed, and `vacated` is the id the member moved from, now empty.
+    Changed {
+        vacated: Option<u8>,
+    },
     /// Another device holds this node's id and keeps it, so this node took the lowest free id.
     Renumbered {
         from: u8,
@@ -265,13 +268,14 @@ impl Group {
                 return Merged::Unchanged;
             }
         }
+        let changed = Merged::Changed { vacated: elsewhere };
         let outcome = match self.member(id) {
-            None => Merged::Changed,
+            None => changed,
             Some(held) if held.same_device(&record) => {
                 if held.changed >= record.changed {
                     return Merged::Unchanged;
                 }
-                Merged::Changed
+                changed
             }
             // Two devices were given this id in separate places.
             Some(held) if record.rank() >= held.rank() => return Merged::Unchanged,
@@ -287,7 +291,7 @@ impl Group {
                 Merged::Renumbered { from: id, to }
             }
             // The device that held it moves itself once it hears this record.
-            Some(_) => Merged::Changed,
+            Some(_) => changed,
         };
         if let Some(other) = elsewhere {
             self.members[usize::from(other)] = None;
@@ -374,10 +378,13 @@ pub(crate) mod tests {
         let mut g = group(0, &[(0, 1), (1, 2)]);
         let mut renamed = member(2, 200);
         renamed.name = Name::new(b"Bo").unwrap();
-        assert_eq!(g.merge(1, renamed, 0), Merged::Changed);
+        assert_eq!(g.merge(1, renamed, 0), Merged::Changed { vacated: None });
         assert_eq!(g.member(1).unwrap().name.as_str(), "Bo");
         assert_eq!(g.merge(1, member(2, 150), 0), Merged::Unchanged);
-        assert_eq!(g.merge(5, member(6, 1), 0), Merged::Changed);
+        assert_eq!(
+            g.merge(5, member(6, 1), 0),
+            Merged::Changed { vacated: None }
+        );
     }
 
     #[test]
@@ -391,7 +398,10 @@ pub(crate) mod tests {
     #[test]
     fn a_member_that_moved_is_dropped_from_its_old_id() {
         let mut g = group(0, &[(0, 1), (1, 2)]);
-        assert_eq!(g.merge(4, member(2, 101), 0), Merged::Changed);
+        assert_eq!(
+            g.merge(4, member(2, 101), 0),
+            Merged::Changed { vacated: Some(1) }
+        );
         assert!(g.member(1).is_none());
         assert_eq!(
             g.merge(1, member(2, 100), 0),
@@ -408,7 +418,10 @@ pub(crate) mod tests {
             if a.rank() < b.rank() { (2, 3) } else { (3, 2) }
         };
         let mut g = group(0, &[(0, 1), (1, high)]);
-        assert_eq!(g.merge(1, member(low, 100), 0), Merged::Changed);
+        assert_eq!(
+            g.merge(1, member(low, 100), 0),
+            Merged::Changed { vacated: None }
+        );
         assert_eq!(g.member(1).unwrap().public, [low; 32]);
         assert_eq!(g.merge(1, member(high, 500), 0), Merged::Unchanged);
     }

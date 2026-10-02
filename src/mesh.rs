@@ -151,8 +151,10 @@ pub struct Mesh {
     path: LoraPath,
     me: Identity,
     group: Option<Group>,
-    /// The group changed and is not yet queued to be stored.
-    unsaved: bool,
+    /// The ids whose member records changed and are not yet queued to be stored, as a set.
+    unsaved: u32,
+    /// The group's key or this node's id changed, so the whole group is to be stored.
+    unsaved_group: bool,
     clock: Clock,
     table: Table,
     /// The timebase time the next own slot is looked for from, past the last one decided.
@@ -185,7 +187,8 @@ impl Mesh {
             path,
             me: start.me,
             group,
-            unsaved: false,
+            unsaved: 0,
+            unsaved_group: false,
             clock: Clock::new(own, now),
             table: Table::new(own),
             after: i64::MIN,
@@ -248,7 +251,8 @@ impl Mesh {
             Command::Leave => {
                 if self.group.is_some() && super::save_group(GroupWrite::Leave).await {
                     self.group = None;
-                    self.unsaved = false;
+                    self.unsaved = 0;
+                    self.unsaved_group = false;
                     info!("[MESH] left the group");
                 } else {
                     warn!("[MESH] not left");
@@ -260,7 +264,7 @@ impl Mesh {
                 info!("[MESH] renamed {} saved={}", name, saved);
                 if let Some(group) = &mut self.group {
                     group.rename(name, utc_seconds(local()));
-                    self.unsaved = true;
+                    self.unsaved |= 1 << group.own();
                 }
             }
             Command::Choose(_)
@@ -271,14 +275,29 @@ impl Mesh {
         }
     }
 
+    /// Queues what changed in the group to be stored, as far as the queue has room.
+    fn queue_unsaved(&mut self) {
+        let Some(group) = &self.group else { return };
+        if self.unsaved_group {
+            if super::queue_group_write(GroupWrite::Group(Box::new(group.clone()))) {
+                self.unsaved_group = false;
+                self.unsaved = 0;
+            }
+            return;
+        }
+        while self.unsaved != 0 {
+            let id = self.unsaved.trailing_zeros() as u8;
+            let member = group.member(id).copied();
+            if !super::queue_group_write(GroupWrite::Member { id, member }) {
+                return;
+            }
+            self.unsaved &= !(1 << id);
+        }
+    }
+
     /// Waits for the node's next slot and sends in it, listening meanwhile.
     async fn step(&mut self) {
-        if self.unsaved
-            && let Some(group) = &self.group
-            && super::queue_group_write(GroupWrite::Group(Box::new(group.clone())))
-        {
-            self.unsaved = false;
-        }
+        self.queue_unsaved();
         let Some(own) = self.group.as_ref().map(Group::own) else {
             return;
         };
@@ -457,9 +476,12 @@ impl Mesh {
                 Record::Member(id, member) => {
                     match group.merge(id, member, now.unwrap_or_else(|| utc_seconds(done))) {
                         Merged::Unchanged => {}
-                        Merged::Changed => {
+                        Merged::Changed { vacated } => {
                             info!("[MESH] member {} is {} now", id, member.name);
-                            self.unsaved = true;
+                            self.unsaved |= 1 << id;
+                            if let Some(vacated) = vacated {
+                                self.unsaved |= 1 << vacated;
+                            }
                         }
                         Merged::Renumbered { from, to } => {
                             warn!(
@@ -468,7 +490,7 @@ impl Mesh {
                             );
                             self.clock.renumber(to);
                             self.table.renumber(to);
-                            self.unsaved = true;
+                            self.unsaved_group = true;
                             moved = true;
                         }
                     }
@@ -698,7 +720,8 @@ impl Mesh {
         {
             let own = group.own();
             self.group = Some(group.clone());
-            self.unsaved = false;
+            self.unsaved = 0;
+            self.unsaved_group = false;
             if role == Role::Join || !had_group {
                 self.clock = Clock::new(own, local());
                 self.table = Table::new(own);

@@ -107,6 +107,11 @@ pub enum GroupWrite {
     Name(Name),
     /// The whole group, replacing what was stored.
     Group(Box<Group>),
+    /// One member's record, or its absence, at `id`.
+    Member {
+        id: u8,
+        member: Option<Member>,
+    },
     /// Forget the group: its key, the members and this device's id.
     Leave,
 }
@@ -119,9 +124,44 @@ impl defmt::Format for GroupWrite {
             Self::Group(group) => {
                 defmt::write!(f, "Group(own={} members={})", group.own(), group.count())
             }
+            Self::Member { id, member } => defmt::write!(
+                f,
+                "Member({}, {})",
+                id,
+                member.as_ref().map(|member| member.name)
+            ),
             Self::Leave => defmt::write!(f, "Leave"),
         }
     }
+}
+
+/// Writes `member` at `id`, or deletes the key if it is stored and `member` is `None`, and keeps
+/// `stored` in step.
+async fn write_member(
+    transaction: &mut ekv::WriteTransaction<'_, Partition, NoopRawMutex>,
+    stored: &mut u32,
+    id: u8,
+    member: Option<&Member>,
+) -> Result<(), ekv::WriteError<FlashStorageError>> {
+    match member {
+        Some(member) => {
+            let mut value = [0; 1 + RECORD_MAX_LEN];
+            value[0] = MESH_VERSION;
+            let mut record = [0; RECORD_MAX_LEN];
+            let len = member.encode(id, &mut record);
+            value[1..1 + len].copy_from_slice(&record[..len]);
+            transaction
+                .write(&member_key(id), &value[..1 + len])
+                .await?;
+            *stored |= 1 << id;
+        }
+        None if *stored & 1 << id != 0 => {
+            transaction.delete(&member_key(id)).await?;
+            *stored &= !(1 << id);
+        }
+        None => {}
+    }
+    Ok(())
 }
 
 /// A member's key: `group.member.` and its id in two digits, which sorts after `group`.
@@ -197,6 +237,9 @@ impl ekv::flash::Flash for Partition {
 pub struct Store {
     /// `None` when the partition table has no storage partition.
     database: Option<Database<Partition, NoopRawMutex>>,
+    /// The ids whose member keys the database holds, as a set, so a write touches only those
+    /// that change.
+    stored_members: u32,
 }
 
 impl Store {
@@ -222,7 +265,10 @@ impl Store {
             .map(|entry| (entry.offset(), entry.len()));
         let Some((offset, length)) = found else {
             warn!("[SETTINGS] no {=str} partition", PARTITION);
-            return Self { database: None };
+            return Self {
+                database: None,
+                stored_members: 0,
+            };
         };
         let pages = ((length / PAGE_SIZE) as usize).min(ekv::config::MAX_PAGE_COUNT);
         let mut config = Config::default();
@@ -237,6 +283,7 @@ impl Store {
         );
         Self {
             database: Some(database),
+            stored_members: 0,
         }
     }
 
@@ -331,11 +378,13 @@ impl Store {
             };
             let group = value(KEY_GROUP).await;
             let mut members = [None; IDS as usize];
+            let mut stored_members = 0;
             if group.is_some() {
                 for id in 0..IDS {
                     let Some(record) = value(&member_key(id)).await else {
                         continue;
                     };
+                    stored_members |= 1 << id;
                     match Member::decode(&record) {
                         Some((at, member)) if at == id => members[usize::from(id)] = Some(member),
                         _ => warn!("[SETTINGS] member {} unreadable", id),
@@ -350,6 +399,7 @@ impl Store {
                 .await
                 .and_then(|secret| secret.as_slice().try_into().ok());
             let name = value(KEY_NAME).await.and_then(|name| Name::new(&name));
+            self.stored_members = stored_members;
             MeshSaved {
                 secret,
                 name,
@@ -367,6 +417,7 @@ impl Store {
             let mut transaction = database.write_transaction().await;
             let mut value = [0; VALUE_BUFFER];
             value[0] = MESH_VERSION;
+            let mut stored = self.stored_members;
             // A transaction takes its keys in ascending order.
             let written = match write {
                 GroupWrite::Identity(secret) => {
@@ -386,29 +437,29 @@ impl Store {
                         if written.is_err() {
                             break;
                         }
-                        written = match group.member(id) {
-                            Some(member) => {
-                                let mut record = [0; RECORD_MAX_LEN];
-                                let len = member.encode(id, &mut record);
-                                value[1..1 + len].copy_from_slice(&record[..len]);
-                                transaction.write(&member_key(id), &value[..1 + len]).await
-                            }
-                            None => transaction.delete(&member_key(id)).await,
-                        };
+                        written =
+                            write_member(&mut transaction, &mut stored, id, group.member(id)).await;
                     }
                     written
+                }
+                GroupWrite::Member { id, member } => {
+                    write_member(&mut transaction, &mut stored, *id, member.as_ref()).await
                 }
                 GroupWrite::Leave => {
                     let mut written = transaction.delete(KEY_GROUP).await;
                     for id in 0..IDS {
                         if written.is_ok() {
-                            written = transaction.delete(&member_key(id)).await;
+                            written = write_member(&mut transaction, &mut stored, id, None).await;
                         }
                     }
                     written
                 }
             };
-            written.is_ok() && transaction.commit().await.is_ok()
+            let saved = written.is_ok() && transaction.commit().await.is_ok();
+            if saved {
+                self.stored_members = stored;
+            }
+            saved
         })
     }
 
