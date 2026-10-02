@@ -3,7 +3,8 @@
 The product is a closed group of up to 32 equivalent nodes that share positions and carry messages
 between members, including private ones. GPS supplies both position and the time reference; LoRa
 carries the traffic. This document is the agreed design. Steps 1 and 2 of the build order below
-are implemented; [`AGENTS.md`](../AGENTS.md), "Radio", says how.
+are implemented, and step 3 is but for its screens; [`AGENTS.md`](../AGENTS.md), "Radio", says
+how.
 
 The first version of this design (commit `e57fe0a`) was eight nodes and positions only. The owner
 extended it on 2026-09-29 to 32 nodes, messages and private messages, moved it to band O, and kept
@@ -290,7 +291,7 @@ header still is one.
 | --- | --- |
 | positions | packed entries, padded to a byte |
 | neighbours | 32-bit set of the ids the sender heard in its recent rounds |
-| member | id, X25519 public key, enrolment time, display name of up to 16 printable ASCII characters |
+| member | id, X25519 public key, join time, change time, hardware address, then a name of 1 to 16 printable ASCII characters; 47 to 63 bytes |
 | message | see "Messages" |
 | acknowledgement | origin id and sequence number of a message delivered to the sender |
 
@@ -316,9 +317,15 @@ With the neighbours record, which every packet carries:
 | 16 | 178 B | 287 ms |
 | 24 | 251 B | 395 ms |
 
-A packet is filled in this order until it is full or nothing is left: the sender's own entry and its
-neighbours, acknowledgements, messages oldest first, entries learned since this node last sent them
-(newest first), the rest of the table in rotation, and one member record in rotation.
+A packet is filled in this order until it is full or nothing is left: the sender's neighbours, one
+member record in rotation, the sender's own entry, acknowledgements, messages oldest first, entries
+learned since this node last sent them (newest first), and the rest of the table in rotation. The
+member record goes ahead of the positions so a busy table cannot crowd it out; it costs a full
+packet about seven entries.
+
+A member record's join time and change time are UTC seconds. The change time is the join's, or a
+later rename's, and the newer record of a member wins a merge. A node never takes a record about
+itself, matched by key or hardware address.
 
 Sizing fields to their true ranges is the compression. Entropy coding gains nothing on top: the
 residual bits are close to uniform and the packets are far too short for a dictionary method. Delta
@@ -430,6 +437,65 @@ defeat the point.
 The ESP32-S3 has no ECC accelerator, so X25519 runs in software. It runs at pairing and once per
 new member for the pairwise key.
 
+#### The exchange as built
+
+The design hand-off of 2026-10-02 (`design/handoffs/octowhere-pairing-handoff-2026-10-02/`) and
+the owner's answers that day settle what this section leaves open. `crates/octowhere-mesh/src/pair.rs`
+implements it, with the radio left to the caller.
+
+- **Channel.** Pairing has band O's upper 125 kHz channel, 869.5875 MHz, to itself, with sync word
+  `0xA6` and the mesh's modulation (owner). Both devices leave the mesh for the pairing, at most
+  about four minutes, so the exchange runs back to back: the transfer of a full group takes
+  seconds. Both send at +2 dBm, PA_BOOST's lowest. That is to avoid the receiver overload two
+  devices side by side meet at +17 dBm, not a range limit: the screens make no promise of
+  distance, and the code is what secures the pairing.
+- **In the clear** go only public keys, hardware addresses and the commitment (owner). Names and
+  the group's size travel sealed, after both users confirm.
+- **Commitment.** The adding device commits to its nonce before it sees the joining device's, as
+  Bluetooth's numeric comparison does. Showing a hash of the two public keys alone would let a
+  device in the middle try keys offline until the two codes agreed, about a million X25519 key
+  generations. With the commitment each attempt it makes has one chance in a million, and a failed
+  one shows as differing codes.
+
+| Frame | From | Holds |
+| --- | --- | --- |
+| announce | joining, every 2 s | its public key, its hardware address |
+| offer | adding, until the nonce | the joining device's key, its own, HMAC-SHA256 of its nonce over both keys, its hardware address |
+| nonce | joining, until the reveal | the session, its nonce |
+| reveal | adding, on each nonce | the session, its nonce |
+| sealed | either | the session, then AES-SIV under the pairing key: an accept with the joining device's name, an end with its reason, a part of the group, an acknowledgement, or done |
+
+Every frame starts with a version byte and its kind. The session is the first eight bytes of
+SHA-256 over both keys. The code is six digits from SHA-256 over the transcript, the two keys and
+both 16-byte nonces, and the pairing key is HKDF-SHA256 of the X25519 secret salted with that
+transcript. A key whose shared secret is not contributory ends the pairing.
+
+- **Discovery.** The adding device lists every device announcing, up to four, by hardware address,
+  and drops one unheard for 10 s; its user chooses. Search ends after 120 s.
+- **Confirmation.** Each user confirms on their own device within 60 s, or declines, or reports that
+  the codes differ. An end frame tells the other device which, or that the code timed out, a
+  cancel, or a failed store; it is sent three times, a second apart. A device the other never hears
+  from again reaches its own deadline.
+- **Transfer.** Once the joining device's accept and its own user's confirmation are both in, the
+  adding device sends the group key, the joining device's id and every member's record, 226 bytes
+  a part. Each part waits for its acknowledgement and is resent a second later without it; 30 s
+  without progress loses contact. A full group of 32 is ten parts.
+- **Commit order.** The joining device stores the group before it acknowledges the last part. The
+  adding device stores the new member on that acknowledgement, then sends done, and stays 5 s to
+  answer a repeated acknowledgement. A joining device that stored but never hears done says so:
+  it is in the group, with the adding device's receipt unconfirmed. An adding device whose last
+  part is never acknowledged has not added the member, and says the outcome is unknown. If the
+  joining device did store the group, its own member record reaches the adding device through the
+  mesh, at the id it was given.
+- **Capacity.** A full group refuses to add before it searches, a returning device included (design
+  hand-off). Below 32, a returning device keeps its id.
+- **Founding.** A device in no group that adds one founds a group, with a random key and itself at
+  id 0, only when the pairing completes. The first joining device gets id 1.
+- **Joining** needs a device in no group. Leaving is its own step, which the screens put first.
+
+Nothing is protected against a cancelled pairing's half-stored state, because nothing is stored
+before the commit order above.
+
 ### Identity and storage
 
 The protocol id is 5 bits, 0–31. The enroller gives the joiner the lowest id free in its own table.
@@ -441,9 +507,13 @@ nothing. An id is freed only by removing its member.
 The eFuse base MAC is the stable hardware identity, used to recognise a re-pair of the same physical
 device rather than issuing a second id.
 
-Group key, id, member table and the sequence-number block persist through `esp-storage` and
-`sequential-storage` in a flash partition, not the SD card, which is removable. Store the blob behind
-a one-byte version envelope.
+Group key, id, member table and the sequence-number block persist in a flash partition, not the
+SD card, which is removable. They are in the settings' ekv database (`src/settings.rs`): the group
+key and this device's id under one key, each member's record under its own, and this device's
+X25519 secret and name apart from the group, each value behind a one-byte version. A device keeps
+its name and key pair when it leaves a group, and CLEAR SETTINGS keeps all of it (owner,
+2026-10-02). A member that changes is stored with the whole group in one transaction. The
+sequence-number block comes with messages.
 
 ### Flash encryption is deferred
 
@@ -451,7 +521,7 @@ Not in the prototype. It costs an irreversible eFuse burn on boards that still n
 Release mode disables the plaintext UART download that `cargo run --release` relies on, and it
 probably breaks `sequential-storage`: XTS encrypts each 16-byte block with its offset as tweak, so
 a written block cannot be partially rewritten, while `sequential-storage` does multi-pass writes
-within a page.
+within a page. The store is ekv now, and whether it writes a block twice has not been checked.
 
 It also protects less than it appears to. It is not firmware authentication, which is Secure Boot,
 and it does nothing against a running device, since the controller decrypts transparently for
@@ -490,7 +560,8 @@ and the restore after are each short with the bus free between them.
 2. Radio settings above, and slots on GPS time with the header and record format, carrying
    positions and neighbours, with a timebase taken from other nodes without a fix. Done, with ids
    from the MAC and a development key until step 3.
-3. Pairing, the member table and ids.
+3. Pairing, the member table and ids. The exchange, the member table, member records in the mesh's
+   packets and their storage are built; the screens are not.
 4. The cancel rule and neighbour-only listening.
 5. CAD with slot phase refined from arrival times.
 6. Messages, then private messages.

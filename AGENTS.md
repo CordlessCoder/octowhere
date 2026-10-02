@@ -19,8 +19,9 @@ initialization or peripheral mappings.
 - `crates/octowhere-motion/` owns compass calibration, sensor fusion, and IMU unit conversion.
   It has no board or renderer dependency and builds for the host.
 - `crates/octowhere-mesh/` owns the location mesh in `context/LORA-PROTOCOL.md`: the slot
-  schedule, the packet's header and records, sealing them with AES-SIV, the table of positions
-  and the timebase. It has no radio or board dependency and builds for the host. `src/mesh.rs`
+  schedule, the packet's header and records, sealing them with AES-SIV, the table of positions,
+  the timebase, the group and its members (`members`), and pairing (`pair`), the exchange
+  without a radio. It has no radio or board dependency and builds for the host. `src/mesh.rs`
   runs it on the radio.
 - `crates/octowhere-ui/` owns screen state, drawing and touch handling. It has no board dependency,
   so it also builds for the host. `src/ui/` there owns dirty tracking, geometry,
@@ -52,7 +53,9 @@ initialization or peripheral mappings.
   GNSS module's bursts arrive. It has no board dependency, and `host-tests` tests it.
 - `src/settings.rs` keeps settings in flash across restarts, in an ekv database: the time zone
   mode, the manually chosen zone, the zone GNSS last placed the device in, the display's
-  brightness, the screen timeout, and whether the screen rests on the always-on face. `partitions.csv` is the flash layout, and the cargo runner flashes it.
+  brightness, the screen timeout, and whether the screen rests on the always-on face. The
+  mesh's state sits beside them: this device's X25519 secret and name, and its group's key, id
+  and members. Clearing the settings leaves the mesh's state (owner). `partitions.csv` is the flash layout, and the cargo runner flashes it.
 - `tools/compass-texture.py` records the design's compass fields into
   `crates/octowhere-ui/src/ui/compass_texture.rs`, from the design's own generator, and checks
   the recording repaints it exactly.
@@ -102,7 +105,8 @@ initialization or peripheral mappings.
   a record. Its partition is historical.
 - [`context/LORA-PROTOCOL.md`](context/LORA-PROTOCOL.md) is the agreed design for the location
   mesh of up to 32 nodes: band and radio settings, gossip digest, GPS-anchored TDMA, packet
-  layout, messages, crypto and pairing. Steps 1 and 2 of its build order are implemented.
+  layout, messages, crypto and pairing. Steps 1 and 2 of its build order are implemented, and
+  step 3 but for its screens.
 - [`context/palette-reference.md`](context/palette-reference.md) records the colour values from the
   reference board and the role each one plays in `chrome.rs`.
 
@@ -201,7 +205,7 @@ Weigh that cost before adding one.
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 1,337,184 bytes, 8.54% of the 15,663,104-byte app partition that
+The image is currently 1,400,240 bytes, 8.94% of the 15,663,104-byte app partition that
 `partitions.csv` gives it. Measure with `espflash save-image --chip esp32s3 --flash-size 16mb
 --partition-table partitions.csv <elf> <out>`; without those two options it assumes 4 MB of flash
 and the default table. The time zone
@@ -363,7 +367,8 @@ Core 1 owns the display SPI/DMA path.
   from `ZONE_CHOICE`, publishes the zone through `ZONE_STATE`, and queues a new zone for
   `settings_task`. It stays out of `BUS_EXECUTOR` because a yield there polls the task again at
   once, which would hold off the frame loop for the whole lookup.
-- `settings_task`, in thread mode, owns the flash and saves what `SETTINGS_WRITES` queues.
+- `settings_task`, in thread mode, owns the flash and saves what `SETTINGS_WRITES` and the
+  mesh's `GROUP_WRITES` queue.
 - `boot_key_task`, in thread mode, owns GPIO0 and passes the BOOT key's short and long presses
   to the frame loop through `BOOT_KEY_PRESSES`. The stage takes them as `Input::boot_key` and
   does nothing with them yet.
@@ -474,11 +479,17 @@ switch positions, and both are TCA9554 outputs rather than radio pins, so `LoraP
 loudly; it transmits or listens through the wrong path. That also couples the radio to the shared
 I2C bus, so any timing the protocol depends on includes an I2C transaction and waiting for the bus.
 
-`radio_task` runs the mesh, `src/mesh.rs` on `crates/octowhere-mesh`: step 2 of the protocol's
-build order, slots carrying positions and neighbours with a timebase taken from other nodes
-without a fix. Until pairing (step 3) a node's id is its MAC's low five bits and every node seals
-under one development key compiled in. Without a fix a node has no position of its own, so its
-packets carry only the neighbours record. A board whose `DIO0` rises with no flag raised has its
+`radio_task` runs the mesh, `src/mesh.rs` on `crates/octowhere-mesh`: slots carrying
+neighbours, a member record and positions, with a timebase taken from other nodes without a fix,
+under the group key pairing gave the node. A node in no group sends nothing and keeps the radio
+asleep. Without a fix a node has no position of its own. Commands reach the mesh through
+`mesh::COMMANDS`: start a pairing to add or join, choose a device found, answer the code, cancel,
+leave the group, rename. A pairing takes the radio to band O's upper channel at +2 dBm until it
+ends; the protocol's "The exchange as built" has the frames and their order. No screen sends
+the commands yet, so `pair-inject` lets `tools/pair-inject.py` send them over the USB JTAG. The
+mesh asks `settings_task` to store the group through `GROUP_WRITES` and waits for
+`GROUP_SAVED` where a pairing's commit depends on it. Keys and nonces come from the hardware's
+true random source, which `async_main` enables with the ADC's noise and leaves on. A board whose `DIO0` rises with no flag raised has its
 flags polled instead, 1 ms apart; one board did until a joint was reworked
 (`docs/hardware-notes.md`).
 
@@ -535,6 +546,8 @@ All default off. None belongs in normal firmware behavior.
 - `rtc-inject` lets `tools/rtc-inject.py` set the RTC over the USB JTAG with probe-rs, either as
   though GNSS set it or as the RTC's own unconfirmed time, without a reset. After one, GNSS no
   longer sets the clock until the firmware restarts.
+- `pair-inject` lets `tools/pair-inject.py` give the mesh its commands over the USB JTAG, in
+  place of the screens: add, join, choose, accept, decline, mismatch, cancel, leave and rename.
 - `lora-link-tx` and `lora-link-rx` build the two ends of a link test. They are mutually exclusive
   and `main.rs` refuses both with a `compile_error!`.
 - `fontdue-target-bench` diverts `async_main` into the on-target font benchmark, which never
