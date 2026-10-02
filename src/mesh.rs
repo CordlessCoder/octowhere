@@ -4,19 +4,29 @@
 //! `context/LORA-PROTOCOL.md` the design.
 
 use alloc::boxed::Box;
-use core::cell::Cell;
+use core::{
+    cell::{Cell, RefCell},
+    sync::atomic::{AtomicU32, Ordering},
+};
 
 use defmt::{debug, info, warn};
 use embassy_futures::select::{Either, Either3, select, select3};
 use embassy_sync::{
     blocking_mutex::{Mutex as BlockingMutex, raw::CriticalSectionRawMutex},
     channel::Channel,
+    signal::Signal,
 };
 use embassy_time::{Duration, Instant, Timer};
 use esp_hal::gpio::Input;
 use lc76g::FixQuality;
-use octowhere::settings::GroupWrite;
+use octowhere::{
+    settings::GroupWrite,
+    ui::group::view::{
+        Answer, GroupView, MemberView, MeshView, PairingView, Position, Refused, Request,
+    },
+};
 use octowhere_mesh::{
+    IDS,
     clock::{Clock, Taken},
     members::{Group, Member, Merged, Name},
     packet::{Builder, Entry, Hdop, Header, MAX_PACKET, Plain, Quality, Record, Source, Timebase},
@@ -78,6 +88,12 @@ pub static RTC_TIME: BlockingMutex<CriticalSectionRawMutex, Cell<Option<(i64, In
     BlockingMutex::new(Cell::new(None));
 /// What the user asks of the mesh.
 pub static COMMANDS: Channel<CriticalSectionRawMutex, Command, 4> = Channel::new();
+/// What the screens show of the mesh, as last published, and a signal that it changed.
+static VIEW: BlockingMutex<CriticalSectionRawMutex, RefCell<Option<MeshView>>> =
+    BlockingMutex::new(RefCell::new(None));
+pub static VIEW_CHANGED: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+/// Counts the views published, so a reader can tell when there is a new one.
+static VIEWS: AtomicU32 = AtomicU32::new(0);
 
 #[derive(Clone, Copy)]
 pub struct Fix {
@@ -98,6 +114,8 @@ pub enum Command {
     Join,
     /// Adding: picks a device found, by its place in the list.
     Choose(u8),
+    /// Adding: picks the device found announcing from this address.
+    ChooseMac([u8; 6]),
     /// The codes match.
     Accept,
     Decline,
@@ -109,10 +127,204 @@ pub enum Command {
     Rename(Name),
 }
 
+impl From<Request> for Command {
+    fn from(request: Request) -> Self {
+        match request {
+            Request::Add => Self::Add,
+            Request::Join => Self::Join,
+            Request::Choose(mac) => Self::ChooseMac(mac),
+            Request::Accept => Self::Accept,
+            Request::Decline => Self::Decline,
+            Request::Mismatch => Self::Mismatch,
+            Request::Cancel => Self::Cancel,
+            Request::Leave => Self::Leave,
+            Request::Rename(name) => Self::Rename(name),
+        }
+    }
+}
+
 /// The mesh's state as the firmware starts.
 pub struct Start {
     pub me: Identity,
     pub group: Option<Box<Group>>,
+}
+
+/// Passes what the screens asked on to the mesh. Returns false when the queue is full.
+pub fn request(request: Request) -> bool {
+    COMMANDS.try_send(request.into()).is_ok()
+}
+
+/// The mesh as last published, if it changed after the view counted `seen`, and its count.
+pub fn view_since(seen: u32) -> Option<(MeshView, u32)> {
+    let count = VIEWS.load(Ordering::Acquire);
+    if count == seen {
+        return None;
+    }
+    VIEW.lock(|view| view.borrow().clone())
+        .map(|view| (view, count))
+}
+
+fn publish(view: MeshView) {
+    let changed = VIEW.lock(|current| {
+        let mut current = current.borrow_mut();
+        let changed = current.as_ref() != Some(&view);
+        if changed {
+            *current = Some(view);
+            VIEWS.fetch_add(1, Ordering::Release);
+        }
+        changed
+    });
+    if changed {
+        VIEW_CHANGED.signal(());
+    }
+}
+
+/// Publishes the stored identity and group before the radio is known, for the screens to show
+/// from the start.
+pub fn publish_start(start: &Start) {
+    publish(Shown::new(false).view(&start.me, start.group.as_deref(), local()));
+}
+
+/// What the screens are shown beyond the group itself.
+struct Shown {
+    radio: bool,
+    sessions: u32,
+    pairing: Option<PairingView>,
+    answered: u32,
+    answer: Option<Answer>,
+    /// When each id was last heard sending, on the local clock.
+    heard: [Option<i64>; IDS as usize],
+    /// The newest position held for each id, as its UTC second. Kept past the table's expiry,
+    /// so an old position shows as old rather than never received.
+    positions: [Option<u32>; IDS as usize],
+}
+
+impl Shown {
+    fn new(radio: bool) -> Self {
+        Self {
+            radio,
+            sessions: 0,
+            pairing: None,
+            answered: 0,
+            answer: None,
+            heard: [None; IDS as usize],
+            positions: [None; IDS as usize],
+        }
+    }
+
+    fn answer(&mut self, answer: Answer) {
+        self.answered += 1;
+        self.answer = Some(answer);
+    }
+
+    /// Notes the stamps of the positions `table` holds.
+    fn positions(&mut self, table: &Table) {
+        for entry in table.entries() {
+            if let Some(held) = self.positions.get_mut(usize::from(entry.id)) {
+                *held = Some(held.map_or(entry.stamp, |held| held.max(entry.stamp)));
+            }
+        }
+    }
+
+    /// The view of `me` in `group` at local time `now`. Times in UTC become local times on the
+    /// stage's clock, which is the same as this one.
+    fn view(&self, me: &Identity, group: Option<&Group>, now: i64) -> MeshView {
+        let utc = utc_now(now);
+        let local_at = |stamp: u32| utc.map(|utc| now - (utc - i64::from(stamp)) * 1_000_000);
+        let group = group.map(|group| {
+            let mut members = [None; IDS as usize];
+            for (id, member) in group.members() {
+                let index = usize::from(id);
+                members[index] = Some(MemberView {
+                    name: member.name,
+                    mac: member.mac,
+                    // A device that knew no UTC dated the record 0.
+                    joined: (member.joined != 0)
+                        .then(|| local_at(member.joined))
+                        .flatten(),
+                    heard: if id == group.own() {
+                        None
+                    } else {
+                        self.heard[index]
+                    },
+                    position: match self.positions[index] {
+                        None => Position::Never,
+                        Some(stamp) => local_at(stamp).map_or(Position::Unknown, Position::At),
+                    },
+                });
+            }
+            GroupView {
+                own: group.own(),
+                members,
+            }
+        });
+        MeshView {
+            radio: self.radio,
+            mac: me.mac,
+            name: me.name,
+            group,
+            sessions: self.sessions,
+            pairing: self.pairing.clone(),
+            answered: self.answered,
+            answer: self.answer,
+        }
+    }
+}
+
+fn pairing_view(session: u32, pairing: &Pairing) -> PairingView {
+    PairingView {
+        session,
+        role: pairing.role(),
+        phase: pairing.phase(),
+        deadline: pairing.deadline(),
+        candidates: pairing.candidates().collect(),
+        peer: pairing.peer(),
+        peer_name: pairing.peer_name(),
+        group: pairing
+            .group()
+            .map(|group| (group.own(), group.count() as u8)),
+        refused: None,
+    }
+}
+
+/// A session the mesh would not start.
+fn refused(session: u32, role: Role, refused: Refused) -> PairingView {
+    PairingView {
+        session,
+        role,
+        phase: Phase::Searching,
+        deadline: None,
+        candidates: heapless::Vec::new(),
+        peer: None,
+        peer_name: None,
+        group: None,
+        refused: Some(refused),
+    }
+}
+
+/// Forgets the group, once that is stored. A node in no group has nothing to forget.
+async fn leave(group: &mut Option<Group>) -> bool {
+    if group.is_none() {
+        return true;
+    }
+    let left = super::save_group(GroupWrite::Leave).await;
+    if left {
+        *group = None;
+    }
+    left
+}
+
+/// Stores `name` as this device's, and only then takes it up, so a failed write leaves the
+/// name that is stored.
+async fn rename(me: &mut Identity, group: Option<&mut Group>, name: Name) -> bool {
+    if !super::save_group(GroupWrite::Name(name)).await {
+        return false;
+    }
+    me.name = name;
+    if let Some(group) = group {
+        group.rename(name, utc_seconds(local()));
+    }
+    true
 }
 
 /// Random bytes from the hardware's true random source, or `None` without it. `async_main`
@@ -134,13 +346,16 @@ fn until(local: i64) -> Timer {
 
 /// UTC seconds at local time `now`, from GNSS or the RTC, or 0 with neither.
 fn utc_seconds(now: i64) -> u32 {
-    let utc = GPS_TIME
+    utc_now(now).map_or(0, |utc| utc.clamp(0, i64::from(u32::MAX)) as u32)
+}
+
+/// UTC seconds at local time `now`, from GNSS or the RTC.
+fn utc_now(now: i64) -> Option<i64> {
+    GPS_TIME
         .lock(Cell::get)
         .map(|gps| now - gps.offset)
-        .or_else(|| rtc_now(now));
-    utc.map_or(0, |utc| {
-        (utc / 1_000_000).clamp(0, i64::from(u32::MAX)) as u32
-    })
+        .or_else(|| rtc_now(now))
+        .map(|utc| utc / 1_000_000)
 }
 
 pub struct Mesh {
@@ -159,7 +374,9 @@ pub struct Mesh {
     table: Table,
     /// The timebase time the next own slot is looked for from, past the last one decided.
     after: i64,
-    shown: Option<Timebase>,
+    timebase_shown: Option<Timebase>,
+    /// What the screens are shown.
+    shown: Shown,
 }
 
 impl Mesh {
@@ -192,11 +409,17 @@ impl Mesh {
             clock: Clock::new(own, now),
             table: Table::new(own),
             after: i64::MIN,
-            shown: None,
+            timebase_shown: None,
+            shown: Shown::new(true),
         };
         let tuned = mesh.tune(FREQUENCY_HZ, SYNC_WORD, POWER_DBM).await;
         info!("[MESH] tuned={}", tuned);
+        mesh.publish();
         mesh
+    }
+
+    fn publish(&self) {
+        publish(self.shown.view(&self.me, self.group.as_ref(), local()));
     }
 
     async fn tune(&mut self, frequency: u32, sync_word: u8, power: u8) -> bool {
@@ -223,6 +446,7 @@ impl Mesh {
 
     pub async fn run(mut self) -> ! {
         loop {
+            self.publish();
             let command = if self.group.is_some() {
                 match select(self.step(), COMMANDS.receive()).await {
                     Either::First(()) => continue,
@@ -246,28 +470,32 @@ impl Mesh {
             Command::Add => self.pair(Role::Add).await,
             Command::Join if self.group.is_some() => {
                 warn!("[MESH] in a group; it must leave before it can join another");
+                self.shown.sessions += 1;
+                self.shown.pairing =
+                    Some(refused(self.shown.sessions, Role::Join, Refused::InGroup));
             }
             Command::Join => self.pair(Role::Join).await,
             Command::Leave => {
-                if self.group.is_some() && super::save_group(GroupWrite::Leave).await {
-                    self.group = None;
+                let left = leave(&mut self.group).await;
+                if left {
                     self.unsaved = 0;
                     self.unsaved_group = false;
                     info!("[MESH] left the group");
                 } else {
                     warn!("[MESH] not left");
                 }
+                self.shown.answer(Answer::Left(left));
             }
             Command::Rename(name) => {
-                self.me.name = name;
-                let saved = super::save_group(GroupWrite::Name(name)).await;
+                let saved = rename(&mut self.me, self.group.as_mut(), name).await;
                 info!("[MESH] renamed {} saved={}", name, saved);
-                if let Some(group) = &mut self.group {
-                    group.rename(name, utc_seconds(local()));
+                if saved && let Some(group) = &self.group {
                     self.unsaved |= 1 << group.own();
                 }
+                self.shown.answer(Answer::Renamed(saved));
             }
             Command::Choose(_)
+            | Command::ChooseMac(_)
             | Command::Accept
             | Command::Decline
             | Command::Mismatch
@@ -305,9 +533,9 @@ impl Mesh {
         self.take_readings(own);
         self.clock.tick(now, rtc_now(now));
         let timebase = self.clock.at(now).map(|(_, timebase)| timebase);
-        if timebase != self.shown {
+        if timebase != self.timebase_shown {
             log_timebase(timebase, self.clock.is_sweeping());
-            self.shown = timebase;
+            self.timebase_shown = timebase;
         }
         let Some((time, _)) = self.clock.at(now) else {
             let end = self.clock.sweep_ends().unwrap_or(now + ROUND_US);
@@ -348,6 +576,7 @@ impl Mesh {
                     },
                     hdop: Hdop::from_milli(fix.hdop_milli.unwrap_or(u32::MAX)),
                 });
+                self.shown.positions(&self.table);
             }
         }
         if let Some((time, _)) = self.clock.at(local()) {
@@ -453,6 +682,9 @@ impl Mesh {
         };
         let start = done - airtime_us(len) - ARRIVAL_LATENCY_US - polled;
         let arrival = self.clock.arrival(&header, start, done);
+        if let Some(heard) = self.shown.heard.get_mut(usize::from(header.sender)) {
+            *heard = Some(done);
+        }
         self.table.heard(
             header.sender,
             round_at(named_slot(header.base, header.sender)),
@@ -498,6 +730,8 @@ impl Mesh {
                 Record::Other(..) => {}
             }
         }
+        self.shown.positions(&self.table);
+        self.publish();
         info!(
             "[MESH] heard id={} timebase={} hops={} taken={} late_us={} len={} rssi={} snr={} entries={} new={} neighbours={=u32:#010x}",
             header.sender,
@@ -593,8 +827,11 @@ impl Mesh {
     /// Runs a pairing in `role` on the pairing channel until it ends, then returns to the mesh's
     /// channel. A node that joins, or founds a group, starts its timebase afresh.
     async fn pair(&mut self, role: Role) {
+        self.shown.sessions += 1;
+        let session = self.shown.sessions;
         let (Some(nonce), Some(founding)) = (random::<16>(), random::<32>()) else {
             warn!("[PAIR] no true random source; not pairing");
+            self.shown.pairing = Some(refused(session, role, Refused::NoRandom));
             return;
         };
         if !self
@@ -645,6 +882,16 @@ impl Mesh {
             if shown != Some(phase) {
                 log_pairing(&pairing, phase);
                 shown = Some(phase);
+            }
+            let view = pairing_view(session, &pairing);
+            if self.shown.pairing.as_ref() != Some(&view) {
+                self.shown.pairing = Some(view);
+                // A pairing that is done has stored its group, which the screens show at once.
+                let group = match phase {
+                    Phase::Done(_) => pairing.group(),
+                    _ => self.group.as_ref(),
+                };
+                publish(self.shown.view(&self.me, group, now));
             }
             if pairing.is_over(now) {
                 break;
@@ -701,6 +948,12 @@ impl Mesh {
                     info!("[PAIR] command {}", command);
                     match command {
                         Command::Choose(index) => pairing.choose(usize::from(index), now),
+                        Command::ChooseMac(mac) => {
+                            let index = pairing.candidates().position(|found| found == mac);
+                            if let Some(index) = index {
+                                pairing.choose(index, now);
+                            }
+                        }
                         Command::Accept => pairing.accept(now),
                         Command::Decline => pairing.reject(false, now),
                         Command::Mismatch => pairing.reject(true, now),
@@ -726,7 +979,9 @@ impl Mesh {
                 self.clock = Clock::new(own, local());
                 self.table = Table::new(own);
                 self.after = i64::MIN;
-                self.shown = None;
+                self.timebase_shown = None;
+                self.shown.heard = [None; IDS as usize];
+                self.shown.positions = [None; IDS as usize];
             }
         }
         if !self.tune(FREQUENCY_HZ, SYNC_WORD, POWER_DBM).await {
@@ -822,8 +1077,38 @@ fn log_timebase(timebase: Option<Timebase>, sweeping: bool) {
     }
 }
 
-/// Lets a debugger give the mesh commands, until there are screens for them;
-/// `tools/pair-inject.py` does.
+/// Stands in for the mesh on a board whose radio did not answer: it keeps this device's name and
+/// can leave the group, and tells the screens there is no radio to pair with.
+#[embassy_executor::task]
+pub async fn offline(start: Start) {
+    let mut me = start.me;
+    let mut group = start.group.map(|group| *group);
+    let mut shown = Shown::new(false);
+    loop {
+        publish(shown.view(&me, group.as_ref(), local()));
+        match COMMANDS.receive().await {
+            Command::Leave => {
+                let left = leave(&mut group).await;
+                shown.answer(Answer::Left(left));
+            }
+            Command::Rename(name) => {
+                let saved = rename(&mut me, group.as_mut(), name).await;
+                if saved && let Some(group) = &group {
+                    let id = group.own();
+                    super::queue_group_write(GroupWrite::Member {
+                        id,
+                        member: group.member(id).copied(),
+                    });
+                }
+                shown.answer(Answer::Renamed(saved));
+            }
+            command => warn!("[MESH] no radio for {}", command),
+        }
+    }
+}
+
+/// Lets a debugger give the mesh commands in place of the screens; `tools/pair-inject.py`
+/// does.
 #[cfg(feature = "pair-inject")]
 pub mod inject {
     use core::sync::atomic::{AtomicU32, Ordering};

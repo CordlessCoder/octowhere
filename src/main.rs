@@ -1834,6 +1834,7 @@ async fn async_main(spawner: Spawner) {
         peripherals.ADC1,
     ));
     let mesh_start = mesh_start(store.load_mesh());
+    mesh::publish_start(&mesh_start);
     info!(
         "[SETTINGS] zone mode={} manual={} automatic={} brightness={} timeout={} always_on={}",
         saved.zone_mode,
@@ -2128,17 +2129,23 @@ async fn bring_up(spawner: Spawner, parts: Parts, zones: ZoneTracker, mesh: mesh
         parts.lora_cs,
     )
     .await;
-    let radio = lora.map(|lora| RadioTask {
-        lora,
-        dio0: Input::new(parts.lora_dio0, InputConfig::default()),
-        path: LoraPath::new(
-            i2c.clone(),
-            !((1 << board::EXIO_GPS_RESET)
-                | (1 << board::EXIO_LORA_RESET)
-                | (1 << board::EXIO_LORA_TX_SWITCH)),
-        ),
-        mesh,
-    });
+    let radio = match lora {
+        Some(lora) => Some(RadioTask {
+            lora,
+            dio0: Input::new(parts.lora_dio0, InputConfig::default()),
+            path: LoraPath::new(
+                i2c.clone(),
+                !((1 << board::EXIO_GPS_RESET)
+                    | (1 << board::EXIO_LORA_RESET)
+                    | (1 << board::EXIO_LORA_TX_SWITCH)),
+            ),
+            mesh,
+        }),
+        None => {
+            spawner.spawn(mesh::offline(mesh).unwrap());
+            None
+        }
+    };
 
     if touch_ok {
         touch.set_config(Cst9217Config {
@@ -2439,6 +2446,8 @@ async fn frame_loop(
     // Swaps left until the frame that switched the panel off has reached core 1, and the board
     // can power off.
     let mut power_off_after: Option<u8> = None;
+    // The count of the mesh's views the stage has.
+    let mut mesh_seen = 0;
     loop {
         let start = Instant::now();
         {
@@ -2477,7 +2486,7 @@ async fn frame_loop(
                     SENSOR_STATE.wait(),
                     BOOT_REPORTS.receive(),
                     KEY_PRESSES.receive(),
-                    BOOT_KEY_PRESSES.receive(),
+                    select(BOOT_KEY_PRESSES.receive(), mesh::VIEW_CHANGED.wait()),
                 ),
                 MOTION_STATE.wait(),
                 Timer::after(wait_timeout),
@@ -2492,10 +2501,19 @@ async fn frame_loop(
                     (None, None, None, Some(report), None, None)
                 }
                 Either4::Second(Either4::Third(key)) => (None, None, None, None, Some(key), None),
-                Either4::Second(Either4::Fourth(key)) => (None, None, None, None, None, Some(key)),
+                Either4::Second(Either4::Fourth(Either::First(key))) => {
+                    (None, None, None, None, None, Some(key))
+                }
+                Either4::Second(Either4::Fourth(Either::Second(()))) | Either4::Fourth(()) => {
+                    (None, None, None, None, None, None)
+                }
                 Either4::Third(state) => (None, None, Some(state), None, None, None),
-                Either4::Fourth(()) => (None, None, None, None, None, None),
             };
+            // A change that came with another wake is taken here too.
+            if let Some((view, seen)) = mesh::view_since(mesh_seen) {
+                stage.set_mesh(view);
+                mesh_seen = seen;
+            }
             match touch_read {
                 Some(Ok(_)) => last_touch_poll = Instant::now(),
                 Some(Err(())) => warn!("[TOUCH] read failed"),
@@ -2552,6 +2570,12 @@ async fn frame_loop(
             if wake_gestures != asked_wake_gestures {
                 TOUCH_WAKE_GESTURES.signal(wake_gestures);
                 asked_wake_gestures = wake_gestures;
+            }
+            if let Some(request) = update.mesh {
+                info!("[MESH] screens ask {}", request);
+                if !mesh::request(request) {
+                    warn!("[MESH] command queue full; {} dropped", request);
+                }
             }
             if update.recalibrate {
                 info!("[COMPASS] recalibrating on request");
