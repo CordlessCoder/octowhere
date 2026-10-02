@@ -306,7 +306,11 @@ results in `docs/logs/display/startup-handover-2026-10-01.md`). And
 `bench/gnss-stuck` holds the GNSS module in reset twice and switches its NMEA output off, for
 `gnss_task`'s recovery to clear (`gnss-stuck-bench`). And `bench/mesh-pa` sends every round,
 cycling the transmitter through both PA pins at two powers each, and logs what each node hears
-(`mesh-pa-bench`; results in `docs/logs/lora/pa-2026-10-01/`).
+(`mesh-pa-bench`; results in `docs/logs/lora/pa-2026-10-01/`). And `bench/mesh-crc`
+sends in every other slot and logs every packet's bytes, sent and received, with what each
+board was doing (`mesh-crc-bench`); `mesh-monitor` adds an RSSI watch of the channel and
+`mesh-low-power` sends at +2 dBm. `tools/mesh-crc-compare.py` and `tools/mesh-burst-compare.py`
+read two nodes' logs; results in `docs/logs/lora/crc-2026-10-02/`.
 
 ## Concurrency
 
