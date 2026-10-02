@@ -9,8 +9,17 @@
 Thumbs.db
 a.bin
 
-# The design agent's full backup; context/design holds what the build needs
+# The design agent's full backup
 /context/octowhere-design-project/
-# Links into assets/, made by the step in context/design/README.md
-/context/design/renderer/fonts/
+# The design's hand-offs, renders, references and specs, kept on the owner's machine rather
+# than in the repository (context/design/README.md)
+/context/design/handoffs/
+/context/design/renderer/
+/context/design/references/
+/context/design/specs/
+/context/design/inputs/
+/context/design/PROJECT-MAP.md
+/context/design/SCREEN-SYSTEM-REVIEW.md
+/context/octowhere-implementation-update-*/
+/context/octowhere-poweroff-implementation-handoff-*/
 __pycache__/

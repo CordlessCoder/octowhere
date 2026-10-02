@@ -1,6 +1,8 @@
 # Screen design brief
 
-This brief is for a design agent working on this device's screens. "This round" says where
+This brief is for a design agent working on this device's screens. The design files it links
+to under `design/`, other than `DECISIONS.md` and `docs/`, and the `octowhere-*` packages, are
+kept with the owner rather than in the repository. "This round" says where
 the rounds stand. The rest covers the hardware, the screens as built, the gestures, what the renderer draws and what that costs, and
 what data and settings exist. Read it with:
 

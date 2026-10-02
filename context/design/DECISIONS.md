@@ -145,3 +145,7 @@ Recorded 2026-09-26. These override the hand-off where they differ.
     those, the owner settled that CLEAR SETTINGS keeps the group and the name, and that a
     pairing sends only keys, hardware addresses and its commitment unencrypted. Pairing's
     channel and frames are in `LORA-PROTOCOL.md`, "The exchange as built".
+28. **The design's files stay out of the repository** (owner, 2026-10-02). The hand-offs,
+    renders, references, specs and briefs, and the update and power-off packages in
+    `context/`, are kept on the owner's machine and ignored by git; this file and `docs/` stay.
+    They were deleted in an ordinary commit, so history up to it still holds them.

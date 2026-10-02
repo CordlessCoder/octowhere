@@ -86,16 +86,19 @@ initialization or peripheral mappings.
 - [`context/design/`](context/design/README.md) is the approved design of every screen, from
   the design agent's hand-off of 2026-09-26: the S1 self-test, the G19 identity and G17 card,
   the K1 clock, the C1 compass, the S1 settings overview with the D3 screens it opens, and the
-  H2b always-on face. The owner approved all of it; its `DECISIONS.md` records that and settles
-  what the hand-off left open. Start at `handoffs/IMPLEMENTATION-HANDOFF-CURRENT.md`, which
-  names the render each state is checked against. Its README says how to run the concept renderers from the
-  fonts under `assets/`. `specs/` keeps the earlier functional specs
-  with the owner's decisions since (clock face, wordmark, compass animation, settings panel,
-  round 3 display and motion, round 4 clock); the hand-off overrides them where they conflict,
-  and `SCREEN-DESIGN-BRIEF.md` has where the build interpreted them. Only the start-up's
+  H2b always-on face, and the later hand-offs that amend it, the 2026-10-02 pairing and group
+  screens last. The owner approved all of it; its `DECISIONS.md` records that and settles
+  what the hand-offs left open. Only `DECISIONS.md` and `docs/` are in the repository: the
+  hand-offs, renders, references and specs, and the update and power-off packages in
+  `context/`, are kept locally and ignored by git (owner, 2026-10-02), and the README lists
+  them. Start at `handoffs/IMPLEMENTATION-HANDOFF-CURRENT.md`, which names the render each
+  state is checked against. The README says how to run the concept renderers from the fonts
+  under `assets/`. `specs/` keeps the earlier functional specs with the owner's decisions
+  since (clock face, wordmark, compass animation, settings panel, round 3 display and motion,
+  round 4 clock); the hand-off overrides them where they conflict, and
+  `SCREEN-DESIGN-BRIEF.md` has where the build interpreted them. Only the start-up's
   identity, logo card and fault screen run at 30 fps; everything else keeps timings in ms. The
-  design agent's full backup is `context/octowhere-design-project/`, ignored by git and kept
-  locally.
+  design agent's full backup is `context/octowhere-design-project/`, also kept locally.
 - [`context/WORKING-NOTES.md`](context/WORKING-NOTES.md) is how the work is done here: how
   the owner reviews, the board's rules and pitfalls, measuring draws, driving `ui-sim`
   without a display, and what is settled. Read it before using the board.

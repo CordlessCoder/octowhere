@@ -125,11 +125,14 @@ shadows the standard library.
 
 ## Outside the repository
 
-On the original machine, and not needed to build or continue the design:
+On the original machine, and not needed to build the firmware:
 
+- The design's hand-offs, renders, references, specs and briefs under `context/design/`, and the
+  update and power-off packages in `context/` (ignored by git, owner, 2026-10-02). Building
+  does not need them; building a screen to its design, and comparing against its render, does.
+  `context/design/README.md` lists them, and history up to 2026-10-02 holds them.
 - `context/octowhere-design-project/`, the design agent's full backup (ignored by git). It
-  holds explorations, historical packages and the design agent's transcript. Everything the
-  build needs is in `context/design/`.
+  holds explorations, historical packages and the design agent's transcript.
 - The two Marathon reference videos in `context/` (excluded in `.git/info/exclude`). The
   design's `references/VIDEO-TIMING-MAP.md` gives their timecodes.
 - `~/git/esp-idf`, a blobless ESP-IDF clone kept for reading Espressif's reference code, and
