@@ -3,7 +3,7 @@
 
 use crate::IDS;
 use crate::packet::{Entry, MAX_DELTA};
-use crate::schedule::is_floor;
+use crate::schedule::{is_floor, is_sweep_round};
 
 /// An id heard within this many rounds is a neighbour.
 pub const NEIGHBOUR_ROUNDS: i64 = 7;
@@ -185,11 +185,13 @@ impl Table {
         }
     }
 
-    /// Whether this node transmits in its slot in `round`. One that hears nobody sends every
-    /// round, so that another node's one-round sweep finds it, wherever their slots fall.
+    /// Whether this node transmits in its slot in `round`. It sends in a sweep round, which
+    /// nodes on a timebase near its own sweep too. One that hears nobody sends every round, so
+    /// that another node's sweep finds it, wherever their slots fall.
     #[must_use]
     pub fn wants_to_send(&self, round: i64) -> bool {
         is_floor(round, self.own)
+            || is_sweep_round(round)
             || self.appeared
             || self.neighbours(round) == 0
             || self.entries().any(|entry| self.is_fresh(entry))
@@ -378,6 +380,17 @@ mod tests {
             (3, [2, 4, 6]),
             "then the rotation, after the last id sent"
         );
+    }
+
+    #[test]
+    fn a_node_sends_in_a_sweep_round() {
+        let mut table = Table::new(1);
+        let sweep = 2 * crate::schedule::SWEEP_EVERY;
+        assert!(!is_floor(sweep, 1));
+        table.heard(5, sweep);
+        table.sent(&[]);
+        assert!(table.wants_to_send(sweep));
+        assert!(!table.wants_to_send(sweep + 1));
     }
 
     #[test]

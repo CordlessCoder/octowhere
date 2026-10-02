@@ -3,17 +3,12 @@
 //! timer, the timebase's since 1970.
 
 use crate::packet::{Header, Source, Timebase};
-use crate::schedule::{ROUND_US, named_slot};
+use crate::schedule::{GUARD_US, ROUND_US, SWEEP_EVERY, is_sweep_round, named_slot, round_at};
 use crate::table::NEIGHBOUR_ROUNDS;
 
 /// A node's first sweep, and one after it lost its timebase's root, listen this long, which spans
 /// every node's floor round.
 pub const SWEEP_US: i64 = 3 * ROUND_US;
-/// Every node also sweeps for one round this often, to find a better timebase and members it
-/// does not know of. It is not a whole number of floors, so successive sweeps fall on each of
-/// the floor's three rounds in turn.
-pub const SWEEP_EVERY_US: i64 = 13 * ROUND_US;
-pub const SHORT_SWEEP_US: i64 = ROUND_US;
 /// Hearing nothing closer to its timebase's root for this long makes a node sweep, and a sweep
 /// that hears nothing closer makes it its own root.
 pub const LOST_US: i64 = NEIGHBOUR_ROUNDS * ROUND_US;
@@ -45,8 +40,8 @@ pub struct Clock {
     clock: Option<(i64, Timebase)>,
     /// From the node's own fix: local time minus UTC, and the local time a fix last refined it.
     gps: Option<(i64, i64)>,
+    /// When a first or lost sweep ends.
     sweep_until: Option<i64>,
-    next_sweep: i64,
     /// When a packet closer to the timebase's root was last taken.
     upstream: i64,
 }
@@ -60,7 +55,6 @@ impl Clock {
             clock: None,
             gps: None,
             sweep_until: Some(now + SWEEP_US),
-            next_sweep: now + SWEEP_US + SWEEP_EVERY_US - ROUND_US / 2,
             upstream: now,
         }
     }
@@ -98,13 +92,11 @@ impl Clock {
         self.clock.is_some_and(|(_, timebase)| timebase.hops > 0) && now - self.upstream > LOST_US
     }
 
-    /// Ends and starts sweeps and ages the GPS time. `rtc` is the RTC's UTC at `now`, which a node
-    /// that heard nobody starts its own clock from. Call it before reading the clock.
-    /// The caller ticks at least once a round, at a point in it that may vary by up to half a
-    /// round.
+    /// Ends and starts first and lost sweeps and ages the GPS time. `rtc` is the RTC's UTC at
+    /// `now`, which a node that heard nobody starts its own clock from. Call it before reading
+    /// the clock.
     pub fn tick(&mut self, now: i64, rtc: Option<i64>) {
-        let gps = self.live_gps(now);
-        if let Some(offset) = gps {
+        if let Some(offset) = self.live_gps(now) {
             self.clock = Some((
                 offset,
                 Timebase {
@@ -112,11 +104,10 @@ impl Clock {
                     hops: 0,
                 },
             ));
-            // A fix is a timebase, so only the search for members is left of a sweep.
-            self.sweep_until = self
-                .sweep_until
-                .map(|until| until.min(now + SHORT_SWEEP_US));
-        } else if let Some((offset, timebase)) = self.clock
+            self.sweep_until = None;
+            return;
+        }
+        if let Some((offset, timebase)) = self.clock
             && timebase.source == Source::Gps
             && timebase.hops == 0
         {
@@ -135,12 +126,8 @@ impl Clock {
             }
             return;
         }
-        let lost = gps.is_none() && self.is_lost(now);
-        if lost || now >= self.next_sweep {
-            let length = if lost { SWEEP_US } else { SHORT_SWEEP_US };
-            self.sweep_until = Some(now + length);
-            // Early by half a round, so the tick that many rounds on starts the next.
-            self.next_sweep = now + SWEEP_EVERY_US - ROUND_US / 2;
+        if self.is_lost(now) {
+            self.sweep_until = Some(now + SWEEP_US);
         }
     }
 
@@ -194,17 +181,40 @@ impl Clock {
         self.clock.map(|(offset, _)| time + offset)
     }
 
-    /// Whether the node sweeps at local time `now`. A sweep ends at its time, though the node
-    /// ticks only once a round.
-    #[must_use]
-    pub fn is_sweeping(&self, now: i64) -> bool {
-        self.sweep_until.is_some_and(|until| now < until)
+    /// The sweep round under way in the timebase at local time `now`, if one is. It opens a guard
+    /// early, as a slot's window does, and closes as early.
+    fn sweep_round(&self, now: i64) -> Option<i64> {
+        let (time, _) = self.at(now)?;
+        let round = round_at(time + GUARD_US);
+        is_sweep_round(round).then_some(round)
     }
 
-    /// When the current sweep ends.
+    /// Whether the node listens throughout at local time `now`: in a first or lost sweep, or in
+    /// a sweep round. A sweep ends at its time, though the node ticks only once a round.
     #[must_use]
-    pub fn sweep_ends(&self) -> Option<i64> {
-        self.sweep_until
+    pub fn is_sweeping(&self, now: i64) -> bool {
+        self.sweep_until.is_some_and(|until| now < until) || self.sweep_round(now).is_some()
+    }
+
+    /// The local time the sweep under way at `now` ends.
+    #[must_use]
+    pub fn sweep_ends(&self, now: i64) -> Option<i64> {
+        match self.sweep_until {
+            Some(until) if now < until => Some(until),
+            _ => {
+                let round = self.sweep_round(now)?;
+                self.local((round + 1) * ROUND_US - GUARD_US)
+            }
+        }
+    }
+
+    /// The local time the next sweep round after `now` opens, with a timebase.
+    #[must_use]
+    pub fn next_sweep(&self, now: i64) -> Option<i64> {
+        let (time, _) = self.at(now)?;
+        let round = round_at(time + GUARD_US) + 1;
+        let next = round + (SWEEP_EVERY - round.rem_euclid(SWEEP_EVERY)) % SWEEP_EVERY;
+        self.local(next * ROUND_US - GUARD_US)
     }
 }
 
@@ -235,45 +245,40 @@ mod tests {
 
     #[test]
     fn a_node_that_hears_nobody_starts_its_own_clock_from_the_rtc() {
+        // The round after UTC's, which is a sweep round.
+        let rtc = UTC + ROUND_US;
         let mut clock = Clock::new(24, 0);
-        clock.tick(SWEEP_US - 1, Some(UTC));
+        clock.tick(SWEEP_US - 1, Some(rtc));
         assert!(clock.is_sweeping(SWEEP_US - 1));
         assert_eq!(clock.at(0), None);
-        clock.tick(SWEEP_US, Some(UTC));
+        clock.tick(SWEEP_US, Some(rtc));
         assert!(!clock.is_sweeping(SWEEP_US));
         let (time, timebase) = clock.at(SWEEP_US).unwrap();
-        assert_eq!(time, UTC);
+        assert_eq!(time, rtc);
         assert_eq!(timebase.source, Source::Node(24));
-        clock.tick(SWEEP_US + SWEEP_EVERY_US - ROUND_US, None);
-        assert!(!clock.is_sweeping(SWEEP_US + SWEEP_EVERY_US - ROUND_US));
-        let next = SWEEP_US + SWEEP_EVERY_US - ROUND_US / 4;
-        clock.tick(next, None);
-        assert!(
-            clock.is_sweeping(next),
-            "it sweeps again for a better timebase"
-        );
-        clock.tick(next + SHORT_SWEEP_US - 1, None);
-        assert!(clock.is_sweeping(next + SHORT_SWEEP_US - 1));
-        clock.tick(next + SHORT_SWEEP_US, None);
-        assert!(!clock.is_sweeping(next + SHORT_SWEEP_US), "for one round");
-        clock.tick(next + SWEEP_EVERY_US + ROUND_US / 4, None);
-        assert!(
-            clock.is_sweeping(next + SWEEP_EVERY_US + ROUND_US / 4),
-            "a tick late in its round still starts the next"
-        );
     }
 
     #[test]
-    fn a_sweep_ends_on_time_between_ticks() {
+    fn a_node_sweeps_its_timebases_sweep_rounds() {
+        // A timebase whose round at local time 0 follows a sweep round.
+        let start = (round_at(UTC) / SWEEP_EVERY * SWEEP_EVERY + 1) * ROUND_US;
         let mut clock = Clock::new(1, 0);
-        clock.tick(SWEEP_US, Some(UTC));
-        let start = SWEEP_US + SWEEP_EVERY_US;
-        clock.tick(start, None);
-        clock.tick(start + SHORT_SWEEP_US - 1_000, None);
-        assert!(clock.is_sweeping(start + SHORT_SWEEP_US - 1));
+        clock.gps(-start, 0);
+        clock.tick(0, None);
+        assert!(!clock.is_sweeping(0), "a fix ends the first sweep");
+        let opens = (SWEEP_EVERY - 1) * ROUND_US - GUARD_US;
+        assert_eq!(clock.next_sweep(0), Some(opens));
+        assert!(!clock.is_sweeping(opens - 1));
+        assert!(clock.is_sweeping(opens));
+        assert_eq!(clock.sweep_ends(opens), Some(opens + ROUND_US));
+        assert!(clock.is_sweeping(opens + ROUND_US - 1));
         assert!(
-            !clock.is_sweeping(start + SHORT_SWEEP_US),
-            "however long until the next tick"
+            !clock.is_sweeping(opens + ROUND_US),
+            "for one round, whenever the node ticks"
+        );
+        assert_eq!(
+            clock.next_sweep(opens),
+            Some(opens + SWEEP_EVERY * ROUND_US)
         );
     }
 
@@ -337,17 +342,6 @@ mod tests {
         let mut clock = Clock::new(1, 0);
         clock.gps(-UTC, 0);
         clock.tick(0, None);
-        assert!(clock.is_sweeping(0), "for members it does not know of");
-        clock.tick(SHORT_SWEEP_US, None);
-        assert!(
-            !clock.is_sweeping(SHORT_SWEEP_US),
-            "for one round, with a timebase"
-        );
-        clock.tick(SWEEP_US + SWEEP_EVERY_US, None);
-        assert!(
-            clock.is_sweeping(SWEEP_US + SWEEP_EVERY_US),
-            "and again later"
-        );
         assert_eq!(
             clock.at(0),
             Some((

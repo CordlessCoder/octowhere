@@ -589,7 +589,7 @@ impl Mesh {
             self.timebase_shown = timebase;
         }
         let Some((time, _)) = self.clock.at(now) else {
-            let end = self.clock.sweep_ends().unwrap_or(now + ROUND_US);
+            let end = self.clock.sweep_ends(now).unwrap_or(now + ROUND_US);
             self.listen(end).await;
             return;
         };
@@ -641,8 +641,8 @@ impl Mesh {
         }
     }
 
-    /// Listens until local time `end`: throughout while sweeping or without a timebase, and
-    /// otherwise in a window round the slot of each other member and of each id heard lately.
+    /// Listens until local time `end`: throughout in a sweep or without a timebase, and otherwise
+    /// in a window round the slot of each other member and of each id heard lately.
     /// Returns whether a packet moved the node to another timebase or another id, which moves
     /// every slot.
     async fn listen(&mut self, end: i64) -> bool {
@@ -655,16 +655,26 @@ impl Mesh {
                 Some((time, _)) if !self.clock.is_sweeping(now) => {
                     let offset = now - time;
                     let from = time - GUARD_US - airtime_us(MAX_PACKET) + 1;
-                    match next_slot_in(from, self.listened(round_at(from))) {
-                        Some((_, start)) => {
-                            let open = start - GUARD_US + offset;
-                            let close = start + GUARD_US + airtime_us(MAX_PACKET) + offset;
-                            (open.max(now), close.min(end))
+                    let window =
+                        next_slot_in(from, self.listened(round_at(from))).map(|(_, start)| {
+                            (
+                                start - GUARD_US + offset,
+                                start + GUARD_US + airtime_us(MAX_PACKET) + offset,
+                            )
+                        });
+                    let sweep = self.clock.next_sweep(now).unwrap_or(i64::MAX);
+                    match window {
+                        Some((open, close)) if open < sweep => {
+                            (open.max(now), close.min(sweep).min(end))
                         }
-                        None => (end, end),
+                        // The sweep round opens first: wait for it, and sweep from there.
+                        _ => (sweep.max(now).min(end), sweep.max(now).min(end)),
                     }
                 }
-                _ => (now, end),
+                _ => (
+                    now,
+                    self.clock.sweep_ends(now).map_or(end, |ends| ends.min(end)),
+                ),
             };
             if open >= end {
                 let _ = self.lora.set_device_mode(DeviceMode::STDBY).await;

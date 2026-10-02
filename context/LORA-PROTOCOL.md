@@ -107,6 +107,7 @@ A node transmits in its slot when it has something to say, and stays silent othe
 - a node appeared for the first time
 - it holds a message, acknowledgement or member record not yet sent
 - the round is one of its floor rounds (below)
+- the round is a sweep round (see "Keeping time without a fix")
 - it hears no other node, so that another node's one-round sweep finds it wherever their slots
   fall (owner, 2026-10-02). An 85-byte packet every round is about 7 mAh a day, paid only while
   the node is alone
@@ -205,12 +206,16 @@ GPS ranks above any node's clock, and between node clocks the lower root id rank
 - **Sweeps.** A node with no timebase listens continuously for three rounds, 135 s, which spans
   every node's floor round. So does a node that has heard no packet with fewer hops in its
   timebase for 7 rounds, and if that sweep hears none either, the node becomes its own root,
-  keeping its clock. Every node also sweeps for one round every 13 rounds, about 10 minutes
-  (owner, 2026-10-02). A node not timing from its own fix looks for a timebase ranked above its
-  own, and every node looks for members it does not know of (see "Listening"). 13 rounds is not
-  a whole number of floors, so successive sweeps fall on each of the floor's three rounds in
-  turn. A fix cuts a three-round sweep short to one round, since only the search for members is
-  left of it. A node keeps transmitting in its own slots during a sweep.
+  keeping its clock. Every round of a timebase whose index is a multiple of 13, about every
+  10 minutes, is a sweep round (owner, 2026-10-02): every node on it listens throughout, from a
+  guard before the round to a guard before its end, and sends in its own slot. A node not timing
+  from its own fix looks for a timebase ranked above its own, and every node looks for members
+  it does not know of (see "Listening"). Nodes on timebases close to one another sweep in rounds
+  that overlap, and hear each other there: nodes timing from GPS anywhere, and nodes whose clocks
+  started from RTCs a fix once set, which drift apart by a second or two a day. The RTC keeps
+  time while the device is off. 13 rounds is not a whole number of floors, so a sweep round
+  falls on each of the floor's three rounds in turn. A fix ends a node's first sweep at once. A
+  node keeps transmitting in its own slots during a sweep.
 - **Starting one.** A node that hears nobody in its first sweep starts its own timebase from its
   RTC's time, as its root. Groups started this way merge as their sweeps find each other, to the
   lowest root. A node that gets a fix moves to GPS time, and the nodes timing from it find it again
@@ -229,12 +234,12 @@ A node listens, every round, to the slot of every member its group holds and of 
 span two floor transmissions, so one lost packet does not drop it. A member out of range costs
 its window every round, and is heard again at its first transmission back in range.
 
-A member added elsewhere, which the node does not know of yet, is found by the one-round sweep
-every 13 rounds (see "Keeping time without a fix"), the sweep that also finds timebases. Once
-heard it is a neighbour, and its member record follows in its packets. New members are rare, so
-finding one may take a while: up to about 30 minutes for one that sends only in its floor rounds,
-and up to one sweep's wait, about 10 minutes, for one that sends every round. The sweep keeps the
-receiver on 7.7% of the time, about 18 mAh a day.
+A member added elsewhere, which the node does not know of yet, is found in a sweep round (see
+"Keeping time without a fix"), where timebases are found too. Every node on a timebase near the
+node's own sends in a sweep round, so a new member in range is heard at the next one, within
+about 10 minutes. Once heard it is a neighbour, and its member record follows in its packets.
+The sweep rounds keep the receiver on 7.7% of the time, about 18 mAh a day, and the packet each
+node sends in them costs about 0.5 mAh a day.
 
 Listening costs the guard and the packet per slot, at 9.7 mA (125 kHz, LNA boost off, its reset
 state):
@@ -614,9 +619,9 @@ protocol does not need this.
 
 ## Open
 
-- Two parts of a group without a fix, each of nodes that hear one another, on timebases started
-  apart, find each other only when a sweep in one meets a floor packet of the other: up to
-  three sweeps, about 30 minutes, for idle nodes
+- Two parts of a group whose clocks share no origin, such as RTCs that hold no time, sweep in
+  rounds that need not overlap. They find each other only when a sweep in one meets a floor
+  packet of the other: up to three sweeps, about 30 minutes, for idle nodes
   (`docs/logs/lora/founding-and-listening-2026-10-02/`). A node that hears nobody sends every
   round, which leaves it one sweep.
 - The limit after which a rekey drops the old key.

@@ -12,6 +12,10 @@ pub const FLOOR_EVERY: i64 = 3;
 /// How far either side of a slot's start a listener opens its window, for the senders' and its own
 /// clock error.
 pub const GUARD_US: i64 = 250_000;
+/// Every round whose index is a multiple of this is a sweep round: every node listens throughout
+/// it and sends in its slot. Not a whole number of floors, so a sweep round falls on each of the
+/// floor's three rounds in turn.
+pub const SWEEP_EVERY: i64 = 13;
 
 /// The round holding `t`.
 #[must_use]
@@ -29,6 +33,12 @@ pub fn slot_start(round: i64, id: u8) -> i64 {
 #[must_use]
 pub fn is_floor(round: i64, id: u8) -> bool {
     round.rem_euclid(FLOOR_EVERY) == i64::from(id) % FLOOR_EVERY
+}
+
+/// Whether every node sweeps `round`.
+#[must_use]
+pub fn is_sweep_round(round: i64) -> bool {
+    round.rem_euclid(SWEEP_EVERY) == 0
 }
 
 /// The round and start of `id`'s first slot starting at or after `t`.
