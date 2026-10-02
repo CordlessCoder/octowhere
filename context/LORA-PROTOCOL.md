@@ -226,7 +226,8 @@ GPS ranks above any node's clock, and between node clocks the lower root id rank
   off the sender's slot, so its arrival says nothing of the sender's timebase and nobody times
   from it. A node that hears a notice from a timebase ranked above its own sweeps for three
   rounds, and takes the timebase from the sender's ordinary packets. So two parts of a group find
-  each other as soon as either one's sweep hears the other, whichever ranks higher.
+  each other as soon as either one's sweep hears the other, whichever ranks higher
+  (`docs/logs/lora/sweeps-and-notices-2026-10-03/`).
 - **Ageing.** A node's own GPS time counts as GPS while a fix has refined it within 30 minutes.
   After that the node ranks as its own root, so a node with a live fix takes the group over.
 
