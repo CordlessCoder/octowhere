@@ -532,13 +532,19 @@ errata workaround, are in [`docs/hardware-notes.md`](docs/hardware-notes.md).
 
 ## Memory
 
-- The internal heap is 240 KiB, from two `esp_alloc::heap_allocator!` calls in `main`: 72 KiB
+- The internal heap is 192 KiB, from two `esp_alloc::heap_allocator!` calls in `main`: 72 KiB
   in the RAM the second-stage bootloader frees after boot (`#[esp_hal::ram(reclaimed)]`), and
-  168 KiB as a static in `.bss`. Core 0's stack is whatever DRAM `.data` and `.bss` leave,
-  about 90 KiB; `_stack_end_cpu0` and `_stack_start_cpu0` in the ELF give it exactly. It was
-  about 19 KiB with the whole heap in `.bss`, and the clock face overflowed it. An overflow is
-  caught by esp-hal's stack guard as a panic, or corrupts memory silently. The heap peaked at
-  about 50 KB over the clock and the compass (`bench/clock-draw`). `context/BACKLOG.md` has
+  120 KiB as a static in `.bss`. Core 0's stack is whatever DRAM `.data` and `.bss` leave,
+  115,724 bytes on 2026-10-02; `_stack_end_cpu0` and `_stack_start_cpu0` in the ELF give it
+  exactly. The tasks' futures are statics, so the stack shrinks as they grow. It was about
+  19 KiB with the whole heap in `.bss`, and the clock face overflowed it. The mesh's work took
+  it to about 60 KB, and the radio task overflowed it from under a group screen. Tasks on
+  `BUS_EXECUTOR` run on the stack thread mode left, so their depth adds to the frame loop's.
+  Each function's frame is the `entry a1, N` that opens it in `xtensa-esp-elf-objdump -d`.
+  The mesh's view and the group screens' list are each kilobytes, so they are filled where they
+  live on the heap rather than built on the stack. An overflow is caught by esp-hal's stack
+  guard as a panic, or corrupts memory silently. The heap peaked at about 50 KB over the clock
+  and the compass (`bench/clock-draw`); 18 KB is in use after boot. `context/BACKLOG.md` has
   the plan for laying SRAM out deliberately.
 - PSRAM is registered in the separate `PSRAM_HEAP` static. Framebuffers must be allocated with
   `FB::alloc(&PSRAM_HEAP)` rather than the global allocator.

@@ -64,9 +64,11 @@ until the feature set is complete, because profiling an incomplete firmware pric
   core 0's stack 341,760 bytes (`0x3FC88000` to `0x3FCDB700`); the stack is whatever the other
   two leave. Since 2026-09-26, 72 KiB of the heap sits in `dram2`, the RAM the ROM needs only
   during boot, and 168 KiB in `.bss`, which left core 0 about 90 KiB of stack (AGENTS.md,
-  "Memory"). Still open: size the heap from a peak measured across every screen (about 50 KB
-  over the clock and the compass, `bench/clock-draw`; the fault screen's 40 KB glyph raster
-  and the picker were not in that run), the data cache's reclaimed segment above `0x3FCF0000`,
+  "Memory"). On 2026-10-02 the static part went to 120 KiB, which left 115,724 bytes of stack,
+  after the radio task overflowed about 60 KB from under a group screen. Still open: size the
+  heap from a peak measured across every screen (about 50 KB over the clock and the compass,
+  `bench/clock-draw`; the fault screen's 40 KB glyph raster, the picker and the group screens
+  were not in that run), the data cache's reclaimed segment above `0x3FCF0000`,
   what IRAM holds (15 KiB of `.rwtext`), the two 8 KiB display DMA buffers and the 8 KiB
   core-1 stack. Do not measure core 0's stack by painting it from `_stack_end` up to the stack
   pointer: that crash-looped the board, probably because esp-rtos keeps data there.
