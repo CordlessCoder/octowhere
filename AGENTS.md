@@ -319,7 +319,9 @@ cycling the transmitter through both PA pins at two powers each, and logs what e
 sends in every other slot and logs every packet's bytes, sent and received, with what each
 board was doing (`mesh-crc-bench`); `mesh-monitor` adds an RSSI watch of the channel and
 `mesh-low-power` sends at +2 dBm. `tools/mesh-crc-compare.py` and `tools/mesh-burst-compare.py`
-read two nodes' logs; results in `docs/logs/lora/crc-2026-10-02/`.
+read two nodes' logs; results in `docs/logs/lora/crc-2026-10-02/`. And `bench/jtag-read` adds
+`tools/jtag-read`, a host tool on the owner's probe-rs fork that times reading a framebuffer
+over the USB JTAG with the core running and halted; the result is in `context/BACKLOG.md`.
 
 ## Concurrency
 

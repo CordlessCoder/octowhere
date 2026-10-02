@@ -90,15 +90,20 @@ until the feature set is complete, because profiling an incomplete firmware pric
     joining device stores one with the founder in it. The founder's CHECK MEMBER is true, but
     nothing reconciles the two.
   - Reading a screen back with `touch-inject` takes about 11 s and interrupts the board. The
-    USB JTAG reads PSRAM at about 40 KB/s on a running core (64 KB took 1.7 s). Halting the
-    core for the whole read (owner's suggestion) was not measured: `probe-rs debug` needs a
-    terminal. If the link is the limit, the lever is sending less: run-length coded at four
-    bytes a run, four of the boards' frames came to 32 to 64 KB, about 1 to 1.6 s at that
-    rate. An RTT channel (owner's
-    suggestion) could carry that frame up, and carry every injected input down in place of
-    the per-feature statics of `rtc-inject`, `pair-inject` and `touch-inject`. RTT goes over
-    the same JTAG memory reads, so it does not speed a read by itself. Whether probe-rs runs
-    RTT on this chip is not checked.
+    link is the ESP32-S3's own USB Serial/JTAG controller, full-speed USB, whose JTAG side
+    takes one 4-bit command per clock (the owner's probe-rs fork,
+    `probe-rs-espressif/src/espusbjtag/protocol.rs`). probe-rs halts the core for every Xtensa
+    memory read, so holding a halt across the whole read changed nothing: 10.0 s halted and
+    10.2 s running for the 434,312-byte frame, 42 KB/s (`bench/jtag-read`). Each 32-bit word
+    is a NAR and an NDR scan, about 40 captured bits, and the driver blocks on the IN endpoint
+    every 544 captured bits, about 13 words a round trip. Levers, estimated rather than
+    measured: the driver's own comment quotes the TRM as allowing 128 bytes of capture before
+    the device pauses, against the 68 it waits at; keeping IN transfers queued, as it already
+    does for OUT, would leave the command stream as the limit, about 2 million clocks a
+    second. On the firmware side, the frame run-length coded at four bytes a run came to 32 to
+    64 KB for four of the boards' frames. An RTT channel (owner's suggestion) could carry that
+    up and every injected input down, in place of the per-feature statics of `rtc-inject`,
+    `pair-inject` and `touch-inject`; it uses the same memory reads.
 
 - Make the partial flush cheaper. With the compass redrawing only what changed, a one-degree turn
   flushes about 28,000 pixels in about 42 regions and takes about 10 ms, against 14.8 ms for the
