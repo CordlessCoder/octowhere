@@ -72,6 +72,10 @@ pub struct Header {
     pub base: u32,
     /// Reserved for CAD.
     pub phase: u8,
+    /// The packet asks a node on a timebase ranked below the sender's to sweep. It is sent when
+    /// that node listens for the sender, off the sender's own slot, so its arrival says nothing
+    /// of the sender's timebase.
+    pub notice: bool,
 }
 
 impl Header {
@@ -87,7 +91,7 @@ impl Header {
             (source, 1),
             (u64::from(root), 5),
             (u64::from(self.timebase.hops), 5),
-            (0, 4),
+            (u64::from(self.notice), 4),
             (u64::from(self.base), 32),
             (u64::from(self.phase), 8),
         ] {
@@ -111,7 +115,7 @@ impl Header {
         let source = take(1);
         let root = take(5) as u8;
         let hops = take(5) as u8;
-        let _flags = take(4);
+        let flags = take(4);
         Ok(Self {
             sender,
             timebase: Timebase {
@@ -124,6 +128,7 @@ impl Header {
             },
             base: take(32) as u32,
             phase: take(8) as u8,
+            notice: flags & 1 != 0,
         })
     }
 }
@@ -474,7 +479,22 @@ mod tests {
             },
             base: 1_790_000_000,
             phase: 0,
+            notice: false,
         }
+    }
+
+    #[test]
+    fn a_notice_survives_the_header() {
+        let header = Header {
+            notice: true,
+            ..header()
+        };
+        let mut bytes = [0; HEADER_LEN];
+        header.encode(&mut bytes);
+        assert_eq!(Header::decode(&bytes), Ok(header));
+        let mut bytes = [0; HEADER_LEN];
+        self::header().encode(&mut bytes);
+        assert!(!Header::decode(&bytes).unwrap().notice);
     }
 
     fn entry(id: u8, stamp: u32) -> Entry {

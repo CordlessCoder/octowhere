@@ -29,7 +29,10 @@ use octowhere_mesh::{
     IDS,
     clock::{Clock, Taken},
     members::{Group, Member, Merged, Name},
-    packet::{Builder, Entry, Hdop, Header, MAX_PACKET, Plain, Quality, Record, Source, Timebase},
+    packet::{
+        Builder, Entry, HEADER_LEN, Hdop, Header, MAX_PACKET, Plain, Quality, Record, Source,
+        Timebase,
+    },
     pair::{End, Identity, MAX_FRAME, Pairing, Phase, Role},
     schedule::{
         GUARD_US, ROUND_US, airtime_us, base_of, named_slot, next_slot, next_slot_in, round_at,
@@ -74,6 +77,8 @@ const MAX_ENTRIES: usize = 24;
 const POLL_US: u64 = 1_000;
 /// How long a pairing waits for the group to be stored before it counts as a failure.
 const STORE_TIMEOUT: Duration = Duration::from_secs(10);
+/// A notice is a header alone.
+const NOTICE_LEN: usize = SIV_LEN + HEADER_LEN;
 /// The longest a pairing listens before it runs its timers again.
 const PAIR_LISTEN_US: i64 = 250_000;
 /// How long a device that founded a group, without hearing the last acknowledgement, listens
@@ -410,6 +415,9 @@ pub struct Mesh {
     shown: Shown,
     /// The view [`publish`] fills.
     view: Box<MeshView>,
+    /// Where a member heard on a timebase ranked below this node's places its slots, as its
+    /// offset from the local timer, until a notice has gone to it.
+    notice: Option<i64>,
 }
 
 impl Mesh {
@@ -446,6 +454,7 @@ impl Mesh {
             timebase_shown: None,
             shown: Shown::new(true),
             view: blank_view(),
+            notice: None,
         };
         let tuned = mesh.tune(FREQUENCY_HZ, SYNC_WORD, POWER_DBM).await;
         info!("[MESH] tuned={}", tuned);
@@ -595,6 +604,17 @@ impl Mesh {
         };
         let (round, start) = next_slot((time + PREPARE_US).max(self.after), own);
         let send_at = start + (now - time);
+        if let Some(at) = self.notice_at(now, own)
+            && at + airtime_us(NOTICE_LEN) + PREPARE_US < send_at
+        {
+            self.notice = None;
+            if self.listen(at - PREPARE_US).await {
+                self.after = i64::MIN;
+            } else {
+                self.send_notice(own, timebase, at).await;
+            }
+            return;
+        }
         if self.listen(send_at - PREPARE_US).await {
             self.after = i64::MIN;
             return;
@@ -611,6 +631,38 @@ impl Mesh {
         if sending {
             self.send(round, start, timebase, send_at).await;
         }
+    }
+
+    /// When the member a notice is for next listens for this node's slot, on the local timer.
+    fn notice_at(&self, now: i64, own: u8) -> Option<i64> {
+        let offset = self.notice?;
+        let (_, start) = next_slot(now - offset + 2 * PREPARE_US, own);
+        Some(start + offset)
+    }
+
+    /// Sends a notice at local time `at`, when a member on a lower timebase listens for this
+    /// node, which makes it sweep and so hear this node's own packets.
+    async fn send_notice(&mut self, own: u8, timebase: Option<Timebase>, at: i64) {
+        let mut packet = [0u8; NOTICE_LEN];
+        let (Some(timebase), Some(group), Some((time, _))) =
+            (timebase, &self.group, self.clock.at(at))
+        else {
+            return;
+        };
+        let header = Header {
+            sender: own,
+            timebase,
+            base: base_of(time),
+            phase: 0,
+            notice: true,
+        };
+        let plain_len = Builder::new(&mut packet[SIV_LEN..], &header).finish();
+        let len = seal::seal(group.key(), &mut packet, plain_len);
+        let sent = self.transmit(&packet[..len], Some(at)).await;
+        info!(
+            "[MESH] notice sent done={}",
+            sent.is_some_and(|(done, _)| done)
+        );
     }
 
     fn take_readings(&mut self, own: u8) {
@@ -766,7 +818,28 @@ impl Mesh {
             POLL_US as i64 / 2
         };
         let start = done - airtime_us(len) - ARRIVAL_LATENCY_US - polled;
+        let ours = self.clock.at(done).map(|(_, timebase)| timebase.source);
+        if header.notice {
+            if ours.is_none_or(|ours| header.timebase.source.outranks(ours)) {
+                info!(
+                    "[MESH] notice from id={} timebase={}; sweeping",
+                    header.sender, header.timebase.source
+                );
+                self.clock.sweep(done);
+            }
+            return false;
+        }
         let arrival = self.clock.arrival(&header, start, done);
+        if arrival.taken == Taken::Ignored
+            && self.notice.is_none()
+            && ours.is_some_and(|ours| ours.outranks(header.timebase.source))
+        {
+            info!(
+                "[MESH] id={} is on a lower timebase; a notice goes to it",
+                header.sender
+            );
+            self.notice = Some(start - named_slot(header.base, header.sender));
+        }
         if let Some(heard) = self.shown.heard.get_mut(usize::from(header.sender)) {
             *heard = Some(done);
         }
@@ -857,6 +930,7 @@ impl Mesh {
             timebase,
             base,
             phase: 0,
+            notice: false,
         };
         let mut packet = [0u8; MAX_PACKET];
         let mut builder = Builder::new(&mut packet[SIV_LEN..], &header);
@@ -1099,6 +1173,7 @@ impl Mesh {
         self.table = Table::new(own);
         self.after = i64::MIN;
         self.timebase_shown = None;
+        self.notice = None;
         self.shown.heard = [None; IDS as usize];
         self.shown.positions = [None; IDS as usize];
     }

@@ -220,6 +220,13 @@ GPS ranks above any node's clock, and between node clocks the lower root id rank
   RTC's time, as its root. Groups started this way merge as their sweeps find each other, to the
   lowest root. A node that gets a fix moves to GPS time, and the nodes timing from it find it again
   at their next sweep.
+- **Notices.** A node that hears a member on a timebase ranked below its own sends it a notice
+  (owner, 2026-10-03): a header alone, flagged, 24 bytes, at the time that member listens for
+  the sender's slot on its own timebase, which the packet's arrival told it. The notice is sent
+  off the sender's slot, so its arrival says nothing of the sender's timebase and nobody times
+  from it. A node that hears a notice from a timebase ranked above its own sweeps for three
+  rounds, and takes the timebase from the sender's ordinary packets. So two parts of a group find
+  each other as soon as either one's sweep hears the other, whichever ranks higher.
 - **Ageing.** A node's own GPS time counts as GPS while a fix has refined it within 30 minutes.
   After that the node ranks as its own root, so a node with a live fix takes the group over.
 
@@ -306,7 +313,7 @@ Header, 8 bytes, encrypted:
 | timebase source: 0 GPS, 1 a node's clock | 1 |
 | timebase root, for a node's clock | 5 |
 | hops from the timebase's root | 5 |
-| flags, reserved | 4 |
+| flags: bit 0 a notice, the rest reserved | 4 |
 | base timestamp, timebase seconds | 32 |
 | slot phase, reserved for CAD | 8 |
 
@@ -620,10 +627,10 @@ protocol does not need this.
 ## Open
 
 - Two parts of a group whose clocks share no origin, such as RTCs that hold no time, sweep in
-  rounds that need not overlap. They find each other only when a sweep in one meets a floor
-  packet of the other: up to three sweeps, about 30 minutes, for idle nodes
-  (`docs/logs/lora/founding-and-listening-2026-10-02/`). A node that hears nobody sends every
-  round, which leaves it one sweep.
+  rounds that need not overlap. They find each other when a sweep round in either meets a
+  packet of the other, since a notice brings the lower one over: up to about 30 minutes for
+  idle nodes (`docs/logs/lora/founding-and-listening-2026-10-02/`). A node that hears nobody
+  sends every round, which leaves it one sweep.
 - The limit after which a rekey drops the old key.
 - A shorter floor once CAD is measured (see "CAD is required at this size").
 - Measuring GNSS time sync (see "Time sync").

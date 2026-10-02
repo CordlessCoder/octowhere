@@ -181,6 +181,12 @@ impl Clock {
         self.clock.map(|(offset, _)| time + offset)
     }
 
+    /// Sweeps for three rounds from local time `now`, as a notice asks.
+    pub fn sweep(&mut self, now: i64) {
+        let until = now + SWEEP_US;
+        self.sweep_until = Some(self.sweep_until.map_or(until, |held| held.max(until)));
+    }
+
     /// The sweep round under way in the timebase at local time `now`, if one is. It opens a guard
     /// early, as a slot's window does, and closes as early.
     fn sweep_round(&self, now: i64) -> Option<i64> {
@@ -233,6 +239,7 @@ mod tests {
             timebase: Timebase { source, hops },
             base: base_of(start),
             phase: 0,
+            notice: false,
         }
     }
 
@@ -256,6 +263,19 @@ mod tests {
         let (time, timebase) = clock.at(SWEEP_US).unwrap();
         assert_eq!(time, rtc);
         assert_eq!(timebase.source, Source::Node(24));
+    }
+
+    #[test]
+    fn a_notice_starts_a_three_round_sweep() {
+        let mut clock = Clock::new(1, 0);
+        clock.tick(SWEEP_US, Some(UTC + ROUND_US));
+        let now = SWEEP_US + SECOND;
+        assert!(!clock.is_sweeping(now));
+        clock.sweep(now);
+        assert!(clock.is_sweeping(now + SWEEP_US - 1));
+        assert_eq!(clock.sweep_ends(now), Some(now + SWEEP_US));
+        clock.tick(now + SWEEP_US, None);
+        assert!(!clock.is_sweeping(now + SWEEP_US));
     }
 
     #[test]
