@@ -38,9 +38,12 @@ until the feature set is complete, because profiling an incomplete firmware pric
     matrix editable live; the web simulator too (its build already compiles the mesh's crypto).
   - Board tests stay for RF (CRC overload up close), the radio's DIO0 quirk, I2C bus contention
     and slot latency, interrupt timing, flash stalls, and the GNSS module sticking.
-- Brief the design agent's next round (owner, 2026-10-03: ready to hand more off; the owner picks
-  its scope). The 2026-10-03 return package, entry below, goes first or with it. Screen work that
-  waits on a design:
+- Send the design agent its next round (owner, 2026-10-03): every open item at once, which the
+  owner scopes with the design agent. The brief is
+  `design/handoffs/MESH-FEATURES-ROUND-BRIEF-2026-10-03.md` (local, like the design files), and
+  `context/design-captures-2026-10-03-3.7z` (local) packs it with what it cites, the stills and
+  the web simulator at `07ad32d`, ready for the owner to send. The 2026-10-03 return package
+  has gone. The items:
   - Where the other members are, the device's purpose, which no screen shows: each member's
     bearing and distance from this device, and how old its position is. Positions reach the
     firmware but not the screens (`SCREEN-DESIGN-BRIEF.md`, "Data a screen can show", grade 2),
@@ -213,12 +216,6 @@ until the feature set is complete, because profiling an incomplete firmware pric
   and `Pending.new.switch` named apart; `now: u32` with 0 for unknown made an `Option`
   throughout; the pairing's `Phase` duplicates of its own fields; `MeshView`'s refused pairing
   as its own state instead of a placeholder phase. `src/mesh.rs` has no tests.
-- Send the design agent its return package for the 2026-10-03 round (`design/DECISIONS.md`
-  entry 29). It is ready, for the owner to send: `context/design-captures-2026-10-03-2.7z`
-  (local, like the design files), with `design/handoffs/IMPLEMENTATION-RESPONSE-2026-10-03.md`
-  in it and beside it. It holds the response, the stills and atlas at 94261f5, the start-up's
-  radio recordings, the identity's barcode building in, the boards' screens, the web simulator,
-  and a note of what the mesh can do that no screen shows yet, for the owner's next round.
 - Finish what step 3's screens leave open (`SCREEN-DESIGN-BRIEF.md`, "Group and pairing as
   built"):
   - Every group screen's legibility on the panel, which nobody has judged yet. Typing on the

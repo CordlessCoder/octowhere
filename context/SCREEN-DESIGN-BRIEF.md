@@ -46,6 +46,11 @@ later decisions are in this brief's "as built" sections.
 
 ## This round
 
+This round's brief, `design/handoffs/MESH-FEATURES-ROUND-BRIEF-2026-10-03.md`, sends every open
+item at once: where the other members are, messages, removing a member, a GNSS fault at run
+time, where outlined text belongs, and what the BOOT key does. The owner scopes it with the
+design agent.
+
 The last round added the radio to the start-up's self-test, a REFRESH DEVICES control to the
 group screens, and a founder's wait for the device it added. Its brief is
 `design/handoffs/REFRESH-AND-RADIO-ROUND-BRIEF-2026-10-03.md`, and the owner approved its
@@ -737,10 +742,14 @@ plumbing it is firmware work. There are three grades.
      group's size and this device's id once the pairing holds them.
 2. **Known to the firmware, not passed to the screens:** GNSS time to the millisecond, fix
    quality, and when the clock was last set from GNSS. Also the compass calibration's internals.
-   From the mesh: the members' positions themselves, the timebase, and the packets' signal.
+   From the mesh: the members' positions themselves, the timebase, and the packets' signal;
+   messages, with whether each was acknowledged; and removals: who asked to remove whom, when
+   the group switches, and the day left to decline one.
 3. **Does not exist:** raise to wake, or any wake but a double tap or the power key (the
-   IMU's wake-on-motion and the BOOT key are unused); a 12-hour clock (ruled out by the clock spec); units, languages, sounds or vibration; removing a member,
-   Wi-Fi or Bluetooth; alarms, timers, step counting and notifications.
+   IMU's wake-on-motion and the BOOT key are unused); a 12-hour clock (ruled out by the clock
+   spec); units, languages, sounds or vibration; Wi-Fi or Bluetooth; alarms, timers, step
+   counting and notifications; and the local magnetic declination, which showing a bearing
+   from true north on the magnetic compass needs.
 
 ## Settings
 
