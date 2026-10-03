@@ -14,8 +14,11 @@ initialization or peripheral mappings.
 
 - `src/drivers/` owns the display path: QSPI, the CO5300 panel, and flushing the framebuffer to
   it.
-- `src/peripherals/` owns the I2C devices: touch, power, RTC, magnetometer, and the shared-bus
-  helper. The IMU comes from `ph-qmi8658` rather than a local module.
+- `crates/octowhere-peripherals/` owns the I2C devices' drivers: touch, power, RTC,
+  magnetometer, and their shared register helper. They are generic over `embedded-hal-async`'s
+  I2C and build and test on the host; the firmware reaches them as `octowhere::peripherals`,
+  and keeps their bring-up and the shared bus. The IMU comes from `ph-qmi8658` rather than a
+  local module.
 - `crates/octowhere-motion/` owns compass calibration, sensor fusion, and IMU unit conversion.
   It has no board or renderer dependency and builds for the host.
 - `crates/octowhere-mesh/` owns the location mesh in `context/LORA-PROTOCOL.md`: the slot
@@ -149,6 +152,10 @@ cargo +stable test --manifest-path crates/octowhere-mesh/Cargo.toml \
   --target x86_64-unknown-linux-gnu --locked
 cargo +stable clippy --manifest-path crates/octowhere-mesh/Cargo.toml \
   --target x86_64-unknown-linux-gnu --locked --all-targets -- -D warnings
+cargo +stable test --manifest-path crates/octowhere-peripherals/Cargo.toml \
+  --target x86_64-unknown-linux-gnu --locked
+cargo +stable clippy --manifest-path crates/octowhere-peripherals/Cargo.toml \
+  --target x86_64-unknown-linux-gnu --locked --all-targets -- -D warnings
 cargo +stable test --manifest-path crates/tz/Cargo.toml --target x86_64-unknown-linux-gnu
 cargo +stable clippy --manifest-path crates/tz/Cargo.toml \
   --target x86_64-unknown-linux-gnu --all-targets -- -D warnings
@@ -197,8 +204,8 @@ panel will show, but they say nothing about draw time on the target. Commands ar
 of `examples/render.rs` and `tools/ui-sim/src/main.rs`. Keep the crate free of board
 dependencies: that is what lets the host build it, and its manifest enforces it.
 
-`host-tests` pulls the board-side modules it can test (`util` and the I2C peripherals) in by
-`#[path]` rather than copying them, so those must keep compiling for std on x86. Board-only
+`host-tests` pulls the board-side modules it can test (`util` and `gnss_time`) in by `#[path]`
+rather than copying them, so those must keep compiling for std on x86. Board-only
 drivers stay out of it. See [`host-tests/README.md`](host-tests/README.md).
 
 The data-cache settings in [`.cargo/config.toml`](.cargo/config.toml) affect drawing and SPI flush
@@ -669,9 +676,9 @@ pin, and the firmware reaches them as `octowhere::fontdue`. `tca9554` is forked 
 atomic register masks with a mutex-guarded cache and a `RawMutex` type parameter, and is a patch
 in the root manifest. Dropping either will not compile.
 
-`octowhere-ui`, `octowhere-tz`, `octowhere-motion`, `octowhere-mesh`, `lc76g`, `sx127x-lora` and
-`sx127x-common` are local path crates. `octowhere-tz` lives in `crates/tz`, and the firmware reaches it as
-`octowhere::tz`.
+`octowhere-ui`, `octowhere-tz`, `octowhere-motion`, `octowhere-mesh`, `octowhere-peripherals`,
+`lc76g`, `sx127x-lora` and `sx127x-common` are local path crates. `octowhere-tz` lives in
+`crates/tz`, and the firmware reaches it as `octowhere::tz`.
 `crates/sx127x-lora` publishes the package name `sx127xlora`, so the manifest key and the directory
 differ. Check [`Cargo.toml`](Cargo.toml) before relying on a fork-only API or changing a dependency.
 

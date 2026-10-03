@@ -618,7 +618,8 @@ wins every merge permanently, and a node with a bad clock causes that by acciden
 attacker. So:
 
 - Reject entries and messages more than an hour ahead of local time. The gate is the PCF85063A
-  oscillator-stop flag, already read in [`src/peripherals/rtc.rs`](../src/peripherals/rtc.rs) and
+  oscillator-stop flag, already read in
+  [`crates/octowhere-peripherals/src/rtc.rs`](../crates/octowhere-peripherals/src/rtc.rs) and
   exposed as `oscillator_stopped()`. A node with OS set skips the check and re-evaluates on its
   first fix.
 - Drop entries past the retention horizon. Old positions are not worth relaying.

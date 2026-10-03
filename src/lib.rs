@@ -8,8 +8,8 @@ extern crate alloc;
 pub mod board;
 pub mod drivers;
 pub mod gnss_time;
-pub mod peripherals;
 pub mod settings;
 pub mod util;
 
+pub use octowhere_peripherals as peripherals;
 pub use octowhere_ui::{chrome, fontdue, framebuffer, motion, tz, ui};

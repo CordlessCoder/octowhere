@@ -2,7 +2,7 @@ use embedded_graphics::prelude::Size;
 use embedded_hal::digital::OutputPin;
 use embedded_hal_async::{digital::Wait, i2c::I2c};
 
-use crate::peripherals::i2c_helper;
+use crate::i2c_helper;
 
 const CST9220_CHIP_ID: u16 = 0x9220;
 const CST9217_CHIP_ID: u16 = 0x9217;

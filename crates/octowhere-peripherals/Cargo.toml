@@ -1,0 +1,20 @@
+[package]
+name = "octowhere-peripherals"
+version = "0.1.0"
+edition = "2024"
+description = "Async I2C drivers for the board's touch controller, power controller, RTC and magnetometer"
+
+[workspace]
+
+[dependencies]
+defmt = { version = "1.1.1", optional = true }
+embassy-time = "0.5.1"
+embedded-graphics = "0.8"
+embedded-hal = "1.0"
+embedded-hal-async = "1.0.0"
+futures = { version = "0.3.32", default-features = false, features = ["async-await"] }
+heapless = "0.9.3"
+
+[features]
+default = []
+defmt = ["dep:defmt"]

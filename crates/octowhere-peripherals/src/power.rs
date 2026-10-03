@@ -59,7 +59,7 @@ const ON_LEVEL_512MS: u8 = 0b01;
 
 /// A press of the power key, as the PMIC tells it apart.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[cfg_attr(target_os = "none", derive(defmt::Format))]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum PowerKey {
     Short,
     Long,
@@ -68,7 +68,7 @@ pub enum PowerKey {
 /// What powered the PMIC on, and what last powered it off, from `REG_POWER_ON_SOURCE` and
 /// `REG_POWER_OFF_SOURCE`.
 #[derive(Clone, Copy, Debug)]
-#[cfg_attr(target_os = "none", derive(defmt::Format))]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct PowerSources {
     pub on: u8,
     pub off: u8,

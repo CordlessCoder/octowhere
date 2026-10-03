@@ -54,7 +54,7 @@ pub struct CompensatedMagneticData {
 }
 
 #[derive(Debug)]
-#[cfg_attr(target_os = "none", derive(defmt::Format))]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum MagnetometerError<E> {
     I2c(E),
     InvalidChipId(u8),

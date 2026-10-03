@@ -1753,6 +1753,7 @@ dependencies = [
  "heapless 0.9.3",
  "lc76g",
  "octowhere-mesh",
+ "octowhere-peripherals",
  "octowhere-ui",
  "ph-qmi8658",
  "static_cell",
@@ -1781,6 +1782,19 @@ version = "0.1.0"
 dependencies = [
  "defmt 1.1.1",
  "libm",
+]
+
+[[package]]
+name = "octowhere-peripherals"
+version = "0.1.0"
+dependencies = [
+ "defmt 1.1.1",
+ "embassy-time",
+ "embedded-graphics",
+ "embedded-hal 1.0.0",
+ "embedded-hal-async",
+ "futures",
+ "heapless 0.9.3",
 ]
 
 [[package]]

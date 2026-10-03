@@ -3,7 +3,7 @@
 // I2C address 0x51, BCD encoded time registers
 use embedded_hal_async::i2c::I2c;
 
-use crate::peripherals::i2c_helper;
+use crate::i2c_helper;
 
 const PCF85063A_ADDR: u8 = 0x51;
 

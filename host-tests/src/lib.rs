@@ -24,9 +24,6 @@ pub const SWAP_SEND_BOUND: () = ();
 #[path = "../../src/gnss_time.rs"]
 pub mod gnss_time;
 
-#[path = "peripherals/mod.rs"]
-pub mod peripherals;
-
 #[cfg(test)]
 mod gnss;
 
