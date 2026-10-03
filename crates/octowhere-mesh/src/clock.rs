@@ -183,7 +183,13 @@ impl Clock {
 
     /// Sweeps for three rounds from local time `now`, as a notice asks.
     pub fn sweep(&mut self, now: i64) {
-        let until = now + SWEEP_US;
+        self.sweep_to(now + SWEEP_US);
+    }
+
+    /// Sweeps until local time `until`, or later if a sweep under way runs longer. Taking up a
+    /// timebase or a fix ends it, as it ends a first sweep, so a caller that must listen on
+    /// asks again.
+    pub fn sweep_to(&mut self, until: i64) {
         self.sweep_until = Some(self.sweep_until.map_or(until, |held| held.max(until)));
     }
 
@@ -268,6 +274,18 @@ mod tests {
         let (time, timebase) = clock.at(SWEEP_US).unwrap();
         assert_eq!(time, rtc);
         assert_eq!(timebase.source, Source::Node(24));
+    }
+
+    #[test]
+    fn a_sweep_runs_to_the_later_end_and_a_timebase_taken_up_ends_it() {
+        let mut clock = Clock::new(1, 0);
+        clock.tick(SWEEP_US, Some(UTC + ROUND_US));
+        let now = SWEEP_US + SECOND;
+        clock.sweep_to(now + 2 * ROUND_US);
+        clock.sweep_to(now + ROUND_US);
+        assert_eq!(clock.sweep_ends(now), Some(now + 2 * ROUND_US));
+        sent(&mut clock, 0, Source::Node(0), 0, 7, now);
+        assert!(!clock.is_sweeping(now + ROUND_US + 2 * SECOND));
     }
 
     #[test]

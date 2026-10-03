@@ -646,9 +646,9 @@ impl Mesh {
             return;
         };
         let now = local();
-        self.update_refresh(now);
         self.take_readings(own);
         self.clock.tick(now, rtc_now(now));
+        self.update_refresh(now);
         let timebase = self.clock.at(now).map(|(_, timebase)| timebase);
         if timebase != self.timebase_shown {
             log_timebase(timebase, self.clock.is_sweeping(now));
@@ -808,6 +808,14 @@ impl Mesh {
                 Some(until) if until > now => close.min(until),
                 _ => close,
             };
+            if let Some(ends) = self.refresh_until()
+                && ends > now
+                && ends < open.min(end)
+            {
+                let _ = self.lora.set_device_mode(DeviceMode::STDBY).await;
+                until(ends).await;
+                continue;
+            }
             if open >= end {
                 let _ = self.lora.set_device_mode(DeviceMode::STDBY).await;
                 until(end).await;
@@ -1422,7 +1430,7 @@ impl Mesh {
             return;
         }
         let now = local();
-        self.clock.sweep(now);
+        self.clock.sweep_to(now + SWEEP_US);
         self.refresh_known = Some(Box::new(core::array::from_fn(|id| {
             group.member(id as u8).map(|member| member.mac)
         })));
@@ -1458,6 +1466,10 @@ impl Mesh {
         let RefreshPhase::Listening { until } = refresh.phase else {
             return false;
         };
+        // A timebase taken up or a fix ends a sweep; a refresh listens on to its end.
+        if now < until {
+            self.clock.sweep_to(until);
+        }
         let before = *refresh;
         refresh.learned = group
             .members()
