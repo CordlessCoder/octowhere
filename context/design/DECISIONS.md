@@ -166,3 +166,9 @@ Recorded 2026-09-26. These override the hand-off where they differ.
     drew each rule at its row's width, so the rule under the third row was as short as the
     fourth row's. Each rule between two rows now spans the wider of them: the top and bottom
     rules stay x 83–383, and the three between run x 57–409. The design has not seen it.
+31. **The settings halftone runs under the rows** (owner, 2026-10-04). S1 kept it out of a
+    rectangle around the rows, and its density stepped at its lobes' edges, so it read as broken
+    up. The panel now keeps it off only the title and the hint, and the rows' text blends over
+    the marks under it. The density eases from the lobes' to the rest's over 56 px. The screens
+    the panel opens keep their middle clear, with the same easing outside it. The design has
+    not seen it.

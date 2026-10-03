@@ -255,15 +255,19 @@ S1 has four rows on each of two pages. Each row keeps its action and live value 
 panel; the rules, index, label and smaller icon follow the selected S1 layout, except that a
 rule between two rows spans the wider of them (`DECISIONS.md` 30). Row names are
 KH Interference Bold 20, and the values Fraktion Mono Bold 20 (the 2026-09-30 update). The
-outer arcs' halftone follows the S1 prototype's law (`settings_study.py`): an 8 px grid inside
-radius 219, 43 % of points in the two lobes beside the rows and 9 % elsewhere, none over the
-title, the hint or the rows' block, drawn with the firmware's hash rather than the prototype's
-random points. Each mark takes one of three purples, `#180A36`, `#250C54` and `#371374`, by
+halftone follows the S1 prototype's law (`settings_study.py`): an 8 px grid inside radius 219,
+43 % of points in the two lobes beside the rows and 9 % elsewhere, drawn with the firmware's
+hash rather than the prototype's random points. Since `DECISIONS.md` 31 the density eases from
+the lobes' to the rest's over 56 px, and on the panel the halftone runs under the rows, kept
+off only the title and the hint, with the rows' text blended over it; the screens the panel
+opens keep the rows' block clear as S1 did. Each mark takes one of three purples, `#180A36`, `#250C54` and `#371374`, by
 how dense the halftone is where it lies, spread a little by its own number: quiet marks mix the
 darker two, lobe marks the brighter two. The prototype picks its purples at random and draws
 solid marks 6 px square; the firmware's solid mark stays 4 px, inset, as on the clock and the
 identity. The halftone breathes while the panel rests, as decision 4a has it. A changing value
-damages only its row; a page drag redraws the panel. The existing 420 ms entry cadence now
+damages only its row; a page drag redraws the panel, which took about 40 ms a frame on the
+board once the text blended, against the 33 ms frame
+(`docs/logs/display/settings-halftone-2026-10-04/`). The existing 420 ms entry cadence now
 reveals the rows on page 1.
 
 D3 puts the offset, zone, brightness, timeout and replay selection on a violet field with black
