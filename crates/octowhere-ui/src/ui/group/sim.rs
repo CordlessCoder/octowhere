@@ -6,7 +6,7 @@ use heapless::Vec;
 
 use super::view::{
     Answer, At, Done, End, GroupView, IDS, Mac, MemberView, MeshView, Name, PairingView, Phase,
-    Position, Reason, Request, Role,
+    Position, Reason, RecoveryPhase, RecoveryView, RefreshPhase, RefreshView, Request, Role,
 };
 use crate::ui::gesture::Micros;
 
@@ -14,6 +14,10 @@ const SECOND: Micros = 1_000_000;
 const SEARCH: Micros = 120 * SECOND;
 const COMPARE: Micros = 60 * SECOND;
 const STALL: Micros = 30 * SECOND;
+/// A refresh's three rounds.
+pub const REFRESH: Micros = 135 * SECOND;
+/// How long a founding listens for the joining device.
+pub const RECOVERY: Micros = 600 * SECOND;
 
 /// What the user of the other device does with the code.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -41,6 +45,16 @@ enum Next {
     Stored,
     /// Joining: the adding device's last word arrives.
     Finished,
+    /// A refresh hears a member's packet.
+    RefreshHears(u8),
+    /// A refresh learns a member added elsewhere.
+    RefreshLearns,
+    RefreshEnds,
+    /// The founded group's joining device is heard.
+    JoinerHeard,
+    /// The founded group is stored, or its write fails.
+    RecoveryStored,
+    RecoveryEnds,
 }
 
 pub struct Sim {
@@ -50,6 +64,12 @@ pub struct Sim {
     pub store_fails: bool,
     /// The other device never confirms that it received the last part.
     pub final_reply_lost: bool,
+    /// How long after a founding's wait starts its joining device is heard, if ever.
+    pub joiner_heard_after: Option<Micros>,
+    /// A refresh learns of a member added elsewhere, as well as hearing two it knows.
+    pub refresh_learns: bool,
+    /// When a founding's wait ends.
+    recovery_until: Option<Micros>,
     next: Option<(Micros, Next)>,
     changed: bool,
 }
@@ -132,6 +152,9 @@ impl Sim {
             peer: PeerUser::default(),
             store_fails: false,
             final_reply_lost: false,
+            joiner_heard_after: Some(215 * SECOND),
+            refresh_learns: false,
+            recovery_until: None,
             next: None,
             changed: true,
         }
@@ -189,6 +212,12 @@ impl Sim {
                 } else {
                     Role::Join
                 };
+                self.view.recovery = None;
+                if let Some(refresh) = &mut self.view.refresh
+                    && refresh.is_listening()
+                {
+                    refresh.phase = RefreshPhase::Interrupted { at: now as At };
+                }
                 self.view.sessions += 1;
                 let group = self
                     .view
@@ -238,8 +267,31 @@ impl Sim {
                 let ok = !self.store_fails;
                 if ok {
                     self.view.group = None;
+                    self.view.refresh = None;
+                    self.view.recovery = None;
+                    self.next = None;
                 }
                 self.answer(Answer::Left(ok));
+            }
+            Request::Refresh
+                if self.view.radio
+                    && self.view.group.is_some()
+                    && !active
+                    && !self
+                        .view
+                        .refresh
+                        .is_some_and(|refresh| refresh.is_listening()) =>
+            {
+                let session = self.view.refresh.map_or(1, |refresh| refresh.session + 1);
+                self.view.refresh = Some(RefreshView {
+                    session,
+                    phase: RefreshPhase::Listening {
+                        until: (now + REFRESH) as At,
+                    },
+                    heard: 0,
+                    learned: 0,
+                });
+                self.next = Some((now + 20 * SECOND, Next::RefreshHears(1)));
             }
             Request::Rename(name) => {
                 let ok = !self.store_fails;
@@ -297,11 +349,15 @@ impl Sim {
                 _ => End::Lost,
             };
             self.end(end);
+            if end == End::Unconfirmed && self.view.group.is_none() {
+                self.wait_for_joiner(now);
+            }
         }
         while let Some((at, next)) = self.next
             && now >= at
         {
             self.next = None;
+            self.changed = true;
             self.advance(next, at);
         }
         core::mem::take(&mut self.changed)
@@ -439,7 +495,117 @@ impl Sim {
                 }),
                 None,
             ),
+            (Next::RefreshHears(id), _) => {
+                if let Some(member) = self
+                    .view
+                    .group
+                    .as_mut()
+                    .and_then(|group| group.members[usize::from(id)].as_mut())
+                {
+                    member.heard = Some(now as At);
+                    if let Some(refresh) = &mut self.view.refresh {
+                        refresh.heard |= 1 << id;
+                    }
+                }
+                self.next = Some(match id {
+                    1 => (now + 30 * SECOND, Next::RefreshHears(2)),
+                    _ if self.refresh_learns => (now + 20 * SECOND, Next::RefreshLearns),
+                    _ => (self.refresh_ends(), Next::RefreshEnds),
+                });
+            }
+            (Next::RefreshLearns, _) => {
+                if let Some(group) = &mut self.view.group
+                    && let Some(id) = (0..IDS).find(|&id| group.members[usize::from(id)].is_none())
+                {
+                    group.members[usize::from(id)] = Some(MemberView {
+                        name: name("Fell Runner"),
+                        mac: [0x48, 0xa1, 0xb2, 0xc3, 0x22, id],
+                        joined: Some(now as At - 3_600 * SECOND as At),
+                        heard: None,
+                        position: Position::Never,
+                    });
+                    if let Some(refresh) = &mut self.view.refresh {
+                        refresh.learned |= 1 << id;
+                    }
+                }
+                self.next = Some((self.refresh_ends(), Next::RefreshEnds));
+            }
+            (Next::RefreshEnds, _) => {
+                if let Some(refresh) = &mut self.view.refresh
+                    && let RefreshPhase::Listening { until } = refresh.phase
+                {
+                    refresh.phase = RefreshPhase::Ended { at: until };
+                }
+            }
+            (Next::JoinerHeard, _) => {
+                self.set_recovery(RecoveryPhase::Storing);
+                self.next = Some((now + SECOND / 20, Next::RecoveryStored));
+            }
+            (Next::RecoveryStored, _) => {
+                let until = self.recovery_ends();
+                if self.store_fails {
+                    self.set_recovery(RecoveryPhase::SaveFailed { until: until as At });
+                    self.next = Some((until, Next::RecoveryEnds));
+                    return;
+                }
+                let mut group = group(1, now);
+                group.members[1] = Some(MemberView {
+                    name: name("Ana's Watch 2"),
+                    mac: PEER_MAC,
+                    joined: Some(now as At),
+                    heard: Some(now as At),
+                    position: Position::Never,
+                });
+                self.view.group = Some(group);
+                self.set_recovery(RecoveryPhase::Stored);
+            }
+            (Next::RecoveryEnds, _) => {
+                let phase = match self.view.recovery.map(|recovery| recovery.phase) {
+                    Some(RecoveryPhase::Listening { .. }) => RecoveryPhase::Expired,
+                    _ => RecoveryPhase::NotStored,
+                };
+                self.set_recovery(phase);
+            }
             (_, None) => {}
         }
+    }
+
+    fn refresh_ends(&self) -> Micros {
+        match self.view.refresh.map(|refresh| refresh.phase) {
+            Some(RefreshPhase::Listening { until }) => until as Micros,
+            _ => 0,
+        }
+    }
+
+    fn recovery_ends(&self) -> Micros {
+        self.recovery_until.unwrap_or(0)
+    }
+
+    /// Listens for the joining device of a founding whose last acknowledgement never came.
+    fn wait_for_joiner(&mut self, now: Micros) {
+        let until = now + RECOVERY;
+        self.recovery_until = Some(until);
+        self.view.recovery = Some(RecoveryView {
+            session: self.view.sessions,
+            phase: RecoveryPhase::Listening { until: until as At },
+            peer_name: self
+                .view
+                .pairing
+                .as_ref()
+                .and_then(|pairing| pairing.peer_name),
+            peer: PEER_MAC,
+            count: 2,
+        });
+        self.next = Some(match self.joiner_heard_after {
+            Some(after) if after < RECOVERY => (now + after, Next::JoinerHeard),
+            _ => (until, Next::RecoveryEnds),
+        });
+    }
+
+    fn set_recovery(&mut self, phase: RecoveryPhase) {
+        if let Some(recovery) = &mut self.view.recovery {
+            recovery.phase = phase;
+        }
+        self.changed = true;
     }
 }

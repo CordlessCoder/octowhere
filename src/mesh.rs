@@ -1,7 +1,7 @@
 //! Runs the location mesh on the radio: sends this node's packet in its slot, listens to the other
 //! slots, and keeps the timebase the slots are placed on. Pairing takes the radio over, on a
-//! channel of its own, until it ends. `octowhere_mesh` holds the protocol and
-//! `context/LORA-PROTOCOL.md` the design.
+//! channel of its own, until it ends. A refresh listens throughout for three rounds when the
+//! screens ask. `octowhere_mesh` holds the protocol and `context/LORA-PROTOCOL.md` the design.
 
 use alloc::boxed::Box;
 use core::{
@@ -22,12 +22,13 @@ use lc76g::FixQuality;
 use octowhere::{
     settings::GroupWrite,
     ui::group::view::{
-        Answer, GroupView, MemberView, MeshView, PairingView, Position, Refused, Request,
+        Answer, GroupView, MemberView, MeshView, PairingView, Position, RecoveryPhase,
+        RecoveryView, RefreshPhase, RefreshView, Refused, Request,
     },
 };
 use octowhere_mesh::{
     IDS,
-    clock::{Clock, Taken},
+    clock::{Clock, SWEEP_US, Taken},
     members::{Group, Member, Merged, Name},
     packet::{
         Builder, Entry, HEADER_LEN, Hdop, Header, MAX_PACKET, Plain, Quality, Record, Source,
@@ -85,6 +86,8 @@ const PAIR_LISTEN_US: i64 = 250_000;
 /// for the joining device under the group's key. That device waits 30 s for done, sweeps for
 /// three rounds, then sends in its next slot, since it hears nobody: about 3½ minutes in all.
 const FOUNDING_WAIT_US: i64 = 10 * 60 * 1_000_000;
+/// How long after a failed write a founding's wait tries to store its group again.
+const STORE_RETRY_US: i64 = 10 * 1_000_000;
 const IRQ_TX_DONE: u8 = 0x08;
 const IRQ_RX_DONE: u8 = 0x40;
 
@@ -134,6 +137,8 @@ pub enum Command {
     /// Forgets the group.
     Leave,
     Rename(Name),
+    /// Listens throughout for three rounds.
+    Refresh,
 }
 
 impl From<Request> for Command {
@@ -148,6 +153,7 @@ impl From<Request> for Command {
             Request::Cancel => Self::Cancel,
             Request::Leave => Self::Leave,
             Request::Rename(name) => Self::Rename(name),
+            Request::Refresh => Self::Refresh,
         }
     }
 }
@@ -230,6 +236,10 @@ struct Shown {
     /// The newest position held for each id, as its UTC second. Kept past the table's expiry,
     /// so an old position shows as old rather than never received.
     positions: [Option<u32>; IDS as usize],
+    /// The refresh under way, or the last, while the group stays this device's.
+    refresh: Option<RefreshView>,
+    /// A founding's wait, under way or ended, until another pairing starts.
+    recovery: Option<RecoveryView>,
 }
 
 impl Shown {
@@ -242,6 +252,8 @@ impl Shown {
             answer: None,
             heard: [None; IDS as usize],
             positions: [None; IDS as usize],
+            refresh: None,
+            recovery: None,
         }
     }
 
@@ -269,6 +281,8 @@ impl Shown {
         view.pairing.clone_from(&self.pairing);
         view.answered = self.answered;
         view.answer = self.answer;
+        view.refresh = self.refresh;
+        view.recovery = self.recovery;
         let Some(group) = group else {
             view.group = None;
             return;
@@ -390,6 +404,17 @@ fn utc_now(now: i64) -> Option<i64> {
         .map(|utc| utc / 1_000_000)
 }
 
+/// A group founded in a pairing whose last acknowledgement never came. A packet under its key
+/// shows the joining device stored it; this device then stores it too, and only then takes it
+/// up.
+struct Founding {
+    group: Group,
+    /// When the wait ends, on the local clock.
+    until: i64,
+    /// The joining device was heard, so only the write is left.
+    heard: bool,
+}
+
 pub struct Mesh {
     lora: SensorLora,
     dio0: Input<'static>,
@@ -398,10 +423,11 @@ pub struct Mesh {
     path: LoraPath,
     me: Identity,
     group: Option<Group>,
-    /// A group this device founded in a pairing whose last acknowledgement it never heard, and
-    /// the local time it stops listening for the joining device. A packet under the group's key
-    /// shows that device stored it.
-    founding: Option<Box<(Group, i64)>>,
+    /// A group this device founded in a pairing whose last acknowledgement it never heard.
+    founding: Option<Box<Founding>>,
+    /// The members' addresses as a refresh under way started, which tell the members it learns
+    /// from one that moved to another id.
+    refresh_known: Option<Box<[Option<[u8; 6]>; IDS as usize]>>,
     /// The ids whose member records changed and are not yet queued to be stored, as a set.
     unsaved: u32,
     /// The group's key or this node's id changed, so the whole group is to be stored.
@@ -446,6 +472,7 @@ impl Mesh {
             me: start.me,
             group,
             founding: None,
+            refresh_known: None,
             unsaved: 0,
             unsaved_group: false,
             clock: Clock::new(own, now),
@@ -532,10 +559,13 @@ impl Mesh {
             Command::Join => self.pair(Role::Join).await,
             Command::Leave => {
                 self.founding = None;
+                self.shown.recovery = None;
                 let left = leave(&mut self.group).await;
                 if left {
                     self.unsaved = 0;
                     self.unsaved_group = false;
+                    self.shown.refresh = None;
+                    self.refresh_known = None;
                     info!("[MESH] left the group");
                 } else {
                     warn!("[MESH] not left");
@@ -544,7 +574,7 @@ impl Mesh {
             }
             Command::Rename(name) => {
                 let group = match &mut self.founding {
-                    Some(founding) => Some(&mut founding.0),
+                    Some(founding) => Some(&mut founding.group),
                     None => self.group.as_mut(),
                 };
                 let saved = rename(&mut self.me, group, name).await;
@@ -554,6 +584,7 @@ impl Mesh {
                 }
                 self.shown.answer(Answer::Renamed(saved));
             }
+            Command::Refresh => self.start_refresh(),
             Command::Choose(_)
             | Command::ChooseMac(_)
             | Command::Accept
@@ -590,6 +621,7 @@ impl Mesh {
             return;
         };
         let now = local();
+        self.update_refresh(now);
         self.take_readings(own);
         self.clock.tick(now, rtc_now(now));
         let timebase = self.clock.at(now).map(|(_, timebase)| timebase);
@@ -700,6 +732,9 @@ impl Mesh {
     async fn listen(&mut self, end: i64) -> bool {
         loop {
             let now = local();
+            if self.update_refresh(now) {
+                self.publish();
+            }
             if now >= end {
                 return false;
             }
@@ -727,6 +762,11 @@ impl Mesh {
                     now,
                     self.clock.sweep_ends(now).map_or(end, |ends| ends.min(end)),
                 ),
+            };
+            // A refresh's end is shown as it comes, whatever the window.
+            let close = match self.refresh_until() {
+                Some(until) if until > now => close.min(until),
+                _ => close,
             };
             if open >= end {
                 let _ = self.lora.set_device_mode(DeviceMode::STDBY).await;
@@ -842,6 +882,13 @@ impl Mesh {
         }
         if let Some(heard) = self.shown.heard.get_mut(usize::from(header.sender)) {
             *heard = Some(done);
+        }
+        if let Some(refresh) = &mut self.shown.refresh
+            && refresh.is_listening()
+            && header.sender != group.own()
+            && header.sender < IDS
+        {
+            refresh.heard |= 1 << header.sender;
         }
         let round = round_at(named_slot(header.base, header.sender));
         self.table.heard(header.sender, round);
@@ -1000,6 +1047,8 @@ impl Mesh {
         if self.founding.take().is_some() {
             info!("[MESH] no longer listening for the device a founding left unconfirmed");
         }
+        self.shown.recovery = None;
+        self.stop_refresh(local());
         self.shown.sessions += 1;
         let session = self.shown.sessions;
         let (Some(nonce), Some(founding)) = (random::<16>(), random::<32>()) else {
@@ -1154,11 +1203,24 @@ impl Mesh {
                 self.unsaved_group = false;
                 if role == Role::Join || !had_group {
                     self.restart(group.own());
+                    self.shown.refresh = None;
                 }
             }
             (Phase::Ended(End::Unconfirmed), Some(group)) if !had_group => {
                 info!("[MESH] listening for the joining device under the founded group's key");
-                self.founding = Some(Box::new((group.clone(), local() + FOUNDING_WAIT_US)));
+                let until = local() + FOUNDING_WAIT_US;
+                self.shown.recovery = Some(RecoveryView {
+                    session,
+                    phase: RecoveryPhase::Listening { until },
+                    peer_name: pairing.peer_name(),
+                    peer: pairing.peer().unwrap_or_default(),
+                    count: group.count() as u8,
+                });
+                self.founding = Some(Box::new(Founding {
+                    group: group.clone(),
+                    until,
+                    heard: false,
+                }));
             }
             _ => {}
         }
@@ -1179,12 +1241,27 @@ impl Mesh {
     }
 
     /// Listens throughout for a packet under the group a founding left unconfirmed, until its
-    /// wait ends. One means the joining device stored the group, which this device then takes
-    /// up and stores.
+    /// wait ends. One means the joining device stored the group, which this device then stores
+    /// and takes up. A failed write is tried again while the wait lasts.
     async fn await_joiner(&mut self) {
-        let Some(end) = self.founding.as_ref().map(|founding| founding.1) else {
+        let Some((end, heard)) = self
+            .founding
+            .as_ref()
+            .map(|founding| (founding.until, founding.heard))
+        else {
             return;
         };
+        if heard {
+            until((local() + STORE_RETRY_US).min(end)).await;
+            if local() >= end {
+                warn!("[MESH] the founded group was never stored; this device founded no group");
+                self.founding = None;
+                self.set_recovery(RecoveryPhase::NotStored);
+            } else {
+                self.store_founded(None).await;
+            }
+            return;
+        }
         if self.lora.rx(None).await.is_err() {
             warn!("[MESH] receive start failed");
         }
@@ -1192,7 +1269,7 @@ impl Mesh {
             let Some((packet, done)) = self.read_packet().await else {
                 continue;
             };
-            let Some(founded) = self.founding.as_ref().map(|founding| &founding.0) else {
+            let Some(founded) = self.founding.as_ref().map(|founding| &founding.group) else {
                 return;
             };
             let mut bytes = packet.payload;
@@ -1200,20 +1277,130 @@ impl Mesh {
                 info!("[MESH] not ours len={} rssi={}", packet.length, packet.rssi);
                 continue;
             }
-            let (founded, _) = *self.founding.take().expect("checked above");
-            info!("[MESH] heard the joining device; the founded group is this device's");
-            let own = founded.own();
-            self.group = Some(founded);
-            self.unsaved = 0;
-            self.unsaved_group = true;
-            self.restart(own);
-            self.take(&packet, done);
+            info!("[MESH] heard the joining device; storing the founded group");
             let _ = self.lora.set_device_mode(DeviceMode::STDBY).await;
+            self.store_founded(Some((packet, done))).await;
             return;
         }
         info!("[MESH] the joining device was not heard; this device founded no group");
         self.founding = None;
+        self.set_recovery(RecoveryPhase::Expired);
         let _ = self.lora.set_device_mode(DeviceMode::STDBY).await;
+    }
+
+    /// Stores the group a founding left unconfirmed, its joining device heard, and takes it up
+    /// once it is stored. `heard` is the packet that proved the join, while it is fresh.
+    async fn store_founded(&mut self, heard: Option<(RxPacket, i64)>) {
+        let Some(founding) = &mut self.founding else {
+            return;
+        };
+        founding.heard = true;
+        let (group, until) = (founding.group.clone(), founding.until);
+        self.set_recovery(RecoveryPhase::Storing);
+        self.publish();
+        if !super::save_group(GroupWrite::Group(Box::new(group))).await {
+            warn!("[MESH] storing the founded group failed; trying again");
+            self.set_recovery(RecoveryPhase::SaveFailed { until });
+            return;
+        }
+        let Some(founding) = self.founding.take() else {
+            return;
+        };
+        info!("[MESH] the founded group is this device's");
+        let own = founding.group.own();
+        self.group = Some(founding.group);
+        self.unsaved = 0;
+        self.unsaved_group = false;
+        self.restart(own);
+        if let Some((packet, done)) = heard {
+            self.take(&packet, done);
+        }
+        self.set_recovery(RecoveryPhase::Stored);
+    }
+
+    fn set_recovery(&mut self, phase: RecoveryPhase) {
+        if let Some(recovery) = &mut self.shown.recovery {
+            recovery.phase = phase;
+        }
+    }
+
+    /// Starts a refresh, which listens throughout for three rounds and goes on sending in this
+    /// node's slot. One under way keeps its time.
+    fn start_refresh(&mut self) {
+        let Some(group) = &self.group else {
+            warn!("[MESH] no group to refresh");
+            return;
+        };
+        if self
+            .shown
+            .refresh
+            .is_some_and(|refresh| refresh.is_listening())
+        {
+            return;
+        }
+        let now = local();
+        self.clock.sweep(now);
+        self.refresh_known = Some(Box::new(core::array::from_fn(|id| {
+            group.member(id as u8).map(|member| member.mac)
+        })));
+        self.shown.refresh = Some(RefreshView {
+            session: self.shown.refresh.map_or(1, |refresh| refresh.session + 1),
+            phase: RefreshPhase::Listening {
+                until: now + SWEEP_US,
+            },
+            heard: 0,
+            learned: 0,
+        });
+        info!("[MESH] refreshing for {}s", SWEEP_US / 1_000_000);
+    }
+
+    /// When the refresh under way ends.
+    fn refresh_until(&self) -> Option<i64> {
+        match self.shown.refresh?.phase {
+            RefreshPhase::Listening { until } => Some(until),
+            _ => None,
+        }
+    }
+
+    /// Notes the members a refresh under way has learned, and ends it at its time. Returns
+    /// whether that changed what the screens show.
+    fn update_refresh(&mut self, now: i64) -> bool {
+        let (Some(refresh), Some(group), Some(known)) = (
+            &mut self.shown.refresh,
+            &self.group,
+            self.refresh_known.as_deref(),
+        ) else {
+            return false;
+        };
+        let RefreshPhase::Listening { until } = refresh.phase else {
+            return false;
+        };
+        let before = *refresh;
+        refresh.learned = group
+            .members()
+            .filter(|(_, member)| !known.contains(&Some(member.mac)))
+            .fold(0, |learned, (id, _)| learned | 1 << id);
+        if now >= until {
+            refresh.phase = RefreshPhase::Ended { at: until };
+            info!(
+                "[MESH] refresh ended heard={=u32:#010x} learned={=u32:#010x}",
+                refresh.heard, refresh.learned
+            );
+            self.refresh_known = None;
+        }
+        *refresh != before
+    }
+
+    /// Ends a refresh under way early, as a pairing takes the radio.
+    fn stop_refresh(&mut self, now: i64) {
+        self.update_refresh(now);
+        if let Some(refresh) = &mut self.shown.refresh
+            && refresh.is_listening()
+        {
+            refresh.phase = RefreshPhase::Interrupted { at: now };
+            self.refresh_known = None;
+            info!("[MESH] refresh stopped for a pairing");
+        }
     }
 
     /// Waits until local time `deadline` for the radio to raise `flag`, the one `DIO0` is mapped
@@ -1392,6 +1579,7 @@ pub mod inject {
                         }
                     }
                 }
+                11 => Command::Refresh,
                 10 => {
                     let now = Instant::now().as_millis() as u32;
                     DEAF_UNTIL_MS.store(now + 1000 * u32::from(argument), Ordering::Relaxed);

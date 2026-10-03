@@ -10,12 +10,14 @@
     uv run tools/pair-inject.py accept | decline | mismatch | cancel | leave
     uv run tools/pair-inject.py name "Ana's watch"
     uv run tools/pair-inject.py deaf 40
+    uv run tools/pair-inject.py refresh
 
 The commands stand in for the screens until they are built: `add` and `join` start a pairing,
 `choose` picks a device the adding side found, `accept`, `decline` and `mismatch` answer the code,
 and `cancel` ends a pairing. `leave` forgets the group, and `name` renames this device. `deaf`
 makes a pairing drop every frame it hears for that many seconds, up to 255, to lose an
-acknowledgement on purpose. With two boards attached, `--probe` picks one by its MAC, which
+acknowledgement on purpose. `refresh` listens throughout for three rounds, as REFRESH DEVICES does.
+With two boards attached, `--probe` picks one by its MAC, which
 `probe-rs list` shows. The ELF must be the one flashed, since the addresses come from it. The
 firmware logs `[MESH] command …` when it takes one.
 """
@@ -27,7 +29,7 @@ import sys
 from elftools.elf.elffile import ELFFile
 
 CODES = {"add": 1, "join": 2, "choose": 3, "accept": 4, "decline": 5, "mismatch": 6,
-         "cancel": 7, "leave": 8, "name": 9, "deaf": 10}
+         "cancel": 7, "leave": 8, "name": 9, "deaf": 10, "refresh": 11}
 COMMAND = "OCTOWHERE_PAIR_COMMAND"
 NAME = "OCTOWHERE_PAIR_NAME"
 
