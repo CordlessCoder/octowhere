@@ -98,12 +98,11 @@ until the feature set is complete, because profiling an incomplete firmware pric
   "Memory"), and the frame loop's runs on the same stack. If the margin is thin, the mesh's
   largest frames are `Mesh::run`, `Mesh::pair` and the task's poll, which builds `Mesh`.
 - Send the design agent its return package for the 2026-10-03 round (`design/DECISIONS.md`
-  entry 29), which is built and ran on the two boards
-  (`docs/logs/lora/refresh-and-recovery-2026-10-03/`): the `render` example's stills, the
-  start-up recordings (`ui-sim --record` of `startup`, `startup-radio-failed`,
-  `startup-radio-slow`, `startup-power-failed` and `startup-power-radio-failed`), the boards'
-  screens and measurements, and where the build departed from the renders
-  (`SCREEN-DESIGN-BRIEF.md`, "Start-up as built" and "Group and pairing as built").
+  entry 29). It is ready, for the owner to send: `context/design-captures-2026-10-03-2.7z`
+  (local, like the design files), with `design/handoffs/IMPLEMENTATION-RESPONSE-2026-10-03.md`
+  in it and beside it. It holds the response, the stills and atlas at 6b7ff8a, the start-up's
+  radio recordings, the boards' screens, the web simulator, and a note of what the mesh can do
+  that no screen shows yet, for the owner's next round.
 - Finish what step 3's screens leave open (`SCREEN-DESIGN-BRIEF.md`, "Group and pairing as
   built"):
   - Every group screen's legibility on the panel, which nobody has judged yet. Typing on the
