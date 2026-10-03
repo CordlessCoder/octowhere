@@ -44,10 +44,12 @@ until the feature set is complete, because profiling an incomplete firmware pric
     a fill of the same rows would take about 2.3. Writing uniform runs as words, two pixels a
     word, or eight bytes of coverage at a time each beat the pixel-at-a-time write alone on
     the device and lost to it in the frame, for a reason not found. Without the writes, the
-    name and the line still take about 3.7 and 3.2 ms beyond rasterizing: turning the
-    raster into coverage rows, gathering and combining them. Damaging only the band and the
-    hatch, the only parts that change between frames, is the other lever. `bench/fault-draw`
-    times each part (`fault-draw-bench`), and at start-up the row write alone.
+    name and the line still took about 3.7 and 3.2 ms beyond rasterizing: turning the raster
+    into coverage rows, gathering and combining them. `4708868` paints each row as it
+    arrives instead of gathering it, and these figures predate it. Damaging only the band
+    and the hatch, the only parts that change between frames, is the other lever.
+    `bench/fault-draw` times each part (`fault-draw-bench`), and at start-up the row write
+    alone.
 
 - Lay out the 512 KiB of SRAM deliberately. esp-hal's linker script gives `.data`, `.bss` and
   core 0's stack 341,760 bytes (`0x3FC88000` to `0x3FCDB700`); the stack is whatever the other
@@ -61,28 +63,32 @@ until the feature set is complete, because profiling an incomplete firmware pric
   what IRAM holds (15 KiB of `.rwtext`), the two 8 KiB display DMA buffers and the 8 KiB
   core-1 stack. Do not measure core 0's stack by painting it from `_stack_end` up to the stack
   pointer: that crash-looped the board, probably because esp-rtos keeps data there.
-- Reduce the UI's heap allocations (owner, 2026-10-03). The internal heap is two regions, the
-  72 KiB reclaimed one and 120 KiB in `.bss`, which esp-alloc 0.11 serves first fit in that
-  order, and it grows a block by allocating the new one and copying, so the old and the new live
-  at once in one region. A large request therefore needs that much contiguous room, and how much
-  is free in total says little. On 2026-10-03 both boards panicked 5.44 s after boot, booting
-  with a stored signed group, when fontdue's glyph raster could not grow on the identity's first
-  frame (`docs/logs/lora/signing-2026-10-03/`). `dfcc637` reserves the raster at its largest,
-  `chrome::RASTER_CELLS`, first thing at boot, and a debug assertion fails a test that draws a
-  glyph larger. What is left, measured on the host by `bench/ui-allocations`
-  (`crates/octowhere-ui/tests/heap_requests.rs`, its command in the header; it can print a
-  backtrace for a request's size):
-  - The identity's title holds its coverage, filled and hollow, in two 45,828-byte buffers
-    while the identity plays (`ui::identity::Title`). They are the start-up's only large
-    requests now. By the boot figures they would leave about 20 KB in the larger region, an
-    estimate the board has not confirmed.
-  - Each fault screen makes 550 to 880 requests of 16 KiB or more over the start-up, the
-    largest 40,800 bytes: `chrome::Knockout`, made anew every frame, holds two glyphs' coverage
-    and a row table in fresh vectors, grown glyph by glyph. A fault screen is what must work
-    when a part has already failed. Keeping its buffers between frames, as the raster now is,
-    would end the churn.
-  - The faces draw with no large request: the clock's largest is 46 bytes and the compass's
-    512.
+- Confirm the UI's heap changes of 2026-10-03 on the boards (owner asked for the reduction). The
+  internal heap is two regions, the 72 KiB reclaimed one and 120 KiB in `.bss`, which esp-alloc
+  0.11 serves first fit in that order, and it grows a block by allocating the new one and
+  copying, so the old and the new live at once in one region. A large request needs that much
+  contiguous room, and how much is free in total says little. Both boards panicked 5.44 s after
+  boot with a stored signed group, when fontdue's glyph raster could not grow on the identity's
+  first frame (`docs/logs/lora/signing-2026-10-03/`). Since then, measured on the host by
+  `bench/ui-allocations` (`crates/octowhere-ui/tests/heap_requests.rs`, its command in the
+  header):
+  - `dfcc637` makes the raster at its largest, `chrome::RASTER_CELLS`, first thing at boot,
+    and a debug assertion fails a test that draws a glyph larger.
+  - `4708868` paints the fault screens' knockout without buffers. A fault start-up made 2,005
+    to 2,386 requests, 552 to 878 of them 16 KiB or more, and held up to 91,450 bytes at once;
+    it now makes 5 to 7, the largest 320 bytes, and holds under 600.
+  - `3a774d1` keeps the identity's title as a `chrome::Recording`, 36,660 bytes reserved whole
+    (`TITLE_BYTES`), where it held two 45,828-byte buffers. The start-up's most held at once
+    went from 115,462 bytes to 61,194.
+  - The faces' largest request is 16 bytes.
+  None of it has run on a board. Check that a boot with a stored group survives the start-up,
+  and time the identity's frames and a fault screen's (`bench/startup-handover`,
+  `bench/fault-draw`). The title now blends a glyph's row a call, about 1,000 calls on a lit
+  frame where it made 114; if its frames are slower, replaying all the glyphs' rows for a row
+  in one call is the lever. Its draw path is also about 1.9 KB of stack deeper, since
+  `draw_identity` is no longer inlined into the start-up's draw. What is left of the start-up's
+  peak is the title's reserve and the hollow ring's three scratch buffers, up to 7,906 bytes
+  each, made afresh for each hollow glyph over the opening (`draw_ring_on_baseline`).
   Do not add PSRAM to the global allocator as a fallback: a value holding an atomic could land
   there, and atomics in PSRAM break (owner). Move a specific buffer to `PSRAM_HEAP` explicitly
   instead, if one must leave internal RAM.

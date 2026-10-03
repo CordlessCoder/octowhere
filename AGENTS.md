@@ -220,7 +220,7 @@ Weigh that cost before adding one.
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 1,641,648 bytes, 10.48% of the 15,663,104-byte app partition that
+The image is currently 1,636,416 bytes, 10.45% of the 15,663,104-byte app partition that
 `partitions.csv` gives it. Measure with `espflash save-image --chip esp32s3 --flash-size 16mb
 --partition-table partitions.csv <elf> <out>`; without those two options it assumes 4 MB of flash
 and the default table. The time zone
@@ -334,9 +334,9 @@ read two nodes' logs; results in `docs/logs/lora/crc-2026-10-02/`. And `bench/jt
 over the USB JTAG with the core running and halted; the result is in `context/BACKLOG.md`. And
 `bench/stack-watermark` paints core 0's stack at boot and logs the deepest it has been used
 every 15 s (`stack-watermark-bench`, with the inject features to drive the boards); results
-under "Memory". And `bench/ui-allocations` counts the stage's large heap requests on the host,
-through every start-up and on each face (`crates/octowhere-ui/tests/heap_requests.rs`); results
-in `context/BACKLOG.md`.
+under "Memory". And `bench/ui-allocations` counts the stage's heap requests on the host, the
+largest, the sizes of 1 KiB or more and the most held at once, through every start-up and on
+each face (`crates/octowhere-ui/tests/heap_requests.rs`); results in `context/BACKLOG.md`.
 
 ## Concurrency
 
@@ -468,9 +468,11 @@ poisons the thread and a later `get()` panics.
   checks that promise.
 - `chrome::Knockout` paints text over a solid background across a run of rows, writing each
   pixel once instead of filling and then blending; the fault screen's band and strip use it.
-  It keeps only two glyphs' coverage, so it takes text drawn left to right through
-  `CoverageTarget::begin_glyph`. `FontdueRenderer::draw_outline_on_baseline` draws text's
-  outline from its coverage grown by a radius; no screen uses it yet.
+  It paints each row as it arrives and blends only where a glyph reaches back over pixels
+  already painted, so it holds no coverage. `chrome::Recording` keeps coverage drawn into it as
+  runs, to blend later in any colour; the identity's title is one, a part a glyph.
+  `FontdueRenderer::draw_outline_on_baseline` draws text's outline from its coverage grown by
+  a radius; no screen uses it yet.
 - `screens::render` clears the round panel's visible circle and the 3 px past it that the
   pixel shift can bring on, in runs of rows that may reach `CLEAR_SLACK` columns further so
   that each run is one fill; below `Clip`, one fill a row
@@ -562,7 +564,7 @@ errata workaround, are in [`docs/hardware-notes.md`](docs/hardware-notes.md).
 - The internal heap is 192 KiB, from two `esp_alloc::heap_allocator!` calls in `main`: 72 KiB
   in the RAM the second-stage bootloader frees after boot (`#[esp_hal::ram(reclaimed)]`), and
   120 KiB as a static in `.bss`. Core 0's stack is whatever DRAM `.data` and `.bss` leave,
-  111,748 bytes on 2026-10-03; `_stack_end_cpu0` and `_stack_start_cpu0` in the ELF give it
+  119,388 bytes at `3a774d1`; `_stack_end_cpu0` and `_stack_start_cpu0` in the ELF give it
   exactly. The tasks' futures are statics, so the stack shrinks as they grow. It was about
   19 KiB with the whole heap in `.bss`, and the clock face overflowed it. The mesh's work took
   it to about 60 KB, and the radio task overflowed it from under a group screen. Tasks on
@@ -594,11 +596,13 @@ errata workaround, are in [`docs/hardware-notes.md`](docs/hardware-notes.md).
   holding an atomic could land there, and atomics in PSRAM break (owner).
 - esp-alloc serves the internal heap's two regions first fit, the 72 KiB one first, and grows a
   block by allocating the new one and copying, so a large request needs that much contiguous
-  room in one region. The start-up's identity holds two 45,828-byte buffers for its title, and
+  room in one region. The start-up's identity held two 45,828-byte buffers for its title, and
   with them a raster that still had to grow left no room on 2026-10-03, which panicked both
   boards at boot. fontdue's glyph raster is now made at its largest right after the heap comes up
-  (`chrome::raster_buffer`, `Stage::use_raster`) and never grows. `context/BACKLOG.md` has the
-  rest of the UI's large requests, and `bench/ui-allocations` counts them on the host.
+  (`chrome::raster_buffer`, `Stage::use_raster`) and never grows, and the title is a
+  `chrome::Recording` of 36,660 bytes, reserved whole (`TITLE_BYTES` in `ui/identity.rs`).
+  Measured on the host by `bench/ui-allocations`, the start-up holds at most 61,194 bytes above
+  the raster, and a fault screen under 1 KB; the faces' largest request is 16 bytes.
 - The current RGB565 configuration uses 466 × 466 × 2 = 434,312 bytes per framebuffer, with two
   framebuffers.
 - Core 1 uses the 8 KiB `CORE1_STACK` static.

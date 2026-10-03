@@ -545,7 +545,8 @@ interpreted them:
   crosses a pixel, as the design's 4× renders sample.
 - **The title's coverage** is built once per start-up, filled and hollow, a few glyphs a frame
   over the opening, and freed when the card starts. Rasterizing the 112 px glyphs every frame
-  cost more than a frame. It holds about 92 KB of the internal heap while the identity plays.
+  cost more than a frame. It is kept as runs of coverage, a glyph at a time, and holds about
+  37 KB of the internal heap while the identity plays.
 - **The card's lime page** runs to the glass's edge, where the design's stops at radius 232,
   since the frame clears straight to lime rather than painting a disc over black.
 - **The UTC digits** show dashes (`000 000 111 000 000`) when the clock has no time or its
