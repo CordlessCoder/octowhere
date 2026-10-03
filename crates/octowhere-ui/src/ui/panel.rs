@@ -472,8 +472,9 @@ fn draw_rules<D: CoverageTarget<Color = Color>>(
             let start = shift + RULE_LEFT[above].min(RULE_LEFT[below]);
             let end = shift + RULE_RIGHT[above].max(RULE_RIGHT[below]);
             let width = ((end - start) as i64 * i64::from(progress) / 255) as i32;
+            let left = start + (end - start - width) / 2;
             target.fill_solid(
-                &Rectangle::new(Point::new(start, top), Size::new(width as u32, 1)),
+                &Rectangle::new(Point::new(left, top), Size::new(width as u32, 1)),
                 chrome::shade(chrome::GRAY, 145),
             )?;
         }
@@ -626,6 +627,22 @@ mod tests {
         assert_eq!(cell_at(Point::new(300, 260), MAX_SCROLL), Some(Cell::Name));
         assert_eq!(cell_at(Point::new(420, 100), 0), None);
         assert_eq!(cell_at(Point::new(150, 30), 0), None);
+    }
+
+    #[test]
+    fn rules_draw_out_from_the_middle() {
+        let mut fb = chrome::FB::boxed();
+        draw_rules(0, 128, &mut *fb).unwrap();
+        for top in RULE_TOP {
+            let lit: std::vec::Vec<i32> = (0..PAGE_WIDTH)
+                .filter(|&x| fb.pixel(Point::new(x, top)) != Some(chrome::BLACK))
+                .collect();
+            let (first, last) = (lit[0], lit[lit.len() - 1]);
+            assert!(
+                (first + last).abs_diff(PAGE_WIDTH - 1) <= 1,
+                "the rule at {top} spans {first}..={last}"
+            );
+        }
     }
 
     #[test]
