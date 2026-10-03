@@ -30,8 +30,9 @@ until the feature set is complete, because profiling an incomplete firmware pric
   framebuffer costs about 1.7 µs even where the cache holds its lines, so small fills are
   call overhead rather than memory, on every screen. Since the multi-field scatter, the
   step also tracks each mark's kind and tests the glass per point, and its settled median
-  rose from 1.84 to 2.28 ms; testing the glass as a column range per row, dropping its two
-  small allocations a call, and reusing the static lower field's work are the candidates.
+  rose from 1.84 to 2.28 ms; testing the glass as a column range per row and reusing the
+  static lower field's work are the candidates. `c933578` dropped its two small allocations a
+  call.
   For the draw, drawing from the step's shown bitset or walking the damage's spans per grid
   row would replace the per-point `Clip::visible`. The clear could skip undamaged rows or
   run from the spans. A lean `fill_solid` for narrow rectangles (integer clamp, one row
@@ -80,15 +81,26 @@ until the feature set is complete, because profiling an incomplete firmware pric
   - `3a774d1` keeps the identity's title as a `chrome::Recording`, 36,660 bytes reserved whole
     (`TITLE_BYTES`), where it held two 45,828-byte buffers. The start-up's most held at once
     went from 115,462 bytes to 61,194.
-  - The faces' largest request is 16 bytes.
+  - The faces and the settings panel made small requests every step they changed: the scatter's
+    damage built two sets of shown marks in eight vectors on every step it changed, and each
+    walk over its grid made two more (`c933578`); the compass dial made its raster and coverage
+    afresh every draw (`2f9ba94`); and the zone picker cloned its list into the stage's copy
+    every step, and made two vectors for each zone when it opened (`da41826`). Over 20 s of
+    the clock face they made 5,472 requests, over 10 s of a turning compass 11,294, opening
+    the panel and its pages 1,292 and an 80 s rest to the always-on face 4,604; they now make
+    0, 6, 0 and 0. The group screens make their two 8,848-byte lists once, and hold them while
+    open; the zone picker makes 14 requests when it opens.
   None of it has run on a board. Check that a boot with a stored group survives the start-up,
   and time the identity's frames and a fault screen's (`bench/startup-handover`,
   `bench/fault-draw`). The title now blends a glyph's row a call, about 1,000 calls on a lit
   frame where it made 114; if its frames are slower, replaying all the glyphs' rows for a row
-  in one call is the lever. Its draw path is also about 1.9 KB of stack deeper, since
-  `draw_identity` is no longer inlined into the start-up's draw. What is left of the start-up's
-  peak is the title's reserve and the hollow ring's three scratch buffers, up to 7,906 bytes
-  each, made afresh for each hollow glyph over the opening (`draw_ring_on_baseline`).
+  in one call is the lever. The scatter's damage now compares both looks point by point in
+  one walk where it built and compared two sets; the stage's tests check every damaged redraw
+  against a full one, but its step time is unmeasured (`bench/scatter`, `bench/clock-draw`).
+  The title's draw path is also about 1.9 KB of stack deeper, since `draw_identity` is no
+  longer inlined into the start-up's draw. What is left of the start-up's peak is the title's
+  reserve and the hollow ring's three scratch buffers, up to 7,906 bytes each, made afresh for
+  each hollow glyph over the opening (`draw_ring_on_baseline`).
   Do not add PSRAM to the global allocator as a fallback: a value holding an atomic could land
   there, and atomics in PSRAM break (owner). Move a specific buffer to `PSRAM_HEAP` explicitly
   instead, if one must leave internal RAM.
