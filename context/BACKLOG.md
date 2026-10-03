@@ -64,46 +64,30 @@ until the feature set is complete, because profiling an incomplete firmware pric
   what IRAM holds (15 KiB of `.rwtext`), the two 8 KiB display DMA buffers and the 8 KiB
   core-1 stack. Do not measure core 0's stack by painting it from `_stack_end` up to the stack
   pointer: that crash-looped the board, probably because esp-rtos keeps data there.
-- Confirm the UI's heap changes of 2026-10-03 on the boards (owner asked for the reduction). The
-  internal heap is two regions, the 72 KiB reclaimed one and 120 KiB in `.bss`, which esp-alloc
-  0.11 serves first fit in that order, and it grows a block by allocating the new one and
-  copying, so the old and the new live at once in one region. A large request needs that much
-  contiguous room, and how much is free in total says little. Both boards panicked 5.44 s after
-  boot with a stored signed group, when fontdue's glyph raster could not grow on the identity's
-  first frame (`docs/logs/lora/signing-2026-10-03/`). Since then, measured on the host by
-  `bench/ui-allocations` (`crates/octowhere-ui/tests/heap_requests.rs`, its command in the
-  header):
-  - `dfcc637` makes the raster at its largest, `chrome::RASTER_CELLS`, first thing at boot,
-    and a debug assertion fails a test that draws a glyph larger.
-  - `4708868` paints the fault screens' knockout without buffers. A fault start-up made 2,005
-    to 2,386 requests, 552 to 878 of them 16 KiB or more, and held up to 91,450 bytes at once;
-    it now makes 5 to 7, the largest 320 bytes, and holds under 600.
-  - `3a774d1` keeps the identity's title as a `chrome::Recording`, 36,660 bytes reserved whole
-    (`TITLE_BYTES`), where it held two 45,828-byte buffers. The start-up's most held at once
-    went from 115,462 bytes to 61,194.
-  - The faces and the settings panel made small requests every step they changed: the scatter's
-    damage built two sets of shown marks in eight vectors on every step it changed, and each
-    walk over its grid made two more (`c933578`); the compass dial made its raster and coverage
-    afresh every draw (`2f9ba94`); and the zone picker cloned its list into the stage's copy
-    every step, and made two vectors for each zone when it opened (`da41826`). Over 20 s of
-    the clock face they made 5,472 requests, over 10 s of a turning compass 11,294, opening
-    the panel and its pages 1,292 and an 80 s rest to the always-on face 4,604; they now make
-    0, 6, 0 and 0. The group screens make their two 8,848-byte lists once, and hold them while
-    open; the zone picker makes 14 requests when it opens.
-  None of it has run on a board. Check that a boot with a stored group survives the start-up,
-  and time the identity's frames and a fault screen's (`bench/startup-handover`,
-  `bench/fault-draw`). The title now blends a glyph's row a call, about 1,000 calls on a lit
-  frame where it made 114; if its frames are slower, replaying all the glyphs' rows for a row
-  in one call is the lever. The scatter's damage now compares both looks point by point in
-  one walk where it built and compared two sets; the stage's tests check every damaged redraw
-  against a full one, but its step time is unmeasured (`bench/scatter`, `bench/clock-draw`).
-  The title's draw path is also about 1.9 KB of stack deeper, since `draw_identity` is no
-  longer inlined into the start-up's draw. What is left of the start-up's peak is the title's
-  reserve and the hollow ring's three scratch buffers, up to 7,906 bytes each, made afresh for
-  each hollow glyph over the opening (`draw_ring_on_baseline`).
-  Do not add PSRAM to the global allocator as a fallback: a value holding an atomic could land
-  there, and atomics in PSRAM break (owner). Move a specific buffer to `PSRAM_HEAP` explicitly
-  instead, if one must leave internal RAM.
+- Speed up the identity's title (owner, 2026-10-03). Since `3a774d1` the title is kept as
+  recorded runs of coverage (`chrome::Recording`, `TITLE_BYTES` in `ui/identity.rs`) rather than
+  two buffers, which saves 55 KB of the start-up's heap, and the owner chose to keep that. But
+  the runs are decoded on every frame that draws the title, and the identity's opening, frames 0
+  to 65, redraws the whole panel every frame: its draw median rose from 22.7 to 24.8 ms on both
+  boards, and 1 % of its frames run past 33.3 ms where at most 0.4 % did
+  (`docs/logs/display/startup-heap-2026-10-03/`). Replaying all the glyphs' rows together, a
+  row at a time, was slower still, so the cost is the decoding rather than the order the
+  framebuffer is walked in. The levers:
+  - Redraw only what changes during the opening. The title changes only as its glyphs type in
+    and flicker, and its frames repaint everything; the fault screen's note under the
+    scatter's entry above names the same lever for the band and the hatch.
+  - Blend runs without decoding them into a line first: covered runs as solid spans, the
+    partial bytes straight from the recording. That trades the copy for more calls, and small
+    fills cost about 1.7 µs each in call overhead (the scatter's entry above).
+  - Store each row so that it replays with less work, such as its covered spans apart from its
+    partial bytes.
+  `bench/startup-handover` times it (`startup-handover-bench`,
+  `tools/startup-handover-summary.py`), with `bench/startup-heap-before` the build before the
+  recorded title. What else is left of the start-up's heap peak, 61,194 bytes on the host, is
+  the title's reserve and the hollow ring's three scratch buffers, up to 7,906 bytes each, made
+  afresh for each hollow glyph over the opening (`draw_ring_on_baseline`). Do not add PSRAM to the
+  global allocator as a fallback: a value holding an atomic could land there, and atomics in
+  PSRAM break (owner).
 - Let the UI crate take an allocator for its large buffers, so the firmware can place an
   atomic-free one in `PSRAM_HEAP` explicitly. The firmware already uses the allocator API on the
   `esp` toolchain, for the framebuffers (`FB::alloc`, behind `octowhere-ui`'s `allocator-api`

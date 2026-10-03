@@ -318,10 +318,12 @@ at each pixel shift position, beside the region flush from before pixel shift
 (`flush-shift-bench`, summarised by `tools/flush-shift-summary.py`); and `bench/settings-save`,
 which saves a key nothing reads every 3 s and logs each save's flash operations and how long
 it held the display core (`settings-save-bench`, summarised by `tools/settings-save-summary.py`); and
-`bench/startup-handover`, which replays the start-up 6 s after each handover with a synthetic
-battery whose charging flips each round, and logs each start-up frame's and the clock entry's
-step and draw (`startup-handover-bench`, summarised by `tools/startup-handover-summary.py`;
-results in `docs/logs/display/startup-handover-2026-10-01.md`). And
+`bench/startup-handover`, which replays the start-up 6 s after each handover, every other time
+with a part failing, with a synthetic battery whose charging flips every two rounds, and logs
+each start-up and fault frame's and the clock entry's step and draw (`startup-handover-bench`,
+summarised by `tools/startup-handover-summary.py`; results in
+`docs/logs/display/startup-handover-2026-10-01.md` and, before and after the heap work with the
+before build on `bench/startup-heap-before`, `docs/logs/display/startup-heap-2026-10-03/`). And
 `bench/gnss-stuck` holds the GNSS module in reset twice and switches its NMEA output off, for
 `gnss_task`'s recovery to clear (`gnss-stuck-bench`). And `bench/mesh-pa` sends every round,
 cycling the transmitter through both PA pins at two powers each, and logs what each node hears
