@@ -6,7 +6,7 @@ use bytemuck::Zeroable;
 use hkdf::Hkdf;
 use sha2::{Digest, Sha256};
 
-use crate::identity::{Identity, dh_public};
+use crate::identity::{Identity, SIGNATURE_LEN, dh_public, verify};
 use crate::members::{MISMATCHES, PUBLIC_LEN};
 use crate::seal::{self, Inauthentic, Key, SIV_LEN};
 use crate::{AHEAD_S, IDS};
@@ -29,6 +29,10 @@ pub const BLOCK: u32 = 64;
 const TO_GROUP: u8 = 0x80;
 /// A key message, which nodes keep past the horizon while they keep the old key.
 const KEY_MESSAGE: u8 = 0x40;
+/// What a key message's signature covers, before the record it signs.
+const KEY_DOMAIN: &[u8] = b"octowhere key";
+/// What follows a key message's seal: its generation, in the clear, and its remover's signature.
+pub const KEY_TAIL: usize = 2 + SIGNATURE_LEN;
 const ID_MASK: u8 = 0x1f;
 
 /// What a body holds, in its first byte; sealed with the rest in a private message.
@@ -129,10 +133,92 @@ impl Message {
     }
 
     /// A private message to `dest`, `plain` its kind and what it holds, sealed under the key
-    /// the two members share. A key message is marked for keeping.
+    /// the two members share.
+    #[must_use]
+    pub fn private(
+        origin: u8,
+        dest: u8,
+        seq: u32,
+        prev: u32,
+        stamp: u32,
+        plain: &[u8],
+        key: &Key,
+    ) -> Option<Self> {
+        Self::sealed(origin, dest, false, seq, prev, stamp, plain, key)
+    }
+
+    /// A key message to `dest`: the key in `plain`, sealed as a private message is, then the
+    /// key's `generation` in the clear, and the signature of `me`, the remover, over the record
+    /// up to it. Relays check the signature against the origin's record; the generation tells
+    /// them which removal it is for.
     #[must_use]
     #[allow(clippy::too_many_arguments)]
-    pub fn private(
+    pub fn key(
+        origin: u8,
+        dest: u8,
+        seq: u32,
+        prev: u32,
+        stamp: u32,
+        generation: u16,
+        plain: &[u8],
+        key: &Key,
+        me: &Identity,
+    ) -> Option<Self> {
+        let mut message = Self::sealed(origin, dest, true, seq, prev, stamp, plain, key)?;
+        let sealed = usize::from(message.len);
+        if sealed + KEY_TAIL > BODY_MAX {
+            return None;
+        }
+        message.body[sealed..sealed + 2].copy_from_slice(&generation.to_be_bytes());
+        message.len = (sealed + 2) as u8;
+        let (signed, len) = message.key_signed();
+        let signature = me.sign(&[&signed[..len]]);
+        message.body[sealed + 2..sealed + KEY_TAIL].copy_from_slice(&signature);
+        message.len = (sealed + KEY_TAIL) as u8;
+        Some(message)
+    }
+
+    /// A key message's generation, which it carries in the clear.
+    #[must_use]
+    pub fn generation(&self) -> Option<u16> {
+        let tail = self.key_tail()?;
+        Some(u16::from_be_bytes([self.body[tail], self.body[tail + 1]]))
+    }
+
+    /// Whether a key message carries the signature of the member whose public key is `public`,
+    /// which must be its origin's.
+    #[must_use]
+    pub fn verify_key(&self, public: &[u8; PUBLIC_LEN]) -> bool {
+        let Some(tail) = self.key_tail() else {
+            return false;
+        };
+        let signature: [u8; SIGNATURE_LEN] = self.body[tail + 2..tail + KEY_TAIL]
+            .try_into()
+            .expect("the tail's signature");
+        let mut unsigned = *self;
+        unsigned.len = (tail + 2) as u8;
+        let (signed, len) = unsigned.key_signed();
+        verify(public, &[&signed[..len]], &signature)
+    }
+
+    /// Where a key message's tail starts: the end of its seal.
+    fn key_tail(&self) -> Option<usize> {
+        let tail = usize::from(self.len).checked_sub(KEY_TAIL)?;
+        (self.is_key() && tail >= SIV_LEN).then_some(tail)
+    }
+
+    /// What a key message's signature covers: the record as it stands, before the signature.
+    fn key_signed(&self) -> ([u8; KEY_DOMAIN.len() + FIXED_LEN + BODY_MAX], usize) {
+        let mut out = [0; KEY_DOMAIN.len() + FIXED_LEN + BODY_MAX];
+        out[..KEY_DOMAIN.len()].copy_from_slice(KEY_DOMAIN);
+        let len = self.encode(&mut out[KEY_DOMAIN.len()..]);
+        (out, KEY_DOMAIN.len() + len)
+    }
+
+    /// `plain` sealed for `dest`, bound to the record's origin, destination, key message's mark
+    /// and number.
+    #[allow(clippy::too_many_arguments)]
+    fn sealed(
         origin: u8,
         dest: u8,
         key_message: bool,
@@ -201,8 +287,12 @@ impl Message {
         key: &Key,
         out: &'a mut [u8; BODY_MAX],
     ) -> Result<&'a [u8], Inauthentic> {
-        let len = usize::from(self.len);
-        out[..len].copy_from_slice(self.body());
+        let len = if self.is_key() {
+            self.key_tail().ok_or(Inauthentic)?
+        } else {
+            usize::from(self.len)
+        };
+        out[..len].copy_from_slice(&self.body[..len]);
         seal::open_bound(key, &self.associated(), &mut out[..len])
     }
 
@@ -722,6 +812,7 @@ mod tests {
 
     use super::*;
     use crate::members::tests::key;
+    use crate::members::tests::key as key_of;
 
     const NOW: u32 = 1_790_000_000;
 
@@ -738,16 +829,18 @@ mod tests {
         let key = Key::new([4; 32]);
         for message in [
             text(3, 7, 6, NOW),
-            Message::private(2, 9, true, 70, 0, NOW, &[kind::KEY; 48], &key).unwrap(),
+            Message::private(2, 9, 70, 0, NOW, &[kind::TEXT; 48], &key).unwrap(),
+            Message::key(2, 9, 71, 70, NOW, 4, &[kind::KEY; 48], &key, &key_of(2)).unwrap(),
         ] {
             let mut out = [0; FIXED_LEN + BODY_MAX];
             let len = message.encode(&mut out);
             assert_eq!(len + 2, message.record_len());
             assert_eq!(Message::decode(&out[..len]), Some(message));
         }
-        let private = Message::private(2, 9, true, 70, 0, NOW, b"\x03secret", &key).unwrap();
+        let private = Message::private(2, 9, 70, 0, NOW, b"\x01secret", &key).unwrap();
         assert_eq!(private.to(), To::Member(9));
-        assert!(private.is_key());
+        assert!(!private.is_key());
+        assert_eq!(private.generation(), None);
         assert!(!text(3, 7, 6, NOW).is_key());
         assert_eq!(text(3, 7, 6, NOW).to(), To::Group);
         assert!(
@@ -755,6 +848,33 @@ mod tests {
             "0 is no number"
         );
         assert!(Message::to_group(32, 1, 0, NOW, b"x").is_none());
+    }
+
+    #[test]
+    fn a_key_message_carries_its_generation_and_its_removers_signature() {
+        let (remover, dest) = (key(1), key(2));
+        let shared = pairwise(&remover, &dest.public()).unwrap();
+        let plain = [kind::KEY; 48];
+        let message = Message::key(1, 2, 9, 8, NOW, 5, &plain, &shared, &remover).unwrap();
+        assert!(message.is_key());
+        assert_eq!(message.to(), To::Member(2));
+        assert_eq!(message.generation(), Some(5));
+        assert!(message.verify_key(&remover.public()));
+        assert!(!message.verify_key(&dest.public()), "another member's key");
+        let mut out = [0; BODY_MAX];
+        assert_eq!(message.open(&shared, &mut out), Ok(&plain[..]));
+        let mut moved = message;
+        moved.stamp += 1;
+        assert!(!moved.verify_key(&remover.public()), "bound to its record");
+        let mut regenerated = message;
+        let tail = usize::from(regenerated.len) - KEY_TAIL;
+        regenerated.body[tail + 1] ^= 1;
+        assert!(!regenerated.verify_key(&remover.public()));
+        assert_eq!(
+            regenerated.open(&shared, &mut out),
+            Ok(&plain[..]),
+            "the seal is apart"
+        );
     }
 
     #[test]
@@ -766,8 +886,7 @@ mod tests {
             pairwise(&b, &public(&a)).unwrap() == ab,
             "both ends work out the same key"
         );
-        let message =
-            Message::private(1, 2, false, 5, 4, NOW, b"\x01meet at the car", &ab).unwrap();
+        let message = Message::private(1, 2, 5, 4, NOW, b"\x01meet at the car", &ab).unwrap();
         let mut out = [0; BODY_MAX];
         assert_eq!(message.open(&ab, &mut out), Ok(&b"\x01meet at the car"[..]));
         let ac = pairwise(&a, &public(&c)).unwrap();

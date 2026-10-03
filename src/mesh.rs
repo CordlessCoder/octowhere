@@ -202,18 +202,19 @@ impl defmt::Format for Text {
 #[derive(Clone, Copy)]
 struct Outgoing {
     to: To,
-    key_message: bool,
+    /// A key message's generation: it goes out signed, with its generation in the clear.
+    generation: Option<u16>,
     len: u8,
     plain: [u8; BODY_MAX],
 }
 
 impl Outgoing {
-    fn new(to: To, key_message: bool, plain: &[u8]) -> Self {
+    fn new(to: To, generation: Option<u16>, plain: &[u8]) -> Self {
         let mut bytes = [0; BODY_MAX];
         bytes[..plain.len()].copy_from_slice(plain);
         Self {
             to,
-            key_message,
+            generation,
             len: plain.len() as u8,
             plain: bytes,
         }
@@ -650,6 +651,8 @@ pub struct Mesh {
     writes: heapless::Vec<u32, 8>,
     /// The removal state changed and is not yet queued to be stored.
     rekey_unsaved: bool,
+    /// A switch's generation and remover, whose key messages are to be kept for catch-up.
+    refill: Option<(u16, u8)>,
     /// A summary made before the slot it goes in, with the origin the next one starts from.
     summary: Option<Box<(heapless::Vec<u8, SUMMARY_MAX>, u8)>>,
 }
@@ -709,6 +712,7 @@ impl Mesh {
             caught_up: [0; IDS as usize],
             writes: heapless::Vec::new(),
             rekey_unsaved: false,
+            refill: None,
             summary: None,
         };
         let tuned = mesh.tune(FREQUENCY_HZ, SYNC_WORD, POWER_DBM).await;
@@ -995,6 +999,9 @@ impl Mesh {
     /// Waits for the node's next slot and sends in it, listening meanwhile.
     async fn step(&mut self) {
         self.queue_unsaved();
+        if let Some((generation, remover)) = self.refill.take() {
+            self.refill_kept(generation, remover).await;
+        }
         let Some(own) = self.group.as_ref().map(Group::own) else {
             return;
         };
@@ -1204,7 +1211,7 @@ impl Mesh {
         for &id in &ids {
             let message = match &self.removal_notice {
                 Some(notice) if notice.message.to() == To::Member(id) => Some(&notice.message),
-                _ => self.kept.get(id),
+                _ => self.kept.get(id, generation.wrapping_add(1)),
             };
             if let Some(message) = message
                 && builder.message(message).is_ok()
@@ -1629,7 +1636,6 @@ impl Mesh {
                     match self.messages.insert(message, round_s) {
                         Insert::New => {
                             let _ = arrivals.push(message.name());
-                            self.kept.keep(&message);
                         }
                         // Catching up a member away for longer than the horizon.
                         Insert::Old if message.is_key() && message.to() == To::Member(own) => {
@@ -1661,9 +1667,13 @@ impl Mesh {
                 .heard(&mut self.messages, header.sender, their_messages, summary);
         }
         for name in &arrivals {
-            if let Some(message) = self.messages.get(*name).copied()
-                && !self.arrived(&message, own)
-            {
+            let Some(message) = self.messages.get(*name).copied() else {
+                continue;
+            };
+            if message.is_key() {
+                self.keep_key(&message);
+            }
+            if !self.arrived(&message, own) {
                 self.messages.mark_unread(*name);
             }
         }
@@ -2072,6 +2082,7 @@ impl Mesh {
         self.outbox.clear();
         self.rekey.clear();
         self.kept.clear();
+        self.refill = None;
         self.catch_up.clear();
         self.removal_notice = None;
         self.remove_again = 0;
@@ -2149,8 +2160,11 @@ impl Mesh {
         }
         let body = new.encode();
         for member in (0..IDS).filter(|&member| remaining & 1 << member != 0) {
-            self.post(&Outgoing::new(To::Member(member), true, &body), time)
-                .await;
+            self.post(
+                &Outgoing::new(To::Member(member), Some(new.generation), &body),
+                time,
+            )
+            .await;
             // Each key takes an X25519 the first time; let the other tasks run between.
             Timer::after(Duration::from_millis(1)).await;
         }
@@ -2237,10 +2251,77 @@ impl Mesh {
         if let Some(until) = self.rekey.undo_until() {
             info!("[REKEY] it can be declined until round {}", until);
         }
+        self.kept.keep_only(group.generation(), switched.remover);
+        self.refill = Some((group.generation(), switched.remover));
         self.caught_up = [0; IDS as usize];
         self.keys_posted = false;
         self.save_switch();
         self.sync_schedule();
+    }
+
+    /// Keeps a key message new to this node for catch-up, once its origin's signature checks
+    /// out. That takes tens of milliseconds, once for each key message.
+    fn keep_key(&mut self, message: &Message) {
+        let Some(generation) = message.generation() else {
+            return;
+        };
+        let Some(public) = self
+            .group
+            .as_ref()
+            .and_then(|group| group.member(message.origin()))
+            .map(|member| member.public)
+        else {
+            return;
+        };
+        if !message.verify_key(&public) {
+            warn!(
+                "[REKEY] a key message from {} for generation {} is not its own",
+                message.origin(),
+                generation
+            );
+            return;
+        }
+        let remover = self.rekey.remover_of(generation).or_else(|| {
+            self.rekey
+                .pending()
+                .filter(|pending| pending.new.generation == generation)
+                .map(|pending| pending.remover)
+        });
+        self.kept.keep(message, remover);
+    }
+
+    /// Keeps for catch-up the key messages of `generation` from `remover` that the store holds
+    /// and nothing kept yet, as a switch that dropped a rival's asks, with a pause between
+    /// signatures.
+    async fn refill_kept(&mut self, generation: u16, remover: u8) {
+        let Some(public) = self
+            .group
+            .as_ref()
+            .and_then(|group| group.member(remover))
+            .map(|member| member.public)
+        else {
+            return;
+        };
+        let missing: heapless::Vec<messages::Name, { IDS as usize }> = self
+            .messages
+            .iter()
+            .filter(|message| {
+                message.generation() == Some(generation)
+                    && message.origin() == remover
+                    && matches!(message.to(), To::Member(dest)
+                        if self.kept.get(dest, generation).is_none())
+            })
+            .map(Message::name)
+            .take(IDS as usize)
+            .collect();
+        for name in missing {
+            if let Some(message) = self.messages.get(name).copied()
+                && message.verify_key(&public)
+            {
+                self.kept.keep(&message, Some(remover));
+            }
+            Timer::after(Duration::from_millis(1)).await;
+        }
     }
 
     /// Declines the removal of the member `removed`, under way, or the last one switched to
@@ -2298,7 +2379,7 @@ impl Mesh {
         let Some((id, key, generation)) = self.notify.take() else {
             return;
         };
-        let notice = Outgoing::new(To::Member(id), false, &[kind::REMOVED]);
+        let notice = Outgoing::new(To::Member(id), None, &[kind::REMOVED]);
         match self.make(&notice, time).await {
             Made::Message(message) => {
                 self.removal_notice = Some(Box::new(RemovalNotice {
@@ -2352,7 +2433,7 @@ impl Mesh {
             );
             return;
         }
-        if self.kept.get(sender).is_none() {
+        if self.kept.get(sender, generation.wrapping_add(1)).is_none() {
             info!(
                 "[REKEY] {} is on generation {}; no key message is held for it",
                 sender, generation
@@ -2401,7 +2482,7 @@ impl Mesh {
         let mut plain = [0; 1 + TEXT_MAX];
         plain[0] = kind::TEXT;
         plain[1..1 + text.as_bytes().len()].copy_from_slice(text.as_bytes());
-        let outgoing = Outgoing::new(to, false, &plain[..1 + text.as_bytes().len()]);
+        let outgoing = Outgoing::new(to, None, &plain[..1 + text.as_bytes().len()]);
         if self.outbox.push_back(outgoing).is_err() {
             warn!("[MSG] the outbox is full");
             return;
@@ -2451,18 +2532,14 @@ impl Mesh {
                     return Made::Dropped;
                 };
                 let key = key.clone();
-                self.sequence.take().and_then(|(seq, prev)| {
-                    Message::private(
-                        own,
-                        dest,
-                        outgoing.key_message,
-                        seq,
-                        prev,
-                        stamp,
-                        plain,
-                        &key,
-                    )
-                })
+                self.sequence
+                    .take()
+                    .and_then(|(seq, prev)| match outgoing.generation {
+                        Some(generation) => Message::key(
+                            own, dest, seq, prev, stamp, generation, plain, &key, &self.me,
+                        ),
+                        None => Message::private(own, dest, seq, prev, stamp, plain, &key),
+                    })
             }
         };
         match made {
@@ -2482,7 +2559,7 @@ impl Mesh {
             Made::Dropped => return true,
             Made::Message(message) => message,
         };
-        self.kept.keep(&message);
+        self.kept.keep(&message, Some(message.origin()));
         let inserted = self.messages.insert(message, round_start_s(time));
         info!("[MSG] posted {} {}", message, inserted);
         true
@@ -2534,7 +2611,9 @@ impl Mesh {
                     }
                     // Only a removal shown is acknowledged: a key ignored, as one declined is,
                     // would otherwise answer every catch-up.
-                    Some((&kind::KEY, _)) => match NewKey::decode(plain) {
+                    Some((&kind::KEY, _)) => match NewKey::decode(plain)
+                        .filter(|new| message.generation() == Some(new.generation))
+                    {
                         Some(new) => match self.learned_key(origin, new) {
                             None => return false,
                             Some(false) => return true,
@@ -2557,7 +2636,7 @@ impl Mesh {
                 ack[1..].copy_from_slice(&message.seq().to_be_bytes());
                 if self
                     .outbox
-                    .push_back(Outgoing::new(To::Member(origin), false, &ack))
+                    .push_back(Outgoing::new(To::Member(origin), None, &ack))
                     .is_err()
                 {
                     warn!(

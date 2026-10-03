@@ -477,7 +477,7 @@ A message record carries:
 | sequence number | 4 | per origin, never reused, never 0 |
 | previous | 4 | the origin's sequence number before this one, 0 for none |
 | timestamp | 4 | timebase seconds, set by the origin, copied by relays |
-| body | rest | a kind byte and what it holds; to one member, sealed (see "Private messages") |
+| body | rest | a kind byte and what it holds; to one member, sealed (see "Private messages"); a key message's seal is followed by its generation and its remover's signature (see "Signatures") |
 
 A message to one member is always private. The kinds are text, an acknowledgement, a new group
 key, and a removal.
@@ -565,26 +565,28 @@ Owner, 2026-10-03, except where it says otherwise.
   the last removal to decline, so that no member can take the day away with an empty removal.
   The members that switched have heard the device on the new key, so they send it no key
   message again.
-- **The new key.** The remover makes a random group key and sends it to each remaining member
-  as a private message, a key message, with its generation, one past the current key's, the
-  round the group switches at, counted on its timebase, and the id and SHA-256 fingerprint of
-  the member removed. The remover sends two a packet, so the switch is as many rounds away as
-  its key messages and the removal message take, and four more: the round it is in, and three
-  for hops. That is about 6 minutes for 8 members, 15 for 32. Until then the removed device
-  still reads everything. The remover reserves every sequence number its key messages need
-  before it starts, and a remover that restarts before they have gone sends them again.
-  Adding a device is refused while a removal is under way, since it would get the key the
-  group is leaving. A node ignores a key message whose switch round is further off than a
-  removal from a group of 32 needs, which would leave the removal pending for good, or whose
-  member removed is neither a member nor a gone record it holds (owner, 2026-10-03).
+- **The new key.** The remover makes a random group key and sends it to each remaining member as
+  a private message, a key message, with its generation, one past the current key's, the round
+  the group switches at, counted on its timebase, and the id and SHA-256 fingerprint of the
+  member removed. The remover signs each (see "Signatures") and sends one a packet, so the
+  switch is as many rounds away as its key messages and the removal message take, and four more:
+  the round it is in, and three for hops. That is about 8 minutes for 8 members, 27 for 32.
+  Until then the removed device still reads everything. The remover reserves every sequence
+  number its key messages need before it starts, and a remover that restarts before they have
+  gone sends them again. Adding a device is refused while a removal is under way, since it would
+  get the key the group is leaving. A node ignores a key message whose switch round is further
+  off than a removal from a group of 32 needs, which would leave the removal pending for good,
+  or whose member removed is neither a member nor a gone record it holds (owner, 2026-10-03).
 - **The switch.** Before it nodes send under the old key, and from it under the new one, in the
   order the new key gives (see "Shuffled slots"). Every node tries both keys on receive, but
   after the switch merges nothing that arrives under the old key. Such a packet only shows that
   its sender missed the change. Before its own switch a node takes nothing from a packet under
   the new key either: it still sends under the old key, which the removed device reads, and
-  its slot order is still the old key's, so the packet's timing says nothing about its clock. A node holding that member's key message sends it again, in a
-  packet under the old key, when the member next listens for its slot there. The removed
-  device can see that packet but cannot open the key inside. Key messages are held past the
+  its slot order is still the old key's, so the packet's timing says nothing about its clock.
+  A node holding the key message of the generation after the one a member is on sends it
+  again, in a packet under that member's key, when the member next listens for its slot there,
+  so a member that missed several switches takes them one at a time. The removed device can
+  see that packet but cannot open the key inside. Key messages are kept for this past the
   message horizon while the old key is, but are left out of the digest after it. A member that
   missed the switch sends in the old order; nodes on the new key hear it in a sweep round,
   where they listen throughout, within about 10 minutes. A node sends a member its key

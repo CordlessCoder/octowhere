@@ -14,8 +14,9 @@ use crate::seal::Key;
 /// A key message's plaintext: its kind, the key, its generation, the switch round, and the id
 /// and fingerprint of the member removed.
 pub const KEY_LEN: usize = 1 + 32 + 2 + 4 + 1 + 8;
-/// The key messages a remover sends in each packet, which sets how far off the switch is.
-pub const KEYS_PER_PACKET: u32 = 2;
+/// The key messages a remover sends in each packet, which sets how far off the switch is. A
+/// signed key message takes most of a packet.
+pub const KEYS_PER_PACKET: u32 = 1;
 /// Rounds past the remover's own key messages for them to cross the hops.
 pub const HOP_ROUNDS: u32 = 3;
 /// The older keys kept for members not yet heard on a newer one.
@@ -189,6 +190,9 @@ pub struct Rekey {
     removing: Option<(u16, u8)>,
     last: Option<Last>,
     undo: Option<Undo>,
+    /// The member that removed for each of the last generations switched to, newest first: a
+    /// node keeps only that member's key messages of a generation for catch-up.
+    removers: [Option<(u16, u8)>; OLD_KEYS],
 }
 
 impl Rekey {
@@ -224,6 +228,16 @@ impl Rekey {
             }
             _ => false,
         }
+    }
+
+    /// The member that removed for `generation`, as this device switched to it.
+    #[must_use]
+    pub fn remover_of(&self, generation: u16) -> Option<u8> {
+        self.removers
+            .iter()
+            .flatten()
+            .find(|(held, _)| *held == generation)
+            .map(|&(_, remover)| remover)
     }
 
     /// Whether some member has not been heard on the newest key since a switch.
@@ -452,6 +466,16 @@ impl Rekey {
             });
         }
         group.rekey(new.key, new.generation);
+        if let Some(at) = self
+            .removers
+            .iter()
+            .position(|held| held.is_some_and(|(generation, _)| generation == new.generation))
+        {
+            // A rival's switch: its remover is that generation's now.
+            self.removers[at] = None;
+        }
+        self.removers.rotate_right(1);
+        self.removers[0] = Some((new.generation, pending.remover));
         self.removing = ours.then_some((new.generation, new.removed));
         self.last = removed.map(|removed| Last {
             generation: new.generation,
@@ -546,7 +570,9 @@ pub const STORED_MAX: usize = 1
     + 4
     + 4
     + 1
-    + 1;
+    + 1
+    + 1
+    + OLD_KEYS * 3;
 
 impl Rekey {
     /// Writes what a restart has to keep: the removal under way, the old keys with the members
@@ -605,6 +631,11 @@ impl Rekey {
                 put(&[undo.removed, u8::from(undo.theirs)]);
             }
             None => put(&[0]),
+        }
+        put(&[self.removers.iter().flatten().count() as u8]);
+        for (generation, remover) in self.removers.iter().flatten() {
+            put(&generation.to_be_bytes());
+            put(&[*remover]);
         }
         len
     }
@@ -672,36 +703,86 @@ impl Rekey {
                 theirs: take(1)?[0] == 1,
             });
         }
+        // Missing, as the undo was, from what was stored before them.
+        if let Some(count) = take(1).map(|count| usize::from(count[0])) {
+            if count > OLD_KEYS {
+                return None;
+            }
+            for at in 0..count {
+                let generation = u16::from_be_bytes(take(2)?.try_into().ok()?);
+                rekey.removers[at] = Some((generation, take(1)?[0]));
+            }
+        }
         rest.is_empty().then_some(rekey)
     }
 }
 
-/// The newest key message to each member, kept past the message horizon to catch up a member
-/// that missed a switch. All zeroes is none kept.
+/// The key messages kept to catch up a member that missed switches, past the message horizon:
+/// for each member, the newest of each of the last [`OLD_KEYS`] generations. All zeroes is none
+/// kept.
 #[derive(Zeroable)]
 #[repr(C)]
 pub struct Kept {
-    messages: [Message; IDS as usize],
+    messages: [[Message; OLD_KEYS]; IDS as usize],
 }
 
 impl Kept {
-    /// Keeps `message` if it is a key message newer than the one kept for its destination.
-    pub fn keep(&mut self, message: &Message) {
-        if let To::Member(dest) = message.to()
-            && message.is_key()
-        {
-            let held = &mut self.messages[usize::from(dest)];
-            if held.seq == 0 || held.stamp <= message.stamp {
-                *held = *message;
+    /// Keeps `message`, a key message whose signature the caller checked, in place of an older
+    /// one of its generation, or of the oldest generation held. Of two members' for one
+    /// generation, the one from `remover` stays, when the caller knows who removed for it, and
+    /// otherwise the first.
+    pub fn keep(&mut self, message: &Message, remover: Option<u8>) {
+        let (To::Member(dest), Some(generation)) = (message.to(), message.generation()) else {
+            return;
+        };
+        let Some(held) = self.messages.get_mut(usize::from(dest)) else {
+            return;
+        };
+        let behind = |kept: &Message| {
+            kept.generation()
+                .map_or(u16::MAX, |kept| generation.wrapping_sub(kept))
+        };
+        let at = held
+            .iter()
+            .position(|kept| kept.seq != 0 && kept.generation() == Some(generation))
+            .or_else(|| held.iter().position(|kept| kept.seq == 0))
+            .or_else(|| {
+                // Wrapping: up to half the range behind is older.
+                (0..OLD_KEYS)
+                    .filter(|&at| (1..=u16::MAX / 2).contains(&behind(&held[at])))
+                    .max_by_key(|&at| behind(&held[at]))
+            });
+        let Some(at) = at else { return };
+        let kept = &held[at];
+        let replace = if kept.seq == 0 || kept.generation() != Some(generation) {
+            true
+        } else if kept.origin == message.origin {
+            kept.stamp <= message.stamp
+        } else {
+            remover == Some(message.origin)
+        };
+        if replace {
+            held[at] = *message;
+        }
+    }
+
+    /// Drops the key messages of `generation` from any member but `remover`, once a switch has
+    /// said who removed for it.
+    pub fn keep_only(&mut self, generation: u16, remover: u8) {
+        for kept in self.messages.iter_mut().flatten() {
+            if kept.seq != 0 && kept.generation() == Some(generation) && kept.origin != remover {
+                *kept = Message::zeroed();
             }
         }
     }
 
+    /// The key message of `generation` kept for the member `id`.
     #[must_use]
-    pub fn get(&self, id: u8) -> Option<&Message> {
+    pub fn get(&self, id: u8, generation: u16) -> Option<&Message> {
         self.messages
-            .get(usize::from(id))
-            .filter(|held| held.seq != 0)
+            .get(usize::from(id))?
+            .iter()
+            .find(|kept| kept.seq != 0 && kept.generation() == Some(generation))
     }
 
     pub fn clear(&mut self) {
@@ -763,8 +844,8 @@ mod tests {
 
     #[test]
     fn the_switch_is_as_far_off_as_the_removers_messages_take() {
-        // Six key messages and the removal notice, two a packet, then hops.
-        assert_eq!(switch_rounds(7), 4 + HOP_ROUNDS + 1);
+        // Six key messages and the removal notice, one a packet, then hops.
+        assert_eq!(switch_rounds(7), 7 + HOP_ROUNDS + 1);
         let g = group(0, &[(0, 1), (1, 2), (2, 3), (3, 4)]);
         let mut rekey = Rekey::default();
         let started = rekey.start(&g, 2, Key::new([9; 32]), 1_000).unwrap();
@@ -1324,6 +1405,9 @@ mod tests {
         for at in 0..DECLINED {
             rekey.declined[at] = Some([at as u8; 8]);
         }
+        for at in 0..OLD_KEYS {
+            rekey.removers[at] = Some((at as u16, at as u8));
+        }
         let mut out = [0; STORED_MAX];
         assert_eq!(rekey.encode(&mut out), STORED_MAX);
         assert!(Rekey::decode(&out).is_some());
@@ -1384,26 +1468,101 @@ mod tests {
         assert!(read.undo(&mut g, 1_010, 2).is_some());
         assert!(*g.key() == Key::new([5; 32]));
         assert_eq!(g.generation(), 3);
+        // What was stored before the removers, and before the undo too.
         let mut before = rekey.clone();
+        before.removers = [None; OLD_KEYS];
+        let len = before.encode(&mut out);
+        assert!(Rekey::decode(&out[..len - 1]).is_some_and(|read| read.undo_until().is_some()));
         before.undo = None;
         let len = before.encode(&mut out);
-        assert!(Rekey::decode(&out[..len - 1]).is_some_and(|read| read.undo_until().is_none()));
+        assert!(Rekey::decode(&out[..len - 2]).is_some_and(|read| read.undo_until().is_none()));
     }
 
     #[test]
-    fn the_newest_key_message_to_each_member_is_kept() {
+    fn the_newest_key_message_of_each_generation_is_kept_for_each_member() {
         extern crate std;
         let key = Key::new([1; 32]);
+        let remover = crate::members::tests::key(1);
+        let to = |dest, generation, seq, stamp| {
+            Message::key(
+                1,
+                dest,
+                seq,
+                0,
+                stamp,
+                generation,
+                &[kind::KEY],
+                &key,
+                &remover,
+            )
+            .unwrap()
+        };
         let mut kept = std::boxed::Box::new(Kept::zeroed());
-        let older = Message::private(1, 4, true, 5, 0, 100, &[kind::KEY], &key).unwrap();
-        let newer = Message::private(2, 4, true, 9, 0, 200, &[kind::KEY], &key).unwrap();
-        let text = Message::private(2, 5, false, 10, 9, 300, &[kind::TEXT], &key).unwrap();
-        kept.keep(&newer);
-        kept.keep(&older);
-        kept.keep(&text);
-        assert_eq!(kept.get(4), Some(&newer));
-        assert_eq!(kept.get(5), None, "only key messages");
+        kept.keep(&to(4, 4, 5, 100), None);
+        kept.keep(&to(4, 4, 6, 90), None);
+        kept.keep(&to(4, 5, 7, 200), None);
+        assert_eq!(
+            kept.get(4, 4).map(Message::seq),
+            Some(5),
+            "the newer of one generation"
+        );
+        assert_eq!(kept.get(4, 5).map(Message::seq), Some(7));
+        assert_eq!(kept.get(4, 6), None);
+        kept.keep(
+            &Message::private(2, 5, 10, 9, 300, &[kind::TEXT], &key).unwrap(),
+            None,
+        );
+        assert!(
+            (0..8).all(|generation| kept.get(5, generation).is_none()),
+            "only key messages"
+        );
+        for generation in 6..9 {
+            kept.keep(&to(4, generation, 10 + u32::from(generation), 300), None);
+        }
+        assert_eq!(kept.get(4, 4), None, "the oldest generation goes first");
+        assert!(kept.get(4, 8).is_some());
+
+        // Two members' key messages for one generation.
+        let rival = crate::members::tests::key(3);
+        let from = |origin, seq, stamp| {
+            Message::key(origin, 6, seq, 0, stamp, 9, &[kind::KEY], &key, &rival).unwrap()
+        };
+        kept.keep(&from(3, 40, 500), None);
+        kept.keep(&from(1, 41, 400), None);
+        assert_eq!(
+            kept.get(6, 9).map(Message::origin),
+            Some(3),
+            "the first, unknowing"
+        );
+        kept.keep(&from(1, 41, 400), Some(1));
+        assert_eq!(
+            kept.get(6, 9).map(Message::origin),
+            Some(1),
+            "the remover's"
+        );
+        kept.keep(&from(3, 42, 600), Some(1));
+        assert_eq!(kept.get(6, 9).map(Message::origin), Some(1));
+        kept.keep(&from(3, 43, 700), None);
+        kept.keep_only(9, 1);
+        assert_eq!(kept.get(6, 9).map(Message::origin), Some(1));
         kept.clear();
-        assert_eq!(kept.get(4), None);
+        assert_eq!(kept.get(4, 5), None);
+    }
+
+    #[test]
+    fn a_switch_records_who_removed_for_each_generation() {
+        let mut g = group(0, &[(0, 1), (1, 2), (2, 3), (3, 4)]);
+        let mut rekey = Rekey::default();
+        rekey.learned(&g, 1, new(9, 4, 1_010, 2, 3), 1_000, false);
+        rekey.switch(&mut g).unwrap();
+        assert_eq!(rekey.remover_of(4), Some(1));
+        rekey.start(&g, 3, Key::new([8; 32]), 1_020).unwrap();
+        rekey.switch(&mut g).unwrap();
+        assert_eq!(rekey.remover_of(5), Some(0));
+        assert_eq!(rekey.remover_of(4), Some(1));
+        assert_eq!(rekey.remover_of(3), None);
+        let mut out = [0; STORED_MAX];
+        let len = rekey.encode(&mut out);
+        assert_eq!(Rekey::decode(&out[..len]).unwrap().remover_of(4), Some(1));
     }
 }
