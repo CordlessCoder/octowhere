@@ -334,7 +334,9 @@ read two nodes' logs; results in `docs/logs/lora/crc-2026-10-02/`. And `bench/jt
 over the USB JTAG with the core running and halted; the result is in `context/BACKLOG.md`. And
 `bench/stack-watermark` paints core 0's stack at boot and logs the deepest it has been used
 every 15 s (`stack-watermark-bench`, with the inject features to drive the boards); results
-under "Memory".
+under "Memory". And `bench/ui-allocations` counts the stage's large heap requests on the host,
+through every start-up and on each face (`crates/octowhere-ui/tests/heap_requests.rs`); results
+in `context/BACKLOG.md`.
 
 ## Concurrency
 
