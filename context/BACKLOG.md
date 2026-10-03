@@ -104,17 +104,17 @@ until the feature set is complete, because profiling an incomplete firmware pric
   Do not add PSRAM to the global allocator as a fallback: a value holding an atomic could land
   there, and atomics in PSRAM break (owner). Move a specific buffer to `PSRAM_HEAP` explicitly
   instead, if one must leave internal RAM.
-- Take the allocator API off its feature gates once Rust 1.100.0 is out, by mid-November 2026:
-  it stabilises there (owner, 2026-10-03). The firmware already uses it on the `esp`
-  toolchain, for the framebuffers (`FB::alloc`, behind `octowhere-ui`'s `allocator-api`
-  feature) and the mesh's PSRAM stores (`zeroed_in_psram`), but the host crates build on stable
-  and cannot. With both toolchains at 1.100 or later, the UI crate can take an allocator for
-  its large buffers and still test on the host, and the firmware can place an atomic-free one
-  in `PSRAM_HEAP` explicitly. The candidates are the identity's title, 36,660 bytes, and the
-  group screens' two 8,848-byte lists. The title moves only if its frames still fit from
-  PSRAM, since it is replayed on every identity frame. Check what the stable API includes
-  before relying on a constructor only nightly has, such as `Box::new_zeroed_in`, and whether
-  esp-alloc still needs its `nightly` feature.
+- Let the UI crate take an allocator for its large buffers, so the firmware can place an
+  atomic-free one in `PSRAM_HEAP` explicitly. The firmware already uses the allocator API on the
+  `esp` toolchain, for the framebuffers (`FB::alloc`, behind `octowhere-ui`'s `allocator-api`
+  feature) and the mesh's PSRAM stores (`zeroed_in_psram`). The host crates build on stable,
+  which lacks it until 1.100.0, by mid-November 2026. The owner accepts nightly on the host
+  (2026-10-03), so this need not wait: the UI crate's lines in "Build and test" in `AGENTS.md`
+  would move from `+stable` to `+nightly`, and with them `tools/ui-sim` and `tools/ui-web`,
+  which build it. The candidates are the identity's title, 36,660 bytes, and the group
+  screens' two 8,848-byte lists. Both are read on every frame that draws them, so measure
+  each frame from PSRAM on the board before moving it; the title's identity frames already
+  come close to their 33 ms.
 - Move the CO5300 driver into its own crate under `crates/`, with the QSPI command layer it
   needs, and implement more of the controller reusably (owner, 2026-09-24). Today
   `src/drivers/co5300.rs` covers init, address windows, brightness, TE and pixel streaming.
