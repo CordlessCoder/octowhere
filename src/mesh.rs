@@ -83,7 +83,7 @@ const NOTICE_LEN: usize = SIV_LEN + HEADER_LEN;
 const PAIR_LISTEN_US: i64 = 250_000;
 /// How long a device that founded a group, without hearing the last acknowledgement, listens
 /// for the joining device under the group's key. That device waits 30 s for done, sweeps for
-/// three rounds and sends by its next floor round, about 5 minutes in all.
+/// three rounds, then sends in its next slot, since it hears nobody: about 3½ minutes in all.
 const FOUNDING_WAIT_US: i64 = 10 * 60 * 1_000_000;
 const IRQ_TX_DONE: u8 = 0x08;
 const IRQ_RX_DONE: u8 = 0x40;

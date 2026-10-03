@@ -525,9 +525,9 @@ transcript. A key whose shared secret is not contributory ends the pairing.
   mesh, at the id it was given. A device that was founding the group has no group to hear that
   under, so it listens throughout for 10 minutes under the founded group's key instead. A packet
   under that key shows the joining device stored the group, and the founding device then stores
-  it and takes it up. The joining device is heard within about 5 minutes: it waits 30 s for
-  done, sweeps for three rounds, then sends in its next floor round. Starting another pairing
-  or leaving ends the wait.
+  it and takes it up. The joining device is heard within about 3½ minutes: it waits 30 s for
+  done, sweeps for three rounds, then sends in its next slot, since it hears nobody. Starting
+  another pairing or leaving ends the wait.
 - **Capacity.** A full group refuses to add before it searches, a returning device included (design
   hand-off). Below 32, a returning device keeps its id.
 - **Founding.** A device in no group that adds one founds a group, with a random key and itself at

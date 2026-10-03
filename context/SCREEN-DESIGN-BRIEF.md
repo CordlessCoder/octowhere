@@ -46,7 +46,11 @@ later decisions are in this brief's "as built" sections.
 
 ## This round
 
-The last round was pairing and the group, the screens for step 3 of the location mesh. Its brief
+This round adds the radio to the start-up's self-test, a REFRESH DEVICES control to the group
+screens, and a founder's wait for the device it added. Its brief is
+`design/handoffs/REFRESH-AND-RADIO-ROUND-BRIEF-2026-10-03.md`.
+
+The round before was pairing and the group, the screens for step 3 of the location mesh. Its brief
 is `design/handoffs/PAIRING-ROUND-BRIEF-2026-10-02.md`, and the owner approved its hand-off,
 `design/handoffs/octowhere-pairing-handoff-2026-10-02/` (`design/DECISIONS.md` entry 27). The
 radio side and the screens are built, and "Group and pairing as built" says where the build
@@ -302,7 +306,7 @@ in for the mesh on the host. Where the build interpreted the hand-off:
   and shows CHECK MEMBER; the member reaches its table later through member records. The
   joining device shows GROUP STORED / PEER RECEIPT NOT CONFIRMED. A device founding a group
   has no group yet in that case. It shows CHECK MEMBER too, and the group appears once it hears
-  the joining device on the mesh, within about 5 minutes.
+  the joining device on the mesh, within about 3½ minutes.
 - **CANCEL** sends the cancel and stays to show what the mesh reports, normally CANCELLED,
   rather than going straight back to the group: the mesh may already be storing. While it
   stores, the top button is left out, since the mesh can no longer cancel.
