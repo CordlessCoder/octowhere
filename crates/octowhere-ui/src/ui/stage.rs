@@ -343,6 +343,8 @@ pub struct Stage {
     startup: Option<Startup>,
     /// What the sequence showed after the last step.
     startup_view: Option<startup::View>,
+    /// What the group screens keep between visits.
+    group_memory: group::Memory,
     identity_marks: identity::IdentityMarks,
     /// The brightness the sequence last asked for.
     startup_level: Option<u8>,
@@ -438,6 +440,7 @@ impl Stage {
             page_accents: second::Accents::FULL,
             startup: None,
             startup_view: None,
+            group_memory: group::Memory::default(),
             identity_marks: identity::IdentityMarks::default(),
             startup_level: None,
             startup_due: None,
@@ -617,6 +620,18 @@ impl Stage {
     #[must_use]
     pub fn page(&self) -> Option<&Page> {
         self.page.as_ref().map(|(page, _)| page)
+    }
+
+    /// The text a group screen showed at the last step, for tests and tools to read.
+    pub fn group_text(&self) -> impl Iterator<Item = &str> {
+        let items = match &self.drawn {
+            Some(Drawn::Group(list)) => list.items(),
+            _ => &[],
+        };
+        items.iter().filter_map(|item| match &item.shape {
+            group::layout::Shape::Text(text) => Some(text.text.as_str()),
+            _ => None,
+        })
     }
 
     /// How far a face has moved off the panel, sideways or down.
@@ -882,7 +897,13 @@ impl Stage {
         let group_list = match &self.page {
             Some((Page::Group(flow), _)) => {
                 let mut list = self.spare_list.take().unwrap_or_else(new_list);
-                flow.view(&mut list, &self.mesh, now, &self.renderer);
+                flow.view(
+                    &mut list,
+                    &self.mesh,
+                    &self.group_memory,
+                    now,
+                    &self.renderer,
+                );
                 Some(list)
             }
             _ => None,
@@ -1507,7 +1528,14 @@ impl Stage {
         update: &mut Update,
     ) {
         if let Some((Page::Group(flow), _)) = &mut self.page {
-            let exit = flow.handle(event, &self.mesh, now, &self.renderer, &mut effects.mesh);
+            let exit = flow.handle(
+                event,
+                &self.mesh,
+                &mut self.group_memory,
+                now,
+                &self.renderer,
+                &mut effects.mesh,
+            );
             if exit == group::Exit::Panel {
                 self.page = None;
             }

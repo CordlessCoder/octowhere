@@ -1,5 +1,6 @@
 //! The group screens, from the 2026-10-02 pairing hand-off: the group and its members, this
-//! device's name, leaving, and pairing to add a member or join a group. Each screen builds a
+//! device's name, leaving, and pairing to add a member or join a group. The 2026-10-03 hand-off
+//! adds refreshing devices and the wait of a device that founded a group. Each screen builds a
 //! [`List`] from its state and the [`MeshView`] the firmware publishes, and asks the mesh for
 //! what it needs through a [`Request`]. Nothing here starts radio traffic without a START, and
 //! nothing reports an outcome the mesh has not.
@@ -16,8 +17,8 @@ use self::{
     keyboard::{Keyboard, Outcome},
     layout::{Face, List, Text, Vertical, format, rect},
     view::{
-        Answer, At, Done, End, MemberView, MeshView, PairingView, Phase, Position, Reason, Refused,
-        Request, Role,
+        Answer, At, Done, End, MemberView, MeshView, PairingView, Phase, Position, Reason,
+        RecoveryPhase, RecoveryView, RefreshPhase, RefreshView, Refused, Request, Role,
     },
 };
 use super::{
@@ -48,9 +49,17 @@ const ACTIONS: [Rectangle; 2] = [rect(88, 300, 224, 406), rect(242, 300, 378, 40
 const HUB_ACTIONS: [Rectangle; 2] = [rect(94, 300, 224, 406), rect(242, 300, 372, 406)];
 /// This device's card on the group screen, whose whole outline is its tap region.
 const OWN_CARD: Rectangle = rect(94, 198, 372, 282);
-/// Where a list of members or devices found scrolls, two rows at a time.
+/// Where the list of devices found scrolls, two rows at a time.
 const ROWS: Rectangle = rect(94, 194, 372, 406);
+/// On MEMBERS: the refresh strip, BACK's tap region, which stops short of it, and the list
+/// under it, which shows a row and part of the next.
+const STRIP: Rectangle = rect(94, 148, 372, 208);
+const MEMBERS_NAV_HIT: Rectangle = rect(82, 86, 188, 141);
+const MEMBER_ROWS: Rectangle = rect(94, 244, 372, 406);
 const ROW: i32 = 106;
+/// The refresh's time left, and the founding wait's PAIR under the device it waits for.
+const LEFT_SLAB: Rectangle = rect(94, 244, 372, 316);
+const PENDING_ACTION: Rectangle = rect(94, 348, 372, 406);
 const CODE_SLAB: Rectangle = rect(62, 214, 404, 292);
 const COUNT_SLAB: Rectangle = rect(94, 259, 372, 335);
 const PROGRESS_SLAB: Rectangle = rect(94, 282, 372, 360);
@@ -58,6 +67,25 @@ const BAR: Rectangle = rect(106, 345, 360, 353);
 const COVER: &str = "COVER RETURNS TO CLOCK";
 /// A packet this recent from a member makes it a direct neighbour: seven rounds.
 const NEIGHBOUR: i64 = octowhere_mesh::table::NEIGHBOUR_ROUNDS * octowhere_mesh::schedule::ROUND_US;
+/// How long a refresh listens: three rounds.
+const REFRESH_US: i64 = octowhere_mesh::clock::SWEEP_US;
+
+/// What the group screens keep between visits: the last ended refresh and founding wait the
+/// user has been shown, by session.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Memory {
+    refresh_seen: u32,
+    recovery_seen: u32,
+}
+
+/// Why REFRESH DEVICES cannot run.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Unavailable {
+    NoRadio,
+    NoGroup,
+    /// A pairing has the radio.
+    Pairing,
+}
 
 /// Where a screen that shows this device's membership goes back to.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -79,34 +107,41 @@ struct Scroll {
 }
 
 impl Scroll {
-    fn max(rows: usize) -> i32 {
-        ((rows as i32 - 2) * ROW).max(0)
+    /// The farthest the list scrolls, which brings its last row to the bottom of `area`.
+    fn max(rows: usize, area: Rectangle) -> i32 {
+        (rows as i32 * ROW - area.size.height as i32).max(0)
     }
 
-    fn row_at(&self, point: Point, rows: usize) -> Option<usize> {
-        if !ROWS.contains(point) {
+    fn row_at(&self, point: Point, rows: usize, area: Rectangle) -> Option<usize> {
+        if !area.contains(point) {
             return None;
         }
-        let row = ((point.y - ROWS.top_left.y + self.offset) / ROW) as usize;
+        let row = ((point.y - area.top_left.y + self.offset) / ROW) as usize;
         (row < rows).then_some(row)
     }
 
-    fn top(&self, row: usize) -> i32 {
-        ROWS.top_left.y + ROW * row as i32 - self.offset
+    fn top(&self, row: usize, area: Rectangle) -> i32 {
+        area.top_left.y + ROW * row as i32 - self.offset
     }
 
-    /// Follows a drag that starts on the list, and returns the row a tap picked.
-    fn handle(&mut self, event: &GestureEvent, rows: usize, now: Micros) -> Option<usize> {
-        let max = Self::max(rows);
+    /// Follows a drag that starts on the list in `area`, and returns the row a tap picked.
+    fn handle(
+        &mut self,
+        event: &GestureEvent,
+        rows: usize,
+        now: Micros,
+        area: Rectangle,
+    ) -> Option<usize> {
+        let max = Self::max(rows, area);
         match *event {
             GestureEvent::Down(point) => {
                 self.finish();
-                self.pressed = self.row_at(point, rows);
+                self.pressed = self.row_at(point, rows, area);
             }
             GestureEvent::DragStart(drag) => {
                 self.pressed = None;
                 let offset = drag.offset();
-                if ROWS.contains(drag.start) && offset.y.abs() > offset.x.abs() {
+                if area.contains(drag.start) && offset.y.abs() > offset.x.abs() {
                     self.grabbed = Some(self.offset);
                     self.offset = (self.offset - offset.y).clamp(0, max);
                 }
@@ -124,7 +159,7 @@ impl Scroll {
             }
             GestureEvent::Tap(point) => {
                 self.pressed = None;
-                return self.row_at(point, rows);
+                return self.row_at(point, rows, area);
             }
             GestureEvent::None => {}
         }
@@ -138,8 +173,8 @@ impl Scroll {
     }
 
     /// Settles, and says whether it still moves.
-    fn step(&mut self, rows: usize, now: Micros) -> bool {
-        self.offset = self.offset.min(Self::max(rows));
+    fn step(&mut self, rows: usize, now: Micros, area: Rectangle) -> bool {
+        self.offset = self.offset.min(Self::max(rows, area));
         let Some((from, to, start)) = self.settle else {
             return false;
         };
@@ -151,10 +186,11 @@ impl Scroll {
         !arrived
     }
 
-    /// The first and last rows in view, counted from 1.
-    fn shown(&self, rows: usize) -> (usize, usize) {
+    /// The first and last rows in view in `area`, counted from 1.
+    fn shown(&self, rows: usize, area: Rectangle) -> (usize, usize) {
         let first = (self.offset / ROW) as usize;
-        (first + 1, (first + 2).min(rows))
+        let visible = (area.size.height as usize).div_ceil(ROW as usize);
+        (first + 1, (first + visible).min(rows))
     }
 }
 
@@ -345,6 +381,13 @@ enum Screen {
     Full,
     NoRadio(Role),
     Pairing(Session),
+    RefreshEntry,
+    /// The refresh with this session, running or ended. One asked for and not yet taken up
+    /// shows as starting.
+    Refresh(u32),
+    RefreshUnavailable(Unavailable),
+    /// Before a new pairing ends a founding's wait.
+    EndWait,
 }
 
 /// Where the group screens go after a step.
@@ -405,6 +448,7 @@ impl Flow {
         &mut self,
         event: &GestureEvent,
         mesh: &MeshView,
+        memory: &mut Memory,
         now: Micros,
         font: &FontdueRenderer<'static, Color>,
         request: &mut Option<Request>,
@@ -416,18 +460,34 @@ impl Flow {
         let tapped = |area: Rectangle| tap.is_some_and(|point| area.contains(point));
         let own = mesh.group.as_ref().map(|group| group.own);
         let next = match &mut self.screen {
-            Screen::Hub => match &mesh.group {
-                _ if tapped(NAV_HIT) => return Exit::Panel,
-                None if tapped(ACTIONS[0]) => Some(Screen::Entry(Role::Add)),
-                None if tapped(ACTIONS[1]) => Some(Screen::Entry(Role::Join)),
-                Some(group) if tapped(OWN_CARD) => Some(Screen::Member {
-                    id: group.own,
-                    from: From::Hub,
-                }),
-                Some(_) if tapped(HUB_ACTIONS[0]) => Some(Screen::Members(Scroll::default())),
-                Some(_) if tapped(HUB_ACTIONS[1]) => Some(Screen::PairOptions),
-                _ => None,
-            },
+            Screen::Hub => {
+                if let Some(recovery) = unseen_recovery(mesh, memory) {
+                    if tapped(ACTION) {
+                        memory.recovery_seen = recovery.session;
+                    }
+                    None
+                } else if pending_recovery(mesh).is_some() {
+                    if tapped(NAV_HIT) {
+                        return Exit::Panel;
+                    }
+                    tapped(PENDING_ACTION).then_some(Screen::EndWait)
+                } else {
+                    match &mesh.group {
+                        _ if tapped(NAV_HIT) => return Exit::Panel,
+                        None if tapped(ACTIONS[0]) => Some(Screen::Entry(Role::Add)),
+                        None if tapped(ACTIONS[1]) => Some(Screen::Entry(Role::Join)),
+                        Some(group) if tapped(OWN_CARD) => Some(Screen::Member {
+                            id: group.own,
+                            from: From::Hub,
+                        }),
+                        Some(_) if tapped(HUB_ACTIONS[0]) => {
+                            Some(Screen::Members(Scroll::default()))
+                        }
+                        Some(_) if tapped(HUB_ACTIONS[1]) => Some(Screen::PairOptions),
+                        _ => None,
+                    }
+                }
+            }
             Screen::PairOptions => {
                 if tapped(NAV_HIT) {
                     Some(Screen::Hub)
@@ -455,15 +515,51 @@ impl Flow {
                     .iter()
                     .flat_map(|group| group.members().map(|(id, _)| id))
                     .collect();
-                if tapped(NAV_HIT) {
+                if tapped(MEMBERS_NAV_HIT) {
                     Some(Screen::Hub)
+                } else if tapped(STRIP) {
+                    Some(refresh_screen(mesh, memory))
                 } else {
                     scroll
-                        .handle(event, ids.len(), now)
+                        .handle(event, ids.len(), now, MEMBER_ROWS)
                         .map(|row| Screen::Member {
                             id: ids[row],
                             from: From::Members,
                         })
+                }
+            }
+            Screen::RefreshEntry => {
+                if tapped(NAV_HIT) {
+                    Some(Screen::Members(Scroll::default()))
+                } else if tapped(ACTION) {
+                    *request = Some(Request::Refresh);
+                    let last = mesh.refresh.map_or(0, |refresh| refresh.session);
+                    Some(Screen::Refresh(last + 1))
+                } else {
+                    None
+                }
+            }
+            Screen::Refresh(session) => {
+                let shown = mesh.refresh.filter(|refresh| refresh.session == *session);
+                let running = shown.is_none_or(|refresh| refresh.is_listening());
+                if running && tapped(NAV_HIT) {
+                    Some(Screen::Members(Scroll::default()))
+                } else if !running && tapped(ACTION) {
+                    memory.refresh_seen = memory.refresh_seen.max(*session);
+                    Some(Screen::Members(Scroll::default()))
+                } else {
+                    None
+                }
+            }
+            Screen::RefreshUnavailable(why) => tapped(ACTION).then_some(match why {
+                Unavailable::NoGroup => Screen::Hub,
+                Unavailable::NoRadio | Unavailable::Pairing => Screen::Members(Scroll::default()),
+            }),
+            Screen::EndWait => {
+                if tapped(NAV_HIT) {
+                    Some(Screen::Hub)
+                } else {
+                    tapped(ACTION).then_some(Screen::PairOptions)
                 }
             }
             Screen::Member { id, from } => {
@@ -605,7 +701,7 @@ impl Flow {
                 }
             }
             Screen::Full | Screen::NoRadio(_) => tapped(ACTION).then_some(Screen::Hub),
-            Screen::Pairing(session) => handle_pairing(session, event, mesh, now, request),
+            Screen::Pairing(session) => handle_pairing(session, event, mesh, memory, now, request),
         };
         if let Some(next) = next {
             self.screen = next;
@@ -629,7 +725,7 @@ impl Flow {
         let next = match &mut self.screen {
             Screen::Members(scroll) => {
                 let rows = mesh.group.as_ref().map_or(0, view::GroupView::count);
-                return (Exit::Stay, scroll.step(rows, now));
+                return (Exit::Stay, scroll.step(rows, now, MEMBER_ROWS));
             }
             Screen::LeaveSlide { slider, asked, .. } => match answered(*asked) {
                 Some(Answer::Left(true)) => Some(Screen::LeaveDone),
@@ -682,7 +778,7 @@ impl Flow {
                     .map_or(0, |pairing| pairing.candidates.len());
                 return (
                     Exit::Stay,
-                    session.slider.step(now) | session.scroll.step(rows, now),
+                    session.slider.step(now) | session.scroll.step(rows, now, ROWS),
                 );
             }
             _ => None,
@@ -698,12 +794,22 @@ impl Flow {
         &self,
         list: &mut List,
         mesh: &MeshView,
+        memory: &Memory,
         now: Micros,
         font: &FontdueRenderer<'static, Color>,
     ) {
         list.clear();
         let l = list;
         match &self.screen {
+            Screen::Hub
+                if unseen_recovery(mesh, memory).is_some() || pending_recovery(mesh).is_some() =>
+            {
+                match (unseen_recovery(mesh, memory), pending_recovery(mesh)) {
+                    (Some(recovery), _) => recovery_screen(l, &recovery, now),
+                    (None, Some(recovery)) => pending_hub(l, &recovery, now),
+                    (None, None) => {}
+                }
+            }
             Screen::Hub => match &mesh.group {
                 None => {
                     head(
@@ -965,6 +1071,23 @@ impl Flow {
                 None,
             ),
             Screen::Pairing(session) => pairing(l, session, mesh, now),
+            Screen::RefreshEntry => refresh_entry(l),
+            Screen::Refresh(session) => refresh(l, *session, mesh, now),
+            Screen::RefreshUnavailable(why) => refresh_unavailable(l, *why),
+            Screen::EndWait => status(
+                l,
+                &Status {
+                    caption: "GROUP / RECOVERY",
+                    nav: Some("BACK"),
+                    glyph: (WAIT, chrome::ORANGE),
+                    heading: ("END CURRENT WAIT?", chrome::ORANGE),
+                    lines: &[
+                        "A NEW PAIRING ENDS RECOVERY",
+                        "THE PENDING GROUP IS NOT STORED",
+                    ],
+                    action: Some("CONTINUE TO PAIR"),
+                },
+            ),
         }
     }
 }
@@ -995,6 +1118,7 @@ fn handle_pairing(
     session: &mut Session,
     event: &GestureEvent,
     mesh: &MeshView,
+    memory: &mut Memory,
     now: Micros,
     request: &mut Option<Request>,
 ) -> Option<Screen> {
@@ -1008,6 +1132,12 @@ fn handle_pairing(
     if pairing.is_some_and(|pairing| pairing.refused.is_some())
         || phase.is_some_and(Phase::is_final)
     {
+        if tapped(ACTION)
+            && let Some(recovery) = pairing.and_then(|pairing| recovery_of(mesh, pairing))
+            && recovery.phase.is_final()
+        {
+            memory.recovery_seen = memory.recovery_seen.max(recovery.session);
+        }
         return tapped(ACTION).then_some(Screen::Hub);
     }
     if session.stop {
@@ -1042,7 +1172,7 @@ fn handle_pairing(
         Some(Phase::Found) => {
             let candidates = pairing.map_or(&[][..], |pairing| &pairing.candidates);
             if session.chose.is_none()
-                && let Some(row) = session.scroll.handle(event, candidates.len(), now)
+                && let Some(row) = session.scroll.handle(event, candidates.len(), now, ROWS)
             {
                 session.chose = Some(row);
                 *request = Some(Request::Choose(candidates[row]));
@@ -1204,18 +1334,37 @@ fn members(list: &mut List, mesh: &MeshView, scroll: &Scroll, now: Micros) {
         GROUP,
         chrome::GRAY,
     );
+    list.outline(STRIP, chrome::GRAY);
+    let (label, color) = match mesh.refresh {
+        _ if !mesh.radio => (format(format_args!("NO RADIO")), chrome::RED),
+        Some(RefreshView {
+            phase: RefreshPhase::Listening { until },
+            ..
+        }) => (
+            format(format_args!("LISTENING  {}", time_left(until, now, list))),
+            chrome::WHITE,
+        ),
+        _ => (format(format_args!("REFRESH DEVICES")), chrome::WHITE),
+    };
+    list.text(
+        Text::new(&label, Face::Kh, 20, color)
+            .at(CENTRE, STRIP.top_left.y + STRIP.size.height as i32 / 2)
+            .vertical(Vertical::Middle),
+    );
     list.centred(
         &format(format_args!("{count:02} MEMBERS / DRAG LIST")),
         CENTRE,
-        168,
+        222,
         Face::Mono,
         13,
         chrome::GRAY,
     );
-    list.clip(Some(ROWS));
+    list.clip(Some(MEMBER_ROWS));
     for (row, (id, member)) in group.members().enumerate() {
-        let top = scroll.top(row);
-        if top >= ROWS.top_left.y + ROWS.size.height as i32 || top + ROW <= ROWS.top_left.y {
+        let top = scroll.top(row, MEMBER_ROWS);
+        if top >= MEMBER_ROWS.top_left.y + MEMBER_ROWS.size.height as i32
+            || top + ROW <= MEMBER_ROWS.top_left.y
+        {
             continue;
         }
         list.fill(rect(94, top, 372, top + 1), chrome::GRAY);
@@ -1239,7 +1388,7 @@ fn members(list: &mut List, mesh: &MeshView, scroll: &Scroll, now: Micros) {
         list.left(&seen, 102, top + 77, Face::Sans, 14, chrome::GRAY);
     }
     list.clip(None);
-    let (first, last) = scroll.shown(count);
+    let (first, last) = scroll.shown(count, MEMBER_ROWS);
     footer(
         list,
         &format(format_args!(
@@ -1561,7 +1710,7 @@ fn pairing(list: &mut List, session: &Session, mesh: &MeshView, now: Micros) {
             );
             list.clip(Some(ROWS));
             for (row, mac) in pairing.candidates.iter().enumerate() {
-                let top = session.scroll.top(row);
+                let top = session.scroll.top(row, ROWS);
                 let held = session.chose.or(session.scroll.pressed) == Some(row);
                 list.outline(
                     rect(94, top, 372, top + ROW),
@@ -1674,6 +1823,30 @@ fn pairing(list: &mut List, session: &Session, mesh: &MeshView, now: Micros) {
         Phase::Storing => progress(list, session, pairing, Progress::Storing, None),
         Phase::Finishing => progress(list, session, pairing, Progress::Finishing, None),
         Phase::Done(done) => finished(list, session, mesh, pairing, done),
+        Phase::Ended(End::Unconfirmed) if session.founding => match recovery_of(mesh, pairing) {
+            Some(recovery) => recovery_screen(list, &recovery, now),
+            None => outcome(
+                list,
+                caption,
+                &ending(End::Unconfirmed, session.role, true),
+                None,
+            ),
+        },
+        Phase::Ended(End::Unconfirmed) => status(
+            list,
+            &Status {
+                caption: "GROUP / RECOVERY",
+                nav: None,
+                glyph: (WAIT, chrome::ORANGE),
+                heading: ("CHECK MEMBER", chrome::ORANGE),
+                lines: &[
+                    "YOUR GROUP REMAINS STORED",
+                    "MEMBER NOT CONFIRMED YET",
+                    "IT APPEARS WHEN ITS RECORD ARRIVES",
+                ],
+                action: Some("VIEW GROUP"),
+            },
+        ),
         Phase::Ended(end) => {
             let ending = ending(end, session.role, session.parts.is_some());
             if end == End::Full {
@@ -1937,4 +2110,450 @@ fn member_done(list: &mut List, caption: &str, word: &str, who: &str, id: u8, co
     );
     action(list, "VIEW GROUP", false, ACTION, chrome::WHITE, None);
     footer(list, COVER);
+}
+
+/// The time left before `until`, as minutes and seconds, changing as it ticks.
+fn time_left(until: At, now: Micros, list: &mut List) -> layout::Line {
+    let (left, next) = words::countdown(until, now);
+    if let Some(next) = next {
+        list.changes_at(next);
+    }
+    format(format_args!("{left}"))
+}
+
+/// A status screen as the 2026-10-03 hand-off lays them out: a heading, up to three lines under
+/// it, the first white, and one action.
+struct Status<'a> {
+    caption: &'a str,
+    nav: Option<&'a str>,
+    glyph: (Glyph, Color),
+    heading: (&'a str, Color),
+    lines: &'a [&'a str],
+    action: Option<&'a str>,
+}
+
+fn status(list: &mut List, status: &Status) {
+    head(
+        list,
+        "GROUP",
+        status.caption,
+        status.nav,
+        status.glyph.0,
+        status.glyph.1,
+    );
+    list.centred(
+        status.heading.0,
+        CENTRE,
+        166,
+        Face::Kh,
+        28,
+        status.heading.1,
+    );
+    for (i, line) in status.lines.iter().enumerate() {
+        let color = if i == 0 { chrome::WHITE } else { chrome::GRAY };
+        list.centred(line, CENTRE, 218 + 23 * i as i32, Face::Sans, 15, color);
+    }
+    if let Some(label) = status.action {
+        action(list, label, false, ACTION, chrome::WHITE, None);
+    }
+    footer(list, COVER);
+}
+
+/// The screen the refresh strip opens: why it cannot run, the refresh running, an ended one
+/// once, or the start of a new one.
+fn refresh_screen(mesh: &MeshView, memory: &mut Memory) -> Screen {
+    if !mesh.radio {
+        return Screen::RefreshUnavailable(Unavailable::NoRadio);
+    }
+    if mesh.group.is_none() {
+        return Screen::RefreshUnavailable(Unavailable::NoGroup);
+    }
+    if mesh.pairing_active() {
+        return Screen::RefreshUnavailable(Unavailable::Pairing);
+    }
+    match mesh.refresh {
+        Some(refresh) if refresh.is_listening() => Screen::Refresh(refresh.session),
+        Some(refresh) if refresh.session > memory.refresh_seen => {
+            memory.refresh_seen = refresh.session;
+            Screen::Refresh(refresh.session)
+        }
+        _ => Screen::RefreshEntry,
+    }
+}
+
+fn refresh_entry(list: &mut List) {
+    let seconds = REFRESH_US / 1_000_000;
+    let lasts = format(format_args!(
+        "LISTENS FOR {} MIN {} SEC",
+        seconds / 60,
+        seconds % 60
+    ));
+    status(
+        list,
+        &Status {
+            caption: "GROUP / REFRESH",
+            nav: Some("BACK"),
+            glyph: (GROUP, chrome::GRAY),
+            heading: ("REFRESH DEVICES", chrome::WHITE),
+            lines: &[
+                "LISTEN FOR GROUP MEMBERS NOW",
+                &lasts,
+                "YOU CAN LEAVE THIS SCREEN",
+            ],
+            action: Some("START REFRESH"),
+        },
+    );
+}
+
+fn heard_line(heard: u32) -> layout::Line {
+    match heard.count_ones() {
+        1 => format(format_args!("01 DEVICE HEARD")),
+        n => format(format_args!("{n:02} DEVICES HEARD")),
+    }
+}
+
+fn learned_line(learned: u32) -> layout::Line {
+    match learned.count_ones() {
+        0 => format(format_args!("NO NEW MEMBERS LEARNED")),
+        1 => format(format_args!("01 NEW MEMBER LEARNED")),
+        n => format(format_args!("{n:02} NEW MEMBERS LEARNED")),
+    }
+}
+
+/// The refresh `session`: its time left and what it has heard while it runs, or what it found
+/// once it ended.
+fn refresh(list: &mut List, session: u32, mesh: &MeshView, now: Micros) {
+    let shown = mesh.refresh.filter(|refresh| refresh.session == session);
+    let (refresh, until) = match shown {
+        // Asked for, and not yet taken up: all its time is still to come.
+        None => (None, now as At + REFRESH_US),
+        Some(refresh) => match refresh.phase {
+            RefreshPhase::Listening { until } => (Some(refresh), until),
+            _ => return refresh_result(list, &refresh, now),
+        },
+    };
+    let (heard, learned) = refresh.map_or((0, 0), |refresh| (refresh.heard, refresh.learned));
+    head(
+        list,
+        "GROUP",
+        "GROUP / REFRESH",
+        Some("BACK"),
+        WAIT,
+        chrome::GRAY,
+    );
+    list.centred("LISTENING", CENTRE, 167, Face::Kh, 30, chrome::WHITE);
+    list.centred(
+        "FOR GROUP DEVICES",
+        CENTRE,
+        210,
+        Face::Sans,
+        15,
+        chrome::WHITE,
+    );
+    let left = if refresh.is_some() {
+        time_left(until, now, list)
+    } else {
+        time_left(until, until as Micros, list)
+    };
+    list.fill(LEFT_SLAB, chrome::WHITE);
+    list.text(
+        Text::new(&left, Face::Kh, 44, chrome::BLACK)
+            .at(CENTRE, 258)
+            .on(chrome::WHITE),
+    );
+    list.centred(
+        &format(format_args!("TIME LEFT / {}", heard_line(heard))),
+        CENTRE,
+        337,
+        Face::Mono,
+        13,
+        chrome::GRAY,
+    );
+    list.centred(
+        &learned_line(learned),
+        CENTRE,
+        362,
+        Face::Mono,
+        13,
+        chrome::GRAY,
+    );
+    list.centred(
+        "CONTINUES WHEN YOU LEAVE",
+        CENTRE,
+        390,
+        Face::Mono,
+        13,
+        chrome::GRAY,
+    );
+    footer(list, COVER);
+}
+
+fn refresh_result(list: &mut List, refresh: &RefreshView, now: Micros) {
+    let (at, interrupted) = match refresh.phase {
+        RefreshPhase::Ended { at } => (at, false),
+        RefreshPhase::Interrupted { at } => (at, true),
+        RefreshPhase::Listening { .. } => return,
+    };
+    // The caption says how long ago, so an old result does not read as current.
+    let (age, next) = words::age(at, now);
+    let caption = if now as At - at < 60 * 1_000_000 {
+        list.changes_at((at + 60 * 1_000_000).max(0) as Micros);
+        format(format_args!("REFRESH / JUST ENDED"))
+    } else {
+        list.changes_at(next);
+        format(format_args!("REFRESH / {age} AGO"))
+    };
+    let (heard, learned) = (heard_line(refresh.heard), learned_line(refresh.learned));
+    let nothing = refresh.heard == 0 && refresh.learned == 0;
+    let (heading, lines): (&str, [&str; 3]) = if interrupted {
+        (
+            "REFRESH STOPPED",
+            ["PAIRING TOOK THE RADIO", &heard, &learned],
+        )
+    } else if nothing {
+        (
+            "NOTHING NEW",
+            [&heard, &learned, "MEMBER AGES ARE UNCHANGED"],
+        )
+    } else if refresh.learned == 0 {
+        ("REFRESH ENDED", [&heard, &learned, "DIRECT AGES UPDATED"])
+    } else {
+        (
+            "REFRESH ENDED",
+            [&heard, &learned, "AGES REMAIN IN THE MEMBER LIST"],
+        )
+    };
+    status(
+        list,
+        &Status {
+            caption: &caption,
+            nav: None,
+            glyph: (GROUP, chrome::GRAY),
+            heading: (heading, chrome::WHITE),
+            lines: &lines,
+            action: Some("VIEW MEMBERS"),
+        },
+    );
+}
+
+fn refresh_unavailable(list: &mut List, why: Unavailable) {
+    let (heading, color, glyph, first, action) = match why {
+        Unavailable::NoRadio => (
+            "NO RADIO",
+            chrome::RED,
+            FAULT,
+            "RADIO DID NOT START",
+            "VIEW MEMBERS",
+        ),
+        Unavailable::NoGroup => (
+            "NO GROUP",
+            chrome::GRAY,
+            GROUP,
+            "JOIN OR CREATE A GROUP FIRST",
+            "VIEW GROUP",
+        ),
+        Unavailable::Pairing => (
+            "PAIRING ACTIVE",
+            chrome::GRAY,
+            GROUP,
+            "PAIRING IS USING THE RADIO",
+            "VIEW MEMBERS",
+        ),
+    };
+    let glyph_color = if color == chrome::RED {
+        chrome::RED
+    } else {
+        chrome::GRAY
+    };
+    status(
+        list,
+        &Status {
+            caption: "GROUP / REFRESH",
+            nav: None,
+            glyph: (glyph, glyph_color),
+            heading: (heading, color),
+            lines: &[first, "REFRESH IS UNAVAILABLE"],
+            action: Some(action),
+        },
+    );
+}
+
+/// A founding's wait under way, which leaves this device in no group until it ends.
+fn pending_recovery(mesh: &MeshView) -> Option<RecoveryView> {
+    mesh.recovery
+        .filter(|recovery| mesh.group.is_none() && !recovery.phase.is_final())
+}
+
+/// A founding's wait that ended since the user was last shown one.
+fn unseen_recovery(mesh: &MeshView, memory: &Memory) -> Option<RecoveryView> {
+    mesh.recovery
+        .filter(|recovery| recovery.phase.is_final() && recovery.session > memory.recovery_seen)
+}
+
+/// The wait the founding `pairing` left, while it is the latest.
+fn recovery_of(mesh: &MeshView, pairing: &PairingView) -> Option<RecoveryView> {
+    mesh.recovery
+        .filter(|recovery| recovery.session == pairing.session)
+}
+
+/// The joining device of a founding's wait, by its name once it has sent one.
+fn recovery_peer(recovery: &RecoveryView) -> layout::Line {
+    match recovery.peer_name {
+        Some(name) => format(format_args!("{}", name.as_str())),
+        None => format(format_args!("{}", words::mac(&recovery.peer))),
+    }
+}
+
+/// The group screen while a founding waits: the device it waits for, and the time left.
+fn pending_hub(list: &mut List, recovery: &RecoveryView, now: Micros) {
+    head(
+        list,
+        "GROUP",
+        "GROUP / LOCAL",
+        Some("BACK"),
+        WAIT,
+        chrome::ORANGE,
+    );
+    list.centred("GROUP PENDING", CENTRE, 163, Face::Kh, 28, chrome::ORANGE);
+    list.centred(
+        "NOT STORED ON THIS DEVICE",
+        CENTRE,
+        207,
+        Face::Mono,
+        13,
+        chrome::GRAY,
+    );
+    match recovery.peer_name {
+        Some(peer) => name(list, peer.as_str(), CENTRE, 237, true, 25),
+        None => list.centred(
+            "NAME NOT RECEIVED",
+            CENTRE,
+            240,
+            Face::Mono,
+            16,
+            chrome::GRAY,
+        ),
+    }
+    list.centred(
+        &words::mac(&recovery.peer),
+        CENTRE,
+        274,
+        Face::Mono,
+        14,
+        chrome::GRAY,
+    );
+    let (line, color) = match recovery.phase {
+        RecoveryPhase::Listening { until } => (
+            format(format_args!(
+                "LISTENING / {} LEFT",
+                time_left(until, now, list)
+            )),
+            chrome::WHITE,
+        ),
+        RecoveryPhase::SaveFailed { until } => (
+            format(format_args!(
+                "SAVE FAILED / {} LEFT",
+                time_left(until, now, list)
+            )),
+            chrome::RED,
+        ),
+        _ => (
+            format(format_args!("HEARD / STORING THE GROUP")),
+            chrome::WHITE,
+        ),
+    };
+    list.centred(&line, CENTRE, 310, Face::Mono, 16, color);
+    action(list, "PAIR", false, PENDING_ACTION, chrome::WHITE, None);
+    footer(list, COVER);
+}
+
+/// Where a founding's wait is, after the pairing that left it, and once it has ended.
+fn recovery_screen(list: &mut List, recovery: &RecoveryView, now: Micros) {
+    let who = recovery_peer(recovery);
+    let heard = format(format_args!("{who} HEARD ON THE GROUP"));
+    let listening = format(format_args!("LISTENING FOR {who}"));
+    let count = format(format_args!("{:02} MEMBERS", recovery.count));
+    let left = |until: At, list: &mut List| time_left(until, now, list);
+    let (heading, color, glyph, lines): (&str, Color, Glyph, [layout::Line; 3]) =
+        match recovery.phase {
+            RecoveryPhase::Listening { until } => (
+                "CHECK MEMBER",
+                chrome::ORANGE,
+                WAIT,
+                [
+                    format(format_args!("NO FINAL REPLY RECEIVED")),
+                    listening,
+                    format(format_args!(
+                        "{} LEFT / GROUP NOT STORED",
+                        left(until, list)
+                    )),
+                ],
+            ),
+            RecoveryPhase::Storing => (
+                "CHECK MEMBER",
+                chrome::ORANGE,
+                WAIT,
+                [
+                    heard,
+                    format(format_args!("STORING THE GROUP")),
+                    format(format_args!("GROUP NOT STORED YET")),
+                ],
+            ),
+            RecoveryPhase::SaveFailed { until } => (
+                "SAVE FAILED",
+                chrome::RED,
+                FAULT,
+                [
+                    heard,
+                    format(format_args!("GROUP NOT STORED")),
+                    format(format_args!("TRYING AGAIN / {} LEFT", left(until, list))),
+                ],
+            ),
+            RecoveryPhase::Stored => (
+                "GROUP STORED",
+                chrome::WHITE,
+                DONE,
+                [
+                    heard,
+                    count,
+                    format(format_args!("MEMBERSHIP SAVED ON THIS DEVICE")),
+                ],
+            ),
+            RecoveryPhase::Expired => (
+                "NO GROUP",
+                chrome::GRAY,
+                GROUP,
+                [
+                    format(format_args!("WAIT ENDED / NOTHING HEARD")),
+                    format(format_args!("NO GROUP WAS STORED")),
+                    format(format_args!("CHECK THE OTHER DEVICE")),
+                ],
+            ),
+            RecoveryPhase::NotStored => (
+                "SAVE FAILED",
+                chrome::RED,
+                FAULT,
+                [
+                    heard,
+                    format(format_args!("GROUP NOT STORED")),
+                    format(format_args!("THE WAIT HAS ENDED")),
+                ],
+            ),
+        };
+    let glyph_color = if color == chrome::WHITE {
+        chrome::GRAY
+    } else {
+        color
+    };
+    status(
+        list,
+        &Status {
+            caption: "GROUP / RECOVERY",
+            nav: None,
+            glyph: (glyph, glyph_color),
+            heading: (heading, color),
+            lines: &[&lines[0], &lines[1], &lines[2]],
+            action: Some("VIEW GROUP"),
+        },
+    );
 }

@@ -161,6 +161,32 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
             ("add-no-radio", "NO RADIO"),
         ],
     ),
+    (
+        "REFRESH + RECOVERY",
+        &[
+            ("refresh-entry", "REFRESH"),
+            ("refresh-running", "REFRESH / LISTENING"),
+            ("members-refresh-active", "MEMBERS / LISTENING"),
+            ("refresh-found", "REFRESH / LEARNED"),
+            ("refresh-known-only", "REFRESH / HEARD"),
+            ("refresh-none", "REFRESH / NOTHING NEW"),
+            ("refresh-aged", "REFRESH / AGED"),
+            ("refresh-stopped", "REFRESH / STOPPED"),
+            ("members-refresh-no-radio", "MEMBERS / NO RADIO"),
+            ("refresh-no-radio", "REFRESH / NO RADIO"),
+            ("refresh-pairing-busy", "REFRESH / PAIRING"),
+            ("refresh-no-group", "REFRESH / NO GROUP"),
+            ("add-confirmation-lost", "IN A GROUP / UNCONFIRMED"),
+            ("founder-check-member", "FOUNDER / CHECK MEMBER"),
+            ("founder-pending-hub", "FOUNDER / PENDING"),
+            ("founder-group-stored", "FOUNDER / STORED"),
+            ("founder-stored-hub", "FOUNDER / GROUP"),
+            ("founder-wait-expired", "FOUNDER / EXPIRED"),
+            ("founder-replace-warning", "FOUNDER / END WAIT"),
+            ("founder-save-failed", "FOUNDER / SAVE FAILED"),
+            ("founder-not-stored", "FOUNDER / NOT STORED"),
+        ],
+    ),
 ];
 
 const COLUMNS: usize = 7;
