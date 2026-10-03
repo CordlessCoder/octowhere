@@ -149,3 +149,16 @@ Recorded 2026-09-26. These override the hand-off where they differ.
     renders, references, specs and briefs, and the update and power-off packages in
     `context/`, are kept on the owner's machine and ignored by git; this file and `docs/` stay.
     They were deleted in an ordinary commit, so history up to it still holds them.
+29. **The radio, refresh and founder recovery hand-off** (owner, 2026-10-03), in
+    `handoffs/octowhere-radio-refresh-handoff-2026-10-03/`, to be built. It answers
+    `handoffs/REFRESH-AND-RADIO-ROUND-BRIEF-2026-10-03.md`. The owner approved RADIO as its own
+    seventh self-test part, whose real failure takes the red fault screen; a self-test that
+    scrolls one row when the radio's check starts, each row widening by where it is; REFRESH
+    DEVICES on MEMBERS, running in the background with its time left and what it really heard;
+    the founder's wait shown with its deadline; and the group screen's even spacing. The full
+    keyboard's touch accuracy is settled on the boards. The owner also settled four points the
+    hand-off left to the build: the founder waits for the group's write to land before taking
+    it up, and retries a failed write while its ten minutes last; the radio's check reports when
+    it starts, for the scroll, and has a deadline of its own; on MEMBERS, BACK's tap region ends
+    at y 141, so it does not reach the refresh strip at y 148; and every refresh result offers
+    VIEW MEMBERS, back to where the refresh started, and the refresh's first screen has BACK.
