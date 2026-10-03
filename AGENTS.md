@@ -323,7 +323,10 @@ board was doing (`mesh-crc-bench`); `mesh-monitor` adds an RSSI watch of the cha
 `mesh-low-power` sends at +2 dBm. `tools/mesh-crc-compare.py` and `tools/mesh-burst-compare.py`
 read two nodes' logs; results in `docs/logs/lora/crc-2026-10-02/`. And `bench/jtag-read` adds
 `tools/jtag-read`, a host tool on the owner's probe-rs fork that times reading a framebuffer
-over the USB JTAG with the core running and halted; the result is in `context/BACKLOG.md`.
+over the USB JTAG with the core running and halted; the result is in `context/BACKLOG.md`. And
+`bench/stack-watermark` paints core 0's stack at boot and logs the deepest it has been used
+every 15 s (`stack-watermark-bench`, with the inject features to drive the boards); results
+under "Memory".
 
 ## Concurrency
 
@@ -554,8 +557,9 @@ errata workaround, are in [`docs/hardware-notes.md`](docs/hardware-notes.md).
   `BUS_EXECUTOR` run on the stack thread mode left, so their depth adds to the frame loop's.
   With step 6 of the mesh (2026-10-03) the radio task's poll takes an 18,768-byte frame,
   `Mesh::run` 9,488 and `Mesh::pair` 11,008, about 45 KB on its deepest path, against about
-  30 KB before. No overflow has been seen, and the high-water mark is not measured
-  (`context/BACKLOG.md`).
+  30 KB before. Painted at boot, the stack's deepest use was 45,336 bytes of 111,212 after the
+  start-up, 66,544 on the device adding in a pairing with its group screens drawn and
+  messages sent, and 72,076 on the device joining, 65% (`bench/stack-watermark`).
   Each function's frame is the `entry a1, N` that opens it in `xtensa-esp-elf-objdump -d`, in
   hex once it is large. The dump names code with no symbol of its own after the symbol before
   it, so a large frame can carry an unlikely name.

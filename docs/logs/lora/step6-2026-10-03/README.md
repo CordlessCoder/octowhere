@@ -137,6 +137,16 @@ added it again at its old id (`returning: true`).
 - **The old key dropped.** `1a38` heard `1c1c` on the new key and dropped the old one at
   349.8 s, and `1c1c` dropped its own at 623.3 s.
 
+## CRC errors between these boards
+
+`1c1c` received 12 of the 37 packets `1a38` sent it in these runs with a CRC error, about one
+in three of those over 100 bytes, at -17 to -30 dBm. `1a38` received all 35 of `1c1c`'s, at
+about -10 dBm. Overload alone would fail the stronger link first. On 2026-10-02 the errors
+ran the other way, at about 1% (`docs/logs/lora/crc-2026-10-02/`). Every loss here was made
+good by the protocol: summaries, member record requests and catching up a member on its old
+key. Whether `1a38`'s transmitter or `1c1c`'s receiver is at fault, or how the boards sit on
+the bench, is not looked into.
+
 ## Not run on the boards
 
 - Two removals at once, and the lower key winning after a switch to the higher, need three
