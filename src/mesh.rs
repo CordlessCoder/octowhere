@@ -157,8 +157,9 @@ pub enum Command {
     },
     /// Removes the member with this id from the group.
     Remove(u8),
-    /// Declines the removal another member asked for, keeping the member it removes.
-    Keep,
+    /// Declines the removal of the member with this id that another member asked for, before
+    /// its switch or within a day after.
+    Keep(u8),
     /// Enrols a member no device stands behind, for removing on a bench of two boards.
     #[cfg(feature = "pair-inject")]
     Phantom,
@@ -754,6 +755,16 @@ impl Mesh {
     }
 
     pub async fn run(mut self) -> ! {
+        if let Some(group) = &self.group {
+            info!(
+                "[MESH] id={} members={} generation={} removal pending={} declinable until={}",
+                group.own(),
+                group.count(),
+                group.generation(),
+                self.rekey.pending().is_some(),
+                self.rekey.undo_until()
+            );
+        }
         loop {
             self.sync_schedule();
             self.publish();
@@ -874,13 +885,7 @@ impl Mesh {
                     info!("[MESH] enrolled a phantom at {}", id);
                 }
             }
-            Command::Keep => match &self.group {
-                Some(group) if self.rekey.decline(group) => {
-                    info!("[REKEY] declined: the member stays, and this device keeps its key");
-                    self.save_rekey();
-                }
-                _ => warn!("[REKEY] no removal to decline"),
-            },
+            Command::Keep(removed) => self.keep(removed),
             Command::Choose(_)
             | Command::ChooseMac(_)
             | Command::Accept
@@ -890,19 +895,35 @@ impl Mesh {
         }
     }
 
-    /// Queues what changed in the group to be stored, as far as the queue has room.
+    /// Queues what changed in the group to be stored, as far as the queue has room. The ids
+    /// that changed reach the removals first, so that a restart never keeps a change that
+    /// declining the last removal would not forget.
     fn queue_unsaved(&mut self) {
-        if self.rekey_unsaved {
-            self.save_rekey();
+        let Some(group) = &mut self.group else {
+            if self.rekey_unsaved {
+                self.save_rekey();
+            }
+            return;
+        };
+        if self.rekey.changed(group.take_changed()) {
+            self.rekey_unsaved = true;
         }
-        let Some(group) = &self.group else { return };
         if self.unsaved_group {
-            if super::queue_group_write(GroupWrite::Group(Box::new(group.clone()))) {
+            let rekey = self.rekey_unsaved.then(|| self.rekey.clone());
+            if super::queue_group_write(GroupWrite::Group(Box::new(group.clone()), rekey)) {
                 self.unsaved_group = false;
                 self.unsaved = 0;
+                self.rekey_unsaved = false;
             }
             return;
         }
+        if self.rekey_unsaved {
+            self.save_rekey();
+            if self.rekey_unsaved {
+                return;
+            }
+        }
+        let Some(group) = &self.group else { return };
         while self.unsaved != 0 {
             let id = self.unsaved.trailing_zeros() as u8;
             let slot = group.slot(id).copied();
@@ -911,6 +932,14 @@ impl Mesh {
             }
             self.unsaved &= !(1 << id);
         }
+    }
+
+    /// Queues the group and its removals to be stored in one write, as a change of key needs:
+    /// apart, a restart between the two would pair the key with removals made for another.
+    fn save_switch(&mut self) {
+        self.unsaved_group = true;
+        self.rekey_unsaved = true;
+        self.queue_unsaved();
     }
 
     /// Waits for the node's next slot and sends in it, listening meanwhile.
@@ -936,6 +965,10 @@ impl Mesh {
         if self.rekey.is_due(round_at(time) as u32) {
             self.switch_key();
             return;
+        }
+        if self.rekey.expire(round_at(time) as u32) {
+            info!("[REKEY] a day since the switch; the key before it is dropped");
+            self.save_rekey();
         }
         if self.notify.is_some() {
             self.tell_removed(time).await;
@@ -1840,11 +1873,18 @@ impl Mesh {
                 break;
             }
             if phase == Phase::Storing && saving.is_none() {
-                let group = pairing
+                let mut group = pairing
                     .group()
                     .expect("a pairing storing has a group")
                     .clone();
-                let number = super::send_group_write(GroupWrite::Group(Box::new(group))).await;
+                // The member added is one more id that declining the last removal forgets, and
+                // this write may stand in for a switch's not yet stored.
+                if self.rekey.changed(group.take_changed()) {
+                    self.rekey_unsaved = true;
+                }
+                let rekey = self.rekey_unsaved.then(|| self.rekey.clone());
+                let number =
+                    super::send_group_write(GroupWrite::Group(Box::new(group), rekey)).await;
                 saving = Some((Instant::now(), number));
                 continue;
             }
@@ -1995,6 +2035,10 @@ impl Mesh {
     /// step.
     fn save_rekey(&mut self) {
         self.rekey_unsaved = true;
+        // A change of key waits to go with the group, in one write.
+        if self.unsaved_group {
+            return;
+        }
         if super::queue_group_write(GroupWrite::Rekey(self.rekey.clone())) {
             self.rekey_unsaved = false;
         }
@@ -2140,11 +2184,62 @@ impl Mesh {
         {
             self.notify = Some((removed, old_key, old_generation));
         }
+        if let Some(until) = self.rekey.undo_until() {
+            info!("[REKEY] it can be declined until round {}", until);
+        }
         self.caught_up = [0; IDS as usize];
         self.keys_posted = false;
-        self.unsaved_group = true;
-        self.save_rekey();
+        self.save_switch();
         self.sync_schedule();
+    }
+
+    /// Declines the removal of the member `removed`, under way, or the last one switched to
+    /// within a day of its switch. Going back to the key before that one forgets the positions,
+    /// messages and records that arrived since, so that the member brought back is not sent
+    /// them.
+    fn keep(&mut self, removed: u8) {
+        let Some(group) = &mut self.group else {
+            warn!("[REKEY] no removal to decline");
+            return;
+        };
+        if self
+            .rekey
+            .pending()
+            .is_some_and(|pending| pending.new.removed == removed)
+            && self.rekey.decline(group)
+        {
+            info!("[REKEY] declined: the member stays, and this device keeps its key");
+            self.save_rekey();
+            return;
+        }
+        let Some((time, _)) = self.clock.at(local()) else {
+            warn!("[REKEY] no timebase to decline by");
+            return;
+        };
+        let Some(reverted) = self.rekey.undo(group, round_at(time) as u32, removed) else {
+            warn!("[REKEY] no removal of {} to decline", removed);
+            return;
+        };
+        let positions = self.table.forget_others();
+        let messages = self.messages.forget_since(reverted.since);
+        info!(
+            "[REKEY] declined after the switch: back on generation {}, forgot records {=u32:#010x}, {} positions and {} messages",
+            group.generation(),
+            reverted.forgotten,
+            positions,
+            messages
+        );
+        self.summaries = Summaries::default();
+        self.summary = None;
+        self.kept.clear();
+        self.catch_up.clear();
+        self.caught_up = [0; IDS as usize];
+        // A rival this device lost to, made again, would only race the key gone back to.
+        self.remove_again = 0;
+        self.save_switch();
+        self.sync_schedule();
+        self.shown.positions(&self.table);
+        self.publish();
     }
 
     /// Makes the message telling the member this device removed that it was, now that the
@@ -2501,7 +2596,7 @@ impl Mesh {
         let (group, until) = (founding.group.clone(), founding.until);
         self.set_recovery(RecoveryPhase::Storing);
         self.publish();
-        if !super::save_group(GroupWrite::Group(Box::new(group))).await {
+        if !super::save_group(GroupWrite::Group(Box::new(group), None)).await {
             warn!("[MESH] storing the founded group failed; trying again");
             self.set_recovery(RecoveryPhase::SaveFailed { until });
             return;
@@ -2793,7 +2888,7 @@ pub mod inject {
                 }
                 11 => Command::Refresh,
                 13 => Command::Remove(argument),
-                14 => Command::Keep,
+                14 => Command::Keep(argument),
                 15 => Command::Phantom,
                 12 => {
                     let mut bytes = [0; 160];

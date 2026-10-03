@@ -120,8 +120,8 @@ pub enum GroupWrite {
     Sequence(u32),
     /// The group's removals: the one under way, the old keys and those declined.
     Rekey(Box<Rekey>),
-    /// The whole group, replacing what was stored.
-    Group(Box<Group>),
+    /// The whole group, replacing what was stored, and with a change of key its removals.
+    Group(Box<Group>, Option<Box<Rekey>>),
     /// What the id `id` holds: a member's record, a gone record, or nothing.
     Slot {
         id: u8,
@@ -143,9 +143,14 @@ impl defmt::Format for GroupWrite {
                 rekey.pending().is_some(),
                 rekey.old().count()
             ),
-            Self::Group(group) => {
-                defmt::write!(f, "Group(own={} members={})", group.own(), group.count())
-            }
+            Self::Group(group, rekey) => defmt::write!(
+                f,
+                "Group(own={} members={} generation={} rekey={})",
+                group.own(),
+                group.count(),
+                group.generation(),
+                rekey.is_some()
+            ),
             Self::Slot { id, slot } => match slot {
                 Some(Slot::Member(member)) => defmt::write!(f, "Member({}, {})", id, member.name),
                 Some(Slot::Gone(_)) => defmt::write!(f, "Gone({})", id),
@@ -447,10 +452,13 @@ impl Store {
                 .await
                 .and_then(|end| Some(u32::from_le_bytes(end.as_slice().try_into().ok()?)));
             let rekey = match &group {
-                Some(_) => value(KEY_REKEY)
-                    .await
-                    .and_then(|bytes| Rekey::decode(&bytes))
-                    .map(Box::new),
+                Some(_) => value(KEY_REKEY).await.and_then(|bytes| {
+                    let rekey = Rekey::decode(&bytes);
+                    if rekey.is_none() {
+                        warn!("[SETTINGS] {=[u8]:a} has another layout", KEY_REKEY);
+                    }
+                    rekey.map(Box::new)
+                }),
                 None => None,
             };
             self.stored_members = stored_members;
@@ -495,7 +503,7 @@ impl Store {
                     value[1..1 + len].copy_from_slice(&bytes[..len]);
                     transaction.write(KEY_REKEY, &value[..1 + len]).await
                 }
-                GroupWrite::Group(group) => {
+                GroupWrite::Group(group, rekey) => {
                     value[1..33].copy_from_slice(group.key().bytes());
                     value[33] = group.own();
                     value[34..36].copy_from_slice(&group.generation().to_le_bytes());
@@ -506,6 +514,12 @@ impl Store {
                         }
                         written =
                             write_member(&mut transaction, &mut stored, id, group.slot(id)).await;
+                    }
+                    if let (Ok(()), Some(rekey)) = (&written, rekey) {
+                        let mut bytes = [0; rekey::STORED_MAX];
+                        let len = rekey.encode(&mut bytes);
+                        value[1..1 + len].copy_from_slice(&bytes[..len]);
+                        written = transaction.write(KEY_REKEY, &value[..1 + len]).await;
                     }
                     written
                 }

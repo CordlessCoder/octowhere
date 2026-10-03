@@ -14,7 +14,7 @@
     uv run tools/pair-inject.py send 1 "meet at the car"
     uv run tools/pair-inject.py send group "back in 10"
     uv run tools/pair-inject.py remove 2
-    uv run tools/pair-inject.py keep
+    uv run tools/pair-inject.py keep 2
     uv run tools/pair-inject.py phantom
 
 The commands stand in for the screens until they are built: `add` and `join` start a pairing,
@@ -24,7 +24,8 @@ device. `deaf` makes a pairing, or the mesh, drop every frame it hears for that 
 255, to lose an acknowledgement or a switch on purpose. `refresh` listens throughout for three rounds, as REFRESH DEVICES
 does. `send` sends text, up to 160 printable ASCII characters, to the member with that id,
 privately, or to the whole group. `remove` removes the member with that id from the group, and
-`keep` declines a removal another member asked for. `phantom` enrols a member no device stands
+`keep` declines another member's removal of the member with that id, before its switch or
+within a day after it. `phantom` enrols a member no device stands
 behind, so that two boards can try a removal with a member left to tell. With two boards attached, `--probe` picks one by its MAC, which
 `probe-rs list` shows. The ELF must be the one flashed, since the addresses come from it. The
 firmware logs `[MESH] command …` when it takes one.
@@ -66,7 +67,7 @@ def main():
     parser.add_argument("command", choices=CODES)
     parser.add_argument("argument", nargs="?",
                         help="the index for `choose`, the name for `name`, seconds for `deaf`, "
-                             "the id or `group` for `send`, the id for `remove`")
+                             "the id or `group` for `send`, the id for `remove` and `keep`")
     parser.add_argument("text", nargs="?", help="the text for `send`")
     parser.add_argument("--probe", default="303a:1001")
     parser.add_argument("--elf", default="target/xtensa-esp32s3-none-elf/release/octowhere")
@@ -75,7 +76,7 @@ def main():
     address = symbols(args.elf, [COMMAND, NAME, TEXT])
     argument = 0
     length = 0
-    if args.command in ("choose", "remove"):
+    if args.command in ("choose", "remove", "keep"):
         argument = int(args.argument or 0)
     elif args.command == "deaf":
         argument = int(args.argument or 0)

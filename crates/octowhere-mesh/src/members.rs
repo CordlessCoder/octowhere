@@ -256,6 +256,8 @@ pub struct Group {
     former_unsent: u8,
     /// The slots' digest, until they change.
     digest: Cell<Option<u32>>,
+    /// The ids whose slots changed since [`Group::take_changed`] last took them, as a set.
+    changed: u32,
 }
 
 impl Group {
@@ -294,6 +296,7 @@ impl Group {
             unsent: 0,
             former_unsent: 0,
             digest: Cell::new(None),
+            changed: 0,
         })
     }
 
@@ -436,7 +439,13 @@ impl Group {
         }
         self.slots[usize::from(id)] = slot;
         self.unsent |= 1 << id;
+        self.changed |= 1 << id;
         self.digest.set(None);
+    }
+
+    /// The ids whose slots changed since the last call, as a set.
+    pub fn take_changed(&mut self) -> u32 {
+        core::mem::take(&mut self.changed)
     }
 
     fn keep_former(&mut self, id: u8, gone: Gone) {
@@ -536,6 +545,27 @@ impl Group {
         false
     }
 
+    /// Forgets what the ids `ids`, a set, hold, other than this node's, and every gone record set
+    /// apart, as declining a removal after its switch does. Those are never stored, so a restart
+    /// forgets them too. The nodes that never switched send the rest again as they hold them.
+    /// Returns the ids that held something, as a set.
+    pub fn forget_changed(&mut self, ids: u32) -> u32 {
+        let mut forgotten = 0;
+        let own = self.own;
+        for id in (0..IDS).filter(|&id| ids & 1 << id != 0 && id != own) {
+            if self.slot(id).is_some() {
+                self.set(id, None);
+                forgotten |= 1 << id;
+            }
+        }
+        for at in 0..FORMER {
+            if self.former[at].is_some() {
+                self.forget(Held::Former(at));
+            }
+        }
+        forgotten
+    }
+
     /// Merges a member record heard from another node, at UTC `now`, 0 when unknown.
     pub fn merge(&mut self, id: u8, record: Member, now: u32) -> Merged {
         if id >= IDS || record.same_device(self.me()) || is_ahead(record.changed, now) {
@@ -569,6 +599,7 @@ impl Group {
         let vacated = match gone {
             Some((Held::Slot(at), _)) => {
                 self.slots[usize::from(at)] = None;
+                self.changed |= 1 << at;
                 self.digest.set(None);
                 (at != id).then_some(at)
             }
@@ -1147,6 +1178,32 @@ pub(crate) mod tests {
             "a gone record is newer than the record it replaces"
         );
         assert_eq!(g.gone(5), Some(&gone(2, 101)));
+    }
+
+    #[test]
+    fn declining_a_removal_after_its_switch_forgets_what_changed_since() {
+        let mut g = group(0, &[(0, 1), (1, 2), (2, 3), (3, 4)]);
+        g.remove(&fingerprint(&[3; 32]), 500);
+        // Since the switch, a device joined at the id it freed and a member renamed.
+        g.enrol(2, member(9, 0));
+        g.merge(1, member(2, 550), 0);
+        g.rename(Name::from_mac(&[0, 0, 0, 0, 0, 7]), 700);
+        let changed = g.take_changed();
+        assert_eq!(changed, 1 << 0 | 1 << 1 | 1 << 2);
+        assert!(g.former.iter().any(Option::is_some));
+        assert_eq!(g.forget_changed(changed), 1 << 1 | 1 << 2);
+        assert!(g.slot(1).is_none() && g.slot(2).is_none());
+        assert_eq!(g.member(3), Some(&member(4, 100)));
+        assert_eq!(g.me().changed, 700, "this node's own record stays");
+        assert!(
+            g.former.iter().all(Option::is_none),
+            "the gone record set apart is forgotten too"
+        );
+        assert_eq!(
+            g.merge(2, member(3, 100), 0),
+            Merged::Changed { vacated: None },
+            "the member removed comes back"
+        );
     }
 
     #[test]

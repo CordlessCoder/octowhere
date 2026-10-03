@@ -125,6 +125,20 @@ impl Table {
         }
     }
 
+    /// Drops every other id's entry, as declining a removal after its switch does, so that the
+    /// member brought back is not sent what the group shared without it. The nodes that never
+    /// switched send theirs again. Returns how many.
+    pub fn forget_others(&mut self) -> usize {
+        let mut forgotten = 0;
+        for id in (0..SLOTS).filter(|&id| id != usize::from(self.own)) {
+            if self.entries[id].take().is_some() {
+                forgotten += 1;
+            }
+            self.sent[id] = None;
+        }
+        forgotten
+    }
+
     /// Records a packet from `id` in `round`.
     pub fn heard(&mut self, id: u8, round: i64) {
         let last = &mut self.heard[usize::from(id)];
@@ -470,5 +484,16 @@ mod tests {
         table.merge(entry(5, 5_000 - MAX_DELTA - 1, DUBLIN), None);
         let mut out = [entry(0, 0, 0); 4];
         assert_eq!(table.digest(5_000, &mut out), 0);
+    }
+
+    #[test]
+    fn declining_a_removal_after_its_switch_forgets_the_positions_of_others() {
+        let mut table = Table::new(0);
+        table.set_own(entry(0, 2_000, DUBLIN));
+        table.merge(entry(1, 999, DUBLIN), None);
+        table.merge(entry(2, 1_000, DUBLIN), None);
+        assert_eq!(table.forget_others(), 2);
+        assert!(table.entry(1).is_none() && table.entry(2).is_none());
+        assert!(table.entry(0).is_some(), "its own position stays");
     }
 }

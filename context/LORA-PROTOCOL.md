@@ -544,11 +544,25 @@ Owner, 2026-10-03, except where it says otherwise.
 - **Who.** Any member can remove any other, as any member can add one. The new key reaches
   each member sealed under the key it shares with the remover, so each knows who asked.
 - **Confirming.** Each device's user is shown who asked to remove whom, and can decline until
-  the switch. A device whose user declines ignores the removal and stays on the old key, so a
-  member removing another out of malice can be overruled; its group can then remove the
-  remover. A device whose user does not answer switches with the group. One that learns of
-  the removal late switches three rounds after it learns of it, at the earliest, so that its
-  user can always decline.
+  the switch, or for a day after it (owner, 2026-10-03). A device whose user declines ignores
+  the removal and stays on the old key, so a member removing another out of malice can be
+  overruled; its group can then remove the remover. A device whose user does not answer
+  switches with the group. One that learns of the removal late switches three rounds after it
+  learns of it, at the earliest.
+- **Declining after the switch.** A device keeps the key it switched from for a day after its
+  own switch, and declining goes back to it. It forgets what it learned since, so that it does
+  not pass the removed member what the group shared without it: every other node's position,
+  the messages stamped from the group's switch round, and the records of every id that changed
+  since its own switch, other than its own, the removed member's among them. The removed member
+  and the nodes that never switched send those again as they hold them. Only the last removal
+  switched to can be declined this way, and not while another is under way. The user names the
+  member, so a removal that arrives meanwhile is not declined in its place. The remover cannot
+  decline its own, but can decline a rival that wins over it. A rival that wins after the
+  switch keeps the key before both, and the day the first switch gave; one that removes nobody
+  gives the member back and leaves nothing to decline. Any other key that removes nobody leaves
+  the last removal to decline, so that no member can take the day away with an empty removal.
+  The members that switched have heard the device on the new key, so they send it no key
+  message again.
 - **The new key.** The remover makes a random group key and sends it to each remaining member
   as a private message, a key message, with its generation, one past the current key's, the
   round the group switches at, counted on its timebase, and the id and SHA-256 fingerprint of
@@ -596,7 +610,7 @@ Owner, 2026-10-03, except where it says otherwise.
   switches has not; otherwise a member could skip past every other removal with a key of a
   generation nobody else holds. One of an earlier generation is stale.
 - **What is kept across a restart.** A pending removal, the old keys and which members each
-  still waits for. The key messages themselves are in the message store, so a restarted node
+  still waits for, and the key kept to decline the last removal after its switch. The key messages themselves are in the message store, so a restarted node
   gets them back from its neighbours within the horizon.
 
 ## Time and freshness

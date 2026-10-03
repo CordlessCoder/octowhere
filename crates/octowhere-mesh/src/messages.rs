@@ -402,6 +402,20 @@ impl Store {
         }
     }
 
+    /// Drops the messages stamped at `since` or later, as declining a removal after its switch
+    /// does. Returns how many.
+    pub fn forget_since(&mut self, since: u32) -> usize {
+        let mut forgotten = 0;
+        for at in 0..CAPACITY {
+            let held = &self.messages[at];
+            if held.seq != 0 && held.stamp >= since {
+                self.remove(at);
+                forgotten += 1;
+            }
+        }
+        forgotten
+    }
+
     /// Marks a message held to be sent.
     pub fn mark(&mut self, name: Name) {
         if let Some(at) = self.place(name) {
@@ -976,5 +990,18 @@ mod tests {
         assert_eq!(fresh.to_reserve(70, 0), Some((1, 1 + 2 * BLOCK)));
         fresh.reserved((1, 1 + 2 * BLOCK));
         assert!((0..70).all(|_| fresh.take().is_some()));
+    }
+
+    #[test]
+    fn declining_a_removal_after_its_switch_forgets_the_messages_since() {
+        let mut held = store();
+        held.insert(text(1, 5, 0, NOW - 10), NOW);
+        held.insert(text(2, 7, 0, NOW), NOW);
+        assert_eq!(held.forget_since(NOW), 1);
+        assert!(held.get((1, 5)).is_some());
+        assert!(held.get((2, 7)).is_none());
+        let mut before = store();
+        before.insert(text(1, 5, 0, NOW - 10), NOW);
+        assert_eq!(held.digest(), before.digest());
     }
 }
