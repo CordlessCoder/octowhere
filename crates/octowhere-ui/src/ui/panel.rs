@@ -24,7 +24,8 @@ use crate::chrome::{
 /// Distance between the two complete pages during a sideways drag.
 pub const PAGE_WIDTH: i32 = 466;
 pub const MAX_SCROLL: i32 = PAGE_WIDTH;
-const RULE_TOP: [i32; 4] = [83, 160, 227, 294];
+/// Each row's top rule, then the rule under the last.
+const RULE_TOP: [i32; 5] = [83, 160, 227, 294, 370];
 const RULE_LEFT: [i32; 4] = [83, 57, 57, 83];
 const RULE_RIGHT: [i32; 4] = [383, 409, 409, 383];
 const CENTER: Point = Point::new(233, 233);
@@ -142,7 +143,11 @@ impl Cell {
             ),
             Point::new(
                 page_left(self.page(), scroll) + RULE_RIGHT[row],
-                if row == 3 { 370 } else { RULE_TOP[row + 1] - 1 },
+                if row == 3 {
+                    RULE_TOP[4]
+                } else {
+                    RULE_TOP[row + 1] - 1
+                },
             ),
         )
     }
@@ -450,7 +455,8 @@ fn draw_cell<D: CoverageTarget<Color = Color>>(
     )
 }
 
-/// The rules, drawn out from the middle to `progress` of their length.
+/// The rules, drawn out from the middle to `progress` of their length. Each spans the wider of
+/// the rows it lies between (owner, 2026-10-03).
 fn draw_rules<D: CoverageTarget<Color = Color>>(
     scroll: i32,
     progress: u8,
@@ -461,22 +467,16 @@ fn draw_rules<D: CoverageTarget<Color = Color>>(
     }
     for page in 0..=1 {
         let shift = page_left(page, scroll);
-        for row in 0..4 {
-            let start = shift + RULE_LEFT[row];
-            let end = shift + RULE_RIGHT[row];
+        for (rule, top) in RULE_TOP.into_iter().enumerate() {
+            let (above, below) = (rule.saturating_sub(1), rule.min(3));
+            let start = shift + RULE_LEFT[above].min(RULE_LEFT[below]);
+            let end = shift + RULE_RIGHT[above].max(RULE_RIGHT[below]);
             let width = ((end - start) as i64 * i64::from(progress) / 255) as i32;
             target.fill_solid(
-                &Rectangle::new(Point::new(start, RULE_TOP[row]), Size::new(width as u32, 1)),
+                &Rectangle::new(Point::new(start, top), Size::new(width as u32, 1)),
                 chrome::shade(chrome::GRAY, 145),
             )?;
         }
-        target.fill_solid(
-            &Rectangle::new(
-                Point::new(shift + 83, 370),
-                Size::new((300 * i32::from(progress) / 255) as u32, 1),
-            ),
-            chrome::shade(chrome::GRAY, 145),
-        )?;
     }
     Ok(())
 }
