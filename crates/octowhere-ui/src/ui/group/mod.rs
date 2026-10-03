@@ -46,10 +46,8 @@ const ACTION: Rectangle = rect(94, 300, 372, 406);
 const ACTIONS: [Rectangle; 2] = [rect(88, 300, 224, 406), rect(242, 300, 378, 406)];
 /// The group's own two, whose outer edges meet its card's.
 const HUB_ACTIONS: [Rectangle; 2] = [rect(94, 300, 224, 406), rect(242, 300, 372, 406)];
-/// This device's card on the group screen: the tap region, and the outline, which stops short
-/// of the actions below.
-const OWN_CARD: Rectangle = rect(94, 194, 372, 300);
-const OWN_OUTLINE: Rectangle = rect(94, 194, 372, 294);
+/// This device's card on the group screen, whose whole outline is its tap region.
+const OWN_CARD: Rectangle = rect(94, 198, 372, 282);
 /// Where a list of members or devices found scrolls, two rows at a time.
 const ROWS: Rectangle = rect(94, 194, 372, 406);
 const ROW: i32 = 106;
@@ -744,17 +742,17 @@ impl Flow {
                         29,
                         chrome::WHITE,
                     );
-                    l.outline(OWN_OUTLINE, chrome::GRAY);
+                    l.outline(OWN_CARD, chrome::GRAY);
                     l.left(
                         &format(format_args!("{:02}", group.own)),
                         107,
-                        219,
+                        216,
                         Face::Mono,
                         16,
                         chrome::GRAY,
                     );
-                    name(l, mesh.name.as_str(), 147, 216, false, 22);
-                    l.centred("THIS DEVICE  >", CENTRE, 266, Face::Mono, 14, chrome::GRAY);
+                    name(l, mesh.name.as_str(), 147, 213, false, 22);
+                    l.centred("THIS DEVICE  >", CENTRE, 255, Face::Mono, 14, chrome::GRAY);
                     pair(l, HUB_ACTIONS, ["MEMBERS", "PAIR"]);
                     footer(l, COVER);
                 }
@@ -1125,9 +1123,18 @@ fn action(
         (color, chrome::BLACK)
     };
     let x = area.top_left.x + area.size.width as i32 / 2;
-    list.text(Text::new(label, Face::Kh, 20, ink).at(x, 333).on(on));
-    if let Some(sub) = sub {
-        list.centred(sub, x, 373, Face::Mono, 12, chrome::GRAY);
+    match sub {
+        // The label and its note sit together as one block.
+        Some(sub) => {
+            list.text(Text::new(label, Face::Kh, 20, ink).at(x, 333).on(on));
+            list.centred(sub, x, 373, Face::Mono, 12, chrome::GRAY);
+        }
+        None => list.text(
+            Text::new(label, Face::Kh, 20, ink)
+                .at(x, area.top_left.y + area.size.height as i32 / 2)
+                .vertical(Vertical::Middle)
+                .on(on),
+        ),
     }
 }
 
