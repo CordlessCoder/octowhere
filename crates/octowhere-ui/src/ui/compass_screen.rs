@@ -1179,27 +1179,21 @@ where
 {
     let turn = f32::from(heading);
     // One quarter of the ticks is filled, and each is drawn at the quarter turns swept past it.
-    let mut raster = fontdue::raster::Raster::empty();
-    let mut coverage = alloc::vec::Vec::new();
     let shown = |mark: usize| mark < usize::from(marks);
-    for tick in 0..9 {
-        let quarters = (0..4)
-            .filter(|quarter| shown(quarter * 9 + tick))
-            .fold(0, |bits, quarter| bits | 1 << quarter);
-        if quarters == 0 {
-            continue;
+    font.with_raster(|raster, scratch| {
+        for tick in 0..9 {
+            let quarters = (0..4)
+                .filter(|quarter| shown(quarter * 9 + tick))
+                .fold(0, |bits, quarter| bits | 1 << quarter);
+            if quarters == 0 {
+                continue;
+            }
+            let (corners, _, color) = tick_shape(tick, turn);
+            super::smooth::polygon_quarters(
+                field, raster, scratch, &corners, CENTER, quarters, color,
+            );
         }
-        let (corners, _, color) = tick_shape(tick, turn);
-        super::smooth::polygon_quarters(
-            field,
-            &mut raster,
-            &mut coverage,
-            &corners,
-            CENTER,
-            quarters,
-            color,
-        );
-    }
+    });
     for (quarter, letter) in LETTERS
         .into_iter()
         .enumerate()

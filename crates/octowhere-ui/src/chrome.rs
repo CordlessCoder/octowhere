@@ -1035,9 +1035,9 @@ pub struct FontdueRendererCtx {
     doubled: alloc::vec::Vec<u8>,
 }
 
-/// Checks that the glyph just rasterized, `width` by `height` pixels, fitted the raster
+/// Checks that the glyph or shape just rasterized, `width` by `height` pixels, fitted the raster
 /// [`RASTER_CELLS`] reserves.
-fn fits(width: usize, height: usize) {
+pub(crate) fn fits(width: usize, height: usize) {
     debug_assert!(
         width * height + 3 <= RASTER_CELLS,
         "a {width}x{height} glyph outgrew the raster reserved at boot",
@@ -1434,6 +1434,17 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
             });
         }
         Ok(())
+    }
+
+    /// Lends the glyph raster, which the firmware reserves at boot, and a scratch buffer to a
+    /// drawing that rasterizes shapes of its own. Text drawn through this renderer from inside
+    /// `work` panics.
+    pub fn with_raster<R>(
+        &self,
+        work: impl FnOnce(&mut fontdue::raster::Raster<'static>, &mut alloc::vec::Vec<u8>) -> R,
+    ) -> R {
+        let ctx = &mut *self.ctx.borrow_mut();
+        work(&mut ctx.canvas, &mut ctx.coverage)
     }
 
     /// Draws `text` at twice this renderer's size with its pen at `origin` on the baseline. Each
