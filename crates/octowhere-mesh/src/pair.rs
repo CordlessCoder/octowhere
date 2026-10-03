@@ -25,6 +25,8 @@ use crate::members::{
     GONE_LEN, Gone, Group, MAC_LEN, Member, Name, PUBLIC_LEN, RECORD_MAX_LEN, Slot,
 };
 use crate::seal::{self, Key, SIV_LEN};
+use alloc::boxed::Box;
+
 use hkdf::Hkdf;
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
@@ -243,7 +245,8 @@ pub struct Pairing {
     new_id: u8,
     returning: bool,
     utc: u32,
-    blob: [u8; WELCOME_MAX],
+    /// On the heap, for the stack's sake: a welcome for a full group is kilobytes.
+    blob: Box<[u8; WELCOME_MAX]>,
     blob_len: usize,
     /// Parts acknowledged, on the adding device; received, on the joining one.
     parts_done: u8,
@@ -279,7 +282,7 @@ impl Pairing {
             new_id: 0,
             returning: false,
             utc: 0,
-            blob: [0; WELCOME_MAX],
+            blob: Box::new([0; WELCOME_MAX]),
             blob_len: 0,
             parts_done: 0,
             parts: 0,

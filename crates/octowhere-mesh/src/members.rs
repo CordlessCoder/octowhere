@@ -1,6 +1,7 @@
 //! The group a node belongs to: its key, the node's own id, and each member's public key, hardware
 //! address and name. Pairing fills it, and member records spread changes to it through the mesh.
 
+use alloc::boxed::Box;
 use core::cell::Cell;
 
 use sha2::{Digest, Sha256};
@@ -332,15 +333,22 @@ pub const FORMER: usize = 8;
 const _: () = assert!(FORMER <= 8, "`former_unsent` is a `u8` set");
 
 #[derive(Clone)]
+struct Records {
+    slots: [Option<Slot>; SLOTS],
+    /// Gone records whose ids new members took, oldest first, with those ids.
+    former: [Option<(u8, Gone)>; FORMER],
+}
+
+#[derive(Clone)]
 pub struct Group {
     key: Key,
     /// How many times the key has changed since the group was founded. A new key's message
     /// names its generation, which tells a later key from a rival.
     generation: u16,
     own: u8,
-    slots: [Option<Slot>; SLOTS],
-    /// Gone records whose ids new members took, oldest first, with those ids.
-    former: [Option<(u8, Gone)>; FORMER],
+    /// The records, on the heap: they are kilobytes, and a group moved or copied on the stack
+    /// would take that much under every call made meanwhile.
+    held: Box<Records>,
     /// The ids whose slots changed here, or were asked for, and have not been sent since, as
     /// a set.
     unsent: u32,
@@ -394,8 +402,10 @@ impl Group {
             key,
             generation,
             own,
-            slots,
-            former: [None; FORMER],
+            held: Box::new(Records {
+                slots,
+                former: [None; FORMER],
+            }),
             unsent: 0,
             former_unsent: 0,
             digest: Cell::new(None),
@@ -433,7 +443,7 @@ impl Group {
 
     #[must_use]
     pub fn slot(&self, id: u8) -> Option<&Slot> {
-        self.slots.get(usize::from(id))?.as_ref()
+        self.held.slots.get(usize::from(id))?.as_ref()
     }
 
     #[must_use]
@@ -499,7 +509,7 @@ impl Group {
         self.by_fingerprint(print).is_some()
             || (0..IDS)
                 .filter_map(|id| self.gone(id))
-                .chain(self.former.iter().flatten().map(|(_, gone)| gone))
+                .chain(self.held.former.iter().flatten().map(|(_, gone)| gone))
                 .any(|gone| fingerprint(&gone.public) == *print)
     }
 
@@ -559,7 +569,7 @@ impl Group {
         if let (Some(Slot::Gone(gone)), Some(Slot::Member(_))) = (self.slot(id).copied(), slot) {
             self.keep_former(id, gone);
         }
-        self.slots[usize::from(id)] = slot;
+        self.held.slots[usize::from(id)] = slot;
         self.unsent |= 1 << id;
         self.changed |= 1 << id;
         self.digest.set(None);
@@ -571,13 +581,13 @@ impl Group {
     }
 
     fn keep_former(&mut self, id: u8, gone: Gone) {
-        if self.former[0].is_some() && self.former.iter().all(Option::is_some) {
-            self.former.rotate_left(1);
-            self.former[FORMER - 1] = None;
+        if self.held.former[0].is_some() && self.held.former.iter().all(Option::is_some) {
+            self.held.former.rotate_left(1);
+            self.held.former[FORMER - 1] = None;
             self.former_unsent >>= 1;
         }
-        if let Some(free) = self.former.iter().position(Option::is_none) {
-            self.former[free] = Some((id, gone));
+        if let Some(free) = self.held.former.iter().position(Option::is_none) {
+            self.held.former[free] = Some((id, gone));
         }
     }
 
@@ -590,11 +600,15 @@ impl Group {
                     .map(|gone| (Held::Slot(id), *gone))
             })
             .or_else(|| {
-                self.former.iter().enumerate().find_map(|(at, former)| {
-                    former
-                        .filter(|(_, gone)| gone.public == *public)
-                        .map(|(_, gone)| (Held::Former(at), gone))
-                })
+                self.held
+                    .former
+                    .iter()
+                    .enumerate()
+                    .find_map(|(at, former)| {
+                        former
+                            .filter(|(_, gone)| gone.public == *public)
+                            .map(|(_, gone)| (Held::Former(at), gone))
+                    })
             })
     }
 
@@ -610,7 +624,7 @@ impl Group {
         match held {
             Held::Slot(id) => self.set(id, None),
             Held::Former(at) => {
-                self.former[at] = None;
+                self.held.former[at] = None;
                 self.former_unsent &= !(1 << at);
             }
         }
@@ -681,7 +695,7 @@ impl Group {
             }
         }
         for at in 0..FORMER {
-            if self.former[at].is_some() {
+            if self.held.former[at].is_some() {
                 self.forget(Held::Former(at));
             }
         }
@@ -744,7 +758,7 @@ impl Group {
         // The device was paired again since it went.
         let vacated = match gone {
             Some((Held::Slot(at), _)) => {
-                self.slots[usize::from(at)] = None;
+                self.held.slots[usize::from(at)] = None;
                 self.changed |= 1 << at;
                 self.digest.set(None);
                 (at != id).then_some(at)
@@ -784,7 +798,7 @@ impl Group {
         let own = self.own;
         let mut record = *self.me();
         record.sign(own, me);
-        self.slots[usize::from(own)] = Some(Slot::Member(record));
+        self.held.slots[usize::from(own)] = Some(Slot::Member(record));
         self.unsigned_own = false;
     }
 
@@ -873,7 +887,8 @@ impl Group {
 
     /// The gone records kept apart from the slots that are to be sent, with their places.
     pub fn former_unsent(&self) -> impl Iterator<Item = (usize, u8, Gone)> + '_ {
-        self.former
+        self.held
+            .former
             .iter()
             .enumerate()
             .filter(|(at, _)| self.former_unsent & 1 << at != 0)
@@ -1384,13 +1399,13 @@ pub(crate) mod tests {
         g.rename(Name::from_mac(&[0, 0, 0, 0, 0, 7]), 700, &key(1));
         let changed = g.take_changed();
         assert_eq!(changed, 1 << 0 | 1 << 1 | 1 << 2);
-        assert!(g.former.iter().any(Option::is_some));
+        assert!(g.held.former.iter().any(Option::is_some));
         assert_eq!(g.forget_changed(changed), 1 << 1 | 1 << 2);
         assert!(g.slot(1).is_none() && g.slot(2).is_none());
         assert_eq!(g.member(3), Some(&member(4, 100)));
         assert_eq!(g.me().changed, 700, "this node's own record stays");
         assert!(
-            g.former.iter().all(Option::is_none),
+            g.held.former.iter().all(Option::is_none),
             "the gone record set apart is forgotten too"
         );
         assert_eq!(

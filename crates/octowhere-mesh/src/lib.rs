@@ -5,6 +5,8 @@
 
 #![no_std]
 
+extern crate alloc;
+
 pub mod bits;
 pub mod clock;
 pub mod identity;
