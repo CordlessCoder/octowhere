@@ -35,9 +35,7 @@ use octowhere_mesh::{
         Timebase,
     },
     pair::{End, Identity, MAX_FRAME, Pairing, Phase, Role},
-    schedule::{
-        GUARD_US, ROUND_US, airtime_us, base_of, named_slot, next_slot, next_slot_in, round_at,
-    },
+    schedule::{GUARD_US, ROUND_US, Schedule, airtime_us, base_of, round_at},
     seal::{self, Key, SIV_LEN},
     table::{Merge, Table},
 };
@@ -425,6 +423,8 @@ pub struct Mesh {
     group: Option<Group>,
     /// A group this device founded in a pairing whose last acknowledgement it never heard.
     founding: Option<Box<Founding>>,
+    /// The order the group's ids send in, from its key.
+    schedule: Option<Box<Schedule>>,
     /// The members' addresses as a refresh under way started, which tell the members it learns
     /// from one that moved to another id.
     refresh_known: Option<Box<[Option<[u8; 6]>; IDS as usize]>>,
@@ -472,6 +472,7 @@ impl Mesh {
             me: start.me,
             group,
             founding: None,
+            schedule: None,
             refresh_known: None,
             unsaved: 0,
             unsaved_group: false,
@@ -485,8 +486,26 @@ impl Mesh {
         };
         let tuned = mesh.tune(FREQUENCY_HZ, SYNC_WORD, POWER_DBM).await;
         info!("[MESH] tuned={}", tuned);
+        mesh.sync_schedule();
         mesh.publish();
         mesh
+    }
+
+    /// Keeps the slot schedule the group's key gives. Call it once the group changes, before
+    /// placing a slot.
+    fn sync_schedule(&mut self) {
+        match &self.group {
+            Some(group)
+                if !self
+                    .schedule
+                    .as_ref()
+                    .is_some_and(|schedule| schedule.is_for(group.key())) =>
+            {
+                self.schedule = Some(Box::new(Schedule::new(group.key())));
+            }
+            Some(_) => {}
+            None => self.schedule = None,
+        }
     }
 
     #[inline(never)]
@@ -520,6 +539,7 @@ impl Mesh {
 
     pub async fn run(mut self) -> ! {
         loop {
+            self.sync_schedule();
             self.publish();
             let command = if self.group.is_some() {
                 match select(self.step(), COMMANDS.receive()).await {
@@ -634,7 +654,13 @@ impl Mesh {
             self.listen(end).await;
             return;
         };
-        let (round, start) = next_slot((time + PREPARE_US).max(self.after), own);
+        let Some((round, start)) = self
+            .schedule
+            .as_deref()
+            .map(|schedule| schedule.next_slot((time + PREPARE_US).max(self.after), own))
+        else {
+            return;
+        };
         let send_at = start + (now - time);
         if let Some(at) = self.notice_at(now, own)
             && at + airtime_us(NOTICE_LEN) + PREPARE_US < send_at
@@ -668,7 +694,11 @@ impl Mesh {
     /// When the member a notice is for next listens for this node's slot, on the local timer.
     fn notice_at(&self, now: i64, own: u8) -> Option<i64> {
         let offset = self.notice?;
-        let (_, start) = next_slot(now - offset + 2 * PREPARE_US, own);
+        // The member's round, on its own timebase, gives this node's slot there.
+        let (_, start) = self
+            .schedule
+            .as_deref()?
+            .next_slot(now - offset + 2 * PREPARE_US, own);
         Some(start + offset)
     }
 
@@ -742,8 +772,12 @@ impl Mesh {
                 Some((time, _)) if !self.clock.is_sweeping(now) => {
                     let offset = now - time;
                     let from = time - GUARD_US - airtime_us(MAX_PACKET) + 1;
-                    let window =
-                        next_slot_in(from, self.listened(round_at(from))).map(|(_, start)| {
+                    let ids = self.listened(round_at(from));
+                    let window = self
+                        .schedule
+                        .as_deref()
+                        .and_then(|schedule| schedule.next_slot_in(from, ids))
+                        .map(|(_, start)| {
                             (
                                 start - GUARD_US + offset,
                                 start + GUARD_US + airtime_us(MAX_PACKET) + offset,
@@ -858,6 +892,13 @@ impl Mesh {
             POLL_US as i64 / 2
         };
         let start = done - airtime_us(len) - ARRIVAL_LATENCY_US - polled;
+        let Some(slot) = self
+            .schedule
+            .as_deref()
+            .map(|schedule| schedule.named_slot(header.base, header.sender))
+        else {
+            return false;
+        };
         let ours = self.clock.at(done).map(|(_, timebase)| timebase.source);
         if header.notice {
             if ours.is_none_or(|ours| header.timebase.source.outranks(ours)) {
@@ -869,7 +910,7 @@ impl Mesh {
             }
             return false;
         }
-        let arrival = self.clock.arrival(&header, start, done);
+        let arrival = self.clock.arrival(&header, slot, start, done);
         if arrival.taken == Taken::Ignored
             && self.notice.is_none()
             && ours.is_some_and(|ours| ours.outranks(header.timebase.source))
@@ -878,7 +919,7 @@ impl Mesh {
                 "[MESH] id={} is on a lower timebase; a notice goes to it",
                 header.sender
             );
-            self.notice = Some(start - named_slot(header.base, header.sender));
+            self.notice = Some(start - slot);
         }
         if let Some(heard) = self.shown.heard.get_mut(usize::from(header.sender)) {
             *heard = Some(done);
@@ -890,7 +931,7 @@ impl Mesh {
         {
             refresh.heard |= 1 << header.sender;
         }
-        let round = round_at(named_slot(header.base, header.sender));
+        let round = round_at(slot);
         self.table.heard(header.sender, round);
         let now = self
             .clock
@@ -1309,6 +1350,7 @@ impl Mesh {
         info!("[MESH] the founded group is this device's");
         let own = founding.group.own();
         self.group = Some(founding.group);
+        self.sync_schedule();
         self.unsaved = 0;
         self.unsaved_group = false;
         self.restart(own);

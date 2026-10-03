@@ -1750,6 +1750,7 @@ dependencies = [
 name = "octowhere-mesh"
 version = "0.1.0"
 dependencies = [
+ "aes",
  "aes-siv",
  "defmt 1.1.1",
  "hkdf",

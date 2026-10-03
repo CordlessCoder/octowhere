@@ -3,7 +3,7 @@
 //! timer, the timebase's since 1970.
 
 use crate::packet::{Header, Source, Timebase};
-use crate::schedule::{GUARD_US, ROUND_US, SWEEP_EVERY, is_sweep_round, named_slot, round_at};
+use crate::schedule::{GUARD_US, ROUND_US, SWEEP_EVERY, is_sweep_round, round_at};
 use crate::table::NEIGHBOUR_ROUNDS;
 
 /// A node's first sweep, and one after it lost its timebase's root, listen this long, which spans
@@ -132,9 +132,9 @@ impl Clock {
     }
 
     /// Takes a packet whose transmission started at local time `start`. A sender starts at its
-    /// slot's start, which its header names.
-    pub fn arrival(&mut self, header: &Header, start: i64, now: i64) -> Arrival {
-        let offset = start - named_slot(header.base, header.sender);
+    /// slot's start, `slot` on its timebase, which its header names to the group's schedule.
+    pub fn arrival(&mut self, header: &Header, slot: i64, start: i64, now: i64) -> Arrival {
+        let offset = start - slot;
         let late_us = self
             .clock
             .filter(|(_, timebase)| timebase.source == header.timebase.source)
@@ -227,7 +227,12 @@ impl Clock {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schedule::{base_of, slot_start};
+    use crate::schedule::{SLOT_US, base_of};
+
+    /// A slot's start in an order that does not shuffle, which the clock does not need.
+    fn slot_start(round: i64, id: u8) -> i64 {
+        round * ROUND_US + i64::from(id) * SLOT_US
+    }
 
     const SECOND: i64 = 1_000_000;
     /// A UTC time in 2026, and a round there.
@@ -247,7 +252,7 @@ mod tests {
     fn sent(clock: &mut Clock, from: u8, source: Source, hops: u8, skew: i64, now: i64) -> Arrival {
         let round = crate::schedule::round_at(now - skew) + 1;
         let start = slot_start(round, from);
-        clock.arrival(&header(from, source, hops, start), start + skew, now)
+        clock.arrival(&header(from, source, hops, start), start, start + skew, now)
     }
 
     #[test]

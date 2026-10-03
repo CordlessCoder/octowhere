@@ -78,17 +78,16 @@ With 32 nodes the whole table no longer fits a packet (23 entries do), and sendi
 round would grow channel load with the square of the group. So a packet carries a partial digest:
 the sender's own entry and the entries that most need spreading, chosen as described under "Packet".
 
-A relay passes an entry on in its own next slot, 1.4 s to one round after hearing it, depending on
-the ids along the path. A chain in id order crosses in one round; against id order, one round per
-hop. Shuffled slots (see "Medium access") make it a little over half a round a hop on average,
-whatever the ids.
+A relay passes an entry on in its own next slot. Slots are shuffled every round (see "Medium
+access"), so that takes a little over half a round a hop on average, and at most about two.
 
 Messages cannot ride the digest's merge, since each one must arrive, and arrive once. They are
 flooded through the same slots with their own ids and seen-set; see "Messages".
 
 ## Medium access
 
-GPS-anchored TDMA. The slot index is the node's paired id, 0–31. Slots are anchored to absolute UTC,
+GPS-anchored TDMA. Each round's 32 slots are the paired ids, 0–31, in an order of the group's
+own, new every round (see "Shuffled slots"). Slots are anchored to absolute UTC,
 so two partitions that cannot hear each other compute the same schedule and are already in phase
 when they rejoin. A node without a fix takes its time from the arrivals of another node's packets;
 see "Keeping time without a fix".
@@ -115,7 +114,7 @@ A node transmits in its slot when it has something to say, and stays silent othe
   the node is alone
 
 Triggers promote a transmission to the node's next slot rather than sending immediately, so trigger
-latency is at most one round, or about two once slots are shuffled. Off-slot transmission has
+latency is at most about two rounds, since slots are shuffled. Off-slot transmission has
 no audience, because the power saving depends on every node sleeping outside slots.
 
 The floor is every third round, at fixed rounds: node `k` transmits in every round `r` (UTC seconds
@@ -133,29 +132,33 @@ left. A node heard for the first time stays news, since the packet cannot say th
 
 ### Shuffled slots
 
-Agreed (owner, 2026-10-03), not built. As built, a node's slot is its id.
+Owner, 2026-10-03 (`schedule::Schedule`).
 
 - **Order.** Each round, the 32 ids are sorted by AES-256 of the round's number on the node's
   timebase and the id, under a key HKDF-SHA256 derives from the group key. An id's slot is its
   place in that order. Members on one timebase share the round number, and only members hold
   the key. The round number cannot be the key: every group with a fix shares it, so the order
   would be every group's, and anyone's with GPS time.
+- **Exactly.** The key is HKDF-SHA256's 32 bytes from the group key, with no salt and the info
+  `octowhere slots`. Each id's block is the round number as eight big-endian bytes, then the
+  id, then seven zeros. The ids sort by the first eight bytes of their encrypted blocks, read
+  big-endian, then by id. Every device has to compute this alike.
 - **Why.** Every group's ids start at 0 and take the lowest free, so with slot = id, member k
   of every group with a fix sends at the same instant, in the same floor rounds, as member k of
   every other. Two groups in one place collide in every slot they share, and a receiver that
   locks onto the other group's packet misses its own. Under their own keys, groups of n₁ and n₂
   share about n₁·n₂/32 slots a round, rarely the same pair two rounds running. A transmitter
   outside the group whose period divides the round hits a different member each round rather
-  than the same one for ever. And a listener with GPS time can no longer read the sender's id
-  from its slot, which it can as built (see "Packet").
+  than the same one for ever. And a listener with GPS time cannot read the sender's id from its
+  slot, which it could while a node's slot was its id (see "Packet").
 - **What stays.** Floor and sweep rounds go by the round number and the id. The header names
   the slot as before: its base timestamp gives the round, and the order the slot. A notice's
   sender works out the round of the node it notifies from that node's arrival, and its own slot
   in that round from the order.
 - **Cost.** A node with news waits up to about two rounds for its slot, a little over half a
   round on average, against at most one round and half on average with slot = id. A relay
-  chain in id order no longer crosses in one round. 32 AES blocks a round, cached for the round
-  and the next.
+  chain in id order no longer crosses in one round. 32 AES blocks a round, cached for the two
+  rounds asked about last.
 - **Rekeying.** The order's key changes with the group key at the switch time, so a member
   left on the old key sends in other slots from then on. Removal's design has to cover that.
 
@@ -351,8 +354,8 @@ synthetic IV (16) | ciphertext: header (8) + records
 AES-SIV (RFC 5297, AES-CMAC-SIV with a 256-bit key) under the group key, with no associated data.
 The synthetic IV is computed from the key and the whole plaintext, and is both the IV and the
 authentication tag, so the packet carries no nonce and nothing in the clear. A sender id in the
-clear would tell a direction-finding listener which node transmitted. As built, the slot tells
-it anyway, to a listener with GPS time; shuffled slots (see "Medium access") close that. SIV's
+clear would tell a direction-finding listener which node transmitted. Shuffled slots (see
+"Medium access") keep the slot from telling it, to a listener with GPS time. SIV's
 determinism reveals only that two packets are identical, and a packet's timestamp keeps that
 from happening. Sending needs no random numbers, so a faulty random source leaks nothing. The
 owner chose it over ChaCha20-Poly1305 with a random 12-byte nonce, which cost 12 bytes a packet
@@ -697,6 +700,7 @@ What is left goes in this order (owner, 2026-10-03):
 
 - Shuffled slots and member records on request (see "Medium access" and "Packet"), together
   and first. Both change what goes on the air, which is cheapest while there are two boards.
+  Shuffled slots are built.
 - Step 6, ahead of step 5. A new group key goes to each member as a private message, so
   removing a member needs the message machinery: flooding, the seen-set, acknowledgements,
   sequence numbers kept in flash, and the pairwise seal. It is built with removal as its first
