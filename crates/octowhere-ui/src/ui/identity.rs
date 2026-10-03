@@ -19,6 +19,7 @@ use embedded_graphics::{
 };
 
 use super::{
+    charging::{self, MAX_BARS, Span},
     clock::ClockView,
     scatter::{Field, Law, Look, Scatter, Shown, Tones},
     screens, smooth,
@@ -194,8 +195,12 @@ const DENSE: f32 = 0.71;
 /// From this frame only the scatter's turns and the clock's digits change. Before it, a frame
 /// redraws everything.
 const SETTLED: u32 = PIN_FROM + 11;
-const _: () =
-    assert!(ARMS_UNTIL <= SETTLED && FLICKER_FROM + 11 <= SETTLED && ROW_FROM + 5 <= SETTLED);
+const _: () = assert!(
+    ARMS_UNTIL <= SETTLED
+        && FLICKER_FROM + 11 <= SETTLED
+        && ROW_FROM + 5 <= SETTLED
+        && ROW_FROM + charging::BUILD_IN_FRAMES <= SETTLED
+);
 
 /// How a flickering element shows, some frames after its flicker starts: on for two, off for
 /// two, on for one, off for two, on for two, partly on for two, then on.
@@ -799,12 +804,22 @@ fn draw_row<D: CoverageTarget<Color = Color>>(
         }
     };
     let scale = BARCODE_WIDTH / startup::bars_advance(context.firmware) as f32;
+    // The barcode builds in as the charging gauge's slices do (owner, 2026-10-01).
+    let rest: heapless::Vec<Span, MAX_BARS> = startup::bars(context.firmware)
+        .map(|(at, width)| Span {
+            left: at as f32,
+            width: width as f32,
+        })
+        .take(MAX_BARS)
+        .collect();
+    let mut bars = heapless::Vec::new();
+    charging::build_in(frame - ROW_FROM, &rest, &mut bars);
     let digits = startup::utc_digits(context.clock);
     for band in 0..5 {
         line.fill(0);
-        for (at, width) in startup::bars(context.firmware) {
-            let from = ROW_LEFT + at as f32 * scale;
-            add(&mut line, from, from + width as f32 * scale);
+        for bar in &bars {
+            let from = ROW_LEFT + bar.left * scale;
+            add(&mut line, from, from + bar.width * scale);
         }
         // Each run of set modules is one span, since two edges meeting mid-pixel would leave a
         // seam.

@@ -509,6 +509,12 @@ interpreted them:
   line, 172 px. After a failed boot the second line still reads `SELF TEST n/7 OK`, as the
   owner chose over `n/7 FAIL`, which is 194 px and would not fit. Its fractional edges are blended
   rather than rounded, and each row of set modules is one span, so no seam shows between them.
+- **The barcode builds in** as the charging gauge's slices do (owner, 2026-10-01, after
+  `DECISIONS.md` entry 24), where the design shows it whole from its frame: from frame 21 a
+  solid as long as the bars closes in on their middle over 13 frames along the flight curve,
+  three frames later a seed grows there for three frames and splits into the end bars, which fly
+  out to their places over 13 frames, and each inner bar appears on the logo's frame nearest its
+  place. The bars rest from frame 58, inside the frames the identity redraws whole.
 - **The pluses** replace the ticks: 7 px arms, 1 px thick, 10 px out from the title's ink
   corners, at (23, 167) and (442, 298), with the ticks' flicker.
 - **The scatter's gap** runs from row 163 to 340, clear of the taller title and row.
