@@ -56,12 +56,13 @@ pub struct Tones {
 pub enum Law {
     /// Rising from the centre to the edge, and highest on the side the look faces.
     Radial,
-    /// `quiet` everywhere but in `lobes`, where it is `peak`, by the mark's top-left corner.
-    /// Looks' facings do not turn it.
+    /// `peak` in `lobes`, easing to `quiet` at `reach` pixels from the nearest, by the mark's
+    /// top-left corner. Looks' facings do not turn it.
     Lobes {
         lobes: &'static [Rectangle],
         quiet: f32,
         peak: f32,
+        reach: f32,
     },
 }
 
@@ -427,11 +428,31 @@ impl Scatter {
                     let radial = 0.45 + 0.55 * ((r - 40.0) * (1.0 / 180.0)).clamp(0.0, 1.0);
                     radial * (0.45 + 0.55 * toward)
                 }
-                Law::Lobes { lobes, quiet, peak } => {
-                    if lobes.iter().any(|lobe| lobe.contains(at.cell.top_left)) {
-                        peak
-                    } else {
+                Law::Lobes {
+                    lobes,
+                    quiet,
+                    peak,
+                    reach,
+                } => {
+                    let corner = at.cell.top_left;
+                    let squared = lobes
+                        .iter()
+                        .map(|lobe| {
+                            let end = lobe.top_left + lobe.size - Point::new(1, 1);
+                            let dx = (lobe.top_left.x - corner.x).max(corner.x - end.x).max(0);
+                            let dy = (lobe.top_left.y - corner.y).max(corner.y - end.y).max(0);
+                            (dx * dx + dy * dy) as f32
+                        })
+                        .fold(f32::MAX, f32::min);
+                    if squared >= reach * reach {
                         quiet
+                    } else {
+                        let near = if squared > 0.0 {
+                            1.0 - squared * inverse_sqrt(squared) / reach
+                        } else {
+                            1.0
+                        };
+                        quiet + (peak - quiet) * near * near * (3.0 - 2.0 * near)
                     }
                 }
             };

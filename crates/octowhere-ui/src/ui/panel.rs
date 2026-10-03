@@ -38,8 +38,9 @@ const MARKER_PITCH: i32 = 16;
 pub const HINT: &str = "DRAG UP TO CLOSE";
 const HINT_TOP: i32 = 406;
 /// The S1 prototype's halftone (`settings_study.py`): an 8 px grid inside radius 219, dense in
-/// two lobes beside the rows and sparse elsewhere, and none over the title, the hint or the
-/// rows' block. Its marks' purples brighten with the density.
+/// two lobes beside the rows and sparse elsewhere, and none over the title or the hint. The
+/// density eases out of the lobes, and the panel's rows lie over it (owner, 2026-10-04). Its
+/// marks' purples brighten with the density.
 const SCATTER: Scatter = Scatter {
     origin: Point::new(24, 24),
     gap: None,
@@ -59,6 +60,7 @@ const SCATTER: Scatter = Scatter {
             ],
             quiet: 0.09,
             peak: LOBE,
+            reach: 56.0,
         },
     }],
 };
@@ -68,11 +70,15 @@ const SCATTER_LOOK: Look = Look {
     facing: 0.0,
     density: 1.0,
 };
-/// No mark's top-left may lie over the title, the hint or the rows' block; a mark is left out
-/// when it meets one of these.
-const SCATTER_CLEAR: [Rectangle; 3] = [
+/// A mark is left out when it meets the title or the hint.
+const PANEL_CLEAR: [Rectangle; 2] = [
     Rectangle::new(Point::new(109, 0), Size::new(254, 83)),
     Rectangle::new(Point::new(118, 376), Size::new(236, 90)),
+];
+/// The screens the panel opens keep the rows' block clear too.
+const SCREEN_CLEAR: [Rectangle; 3] = [
+    PANEL_CLEAR[0],
+    PANEL_CLEAR[1],
     Rectangle::new(Point::new(85, 88), Size::new(302, 283)),
 ];
 
@@ -420,7 +426,7 @@ fn draw_cell<D: CoverageTarget<Color = Color>>(
         &index,
         pen,
         Reveal::of(accents.index[i], 2),
-        &mut OnBackground::new(&mut *target, chrome::BLACK),
+        &mut *target,
     )?;
     let style = name_style(font);
     let name = cell.name();
@@ -430,7 +436,7 @@ fn draw_cell<D: CoverageTarget<Color = Color>>(
         name,
         pen,
         Reveal::of(accents.name[i], name.len()),
-        &mut OnBackground::new(&mut *target, chrome::BLACK),
+        &mut *target,
     )?;
     let mut value = String::<24>::new();
     if let Some(tag) = content.tag {
@@ -439,11 +445,7 @@ fn draw_cell<D: CoverageTarget<Color = Color>>(
     _ = value.push_str(&content.value);
     let style = value_style(font, content.value_color);
     let pen = Point::new(x + 45, text::baseline_for_ink_top(&style, &value, top + 38));
-    style.draw_on_baseline(
-        &value,
-        pen,
-        &mut OnBackground::new(&mut *target, chrome::BLACK),
-    )?;
+    style.draw_on_baseline(&value, pen, &mut *target)?;
     let marker = Rectangle::new(Point::new(x, top + 12), Size::new(3, 16));
     target.fill_solid(
         &marker,
@@ -492,19 +494,19 @@ fn scatter_looks(accents: &Accents) -> [Look; 1] {
     }]
 }
 
-/// The scatter the panel and the screens it opens share, at `accents`' bloom and breath.
+/// The scatter the screens the panel opens draw, clear of their middle.
 pub fn draw_scatter<D: CoverageTarget<Color = Color>>(
     accents: &Accents,
     target: &mut D,
 ) -> Result<(), D::Error> {
-    SCATTER.draw_clear_of(&scatter_looks(accents), &SCATTER_CLEAR, target)
+    SCATTER.draw_clear_of(&scatter_looks(accents), &SCREEN_CLEAR, target)
 }
 
 /// Marks the scatter's marks that differ between `before` and `after`.
 pub fn scatter_damage(before: &Accents, after: &Accents, damage: &mut chrome::Dirty) {
     SCATTER.changed_between(
-        (&scatter_looks(before), &SCATTER_CLEAR),
-        (&scatter_looks(after), &SCATTER_CLEAR),
+        (&scatter_looks(before), &PANEL_CLEAR),
+        (&scatter_looks(after), &PANEL_CLEAR),
         damage,
     );
 }
@@ -516,7 +518,7 @@ pub fn draw<D: CoverageTarget<Color = Color>>(
     font: &FontdueRenderer<'static, Color>,
     target: &mut D,
 ) -> Result<(), D::Error> {
-    draw_scatter(&accents, target)?;
+    SCATTER.draw_clear_of(&scatter_looks(&accents), &PANEL_CLEAR, target)?;
     {
         let rows = &mut Window::new(
             &mut *target,
