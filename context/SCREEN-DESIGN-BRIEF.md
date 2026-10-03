@@ -50,7 +50,8 @@ The last round added the radio to the start-up's self-test, a REFRESH DEVICES co
 group screens, and a founder's wait for the device it added. Its brief is
 `design/handoffs/REFRESH-AND-RADIO-ROUND-BRIEF-2026-10-03.md`, and the owner approved its
 hand-off, `design/handoffs/octowhere-radio-refresh-handoff-2026-10-03/` (`design/DECISIONS.md`
-entry 29). It is built and checked on the host; the boards have not run it yet. "Start-up as
+entry 29). It is built, and the two boards ran it on 2026-10-03
+(`docs/logs/lora/refresh-and-recovery-2026-10-03/`, with their own screens). "Start-up as
 built" and "Group and pairing as built" say where the build interpreted it.
 
 The round before was pairing and the group, the screens for step 3 of the location mesh. Its brief

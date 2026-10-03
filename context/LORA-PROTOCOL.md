@@ -254,8 +254,10 @@ GPS ranks above any node's clock, and between node clocks the lower root id rank
   lowest root. A node that gets a fix moves to GPS time, and the nodes timing from it find it again
   at their next sweep.
 - **Refreshing.** REFRESH DEVICES on the screens starts the same three-round sweep at once
-  (owner, 2026-10-03). It counts the members it heard directly apart from those the group
-  gained while it ran, and a pairing stops it.
+  (owner, 2026-10-03), and keeps it to its end though a timebase taken up or a fix would end a
+  sweep. It counts the members it heard directly apart from those the group gained while it
+  ran, and a pairing stops it. It brought two boards on clocks 271 s apart together from either
+  side (`docs/logs/lora/refresh-and-recovery-2026-10-03/`).
 - **Notices.** A node that hears a member on a timebase ranked below its own sends it a notice
   (owner, 2026-10-03): a header alone, flagged, 24 bytes, at the time that member listens for
   the sender's slot on its own timebase, which the packet's arrival told it. The notice is sent
@@ -704,7 +706,7 @@ What is left goes in this order (owner, 2026-10-03):
 
 - Shuffled slots and member records on request (see "Medium access" and "Packet"), together
   and first. Both change what goes on the air, which is cheapest while there are two boards.
-  Both are built, and the boards have not run them yet.
+  Both are built and ran on the two boards (`docs/logs/lora/refresh-and-recovery-2026-10-03/`).
 - Step 6, ahead of step 5. A new group key goes to each member as a private message, so
   removing a member needs the message machinery: flooding, the seen-set, acknowledgements,
   sequence numbers kept in flash, and the pairwise seal. It is built with removal as its first

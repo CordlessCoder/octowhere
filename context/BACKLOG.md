@@ -87,14 +87,13 @@ until the feature set is complete, because profiling an incomplete firmware pric
   order its "Build order" gives (owner, 2026-10-03): shuffled slots and member records on
   request, then step 6 with removing a member as its first use, then step 5, CAD, which needs
   the slot timing it depends on measured first ("Time sync" there).
-- Run the 2026-10-03 round on the boards (`design/DECISIONS.md` entry 29), which is built and
-  checked on the host only; the boards were not attached. Time the radio's check and the
-  self-test's scroll, and check the scroll redraws only the list and holds nothing back. Refresh
-  between the two boards with their clocks apart (`tools/rtc-inject.py`), from each side, and
-  read the counts it reports against the logs. Lose a founding's last acknowledgement with
-  `pair-inject.py deaf` and watch GROUP PENDING through to GROUP STORED, and to NO GROUP with
-  the joining device off. Then send the design agent its return package: the native captures,
-  the start-up recordings and these board results.
+- Send the design agent its return package for the 2026-10-03 round (`design/DECISIONS.md`
+  entry 29), which is built and ran on the two boards
+  (`docs/logs/lora/refresh-and-recovery-2026-10-03/`): the `render` example's stills, the
+  start-up recordings (`ui-sim --record` of `startup`, `startup-radio-failed`,
+  `startup-radio-slow`, `startup-power-failed` and `startup-power-radio-failed`), the boards'
+  screens and measurements, and where the build departed from the renders
+  (`SCREEN-DESIGN-BRIEF.md`, "Start-up as built" and "Group and pairing as built").
 - Finish what step 3's screens leave open (`SCREEN-DESIGN-BRIEF.md`, "Group and pairing as
   built"):
   - Every group screen's legibility on the panel, which nobody has judged yet. Typing on the
