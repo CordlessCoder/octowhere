@@ -625,6 +625,203 @@ impl<T: CoverageTarget<Color = Color>> CoverageTarget for Knockout<'_, T> {
     }
 }
 
+/// Coverage drawn into it, kept to be blended onto a target later in any colour. Each row it is
+/// sent is stored as it came, without its uncovered ends and as runs: of uncovered pixels, of
+/// fully covered ones, and of the bytes of the rest. Rows that overlap are kept apart and blended
+/// in turn. The colour drawn with is not kept.
+pub struct Recording {
+    bytes: alloc::vec::Vec<u8>,
+    /// Where the part being recorded began, and the columns and rows its rows have reached.
+    part: Part,
+}
+
+/// What a [`Recording`] holds between two calls to [`Recording::part`].
+#[derive(Clone, Debug, Default)]
+pub struct Part {
+    bytes: core::ops::Range<usize>,
+    columns: core::ops::Range<i32>,
+    rows: core::ops::Range<i32>,
+}
+
+impl Part {
+    fn reach(&mut self, columns: core::ops::Range<i32>, y: i32) {
+        if self.columns.is_empty() {
+            (self.columns, self.rows) = (columns, y..y + 1);
+        } else {
+            self.columns = self.columns.start.min(columns.start)..self.columns.end.max(columns.end);
+            self.rows = self.rows.start.min(y)..self.rows.end.max(y + 1);
+        }
+    }
+}
+
+/// A row's header: its row, first column and pixel count, [`ROW_FIELD`] bits each.
+const ROW_HEADER: usize = 4;
+const ROW_FIELD: u32 = 9;
+const _: () = assert!(board::LCD_WIDTH < 1 << ROW_FIELD && board::LCD_HEIGHT < 1 << ROW_FIELD);
+/// The longest run. A run's byte holds its kind times this, plus its length less one.
+const RUN_LENGTH: usize = 64;
+/// The kinds of run: uncovered pixels, covered ones, and the rest, whose bytes follow the run's.
+const RUN_UNCOVERED: u8 = 0;
+const RUN_COVERED: u8 = 1;
+const RUN_BYTES: u8 = 2;
+
+impl Recording {
+    /// A recording with room for `bytes` of rows, which it grows past only if it must.
+    #[must_use]
+    pub fn with_capacity(bytes: usize) -> Self {
+        Self {
+            bytes: alloc::vec::Vec::with_capacity(bytes),
+            part: Part::default(),
+        }
+    }
+
+    /// How many bytes the rows take.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.bytes.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
+
+    /// Ends the part recorded since the last call, or since the recording began, and returns it.
+    pub fn part(&mut self) -> Part {
+        let end = self.bytes.len();
+        let mut part = core::mem::take(&mut self.part);
+        part.bytes.end = end;
+        self.part.bytes = end..end;
+        part
+    }
+
+    /// Blends `part`'s rows onto `target` in `color`, those of their pixels in `columns`.
+    pub fn draw<D: CoverageTarget<Color = Color>>(
+        &self,
+        part: &Part,
+        columns: core::ops::Range<i32>,
+        color: Color,
+        target: &mut D,
+    ) {
+        let columns = columns.start.max(part.columns.start)..columns.end.min(part.columns.end);
+        if columns.is_empty() {
+            return;
+        }
+        let shown = Rectangle::new(
+            Point::new(columns.start, part.rows.start),
+            Size::new(columns.len() as u32, part.rows.len() as u32),
+        );
+        if !target.visible(&shown) {
+            return;
+        }
+        let mut line = [0u8; board::LCD_WIDTH as usize];
+        let mut bytes = &self.bytes[part.bytes.clone()];
+        while let Some((header, rest)) = bytes.split_at_checked(ROW_HEADER) {
+            let header = u32::from_le_bytes([header[0], header[1], header[2], header[3]]);
+            let field = |n: u32| (header >> (n * ROW_FIELD)) % (1 << ROW_FIELD);
+            let (y, x, cells) = (field(0) as i32, field(1) as i32, field(2) as usize);
+            bytes = rest;
+            let mut filled = 0;
+            while filled < cells {
+                let run = bytes[0];
+                let length = usize::from(run) % RUN_LENGTH + 1;
+                let cells = &mut line[filled..filled + length];
+                bytes = match run / RUN_LENGTH as u8 {
+                    RUN_UNCOVERED => {
+                        cells.fill(0);
+                        &bytes[1..]
+                    }
+                    RUN_COVERED => {
+                        cells.fill(u8::MAX);
+                        &bytes[1..]
+                    }
+                    _ => {
+                        cells.copy_from_slice(&bytes[1..=length]);
+                        &bytes[1 + length..]
+                    }
+                };
+                filled += length;
+            }
+            let (from, to) = (x.max(columns.start), (x + cells as i32).min(columns.end));
+            if from < to {
+                target.blend_row(
+                    from,
+                    y,
+                    &line[(from - x) as usize..(to - x) as usize],
+                    color,
+                );
+            }
+        }
+    }
+}
+
+impl Dimensions for Recording {
+    fn bounding_box(&self) -> Rectangle {
+        DISPLAY_BBOX
+    }
+}
+
+impl DrawTarget for Recording {
+    type Color = Color;
+    type Error = core::convert::Infallible;
+
+    fn draw_iter<I: IntoIterator<Item = Pixel<Color>>>(
+        &mut self,
+        pixels: I,
+    ) -> Result<(), Self::Error> {
+        for Pixel(point, color) in pixels {
+            self.blend_row(point.x, point.y, &[u8::MAX], color);
+        }
+        Ok(())
+    }
+}
+
+impl CoverageTarget for Recording {
+    /// Rows off the panel, and a row's uncovered ends, are left out.
+    fn blend_row(&mut self, x: i32, y: i32, coverage: &[u8], _: Color) {
+        const WIDTH: i32 = board::LCD_WIDTH as i32;
+        if !(0..board::LCD_HEIGHT as i32).contains(&y) {
+            return;
+        }
+        let (start, end) = (x.max(0), x.saturating_add(coverage.len() as i32).min(WIDTH));
+        if start >= end {
+            return;
+        }
+        let coverage = &coverage[(start - x) as usize..(end - x) as usize];
+        let Some(first) = coverage.iter().position(|&c| c != 0) else {
+            return;
+        };
+        let last = coverage.iter().rposition(|&c| c != 0).unwrap_or(first);
+        let coverage = &coverage[first..=last];
+        let start = start + first as i32;
+        self.part.reach(start..start + coverage.len() as i32, y);
+        let header = [y, start, coverage.len() as i32]
+            .iter()
+            .rev()
+            .fold(0, |header, &field| header << ROW_FIELD | field as u32);
+        self.bytes.extend_from_slice(&header.to_le_bytes());
+        let kind = |c: u8| match c {
+            0 => RUN_UNCOVERED,
+            u8::MAX => RUN_COVERED,
+            _ => RUN_BYTES,
+        };
+        let mut rest = coverage;
+        while let Some(&first) = rest.first() {
+            let run = kind(first);
+            let length = rest
+                .iter()
+                .take(RUN_LENGTH)
+                .position(|&c| kind(c) != run)
+                .unwrap_or(rest.len().min(RUN_LENGTH));
+            self.bytes.push(run * RUN_LENGTH as u8 + (length - 1) as u8);
+            if run == RUN_BYTES {
+                self.bytes.extend_from_slice(&rest[..length]);
+            }
+            rest = &rest[length..];
+        }
+    }
+}
+
 // `scale` is the size in px per em the outlines are flattened for; larger text shows the facets.
 // At 24 the compass readout matches a much finer flattening. Raising it costs rasterization time
 // on every glyph drawn.
