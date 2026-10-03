@@ -7,6 +7,7 @@
 
 pub mod bits;
 pub mod clock;
+pub mod identity;
 pub mod members;
 pub mod messages;
 pub mod packet;

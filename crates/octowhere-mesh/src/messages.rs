@@ -5,8 +5,8 @@
 use bytemuck::Zeroable;
 use hkdf::Hkdf;
 use sha2::{Digest, Sha256};
-use x25519_dalek::{PublicKey, StaticSecret};
 
+use crate::identity::{Identity, dh_public};
 use crate::members::{MISMATCHES, PUBLIC_LEN};
 use crate::seal::{self, Inauthentic, Key, SIV_LEN};
 use crate::{AHEAD_S, IDS};
@@ -264,16 +264,17 @@ pub fn is_text(text: &[u8]) -> bool {
     (1..=TEXT_MAX).contains(&text.len()) && text.iter().all(|&c| (0x20..0x7f).contains(&c))
 }
 
-/// The key two members' private messages are sealed under: 256 bits of HKDF-SHA256 over their
-/// X25519 shared secret, bound to both public keys. `None` for a key whose shared secret is not
+/// The key two members' private messages are sealed under: 256 bits of HKDF-SHA256 over the
+/// shared secret of the X25519 keys their identities give, bound to both identities' public
+/// keys. `None` for a public key that is no identity's, or a shared secret that is not
 /// contributory.
 #[must_use]
-pub fn pairwise(me: &StaticSecret, theirs: &[u8; PUBLIC_LEN]) -> Option<Key> {
-    let shared = me.diffie_hellman(&PublicKey::from(*theirs));
+pub fn pairwise(me: &Identity, theirs: &[u8; PUBLIC_LEN]) -> Option<Key> {
+    let shared = me.dh().diffie_hellman(&dh_public(theirs)?);
     if !shared.was_contributory() {
         return None;
     }
-    let mine = PublicKey::from(me).to_bytes();
+    let mine = me.public();
     let (low, high) = if mine <= *theirs {
         (mine, *theirs)
     } else {
@@ -301,7 +302,7 @@ impl Default for Pairwise {
 
 impl Pairwise {
     /// The key shared with the member `id`, whose public key is `theirs`.
-    pub fn key(&mut self, me: &StaticSecret, id: u8, theirs: &[u8; PUBLIC_LEN]) -> Option<&Key> {
+    pub fn key(&mut self, me: &Identity, id: u8, theirs: &[u8; PUBLIC_LEN]) -> Option<&Key> {
         let held = self.keys.get_mut(usize::from(id))?;
         if held.as_ref().is_none_or(|(public, _)| public != theirs) {
             *held = Some((*theirs, pairwise(me, theirs)?));
@@ -720,6 +721,7 @@ mod tests {
     use std::boxed::Box;
 
     use super::*;
+    use crate::members::tests::key;
 
     const NOW: u32 = 1_790_000_000;
 
@@ -757,12 +759,8 @@ mod tests {
 
     #[test]
     fn a_private_message_opens_only_for_its_pair_and_unaltered() {
-        let (a, b, c) = (
-            StaticSecret::from([1; 32]),
-            StaticSecret::from([2; 32]),
-            StaticSecret::from([3; 32]),
-        );
-        let public = |s: &StaticSecret| PublicKey::from(s).to_bytes();
+        let (a, b, c) = (key(1), key(2), key(3));
+        let public = |identity: &Identity| identity.public();
         let ab = pairwise(&a, &public(&b)).unwrap();
         assert!(
             pairwise(&b, &public(&a)).unwrap() == ab,

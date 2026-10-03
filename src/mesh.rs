@@ -527,7 +527,7 @@ async fn rename(me: &mut Identity, group: Option<&mut Group>, name: Name) -> boo
     }
     me.name = name;
     if let Some(group) = group {
-        group.rename(name, utc_seconds(local()));
+        group.rename(name, utc_seconds(local()), me);
     }
     true
 }
@@ -843,7 +843,7 @@ impl Mesh {
                 let now = local();
                 let (left, group) = leave(&mut self.group).await;
                 if let Some(group) = group {
-                    let gone = group.leaving(utc_seconds(now));
+                    let gone = group.leaving(utc_seconds(now), &self.me);
                     self.leaving = Some(Box::new(Leaving {
                         group,
                         gone,
@@ -881,20 +881,22 @@ impl Mesh {
             #[cfg(feature = "pair-inject")]
             Command::Phantom => {
                 let now = utc_seconds(local());
-                if let (Some(group), Some(public), Some(mac)) =
+                if let (Some(group), Some(seed), Some(mac)) =
                     (&mut self.group, random::<32>(), random::<6>())
                     && let Some(id) = group.lowest_free()
                 {
-                    group.enrol(
-                        id,
-                        Member {
-                            public,
-                            joined: now,
-                            changed: now,
-                            mac,
-                            name: Name::new(b"Phantom").expect("a printable name"),
-                        },
-                    );
+                    let phantom =
+                        Identity::new(seed, mac, Name::new(b"Phantom").expect("printable"));
+                    let mut record = Member {
+                        public: phantom.public(),
+                        joined: now,
+                        changed: now,
+                        mac,
+                        name: phantom.name,
+                        signature: [0; octowhere_mesh::identity::SIGNATURE_LEN],
+                    };
+                    record.sign(id, &phantom);
+                    group.enrol(id, record);
                     self.unsaved |= 1 << id;
                     info!("[MESH] enrolled a phantom at {}", id);
                 }
@@ -1603,6 +1605,7 @@ impl Mesh {
                                 "[MESH] another device keeps id {}; this one moves to {}",
                                 from, to
                             );
+                            group.sign_own(&self.me);
                             self.clock.renumber(to);
                             self.table.renumber(to);
                             self.unsaved_group = true;
@@ -1873,18 +1876,10 @@ impl Mesh {
             Role::Join => Pairing::join(&self.me, nonce, now),
             Role::Add => {
                 let utc = utc_seconds(now);
-                let group = self.group.clone().unwrap_or_else(|| {
-                    Group::found(
-                        Key::new(founding),
-                        Member {
-                            public: self.me.public(),
-                            joined: utc,
-                            changed: utc,
-                            mac: self.me.mac,
-                            name: self.me.name,
-                        },
-                    )
-                });
+                let group = self
+                    .group
+                    .clone()
+                    .unwrap_or_else(|| Group::found(Key::new(founding), &self.me, utc));
                 Pairing::add(&self.me, group, nonce, now, utc)
             }
         };
@@ -2451,7 +2446,7 @@ impl Mesh {
                     warn!("[MSG] id {} went before its message did", dest);
                     return Made::Dropped;
                 };
-                let Some(key) = self.pairwise.key(&self.me.secret, dest, &public) else {
+                let Some(key) = self.pairwise.key(&self.me, dest, &public) else {
                     warn!("[MSG] no key shared with id {}", dest);
                     return Made::Dropped;
                 };
@@ -2520,7 +2515,7 @@ impl Mesh {
                     );
                     return false;
                 };
-                let Some(key) = self.pairwise.key(&self.me.secret, origin, &public) else {
+                let Some(key) = self.pairwise.key(&self.me, origin, &public) else {
                     return true;
                 };
                 let mut out = [0; BODY_MAX];

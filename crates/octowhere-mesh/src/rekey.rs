@@ -725,8 +725,8 @@ pub struct Switched {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::members::tests::member;
-    use crate::members::{Gone, Slot, fingerprint};
+    use crate::members::tests::{member, signed};
+    use crate::members::{Slot, fingerprint};
 
     fn group(own: u8, ids: &[(u8, u8)]) -> Group {
         let mut slots = [None; IDS as usize];
@@ -738,14 +738,7 @@ mod tests {
 
     /// Holds the device `of` as gone from id `id`: a key that names it removes nobody.
     fn left(g: &mut Group, id: u8, of: u8) {
-        g.merge_gone(
-            id,
-            Gone {
-                public: [of; 32],
-                changed: 50,
-            },
-            0,
-        );
+        g.merge_gone(id, crate::members::tests::left(id, of, 50), 0);
     }
 
     fn new(n: u8, generation: u16, switch: u32, removed: u8, of: u8) -> NewKey {
@@ -754,7 +747,7 @@ mod tests {
             generation,
             switch,
             removed,
-            fingerprint: fingerprint(&[of; 32]),
+            fingerprint: fingerprint(&member(of, 0).public),
         }
     }
 
@@ -777,7 +770,7 @@ mod tests {
         let started = rekey.start(&g, 2, Key::new([9; 32]), 1_000).unwrap();
         assert_eq!(started.generation, 4);
         assert_eq!(started.removed, 2);
-        assert_eq!(started.fingerprint, fingerprint(&[3; 32]));
+        assert_eq!(started.fingerprint, fingerprint(&member(3, 0).public));
         assert_eq!(started.switch, 1_000 + switch_rounds(3));
         assert!(
             rekey.start(&g, 3, Key::new([8; 32]), 1_000).is_none(),
@@ -1060,7 +1053,7 @@ mod tests {
         let until = 1_010 + UNDO_ROUNDS;
         assert_eq!(rekey.undo_until(), Some(until));
         // A member renamed after the switch, under the new key.
-        g.merge(3, member(4, 2_000), 0);
+        g.merge(3, signed(3, 4, 2_000), 0);
         assert!(rekey.changed(g.take_changed()));
         assert_eq!(
             rekey.undo(&mut g, until, 3),
@@ -1369,7 +1362,7 @@ mod tests {
         let mut rekey = Rekey::default();
         rekey.learned(&g, 1, new(9, 4, 1_010, 2, 3), 1_000, false);
         rekey.switch(&mut g).unwrap();
-        g.merge(1, member(2, 2_000), 0);
+        g.merge(1, signed(1, 2, 2_000), 0);
         rekey.changed(g.take_changed());
         let len = rekey.encode(&mut out);
         let mut read = Rekey::decode(&out[..len]).unwrap();

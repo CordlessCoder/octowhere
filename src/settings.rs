@@ -57,8 +57,9 @@ const KEY_GROUP: &[u8] = b"group";
 /// A removal under way, the old keys kept and those declined, as `Rekey::encode` writes them.
 /// It sorts after every member's key.
 const KEY_REKEY: &[u8] = b"group.rekey";
-/// This device's X25519 secret. It is in the clear: `context/LORA-PROTOCOL.md` defers flash
-/// encryption.
+/// This device's Ed25519 seed, which its keys come from (`octowhere_mesh::identity`). It is in
+/// the clear: `context/LORA-PROTOCOL.md` defers flash encryption. A device that stored an X25519
+/// secret here before reads it as a seed, which gives it a new identity.
 const KEY_IDENTITY: &[u8] = b"identity";
 const KEY_NAME: &[u8] = b"name";
 /// The end of the block of message sequence numbers reserved last, little-endian: every number
@@ -105,7 +106,7 @@ pub enum Write {
 /// The mesh's state as stored.
 #[derive(Default)]
 pub struct MeshSaved {
-    pub secret: Option<[u8; 32]>,
+    pub seed: Option<[u8; 32]>,
     pub name: Option<Name>,
     pub group: Option<Box<Group>>,
     pub sequence: Option<u32>,
@@ -444,9 +445,9 @@ impl Store {
                     .map_or(0, |bytes| u16::from_le_bytes([bytes[0], bytes[1]]));
                 Group::restore(Key::new(key.try_into().ok()?), generation, own, slots)
             });
-            let secret = value(KEY_IDENTITY)
+            let seed = value(KEY_IDENTITY)
                 .await
-                .and_then(|secret| secret.as_slice().try_into().ok());
+                .and_then(|seed| seed.as_slice().try_into().ok());
             let name = value(KEY_NAME).await.and_then(|name| Name::new(&name));
             let sequence = value(KEY_SEQUENCE)
                 .await
@@ -463,7 +464,7 @@ impl Store {
             };
             self.stored_members = stored_members;
             MeshSaved {
-                secret,
+                seed,
                 name,
                 group: group.map(Box::new),
                 sequence,
@@ -484,8 +485,8 @@ impl Store {
             let mut stored = self.stored_members;
             // A transaction takes its keys in ascending order.
             let written = match write {
-                GroupWrite::Identity(secret) => {
-                    value[1..33].copy_from_slice(secret);
+                GroupWrite::Identity(seed) => {
+                    value[1..33].copy_from_slice(seed);
                     transaction.write(KEY_IDENTITY, &value[..33]).await
                 }
                 GroupWrite::Name(name) => {

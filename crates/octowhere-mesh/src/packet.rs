@@ -713,6 +713,7 @@ mod tests {
         let gone = Gone {
             public: [3; 32],
             changed: 1_790_000_002,
+            signature: [7; 64],
         };
         let mut buf = [0; MAX_PLAIN];
         let mut builder = Builder::new(&mut buf, &header());

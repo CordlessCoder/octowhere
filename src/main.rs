@@ -1939,27 +1939,27 @@ async fn async_main(spawner: Spawner) {
 fn mesh_start(saved: settings::MeshSaved) -> mesh::Start {
     let mac = esp_hal::efuse::base_mac_address();
     let mac: [u8; 6] = mac.as_bytes()[..6].try_into().expect("a six-byte MAC");
-    let secret = saved.secret.or_else(|| {
-        let secret = mesh::random::<32>()?;
+    let seed = saved.seed.or_else(|| {
+        let seed = mesh::random::<32>()?;
         info!("[MESH] made this device's key pair");
-        if queue_group_write(settings::GroupWrite::Identity(secret)).is_none() {
+        if queue_group_write(settings::GroupWrite::Identity(seed)).is_none() {
             warn!("[MESH] the key pair could not be queued to store");
         }
-        Some(secret)
+        Some(seed)
     });
-    let secret = secret.unwrap_or_else(|| {
+    let seed = seed.unwrap_or_else(|| {
         // Without a random source the device cannot pair; this key is never stored.
         warn!("[MESH] no random source for a key pair");
         [0; 32]
     });
     mesh::Start {
-        me: octowhere_mesh::pair::Identity {
-            secret: octowhere_mesh::pair::StaticSecret::from(secret),
+        me: octowhere_mesh::identity::Identity::new(
+            seed,
             mac,
-            name: saved
+            saved
                 .name
                 .unwrap_or_else(|| octowhere_mesh::members::Name::from_mac(&mac)),
-        },
+        ),
         group: saved.group,
         sequence: saved.sequence,
         rekey: saved.rekey,

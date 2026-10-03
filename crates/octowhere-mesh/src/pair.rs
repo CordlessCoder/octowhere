@@ -8,25 +8,26 @@
 //! has one chance in a million.
 //!
 //! Once both users confirm, the adding device sends the group in parts sealed under a key from
-//! the X25519 secret, and the joining device acknowledges each. The joining device stores the
-//! group before it acknowledges the last part. The adding device stores the new member on that
-//! acknowledgement, then says it is done.
+//! the X25519 secret, and the joining device acknowledges each. The joining device signs its own
+//! record in the group and stores the group before it acknowledges the last part, and that
+//! acknowledgement carries the signature. The adding device checks it, stores the new member,
+//! then says it is done. The keys exchanged are Ed25519 identities, with X25519 derived from
+//! them (`identity`).
 //!
 //! [`Pairing`] is the exchange without a radio: the caller passes it each frame heard, sends the
 //! frames [`Pairing::poll`] returns, and stores the group when the phase is [`Phase::Storing`].
 //! Times are microseconds on the caller's timer.
 
-use hkdf::Hkdf;
-use hmac::{Hmac, KeyInit, Mac};
-use sha2::{Digest, Sha256};
-use x25519_dalek::PublicKey;
-pub use x25519_dalek::StaticSecret;
-
 use crate::IDS;
+pub use crate::identity::Identity;
+use crate::identity::{SIGNATURE_LEN, dh_public};
 use crate::members::{
     GONE_LEN, Gone, Group, MAC_LEN, Member, Name, PUBLIC_LEN, RECORD_MAX_LEN, Slot,
 };
 use crate::seal::{self, Key, SIV_LEN};
+use hkdf::Hkdf;
+use hmac::{Hmac, KeyInit, Mac};
+use sha2::{Digest, Sha256};
 
 /// 2 added the key's generation and gone records to the group's transfer.
 pub const VERSION: u8 = 2;
@@ -203,21 +204,6 @@ impl Phase {
     }
 }
 
-/// A device's long-term identity.
-#[derive(Clone)]
-pub struct Identity {
-    pub secret: StaticSecret,
-    pub mac: [u8; MAC_LEN],
-    pub name: Name,
-}
-
-impl Identity {
-    #[must_use]
-    pub fn public(&self) -> [u8; PUBLIC_LEN] {
-        PublicKey::from(&self.secret).to_bytes()
-    }
-}
-
 #[derive(Clone, Copy)]
 struct Candidate {
     public: [u8; PUBLIC_LEN],
@@ -359,7 +345,7 @@ impl Pairing {
             Role::Add => self.their_name,
             Role::Join => {
                 let group = self.group.as_ref()?;
-                let id = group.by_mac(&self.peer?.mac)?;
+                let id = group.by_public(&self.peer?.public)?;
                 group.member(id).map(|member| member.name)
             }
         }
@@ -606,7 +592,20 @@ impl Pairing {
                 self.seal(out, &body[..3 + end - start])
             }
             (Role::Join, Phase::Transfer { .. } | Phase::Finishing) => {
-                self.seal(out, &[body::ACK, self.parts_done.wrapping_sub(1)])
+                let mut ack = [0; 2 + SIGNATURE_LEN];
+                ack[..2].copy_from_slice(&[body::ACK, self.parts_done.wrapping_sub(1)]);
+                // The last part's carries this device's signature of its own record.
+                match self
+                    .group
+                    .as_ref()
+                    .filter(|_| self.parts_done == self.parts)
+                {
+                    Some(group) => {
+                        ack[2..].copy_from_slice(&group.me().signature);
+                        self.seal(out, &ack)
+                    }
+                    None => self.seal(out, &ack[..2]),
+                }
             }
             (Role::Add, Phase::Done(_) | Phase::Ended(End::StoreFailed)) => {
                 self.seal(out, &[body::DONE])
@@ -742,7 +741,10 @@ impl Pairing {
     /// Works out the code and the session key from the other device's key, the joining and
     /// adding devices' keys, and both nonces. Returns false for a key no honest device has.
     fn derive(&mut self, theirs: &[u8; 32], joining: &[u8; 32], adding: &[u8; 32]) -> bool {
-        let shared = self.me.secret.diffie_hellman(&PublicKey::from(*theirs));
+        let Some(theirs) = dh_public(theirs) else {
+            return false;
+        };
+        let shared = self.me.dh().diffie_hellman(&theirs);
         if !shared.was_contributory() {
             return false;
         }
@@ -824,12 +826,13 @@ impl Pairing {
     fn start_transfer(&mut self, now: i64) {
         let peer = self.peer.expect("chosen before the transfer");
         let mut group = self.group.clone().expect("an adding device has a group");
-        let Some(id) = group.id_for(&peer.mac) else {
+        let Some(id) = group.id_for(&peer.public) else {
             self.end(End::Full, None, now);
             return;
         };
-        self.returning = group.by_mac(&peer.mac).is_some();
+        self.returning = group.by_public(&peer.public).is_some();
         self.new_id = id;
+        // The joining device signs this, and only this, once it has the group.
         group.enrol(
             id,
             Member {
@@ -838,6 +841,7 @@ impl Pairing {
                 changed: self.utc,
                 mac: peer.mac,
                 name: self.their_name.unwrap_or_else(|| Name::from_mac(&peer.mac)),
+                signature: [0; SIGNATURE_LEN],
             },
         );
         self.blob_len = welcome(&group, id, &mut self.blob);
@@ -856,6 +860,16 @@ impl Pairing {
         let Some(&index) = rest.first() else { return };
         match self.phase {
             Phase::Transfer { .. } if index == self.parts_done => {
+                if self.parts_done + 1 == self.parts {
+                    let signed = rest
+                        .get(1..)
+                        .and_then(|signature| signature.try_into().ok())
+                        .is_some_and(|signature| self.signed_by_joiner(signature));
+                    if !signed {
+                        self.end(End::Inauthentic, Some(Reason::StoreFailed), now);
+                        return;
+                    }
+                }
                 self.parts_done += 1;
                 if self.parts_done == self.parts {
                     self.phase = Phase::Storing;
@@ -875,6 +889,24 @@ impl Pairing {
             }
             _ => {}
         }
+    }
+
+    /// Puts the joining device's `signature` on its record, if it signed the record this device
+    /// made of it.
+    fn signed_by_joiner(&mut self, signature: [u8; SIGNATURE_LEN]) -> bool {
+        let id = self.new_id;
+        let Some(group) = &mut self.group else {
+            return false;
+        };
+        let Some(mut record) = group.member(id).copied() else {
+            return false;
+        };
+        record.signature = signature;
+        if !record.verify(id) {
+            return false;
+        }
+        group.enrol(id, record);
+        true
     }
 
     fn part(&mut self, rest: &[u8], now: i64) {
@@ -907,9 +939,12 @@ impl Pairing {
                     return;
                 }
                 match read_welcome(&self.blob[..self.blob_len]) {
-                    Some(group)
-                        if group.me().public == self.public && group.me().mac == self.me.mac =>
+                    Some(mut group)
+                        if group.me().public == self.public
+                            && group.me().mac == self.me.mac
+                            && group.me().name == self.me.name =>
                     {
+                        group.sign_own(&self.me);
                         self.new_id = group.own();
                         self.group = Some(group);
                         self.phase = Phase::Storing;
@@ -1011,10 +1046,7 @@ mod tests {
     fn a_transfer_keeps_the_generation_and_gone_records() {
         let mut slots = [None; IDS as usize];
         slots[0] = Some(Slot::Member(member(1, 100)));
-        slots[2] = Some(Slot::Gone(Gone {
-            public: [2; 32],
-            changed: 200,
-        }));
+        slots[2] = Some(Slot::Gone(Gone::unsigned(member(2, 0).public, 200)));
         slots[31] = Some(Slot::Member(member(3, 300)));
         let group = Group::restore(Key::new([6; 32]), 9, 0, slots).unwrap();
         let mut blob = [0; WELCOME_MAX];
@@ -1032,26 +1064,12 @@ mod tests {
 
     fn identity(n: u8) -> Identity {
         let mac = [0x10, 0, 0, 0, 0x1c, n];
-        Identity {
-            secret: StaticSecret::from([n; 32]),
-            mac,
-            name: Name::from_mac(&mac),
-        }
-    }
-
-    fn as_member(me: &Identity) -> Member {
-        Member {
-            public: me.public(),
-            joined: UTC - 100,
-            changed: UTC - 100,
-            mac: me.mac,
-            name: me.name,
-        }
+        Identity::new([n; 32], mac, Name::from_mac(&mac))
     }
 
     /// A group founded by `adder`, with members at the other `ids`.
     fn group(adder: &Identity, ids: &[u8]) -> Group {
-        let mut group = Group::found(Key::new([9; 32]), as_member(adder));
+        let mut group = Group::found(Key::new([9; 32]), adder, UTC - 100);
         for &id in ids {
             group.enrol(id, member(100 + id, UTC - 50));
         }
@@ -1177,7 +1195,7 @@ mod tests {
     #[test]
     fn a_device_in_no_group_founds_one() {
         let (a, j) = (identity(1), identity(2));
-        let founded = Group::found(Key::new([4; 32]), as_member(&a));
+        let founded = Group::found(Key::new([4; 32]), &a, UTC - 100);
         let mut adder = Pairing::add(&a, founded, [1; 16], 0, UTC);
         let mut joiner = Pairing::join(&j, [2; 16], 0);
         run(
@@ -1402,12 +1420,65 @@ mod tests {
     }
 
     #[test]
+    fn the_joining_device_signs_its_own_record() {
+        let (a, j) = (identity(1), identity(2));
+        let mut adder = Pairing::add(&a, group(&a, &[1]), [1; 16], 0, UTC);
+        let mut joiner = Pairing::join(&j, [2; 16], 0);
+        run(
+            &mut adder,
+            &mut joiner,
+            60_000 * MS,
+            |_, _, _| true,
+            users,
+            (true, true),
+        );
+        let Phase::Done(Done::Added { id, .. }) = adder.phase() else {
+            panic!("added: {:?}", adder.phase());
+        };
+        let theirs = adder.group().unwrap().member(id).unwrap();
+        assert_eq!(theirs.public, j.public());
+        assert!(theirs.verify(id));
+        assert_eq!(joiner.group().unwrap().member(id), Some(theirs));
+    }
+
+    #[test]
+    fn a_device_with_a_known_mac_and_a_new_key_is_a_new_member() {
+        let (a, j) = (identity(1), identity(2));
+        let mut old = group(&a, &[1, 2]);
+        old.enrol(
+            5,
+            Member {
+                mac: j.mac,
+                ..member(55, UTC - 999)
+            },
+        );
+        let mut adder = Pairing::add(&a, old, [1; 16], 0, UTC);
+        let mut joiner = Pairing::join(&j, [2; 16], 0);
+        run(
+            &mut adder,
+            &mut joiner,
+            60_000 * MS,
+            |_, _, _| true,
+            users,
+            (true, true),
+        );
+        assert_eq!(
+            adder.phase(),
+            Phase::Done(Done::Added {
+                id: 3,
+                returning: false
+            })
+        );
+    }
+
+    #[test]
     fn a_returning_device_gets_its_old_id() {
         let (a, j) = (identity(1), identity(2));
         let mut old = group(&a, &[1, 2]);
         old.enrol(
             5,
             Member {
+                public: j.public(),
                 mac: j.mac,
                 ..member(55, UTC - 999)
             },
