@@ -271,12 +271,14 @@ impl Rekey {
         let new = pending.new;
         let removed = group.remove(&new.fingerprint, at);
         let waiting = group.ids() & !(1 << group.own());
-        self.old.rotate_right(1);
-        self.old[0] = Some(Old {
-            key: group.key().clone(),
-            generation: group.generation(),
-            waiting,
-        });
+        if waiting != 0 {
+            self.old.rotate_right(1);
+            self.old[0] = Some(Old {
+                key: group.key().clone(),
+                generation: group.generation(),
+                waiting,
+            });
+        }
         group.rekey(new.key, new.generation);
         if let Some(removed) = removed {
             self.removing &= !(1 << removed);
@@ -543,6 +545,17 @@ mod tests {
             "dropped once everyone is heard on the new key"
         );
         assert_eq!(rekey.old().count(), 0);
+    }
+
+    #[test]
+    fn a_switch_with_no_member_left_keeps_no_old_key() {
+        let mut g = group(0, &[(0, 1), (1, 2)]);
+        let mut rekey = Rekey::default();
+        rekey.start(&g, 1, Key::new([9; 32]), 1_000).unwrap();
+        let switched = rekey.switch(&mut g, 0).unwrap();
+        assert_eq!(switched.removed, Some(1));
+        assert_eq!(rekey.old().count(), 0);
+        assert!(!rekey.is_waiting());
     }
 
     #[test]
