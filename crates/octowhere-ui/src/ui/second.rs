@@ -948,7 +948,7 @@ impl Stepper {
         }
         let mut position = String::<20>::new();
         if failure {
-            _ = write!(position, "DEMO / {:02} OF 06", self.index);
+            _ = write!(position, "DEMO / {:02} OF {:02}", self.index, len - 1);
         } else if !replay {
             _ = write!(position, "{:02} / {:02}", self.index + 1, len);
         }
@@ -1008,10 +1008,12 @@ impl ReplayChooser {
         target: &mut D,
     ) -> Result<(), D::Error> {
         let choice = Replay::ALL[self.stepper.index];
+        // The captions count the choices and BACK.
+        const _: () = assert!(Replay::ALL.len() + 1 == 9);
         let section = if choice.glyph().is_some() {
-            "FAILURE DEMO / 08"
+            "FAILURE DEMO / 09"
         } else {
-            "REPLAY / 08"
+            "REPLAY / 09"
         };
         let icon_color = if choice.glyph().is_some() {
             chrome::ORANGE

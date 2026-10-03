@@ -393,6 +393,12 @@ fn settings_frames() -> Vec<(String, Stage)> {
     tap(&mut demo, 233, 258);
     demo.wait(2_000_000);
     frames.push(("replay-demo-fault".into(), demo.stage));
+    frames.push(("replay-chooser-radio".into(), chooser(7).stage));
+    // The tap waits 300 ms: 1.55 s in, the list rests on the radio's failure.
+    let mut demo = chooser(7);
+    tap(&mut demo, 233, 258);
+    demo.wait(1_250_000);
+    frames.push(("replay-demo-radio".into(), demo.stage));
     let mut picker = open();
     tap(&mut picker, 150, 115);
     frames.push(("picker-offset".into(), picker.stage));
@@ -411,7 +417,9 @@ fn settings_frames() -> Vec<(String, Stage)> {
 }
 
 /// The start-up sequence: the self-test as parts answer, the identity and the card by frame, and
-/// the fault screen and its exit. Every part reports a tenth of a second after the last.
+/// the fault screen and its exit. The parts before the radio report a tenth of a second apart;
+/// the radio's check starts as GNSS's ends, at 600 ms, and takes 2 ms, as on the board, and the
+/// list scrolls to it until 760 ms.
 fn startup_frames() -> Vec<(String, Stage)> {
     let boot = |failing: &[Part], parts: usize, now: u64| {
         let mut stage = Stage::starting(PeripheralState {
@@ -429,11 +437,23 @@ fn startup_frames() -> Vec<(String, Stage)> {
             } else {
                 Outcome::Answered
             };
+            let at = if part == Part::Radio {
+                602_000
+            } else {
+                100_000 * (i as u64 + 1)
+            };
             stage.step(Input {
-                now: 100_000 * (i as u64 + 1),
-                boot: Some(Report { part, outcome }),
+                now: at,
+                boot: Some(Report::Decided(part, outcome)),
                 ..Input::default()
             });
+            if part == Part::Gnss {
+                stage.step(Input {
+                    now: at,
+                    boot: Some(Report::Started(Part::Radio)),
+                    ..Input::default()
+                });
+            }
         }
         stage.step(Input {
             now,
@@ -441,19 +461,39 @@ fn startup_frames() -> Vec<(String, Stage)> {
         });
         stage
     };
-    // The last glyph lands at 720 ms, and the hold ends 200 ms later.
-    let frame = |n: u64| 920_000 + (n * 1_000_000).div_ceil(30);
+    // The list rests at 760 ms, after the last glyph lands, and the hold ends 200 ms later.
+    let frame = |n: u64| 960_000 + (n * 1_000_000).div_ceil(30);
     let mut frames = vec![
         ("startup-selftest".to_string(), boot(&[], 0, 50_000)),
         ("startup-selftest-building".into(), boot(&[], 3, 345_000)),
-        ("startup-selftest-passed".into(), boot(&[], 6, 850_000)),
+        ("startup-selftest-passed".into(), boot(&[], 7, 900_000)),
         (
             "startup-selftest-failing".into(),
             boot(&[Part::Magnet], 5, 850_000),
         ),
         (
             "startup-selftest-failed".into(),
-            boot(&[Part::Magnet], 6, 850_000),
+            boot(&[Part::Magnet], 7, 900_000),
+        ),
+        // A twentieth of a second into the scroll, eased most of the way.
+        ("startup-selftest-scrolling".into(), boot(&[], 7, 640_000)),
+        (
+            "startup-selftest-radio-pending".into(),
+            boot(&[], 6, 900_000),
+        ),
+        (
+            "startup-selftest-radio-failed".into(),
+            boot(&[Part::Radio], 7, 900_000),
+        ),
+        // A failed POWER scrolls out of view under the radio, which shows its result for
+        // 200 ms from 760 ms before the list comes back by 1120 ms.
+        (
+            "startup-selftest-power-hidden".into(),
+            boot(&[Part::Power], 7, 900_000),
+        ),
+        (
+            "startup-selftest-power-returned".into(),
+            boot(&[Part::Power], 7, 1_200_000),
         ),
     ];
     // The identity's frames 0–119, then the card's 120–138, then the clock.
@@ -461,27 +501,37 @@ fn startup_frames() -> Vec<(String, Stage)> {
         0, 3, 6, 12, 13, 20, 24, 30, 38, 42, 45, 51, 53, 56, 66, 77, 82, 97, 119, 120, 123, 129,
         133, 137, 138, 139,
     ] {
-        frames.push((format!("startup-frame-{n:02}"), boot(&[], 6, frame(n))));
+        frames.push((format!("startup-frame-{n:02}"), boot(&[], 7, frame(n))));
     }
-    // With a failure the hold is 300 ms, from 720 ms. The ticker turns every 36 frames, and the
+    // With a failure the hold is 300 ms, from 760 ms. The ticker turns every 36 frames, and the
     // exit runs over frames 120–137.
     for n in [0, 3, 40, 30, 119, 120, 121, 122, 125, 128, 131, 134, 137] {
         frames.push((
             format!("startup-fault-{n:03}"),
-            boot(&[Part::Magnet], 6, frame(n) + 100_000),
+            boot(&[Part::Magnet], 7, frame(n) + 100_000),
         ));
     }
     frames.push((
         "startup-fault-two".into(),
-        boot(&[Part::Magnet, Part::Gnss], 6, frame(3) + 100_000),
+        boot(&[Part::Magnet, Part::Gnss], 7, frame(3) + 100_000),
     ));
     frames.push((
         "startup-fault-four".into(),
         boot(
             &[Part::Clock, Part::Touch, Part::Magnet, Part::Gnss],
-            6,
+            7,
             frame(3) + 100_000,
         ),
+    ));
+    frames.push((
+        "startup-fault-radio".into(),
+        boot(&[Part::Radio], 7, frame(3) + 100_000),
+    ));
+    // A failed POWER waits for the list to come back, which ends 360 ms after the list first
+    // rests: 1120 ms, and the hold ends at 1420.
+    frames.push((
+        "startup-fault-power-radio".into(),
+        boot(&[Part::Power, Part::Radio], 7, frame(3) + 460_000),
     ));
     frames
 }

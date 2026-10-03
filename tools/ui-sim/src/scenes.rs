@@ -19,7 +19,7 @@ use octowhere_ui::ui::{
     second::Store,
     stage::Stage,
     stage::{Key, Motion, Sensors},
-    startup::{Outcome, Part},
+    startup::{Outcome, Part, Report},
 };
 
 pub struct Scene {
@@ -47,6 +47,30 @@ pub const SCENES: &[Scene] = &[
         name: "startup-failed",
         about: "the self-test with the magnetometer failing, the fault screen and the clock",
         run: startup_failed,
+        captioned: false,
+    },
+    Scene {
+        name: "startup-radio-failed",
+        about: "the self-test scrolling to a radio that does not answer, and its fault screen",
+        run: startup_radio_failed,
+        captioned: false,
+    },
+    Scene {
+        name: "startup-radio-slow",
+        about: "the self-test scrolling to a radio that takes its whole deadline to answer",
+        run: startup_radio_slow,
+        captioned: false,
+    },
+    Scene {
+        name: "startup-power-failed",
+        about: "the self-test with POWER failing, scrolled out of view by the radio and back",
+        run: startup_power_failed,
+        captioned: false,
+    },
+    Scene {
+        name: "startup-power-radio-failed",
+        about: "the self-test with POWER and the radio failing, and their fault screen",
+        run: startup_power_radio_failed,
         captioned: false,
     },
     Scene {
@@ -536,19 +560,8 @@ fn close_settings(driver: &mut Driver) {
 
 /// Every screen and state, paced for a viewer who has not seen the device.
 fn tour(driver: &mut Driver) {
-    use Outcome::Answered;
     say("SELF-TEST. EACH PART OF THE BOARD IS TICKED OFF AS IT ANSWERS.");
-    boot(
-        driver,
-        [
-            (Part::Power, Answered, 150),
-            (Part::Clock, Answered, 250),
-            (Part::Touch, Answered, 500),
-            (Part::Motion, Answered, 600),
-            (Part::Magnet, Answered, 750),
-            (Part::Gnss, Answered, 1_300),
-        ],
-    );
+    boot(driver, &ANSWERING);
     driver.motion(facing(37.0));
     driver.wait(ms(1_700).saturating_sub(driver.now()));
     say("EVERY PART ANSWERED, SO THE IDENTITY AND THE LOGO CARD PLAY.");
@@ -882,8 +895,8 @@ fn settings_walk(driver: &mut Driver) {
     driver.wait(ms(1_000));
 }
 
-/// Boots with the clock running in Dublin, each part reporting at `at` ms from power-on.
-fn boot(driver: &mut Driver, reports: [(Part, Outcome, u64); 6]) {
+/// Boots with the clock running in Dublin, each report arriving at `at` ms from power-on.
+fn boot(driver: &mut Driver, reports: &[(Report, u64)]) {
     driver.stage = Stage::starting(PeripheralState {
         firmware: "0.1.0",
         ..PeripheralState::default()
@@ -891,45 +904,97 @@ fn boot(driver: &mut Driver, reports: [(Part, Outcome, u64); 6]) {
     driver.run_clock();
     driver.hold(hand);
     driver.sensors(dublin());
-    for (part, outcome, at) in reports {
+    for &(report, at) in reports {
         driver.wait(ms(at).saturating_sub(driver.now()));
-        driver.boot(part, outcome);
+        driver.report(report);
     }
 }
 
 fn startup(driver: &mut Driver) {
-    boot(driver, ANSWERING);
+    boot(driver, &ANSWERING);
     driver.wait(ms(5_900));
 }
 
 fn startup_unplugged(driver: &mut Driver) {
-    boot(driver, ANSWERING);
+    boot(driver, &ANSWERING);
     on_battery(driver, 87, false);
     driver.wait(ms(5_900));
 }
 
-/// Every part answering, as a start-up usually goes.
-pub const ANSWERING: [(Part, Outcome, u64); 6] = [
-    (Part::Power, Outcome::Answered, 150),
-    (Part::Clock, Outcome::Answered, 250),
-    (Part::Touch, Outcome::Answered, 500),
-    (Part::Motion, Outcome::Answered, 600),
-    (Part::Magnet, Outcome::Answered, 750),
-    (Part::Gnss, Outcome::Answered, 1_300),
+/// Every part answering, as a start-up usually goes. The radio's check starts as GNSS's ends
+/// and takes about 2 ms, as on the board.
+pub const ANSWERING: [(Report, u64); 8] = [
+    (Report::Decided(Part::Power, Outcome::Answered), 150),
+    (Report::Decided(Part::Clock, Outcome::Answered), 250),
+    (Report::Decided(Part::Touch, Outcome::Answered), 500),
+    (Report::Decided(Part::Motion, Outcome::Answered), 600),
+    (Report::Decided(Part::Magnet, Outcome::Answered), 750),
+    (Report::Decided(Part::Gnss, Outcome::Answered), 1_300),
+    (Report::Started(Part::Radio), 1_300),
+    (Report::Decided(Part::Radio, Outcome::Answered), 1_302),
 ];
 
+/// [`ANSWERING`] with `changes` in place of the reports for their parts.
+fn answering_but(changes: &[(Report, u64)]) -> Vec<(Report, u64)> {
+    let part = |report: &Report| match *report {
+        Report::Started(part) | Report::Decided(part, _) => part,
+    };
+    let decides = |report: &Report| matches!(report, Report::Decided(..));
+    let mut reports: Vec<_> = ANSWERING
+        .iter()
+        .filter(|(report, _)| {
+            !changes.iter().any(|(change, _)| {
+                part(change) == part(report) && decides(change) == decides(report)
+            })
+        })
+        .chain(changes)
+        .copied()
+        .collect();
+    reports.sort_by_key(|&(_, at)| at);
+    reports
+}
+
 fn startup_failed(driver: &mut Driver) {
-    use Outcome::{Answered, NoReply};
     boot(
         driver,
-        [
-            (Part::Power, Answered, 150),
-            (Part::Clock, Answered, 250),
-            (Part::Touch, Answered, 500),
-            (Part::Motion, Answered, 600),
-            (Part::Magnet, NoReply, 1_000),
-            (Part::Gnss, Answered, 1_300),
-        ],
+        &answering_but(&[(Report::Decided(Part::Magnet, Outcome::NoReply), 1_000)]),
+    );
+    driver.wait(ms(5_200));
+}
+
+fn startup_radio_failed(driver: &mut Driver) {
+    boot(
+        driver,
+        &answering_but(&[(Report::Decided(Part::Radio, Outcome::NoReply), 1_302)]),
+    );
+    driver.wait(ms(5_200));
+}
+
+/// The radio answering at the end of its 200 ms deadline.
+fn startup_radio_slow(driver: &mut Driver) {
+    boot(
+        driver,
+        &answering_but(&[(Report::Decided(Part::Radio, Outcome::Answered), 1_500)]),
+    );
+    driver.wait(ms(5_900));
+}
+
+/// POWER failing at its 200 ms deadline.
+fn startup_power_failed(driver: &mut Driver) {
+    boot(
+        driver,
+        &answering_but(&[(Report::Decided(Part::Power, Outcome::NoReply), 200)]),
+    );
+    driver.wait(ms(5_200));
+}
+
+fn startup_power_radio_failed(driver: &mut Driver) {
+    boot(
+        driver,
+        &answering_but(&[
+            (Report::Decided(Part::Power, Outcome::NoReply), 200),
+            (Report::Decided(Part::Radio, Outcome::NoReply), 1_302),
+        ]),
     );
     driver.wait(ms(5_200));
 }

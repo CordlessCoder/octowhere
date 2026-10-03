@@ -1312,16 +1312,29 @@ impl Stage {
         self.startup_due = startup.next_change(now);
         let view = startup.view(now);
         match (self.startup_view, view) {
-            (Some(startup::View::SelfTest(before)), Some(startup::View::SelfTest(after))) => {
-                if before != after {
+            (
+                Some(startup::View::SelfTest {
+                    cells: before,
+                    scroll: was,
+                }),
+                Some(startup::View::SelfTest {
+                    cells: after,
+                    scroll: is,
+                }),
+            ) => {
+                if was != is {
+                    self.changed.add(startup::LIST);
+                } else {
                     for (i, _) in before
                         .iter()
                         .zip(&after)
                         .enumerate()
                         .filter(|(_, (a, b))| a != b)
                     {
-                        self.changed.add(startup::cell_bounds(i));
+                        self.changed.add(startup::cell_bounds(i, is));
                     }
+                }
+                if before != after {
                     self.changed
                         .add(startup::counter_bounds(&self.renderer, &before));
                     self.changed

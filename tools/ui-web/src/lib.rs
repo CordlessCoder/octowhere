@@ -42,15 +42,17 @@ const POWER_ON_US: u64 = 512_000;
 /// How far the heading turns each step while it spins, in degrees.
 const SPIN_STEP: f32 = 0.5;
 
-/// When each part reports at start-up, in ms from power-on, as the desktop simulator's start-up
-/// scene has them.
-const BOOT_REPORTS: [(Part, u64); 6] = [
-    (Part::Power, 150),
-    (Part::Clock, 250),
-    (Part::Touch, 500),
-    (Part::Motion, 600),
-    (Part::Magnet, 750),
-    (Part::Gnss, 1_300),
+/// What boot reports at start-up, in ms from power-on, as the desktop simulator's start-up
+/// scene has it.
+const BOOT_REPORTS: [(Report, u64); 8] = [
+    (Report::Decided(Part::Power, Outcome::Answered), 150),
+    (Report::Decided(Part::Clock, Outcome::Answered), 250),
+    (Report::Decided(Part::Touch, Outcome::Answered), 500),
+    (Report::Decided(Part::Motion, Outcome::Answered), 600),
+    (Report::Decided(Part::Magnet, Outcome::Answered), 750),
+    (Report::Decided(Part::Gnss, Outcome::Answered), 1_300),
+    (Report::Started(Part::Radio), 1_300),
+    (Report::Decided(Part::Radio, Outcome::Answered), 1_302),
 ];
 
 /// The supplies the page offers: whether a battery is fitted, whether USB is in, and whether
@@ -302,7 +304,7 @@ struct Sim {
     /// When the pointer went down while the controller watched for gestures.
     pressed_at: Option<u64>,
     /// The start-up's reports not yet stepped in.
-    reports: Vec<(Part, u64)>,
+    reports: Vec<(Report, u64)>,
     powered_off: bool,
     /// The stage's time at the last step.
     now: u64,
@@ -400,12 +402,9 @@ impl Sim {
             self.sensors_changed = false;
         }
         let boot = match self.reports.last() {
-            Some(&(part, at)) if now >= at * 1_000 => {
+            Some(&(report, at)) if now >= at * 1_000 => {
                 self.reports.pop();
-                Some(Report {
-                    part,
-                    outcome: Outcome::Answered,
-                })
+                Some(report)
             }
             _ => None,
         };

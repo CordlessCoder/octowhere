@@ -3,7 +3,8 @@ pub enum Sx127xError<SPI> {
     InvalidInput,
     InvalidPayloadLength,
     InvalidState,
-    InvalidVersion,
+    /// The chip answered with this version, not the variant's.
+    InvalidVersion(u8),
     ModeNotReady,
     PacketNotReady,
     PacketTermination,

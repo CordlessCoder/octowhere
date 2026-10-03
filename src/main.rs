@@ -76,7 +76,7 @@ use octowhere::{
             Input as StageInput, Key as StageKey, Motion, Sensors, Stage, Store as Choice, Touch,
             TouchGesture,
         },
-        startup::{Outcome, Part, Report},
+        startup::{self, Outcome, Part, Report},
     },
     util::{Swap, SwapThread},
 };
@@ -1727,6 +1727,8 @@ const CLOCK_DEADLINE: Duration = Duration::from_millis(200);
 const TOUCH_DEADLINE: Duration = Duration::from_millis(600);
 const MOTION_DEADLINE: Duration = Duration::from_millis(500);
 const MAGNET_DEADLINE: Duration = Duration::from_millis(500);
+/// Reading the radio's version and configuring it takes about 2 ms over its own SPI bus.
+const RADIO_DEADLINE: Duration = Duration::from_millis(200);
 /// With a fix, how often the GNSS module copies its navigation data to its flash, so a loss of
 /// power keeps the satellites' orbits and the last position. Its RTC RAM keeps them otherwise.
 const NAVIGATION_SAVE_INTERVAL: Duration = Duration::from_secs(30 * 60);
@@ -1741,16 +1743,20 @@ const GNSS_STUCK_SILENCE: Duration = Duration::from_secs(10);
 /// The least time between two resets of a stuck module.
 const GNSS_RESET_INTERVAL: Duration = Duration::from_secs(60);
 
-/// Each part's outcome as boot decides it, for the self-test.
-static BOOT_REPORTS: Channel<CriticalSectionRawMutex, Report, 6> = Channel::new();
+/// When boot starts checking each part and how the check ends, for the self-test.
+static BOOT_REPORTS: Channel<CriticalSectionRawMutex, Report, { 2 * startup::PARTS }> =
+    Channel::new();
 
-/// Runs one part's bring-up against its deadline and reports how it ended. Returns whether the
-/// part answered.
+/// Runs one part's bring-up against its deadline and reports when it starts and how it ended.
+/// Returns whether the part answered.
 async fn probe(
     part: Part,
     deadline: Duration,
     bring_up: impl Future<Output = Result<(), Outcome>>,
 ) -> bool {
+    if BOOT_REPORTS.try_send(Report::Started(part)).is_err() {
+        warn!("[BOOT] report queue full, {} start not shown", part);
+    }
     let started = Instant::now();
     let outcome = match with_timeout(deadline, bring_up).await {
         Ok(Ok(())) => Outcome::Answered,
@@ -1763,7 +1769,10 @@ async fn probe(
         outcome,
         started.elapsed().as_millis()
     );
-    if BOOT_REPORTS.try_send(Report { part, outcome }).is_err() {
+    if BOOT_REPORTS
+        .try_send(Report::Decided(part, outcome))
+        .is_err()
+    {
         warn!("[BOOT] report queue full, {} not shown", part);
     }
     outcome == Outcome::Answered
@@ -2123,13 +2132,20 @@ async fn bring_up(spawner: Spawner, parts: Parts, zones: ZoneTracker, mesh: mesh
     );
     initial_sensor_state.gnss = nmea_parser.state();
 
-    let lora = start_lora(
-        parts.lora_spi,
-        parts.lora_sck,
-        parts.lora_mosi,
-        parts.lora_miso,
-        parts.lora_cs,
-    )
+    let mut lora = None;
+    probe(Part::Radio, RADIO_DEADLINE, async {
+        lora = Some(
+            start_lora(
+                parts.lora_spi,
+                parts.lora_sck,
+                parts.lora_mosi,
+                parts.lora_miso,
+                parts.lora_cs,
+            )
+            .await?,
+        );
+        Ok(())
+    })
     .await;
     let radio = match lora {
         Some(lora) => Some(RadioTask {
@@ -2390,7 +2406,7 @@ async fn start_lora(
     mosi: peripherals::GPIO43<'static>,
     miso: peripherals::GPIO17<'static>,
     cs: peripherals::GPIO18<'static>,
-) -> Option<SensorLora> {
+) -> Result<SensorLora, Outcome> {
     let config = spi::master::Config::default()
         .with_frequency(Rate::from_mhz(8))
         .with_mode(spi::Mode::_0);
@@ -2408,19 +2424,30 @@ async fn start_lora(
     match Sx1272Lora::new_with_config(spi, config).await {
         Ok(lora) => {
             info!("[LORA] init_ok");
-            Some(lora)
+            Ok(lora)
         }
-        Err(sx127xlora::driver::Sx127xError::InvalidVersion) => {
-            error!("[LORA] init_failed reason=invalid_version");
-            None
+        // A bus with nothing on it reads all zeros or all ones.
+        Err(sx127xlora::driver::Sx127xError::InvalidVersion(version @ (0x00 | 0xFF))) => {
+            error!(
+                "[LORA] init_failed reason=no_chip version={=u8:#04x}",
+                version
+            );
+            Err(Outcome::NoReply)
+        }
+        Err(sx127xlora::driver::Sx127xError::InvalidVersion(version)) => {
+            error!(
+                "[LORA] init_failed reason=invalid_version version={=u8:#04x}",
+                version
+            );
+            Err(Outcome::BadReply)
         }
         Err(sx127xlora::driver::Sx127xError::SPI(_)) => {
             error!("[LORA] init_failed reason=spi");
-            None
+            Err(Outcome::NoReply)
         }
         Err(_) => {
             error!("[LORA] init_failed reason=configuration");
-            None
+            Err(Outcome::BadReply)
         }
     }
 }

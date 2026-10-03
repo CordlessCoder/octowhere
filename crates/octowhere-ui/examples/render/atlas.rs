@@ -35,6 +35,16 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
             ("startup-fault-two", "FAULT / TWO PARTS"),
             ("startup-fault-four", "FAULT / FOUR PARTS"),
             ("startup-fault-128", "FAULT / EXIT"),
+            ("startup-selftest-scrolling", "SELF TEST / SCROLLING"),
+            (
+                "startup-selftest-radio-pending",
+                "SELF TEST / RADIO PENDING",
+            ),
+            ("startup-selftest-radio-failed", "SELF TEST / RADIO FAILED"),
+            ("startup-selftest-power-hidden", "SELF TEST / POWER HIDDEN"),
+            ("startup-selftest-power-returned", "SELF TEST / POWER BACK"),
+            ("startup-fault-radio", "FAULT / RADIO"),
+            ("startup-fault-power-radio", "FAULT / POWER + RADIO"),
         ],
     ),
     (
@@ -90,6 +100,8 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
             ("replay-chooser-magnet", "REPLAY / MAGNET"),
             ("replay-demo-selftest", "REPLAY / SELF TEST"),
             ("replay-demo-fault", "REPLAY / FAULT"),
+            ("replay-chooser-radio", "REPLAY / RADIO"),
+            ("replay-demo-radio", "REPLAY / RADIO DEMO"),
         ],
     ),
     (

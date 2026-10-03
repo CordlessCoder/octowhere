@@ -868,7 +868,7 @@ fn draw_row<D: CoverageTarget<Color = Color>>(
         let mut version = heapless::String::<32>::new();
         let _ = write!(version, "VERSION {}", context.firmware);
         let mut count = heapless::String::<24>::new();
-        let _ = write!(count, "SELF TEST {answered}/6 OK");
+        let _ = write!(count, "SELF TEST {answered}/{} OK", super::startup::PARTS);
         for (line, top) in [version.as_str(), count.as_str()]
             .into_iter()
             .zip(COPY_TOPS)

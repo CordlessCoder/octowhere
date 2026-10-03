@@ -1583,6 +1583,12 @@ fn start_up_damage_redraws_what_changed() {
             );
         };
         for part in Part::ALL {
+            // The radio's check starts a while before it ends, so the list scrolls while the
+            // parts wait.
+            if part == Part::Radio {
+                driver.boot_started(part);
+                check(&driver, "radio started");
+            }
             for _ in 0..6 {
                 driver.step(Input::default());
                 check(&driver, "waiting");
@@ -1678,8 +1684,9 @@ fn after_the_card_the_clock_runs_its_entry_and_types_its_time_in() {
 fn a_failure_shows_the_fault_screen_then_the_clock() {
     let mut driver = Driver::starting();
     boot_all(&mut driver, Some(Part::Gnss));
-    // The hold, then 120 frames at 30 fps and the 18 of the exit.
-    driver.wait(4_800_000);
+    // The list's scroll to the radio, the hold, then 120 frames at 30 fps and the 18 of the
+    // exit.
+    driver.wait(4_900_000);
     assert!(driver.stage.starting_up());
     driver.wait(200_000);
     assert!(!driver.stage.starting_up());

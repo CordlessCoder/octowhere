@@ -79,7 +79,7 @@ use octowhere_ui::{
         stage::{
             Input, Key as PowerKey, Motion, Sensors, Stage, Store, Touch, TouchGesture, Update,
         },
-        startup::{Outcome, Part, Report},
+        startup::Report,
     },
 };
 
@@ -702,7 +702,7 @@ fn interact(mut window: Window, masked: bool, extension: &str) {
     let mut pressed_at = None;
     // Once powered off, when K went down; and the start-up's reports not yet stepped in.
     let (mut powered_off, mut power_on_since) = (false, None);
-    let mut reports: Vec<(Part, Outcome, u64)> = Vec::new();
+    let mut reports: Vec<(Report, u64)> = Vec::new();
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
         let now = start.elapsed().as_micros() as u64 + 1;
@@ -816,7 +816,7 @@ fn interact(mut window: Window, masked: bool, extension: &str) {
                 reports = scenes::ANSWERING
                     .iter()
                     .rev()
-                    .map(|&(part, outcome, at)| (part, outcome, now + at * 1_000))
+                    .map(|&(report, at)| (report, now + at * 1_000))
                     .collect();
                 // The power controller took that press, and the firmware never sees it.
                 power_key = Held(Some((now, true)));
@@ -824,9 +824,9 @@ fn interact(mut window: Window, masked: bool, extension: &str) {
             }
         }
         let boot = match reports.last() {
-            Some(&(part, outcome, at)) if now >= at => {
+            Some(&(report, at)) if now >= at => {
                 reports.pop();
-                Some(Report { part, outcome })
+                Some(report)
             }
             _ => None,
         };

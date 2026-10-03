@@ -1222,7 +1222,7 @@ impl<SPI: SpiDevice, V: Sx127xVariant> Sx127xLora<SPI, V> {
         if version != V::CHIP_VERSION {
             #[cfg(feature = "defmt")]
             error!("invalid chip version: {} != {}", version, V::CHIP_VERSION);
-            return Err(InvalidVersion);
+            return Err(InvalidVersion(version));
         }
         Ok(())
     }

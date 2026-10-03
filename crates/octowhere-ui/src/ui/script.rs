@@ -185,8 +185,17 @@ impl<'a> Driver<'a> {
 
     /// Reports how boot left `part`.
     pub fn boot(&mut self, part: Part, outcome: Outcome) -> Update {
+        self.report(Report::Decided(part, outcome))
+    }
+
+    /// Reports that boot started checking `part`.
+    pub fn boot_started(&mut self, part: Part) -> Update {
+        self.report(Report::Started(part))
+    }
+
+    pub fn report(&mut self, report: Report) -> Update {
         self.step(Input {
-            boot: Some(Report { part, outcome }),
+            boot: Some(report),
             ..Input::default()
         })
     }
