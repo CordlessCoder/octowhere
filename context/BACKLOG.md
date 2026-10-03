@@ -92,6 +92,11 @@ until the feature set is complete, because profiling an incomplete firmware pric
   Then step 5, CAD, which needs the slot timing it depends on measured first ("Time sync"
   there), the owner's answers on the battery and a GPS fix for both boards (its "Open"), and
   then step 7.
+- Measure core 0's stack high-water mark on the board, with a pairing, a removal and a full
+  message store, by painting the stack at boot and reading the untouched depth over the USB
+  JTAG. The radio task's deepest path grew to about 45 KB with step 6 of the mesh (AGENTS.md,
+  "Memory"), and the frame loop's runs on the same stack. If the margin is thin, the mesh's
+  largest frames are `Mesh::run`, `Mesh::pair` and the task's poll, which builds `Mesh`.
 - Send the design agent its return package for the 2026-10-03 round (`design/DECISIONS.md`
   entry 29), which is built and ran on the two boards
   (`docs/logs/lora/refresh-and-recovery-2026-10-03/`): the `render` example's stills, the

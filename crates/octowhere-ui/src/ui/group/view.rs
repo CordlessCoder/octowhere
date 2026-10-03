@@ -72,6 +72,8 @@ pub enum Refused {
     InGroup,
     /// No true random source for the keys.
     NoRandom,
+    /// Adding: a member is being removed, and the group is about to change its key.
+    Removing,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

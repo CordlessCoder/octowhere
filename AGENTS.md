@@ -552,6 +552,10 @@ errata workaround, are in [`docs/hardware-notes.md`](docs/hardware-notes.md).
   19 KiB with the whole heap in `.bss`, and the clock face overflowed it. The mesh's work took
   it to about 60 KB, and the radio task overflowed it from under a group screen. Tasks on
   `BUS_EXECUTOR` run on the stack thread mode left, so their depth adds to the frame loop's.
+  With step 6 of the mesh (2026-10-03) the radio task's poll takes an 18,768-byte frame,
+  `Mesh::run` 9,488 and `Mesh::pair` 11,008, about 45 KB on its deepest path, against about
+  30 KB before. No overflow has been seen, and the high-water mark is not measured
+  (`context/BACKLOG.md`).
   Each function's frame is the `entry a1, N` that opens it in `xtensa-esp-elf-objdump -d`, in
   hex once it is large. The dump names code with no symbol of its own after the symbol before
   it, so a large frame can carry an unlikely name.

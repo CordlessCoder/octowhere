@@ -500,7 +500,9 @@ key, and a removal.
   origin's one before it, which is how a node knows. Sequence numbers skip at a restart, so a
   gap in the numbers alone says nothing. A neighbour that hears a summary marks to be sent every
   message it holds outside those ranges or among those lacked, unless its digest matches the
-  summary's sender's.
+  summary's sender's. A summary takes at most 120 bytes; one too short for every origin says
+  which it covers, and the next starts where it stopped. It is made before the slot it goes
+  in, since with a full store that takes milliseconds.
 - **Acknowledgement.** The destination of a private message answers with an acknowledgement,
   itself a private message, which travels and is held the same way. Acknowledgements and
   messages to the whole group are not acknowledged.
@@ -531,7 +533,9 @@ since the header and record are under the group key.
   body to its record. SIV needs no nonce. The sequence number must still never repeat for an
   origin, because it names the message in every node's store. It is persisted in flash in
   reserved blocks of 64, and a boot skips to the next block, so a crash wastes numbers rather
-  than reusing them. It belongs to the device, not the group, so leaving keeps it.
+  than reusing them. A new block starts no lower than the clock's second, so a device given a
+  freed id starts above every number its last holder used. It belongs to the device, not the
+  group, so leaving keeps it.
 
 ### Removing a member
 
@@ -543,14 +547,18 @@ Owner, 2026-10-03, except where it says otherwise.
   the switch. A device whose user declines ignores the removal and stays on the old key, so a
   member removing another out of malice can be overruled; its group can then remove the
   remover. A device whose user does not answer switches with the group. One that learns of
-  the removal only after the switch switches at once.
+  the removal late switches three rounds after it learns of it, at the earliest, so that its
+  user can always decline.
 - **The new key.** The remover makes a random group key and sends it to each remaining member
   as a private message, a key message, with its generation, one past the current key's, the
   round the group switches at, counted on its timebase, and the id and SHA-256 fingerprint of
   the member removed. The remover sends two a packet, so the switch is as many rounds away as
   its key messages and the removal message take, and four more: the round it is in, and three
   for hops. That is about 6 minutes for 8 members, 15 for 32. Until then the removed device
-  still reads everything.
+  still reads everything. The remover reserves every sequence number its key messages need
+  before it starts, and a remover that restarts before they have gone sends them again.
+  Adding a device is refused while a removal is under way, since it would get the key the
+  group is leaving.
 - **The switch.** Before it nodes send under the old key, and from it under the new one, in the
   order the new key gives (see "Shuffled slots"). Every node tries both keys on receive, but
   after the switch merges nothing that arrives under the old key. Such a packet only shows that
@@ -559,9 +567,11 @@ Owner, 2026-10-03, except where it says otherwise.
   device can see that packet but cannot open the key inside. Key messages are held past the
   message horizon while the old key is, but are left out of the digest after it. A member that
   missed the switch sends in the old order; nodes on the new key hear it in a sweep round,
-  where they listen throughout, within about 10 minutes.
+  where they listen throughout, within about 10 minutes. A node sends a member its key
+  message this way at most three times for each old key: one that declined never takes it,
+  and is not acknowledged, so that it would otherwise draw one every sweep round.
 - **The old key** is kept with no time limit, until every remaining member has been heard
-  under the new one. A member can be away for any length of time and come back without pairing
+  under the new one; a node keeps the four newest such keys. A member can be away for any length of time and come back without pairing
   again. While some are not heard, a node sends a header under the old key in its slot of each
   sweep round, so parts of the group that switched to different keys still hear each other.
 - **The removed device** is sent a private message saying it was removed and by whom. Its
@@ -572,12 +582,17 @@ Owner, 2026-10-03, except where it says otherwise.
   Told before the switch, the device could answer by removing its remover, and the two keys
   would be rivals that the lower hash settles.
 - **Its record.** At the switch every node replaces the removed member's record with a gone
-  record. Its id is free for the next pairing at once.
+  record, as of the start of the switch round, so every node's is the same. Its id is free
+  for the next pairing at once.
 - **Two at once.** Two removals made apart at the same time make two keys of one generation.
   The one whose key has the lower SHA-256 wins wherever both are known, even after a switch
-  to the other, and the other remover makes its removal again under it (proposed,
-  2026-10-03). A key of a later generation is taken whatever it replaces, so a member that
-  missed two switches takes the newest at once; one of an earlier generation is stale.
+  to the other, and the other remover makes its removal again under it once the member it
+  removed is back (proposed, 2026-10-03). A node that switched to the losing key gives that
+  member its id back, and its record returns from the nodes that never took that key. A key
+  one generation ahead is taken as a removal to show. One further ahead is taken only by a
+  node that has heard no member on its key for seven rounds, as a member that missed two
+  switches has not; otherwise a member could skip past every other removal with a key of a
+  generation nobody else holds. One of an earlier generation is stale.
 - **What is kept across a restart.** A pending removal, the old keys and which members each
   still waits for. The key messages themselves are in the message store, so a restarted node
   gets them back from its neighbours within the horizon.
@@ -720,7 +735,8 @@ its id, with no new key (owner, 2026-10-03). A pairing started meanwhile ends th
 device with no timebase has nobody to tell; the others can still remove it. A device that may
 still hold the key is removed instead. A gone record wins a merge against the same device's
 record when it is newer, and a node that hears a record for a device it holds as gone sends the
-gone record back. When a new member takes a gone member's id, the gone record moves to a list
+gone record back. A member or gone record stamped more than an hour ahead of a node's clock is
+refused: it would win every merge until then. When a new member takes a gone member's id, the gone record moves to a list
 of the last eight, kept in RAM, which still answers for it. Of two gone records for one id,
 every node keeps the newer. Pairing a device again gives it a newer record, which wins, and a
 pairing carries the gone records with the members.

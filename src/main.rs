@@ -202,8 +202,14 @@ static SETTINGS_QUEUED: AtomicU32 = AtomicU32::new(0);
 static SETTINGS_DONE: AtomicU32 = AtomicU32::new(0);
 /// The mesh's state for `settings_task` to save, counted in `SETTINGS_QUEUED` with the settings.
 static GROUP_WRITES: Channel<CriticalSectionRawMutex, settings::GroupWrite, 2> = Channel::new();
-/// Whether the last of `GROUP_WRITES` reached the flash.
-static GROUP_SAVED: Signal<CriticalSectionRawMutex, bool> = Signal::new();
+/// `GROUP_WRITES` queued and done, numbered in the order they go, so that a waiter can tell its
+/// own write's result from one queued ahead of it. One task queues them at a time.
+static GROUP_QUEUED: AtomicU32 = AtomicU32::new(0);
+static GROUP_DONE: AtomicU32 = AtomicU32::new(0);
+/// Whether each of the last 32 group writes reached the flash, at its number's bit.
+static GROUP_RESULTS: AtomicU32 = AtomicU32::new(0);
+/// Signalled as each group write is done.
+static GROUP_SAVED: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 /// Power key presses, from `sensor_task`, which owns the PMIC, for the frame loop.
 static KEY_PRESSES: Channel<CriticalSectionRawMutex, PowerKey, 2> = Channel::new();
 /// BOOT key presses, from `boot_key_task`, for the frame loop.
@@ -884,7 +890,15 @@ async fn settings_task(mut store: Store) {
             Either::First(write) => settings::with_display_core_held(|| store.save(*write)).await,
             Either::Second(write) => {
                 let saved = settings::with_display_core_held(|| store.save_mesh(write)).await;
-                GROUP_SAVED.signal(saved);
+                let number = GROUP_DONE.load(Ordering::Relaxed).wrapping_add(1);
+                let bit = 1 << (number % 32);
+                if saved {
+                    GROUP_RESULTS.fetch_or(bit, Ordering::Relaxed);
+                } else {
+                    GROUP_RESULTS.fetch_and(!bit, Ordering::Relaxed);
+                }
+                GROUP_DONE.store(number, Ordering::Release);
+                GROUP_SAVED.signal(());
                 saved
             }
         };
@@ -908,23 +922,36 @@ fn queue_group_write(write: settings::GroupWrite) -> bool {
     match GROUP_WRITES.try_send(write) {
         Ok(()) => {
             SETTINGS_QUEUED.fetch_add(1, Ordering::Relaxed);
+            GROUP_QUEUED.fetch_add(1, Ordering::Relaxed);
             true
         }
         Err(_) => false,
     }
 }
 
-/// Queues a change to the mesh's state, waiting for room.
-async fn send_group_write(write: settings::GroupWrite) {
+/// Queues a change to the mesh's state, waiting for room, and returns its number for
+/// [`group_saved`].
+async fn send_group_write(write: settings::GroupWrite) -> u32 {
     SETTINGS_QUEUED.fetch_add(1, Ordering::Relaxed);
     GROUP_WRITES.send(write).await;
+    GROUP_QUEUED.fetch_add(1, Ordering::Relaxed).wrapping_add(1)
+}
+
+/// Waits for the group write numbered `number` and says whether it reached the flash.
+async fn group_saved(number: u32) -> bool {
+    loop {
+        // Wrapping: a write up to half the range behind is done.
+        if GROUP_DONE.load(Ordering::Acquire).wrapping_sub(number) < u32::MAX / 2 {
+            return GROUP_RESULTS.load(Ordering::Relaxed) & 1 << (number % 32) != 0;
+        }
+        GROUP_SAVED.wait().await;
+    }
 }
 
 /// Saves a change to the mesh's state, and says whether it reached the flash.
 async fn save_group(write: settings::GroupWrite) -> bool {
-    GROUP_SAVED.reset();
-    send_group_write(write).await;
-    with_timeout(Duration::from_secs(10), GROUP_SAVED.wait())
+    let number = send_group_write(write).await;
+    with_timeout(Duration::from_secs(10), group_saved(number))
         .await
         .unwrap_or(false)
 }

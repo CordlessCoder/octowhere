@@ -1693,6 +1693,13 @@ fn pairing(list: &mut List, session: &Session, mesh: &MeshView, now: Micros) {
                 copy: ["NO RANDOM SOURCE FOR KEYS", "PAIRING UNAVAILABLE"],
                 action: "BACK TO GROUP",
             },
+            Refused::Removing => Ending {
+                big: "REMOVING",
+                color: chrome::ORANGE,
+                glyph: GROUP,
+                copy: ["A MEMBER IS BEING REMOVED", "ADD ONCE THE KEY HAS CHANGED"],
+                action: "BACK TO GROUP",
+            },
         };
         return outcome(list, caption, &ending, None);
     }

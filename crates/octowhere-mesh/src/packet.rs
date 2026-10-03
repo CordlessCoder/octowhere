@@ -3,7 +3,7 @@
 
 use crate::bits::{BitReader, BitWriter, Full};
 use crate::members::{GONE_LEN, Gone, Member, RECORD_MAX_LEN, Slot};
-use crate::messages::{BODY_MAX, FIXED_LEN, Message, Store};
+use crate::messages::{BODY_MAX, FIXED_LEN, Message};
 use crate::seal::SIV_LEN;
 
 pub const VERSION: u8 = 1;
@@ -356,19 +356,16 @@ impl<'a> Builder<'a> {
         self.word(record::MESSAGES, digest)
     }
 
-    /// Writes a summary of what `store` holds, as much of it as fits in the room left less
-    /// `spare`.
-    pub fn summary(&mut self, store: &Store, spare: usize) -> Result<(), Full> {
-        let room = self.room().saturating_sub(spare);
-        if room < 2 + 4 {
+    /// Writes a summary [`Store::summary`] wrote.
+    pub fn summary(&mut self, summary: &[u8]) -> Result<(), Full> {
+        if summary.len() > 255 || 2 + summary.len() > self.room() {
             return Err(Full);
         }
         let at = self.len;
-        let end = at + 2 + (room - 2).min(255);
-        let len = store.summary(&mut self.buf[at + 2..end]);
         self.buf[at] = record::SUMMARY;
-        self.buf[at + 1] = len as u8;
-        self.len += 2 + len;
+        self.buf[at + 1] = summary.len() as u8;
+        self.buf[at + 2..at + 2 + summary.len()].copy_from_slice(summary);
+        self.len += 2 + summary.len();
         Ok(())
     }
 
@@ -685,7 +682,9 @@ mod tests {
         let mut buf = [0; MAX_PLAIN];
         let mut builder = Builder::new(&mut buf, &header());
         builder.messages_digest(store.digest()).unwrap();
-        builder.summary(&store, 0).unwrap();
+        let mut summary = [0; 64];
+        let (summary_len, _) = store.summary(&mut summary, 0);
+        builder.summary(&summary[..summary_len]).unwrap();
         builder.message(&message).unwrap();
         let len = builder.finish();
         assert_eq!(

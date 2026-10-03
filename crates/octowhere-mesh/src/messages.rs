@@ -441,17 +441,20 @@ impl Store {
     }
 
     /// Writes a summary of what the store holds into `out`, as much as fits, and returns its
-    /// length: the origins it covers as a set, then for each covered origin with messages, the
-    /// origin, its oldest and newest sequence numbers, and the gaps between them, each as the
-    /// number held before it and the last missing. A covered origin with no entry has nothing
-    /// here.
-    pub fn summary(&self, out: &mut [u8]) -> usize {
+    /// length and the origin the next summary starts from. It holds the origins it covers as a
+    /// set, then for each covered origin with messages, the origin, its oldest and newest
+    /// sequence numbers, and the gaps between them, each as the number held before it and the
+    /// last missing. A covered origin with no entry has nothing here. It starts from origin
+    /// `first`, so that summaries too short for every origin take turns.
+    pub fn summary(&self, out: &mut [u8], first: u8) -> (usize, u8) {
         if out.len() < 4 {
-            return 0;
+            return (0, first);
         }
         let mut covered = 0u32;
         let mut len = 4;
-        for origin in 0..IDS {
+        let mut next = first;
+        for origin in (0..IDS).map(|at| (first + at) % IDS) {
+            next = origin;
             let Some(first) = self.next_from(origin, 0) else {
                 covered |= 1 << origin;
                 continue;
@@ -478,7 +481,11 @@ impl Store {
             covered |= 1 << origin;
         }
         out[..4].copy_from_slice(&covered.to_le_bytes());
-        len
+        // A summary that covered every origin starts the next from the same one.
+        if covered == u32::MAX {
+            next = first;
+        }
+        (len, next)
     }
 
     /// Marks to be sent every message a neighbour's summary shows it lacks.
@@ -522,7 +529,7 @@ fn lacks(entry: Option<&[u8]>, seq: u32) -> bool {
     }
     (0..usize::from(entry[9])).any(|hole| {
         let at = 10 + 8 * hole;
-        (word(at) + 1..=word(at + 4)).contains(&seq)
+        seq > word(at) && seq <= word(at + 4)
     })
 }
 
@@ -532,6 +539,8 @@ pub struct Summaries {
     /// For each id, how many of its packets running carried a digest unlike this node's.
     mismatched: [u8; IDS as usize],
     pending: bool,
+    /// The origin the next summary starts from.
+    next: u8,
 }
 
 impl Summaries {
@@ -562,9 +571,16 @@ impl Summaries {
         self.pending
     }
 
-    /// Takes the summary as sent.
-    pub fn sent(&mut self) {
+    /// The origin the next summary starts from.
+    #[must_use]
+    pub fn first(&self) -> u8 {
+        self.next
+    }
+
+    /// Takes the summary as sent, and `next` as the origin the following one starts from.
+    pub fn sent(&mut self, next: u8) {
         self.pending = false;
+        self.next = next % IDS;
     }
 }
 
@@ -589,15 +605,34 @@ impl Sequence {
         }
     }
 
-    /// The block end to store before another number can be taken, when the block is used up.
+    /// The block to store before `count` more numbers can be taken, when the one held has fewer,
+    /// at timebase second `now`: where it starts and the end to store. A new block starts no
+    /// lower than `now`, so a device that takes a freed id starts above every number its last
+    /// holder used, as long as that one sent fewer than one message a second.
     #[must_use]
-    pub fn to_reserve(&self) -> Option<u32> {
-        (self.next >= self.reserved).then(|| self.next.saturating_add(BLOCK))
+    pub fn to_reserve(&self, count: u32, now: u32) -> Option<(u32, u32)> {
+        if self.reserved - self.next >= count {
+            return None;
+        }
+        // Numbers left in the block held are used first; a fresh block may start higher.
+        let start = if self.next == self.reserved {
+            self.next.max(now)
+        } else {
+            self.next
+        };
+        let end = start.saturating_add(count.div_ceil(BLOCK).max(1) * BLOCK);
+        Some((start, end))
     }
 
-    /// Takes up the block end [`Sequence::to_reserve`] gave, once it is stored.
-    pub fn reserved(&mut self, end: u32) {
-        self.reserved = self.reserved.max(end);
+    /// Takes up the block [`Sequence::to_reserve`] gave, once its end is stored.
+    pub fn reserved(&mut self, (start, end): (u32, u32)) {
+        if end <= self.reserved {
+            return;
+        }
+        if self.next == self.reserved {
+            self.next = start.max(self.next);
+        }
+        self.reserved = end;
     }
 
     /// The next number and the one before it, 0 for none this run, or `None` until a block is
@@ -788,7 +823,7 @@ mod tests {
         }
         b.sent((7, 1));
         let mut summary = [0; 253];
-        let len = a.summary(&mut summary);
+        let (len, _) = a.summary(&mut summary, 0);
         b.answer(&summary[..len]);
         let mut sent = std::vec::Vec::new();
         let mut after = None;
@@ -831,21 +866,39 @@ mod tests {
     }
 
     #[test]
-    fn a_summary_that_runs_out_of_room_covers_only_what_it_describes() {
+    fn summaries_too_short_for_every_origin_take_turns() {
         let mut a = store();
         for origin in 0..IDS {
             a.insert(text(origin, 1, 0, NOW), NOW);
         }
         let mut summary = [0; 60];
-        let len = a.summary(&mut summary);
+        let (len, next) = a.summary(&mut summary, 0);
         let covered = u32::from_le_bytes(summary[..4].try_into().unwrap());
         assert_eq!(covered, 0b11111, "five entries of ten bytes fit");
-        assert_eq!(len, 54);
+        assert_eq!((len, next), (54, 5));
         let mut b = store();
         b.insert(text(30, 1, 0, NOW), NOW);
         b.sent((30, 1));
         b.answer(&summary[..len]);
         assert!(!b.has_unsent(), "nothing is known of origin 30's");
+
+        let (len, next) = a.summary(&mut summary, 29);
+        let covered = u32::from_le_bytes(summary[..4].try_into().unwrap());
+        assert_eq!(covered, 1 << 29 | 1 << 30 | 1 << 31 | 1 | 1 << 1);
+        assert_eq!(next, 2, "it wraps round");
+        a.sent((30, 1));
+        let mut lacking = store();
+        lacking.answer(&summary[..len]);
+        b.answer(&summary[..len]);
+        assert!(!b.has_unsent(), "a holds 30/1 too");
+
+        let mut small = store();
+        small.insert(text(3, 1, 0, NOW), NOW);
+        let (_, next) = small.summary(&mut [0; 60], 7);
+        assert_eq!(
+            next, 7,
+            "a summary of everything starts the next at the same origin"
+        );
     }
 
     #[test]
@@ -864,7 +917,7 @@ mod tests {
         );
         summaries.heard(&mut s, 3, ours ^ 1, None);
         assert!(summaries.pending());
-        summaries.sent();
+        summaries.sent(0);
         assert!(!summaries.pending());
     }
 
@@ -886,20 +939,42 @@ mod tests {
     fn sequence_numbers_wait_for_their_block_and_skip_it_at_a_restart() {
         let mut sequence = Sequence::new(None);
         assert_eq!(sequence.take(), None);
-        assert_eq!(sequence.to_reserve(), Some(1 + BLOCK));
-        sequence.reserved(1 + BLOCK);
+        assert_eq!(sequence.to_reserve(1, 0), Some((1, 1 + BLOCK)));
+        sequence.reserved((1, 1 + BLOCK));
         assert_eq!(sequence.take(), Some((1, 0)));
         assert_eq!(sequence.take(), Some((2, 1)));
-        assert_eq!(sequence.to_reserve(), None);
+        assert_eq!(sequence.to_reserve(1, 0), None);
+        assert_eq!(
+            sequence.to_reserve(BLOCK, 0),
+            Some((3, 3 + BLOCK)),
+            "what the block holds is used first"
+        );
         for _ in 3..=BLOCK {
             sequence.take().unwrap();
         }
         assert_eq!(sequence.take(), None);
-        assert_eq!(sequence.to_reserve(), Some(1 + 2 * BLOCK));
+        assert_eq!(sequence.to_reserve(1, 0), Some((1 + BLOCK, 1 + 2 * BLOCK)));
 
         let mut restarted = Sequence::new(Some(1 + BLOCK));
         assert_eq!(restarted.take(), None);
-        restarted.reserved(restarted.to_reserve().unwrap());
+        let block = restarted.to_reserve(1, 0).unwrap();
+        restarted.reserved(block);
         assert_eq!(restarted.take(), Some((1 + BLOCK, 0)));
+    }
+
+    #[test]
+    fn a_fresh_block_starts_at_the_clock() {
+        let now = 1_790_000_000;
+        let mut sequence = Sequence::new(Some(65));
+        let block = sequence.to_reserve(1, now).unwrap();
+        assert_eq!(block, (now, now + BLOCK));
+        sequence.reserved(block);
+        assert_eq!(sequence.take(), Some((now, 0)));
+        assert_eq!(sequence.take(), Some((now + 1, now)));
+        // Thirty-one key messages want one block; seventy want two.
+        let mut fresh = Sequence::new(None);
+        assert_eq!(fresh.to_reserve(70, 0), Some((1, 1 + 2 * BLOCK)));
+        fresh.reserved((1, 1 + 2 * BLOCK));
+        assert!((0..70).all(|_| fresh.take().is_some()));
     }
 }
