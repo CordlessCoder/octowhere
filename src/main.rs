@@ -1615,7 +1615,10 @@ async fn radio_task(task: RadioTask) {
     }
 
     #[cfg(not(any(feature = "lora-link-tx", feature = "lora-link-rx")))]
-    mesh::Mesh::new(lora, dio0, path, mesh).await.run().await;
+    mesh::Mesh::new(mesh::Radio::new(lora, dio0, path), mesh)
+        .await
+        .run()
+        .await;
 }
 
 fn bench_repeat<R>(mut the_thing: impl FnMut() -> R, name: &str) -> (R, Duration) {

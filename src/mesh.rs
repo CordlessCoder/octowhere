@@ -3,6 +3,8 @@
 //! channel of its own, until it ends. A refresh listens throughout for three rounds when the
 //! screens ask. `octowhere_mesh` holds the protocol and `context/LORA-PROTOCOL.md` the design.
 
+mod radio;
+
 use alloc::boxed::Box;
 use core::{
     cell::{Cell, RefCell},
@@ -18,7 +20,6 @@ use embassy_sync::{
 };
 use embassy_time::{Duration, Instant, Timer};
 use esp_alloc::EspHeap;
-use esp_hal::gpio::Input;
 use lc76g::FixQuality;
 use octowhere::{
     settings::GroupWrite,
@@ -44,16 +45,10 @@ use octowhere_mesh::{
     seal::{self, Key, SIV_LEN},
     table::{Merge, Table},
 };
-use sx127xlora::{
-    driver::Sx127xError,
-    registers::{
-        FIFO_ADDR_PTR, FIFO_TX_BASE_ADDR, FIFO_TX_BASE_ADDR_VALUE, IRQ_FLAGS,
-        SYNC_WORD as SYNC_WORD_REGISTER,
-    },
-    types::{DeviceMode, OCP, PowerRamp, RxDone, RxPacket, TxConfig, TxDone},
-};
+use sx127xlora::types::RxPacket;
 
-use super::{GPS_TIME, LoraPath, SensorLora};
+pub use self::radio::Radio;
+use super::GPS_TIME;
 
 /// Band O's lower 125 kHz channel.
 const FREQUENCY_HZ: u32 = 869_462_500;
@@ -73,12 +68,8 @@ const PREPARE_US: i64 = 30_000;
 /// sender's transmission begins: half how late a root hears the nodes timing from it, on two
 /// boards whose `DIO0` follows the radio (2026-10-01). Polling the flags adds half a poll.
 const ARRIVAL_LATENCY_US: i64 = 1_050;
-/// The longest a transmission can take, with margin for `DIO0`.
-const SEND_TIMEOUT_US: i64 = 500_000;
 /// Positions a packet carries at most: as many as fit beside the neighbours record.
 const MAX_ENTRIES: usize = 24;
-/// How often the radio's flags are read where `DIO0` does not follow them.
-const POLL_US: u64 = 1_000;
 /// How long a pairing waits for the group to be stored before it counts as a failure.
 const STORE_TIMEOUT: Duration = Duration::from_secs(10);
 /// A notice is a header alone.
@@ -99,8 +90,6 @@ const OUTBOX: usize = 8;
 const LEAVE_REPEATS: u8 = 2;
 /// How long a device that left tries to tell the others: its next slots, a round apart.
 const LEAVE_WAIT_US: i64 = 3 * ROUND_US;
-const IRQ_TX_DONE: u8 = 0x08;
-const IRQ_RX_DONE: u8 = 0x40;
 
 /// The latest fix and the UTC second it was made in, from `gnss_task`.
 pub static FIX: BlockingMutex<CriticalSectionRawMutex, Cell<Option<Fix>>> =
@@ -586,11 +575,7 @@ struct Founding {
 }
 
 pub struct Mesh {
-    lora: SensorLora,
-    dio0: Input<'static>,
-    /// `DIO0` rose for the last flag it was mapped to. Where it did not, the flags are polled.
-    dio0_follows: bool,
-    path: LoraPath,
+    radio: Radio,
     me: Identity,
     group: Option<Group>,
     /// A group this device founded in a pairing whose last acknowledgement it never heard.
@@ -658,7 +643,7 @@ pub struct Mesh {
 }
 
 impl Mesh {
-    pub async fn new(lora: SensorLora, dio0: Input<'static>, path: LoraPath, start: Start) -> Self {
+    pub async fn new(radio: Radio, start: Start) -> Self {
         let group = start.group.map(|group| *group);
         let own = group.as_ref().map_or(0, Group::own);
         let mut rekey = start.rekey.unwrap_or_default();
@@ -682,10 +667,7 @@ impl Mesh {
         }
         let now = local();
         let mut mesh = Self {
-            lora,
-            dio0,
-            dio0_follows: true,
-            path,
+            radio,
             me: start.me,
             group,
             founding: None,
@@ -721,7 +703,7 @@ impl Mesh {
             refill: None,
             summary: None,
         };
-        let tuned = mesh.tune(FREQUENCY_HZ, SYNC_WORD, POWER_DBM).await;
+        let tuned = mesh.radio.tune(FREQUENCY_HZ, SYNC_WORD, POWER_DBM).await;
         info!("[MESH] tuned={}", tuned);
         mesh.sync_schedule();
         mesh.publish();
@@ -756,28 +738,6 @@ impl Mesh {
         publish(&mut self.view);
     }
 
-    async fn tune(&mut self, frequency: u32, sync_word: u8, power: u8) -> bool {
-        let lora = &mut self.lora;
-        let _ = lora.set_device_mode(DeviceMode::STDBY).await;
-        let tuned = lora.set_frequency(frequency).await.is_ok()
-            && lora.write(SYNC_WORD_REGISTER, sync_word).await.is_ok();
-        let powered = match TxConfig::new(OCP::new(true, 120), power, PowerRamp::Us40, false) {
-            Ok(config) => lora.configure_tx(config).await.is_ok(),
-            Err(_) => false,
-        };
-        self.idle_receive().await;
-        tuned && powered
-    }
-
-    /// Puts the radio in standby with its antenna on the receive path and `DIO0` on RxDone,
-    /// whatever was interrupted.
-    async fn idle_receive(&mut self) {
-        let _ = self.lora.set_device_mode(DeviceMode::STDBY).await;
-        let _ = self.lora.clear_all_interrupts().await;
-        let _ = self.lora.map_dio0::<RxDone>().await;
-        let _ = self.path.receive().await;
-    }
-
     pub async fn run(mut self) -> ! {
         if let Some(group) = &self.group {
             info!(
@@ -798,7 +758,7 @@ impl Mesh {
                     Either::First(()) => continue,
                     Either::Second(command) => {
                         // The step may have stopped anywhere, a transmission included.
-                        self.idle_receive().await;
+                        self.radio.idle_receive().await;
                         command
                     }
                 }
@@ -806,7 +766,7 @@ impl Mesh {
                 match select(self.await_joiner(), COMMANDS.receive()).await {
                     Either::First(()) => continue,
                     Either::Second(command) => {
-                        self.idle_receive().await;
+                        self.radio.idle_receive().await;
                         command
                     }
                 }
@@ -818,12 +778,12 @@ impl Mesh {
                         if matches!(command, Command::Add | Command::Join) {
                             self.leaving = None;
                         }
-                        self.idle_receive().await;
+                        self.radio.idle_receive().await;
                         command
                     }
                 }
             } else {
-                let _ = self.lora.set_device_mode(DeviceMode::SLEEP).await;
+                self.radio.sleep().await;
                 COMMANDS.receive().await
             };
             self.command(command).await;
@@ -1132,7 +1092,7 @@ impl Mesh {
             self.leaving = None;
             return;
         }
-        let _ = self.lora.set_device_mode(DeviceMode::STDBY).await;
+        self.radio.standby().await;
         until(send_at - PREPARE_US).await;
         self.after = start + 1;
         let header = Header {
@@ -1148,7 +1108,7 @@ impl Mesh {
         let _ = builder.gone(own, &leaving.gone);
         let plain_len = builder.finish();
         let len = seal::seal(leaving.group.key(), &mut packet, plain_len);
-        let sent = self.transmit(&packet[..len], Some(send_at)).await;
+        let sent = self.radio.transmit(&packet[..len], Some(send_at)).await;
         info!(
             "[MESH] told the group it left round={} done={}",
             round,
@@ -1228,7 +1188,7 @@ impl Mesh {
         }
         let plain_len = builder.finish();
         let len = seal::seal(&key, &mut packet, plain_len);
-        let sent = self.transmit(&packet[..len], Some(at)).await;
+        let sent = self.radio.transmit(&packet[..len], Some(at)).await;
         self.catch_up.retain(|up| caught & 1 << up.id == 0);
         for id in (0..IDS).filter(|&id| caught & 1 << id != 0) {
             let sent = &mut self.caught_up[usize::from(id)];
@@ -1283,7 +1243,7 @@ impl Mesh {
         };
         let plain_len = Builder::new(&mut packet[SIV_LEN..], &header).finish();
         let len = seal::seal(group.key(), &mut packet, plain_len);
-        let sent = self.transmit(&packet[..len], Some(at)).await;
+        let sent = self.radio.transmit(&packet[..len], Some(at)).await;
         info!(
             "[MESH] notice sent done={}",
             sent.is_some_and(|(done, _)| done)
@@ -1379,29 +1339,29 @@ impl Mesh {
             if let Some(ends) = event
                 && ends < open.min(end)
             {
-                let _ = self.lora.set_device_mode(DeviceMode::STDBY).await;
+                self.radio.standby().await;
                 until(ends).await;
                 continue;
             }
             if open >= end {
-                let _ = self.lora.set_device_mode(DeviceMode::STDBY).await;
+                self.radio.standby().await;
                 until(end).await;
                 return false;
             }
             if open > now {
-                let _ = self.lora.set_device_mode(DeviceMode::STDBY).await;
+                self.radio.standby().await;
                 until(open).await;
             }
-            if self.lora.rx(None).await.is_err() {
+            if !self.radio.start_receiving().await {
                 warn!("[MESH] receive start failed");
             }
-            while self.wait_for(IRQ_RX_DONE, close).await {
+            while self.radio.wait_received(close).await {
                 if self.receive().await {
-                    let _ = self.lora.set_device_mode(DeviceMode::STDBY).await;
+                    self.radio.standby().await;
                     return true;
                 }
             }
-            let _ = self.lora.set_device_mode(DeviceMode::STDBY).await;
+            self.radio.standby().await;
         }
     }
 
@@ -1415,36 +1375,10 @@ impl Mesh {
         (group.ids() | self.table.neighbours(round)) & !(1 << group.own())
     }
 
-    /// Reads the packet `DIO0` reported, and when its RxDone was seen.
-    async fn read_packet(&mut self) -> Option<(RxPacket, i64)> {
-        let done = local();
-        let packet = self.lora.rx_packet().await;
-        let flags = self.lora.read(IRQ_FLAGS).await.ok();
-        let _ = self.lora.clear_all_interrupts().await;
-        match packet {
-            Ok(packet) => Some((packet, done)),
-            Err(error) => {
-                warn!(
-                    "[MESH] receive failed: {} flags={}",
-                    defmt::Debug2Format(&error),
-                    flags
-                );
-                // The driver finds no RxDone, so DIO0 rose for nothing.
-                if matches!(error, Sx127xError::PacketNotReady) && self.dio0_follows {
-                    warn!(
-                        "[MESH] DIO0 is high with no flag raised; polling the radio's flags from here"
-                    );
-                    self.dio0_follows = false;
-                }
-                None
-            }
-        }
-    }
-
     /// Takes the packet `DIO0` reported. Returns whether it moved the node to its timebase, or
     /// to another id.
     async fn receive(&mut self) -> bool {
-        let Some((packet, done)) = self.read_packet().await else {
+        let Some((packet, done)) = self.radio.read_packet().await else {
             return false;
         };
         self.take(&packet, done)
@@ -1518,11 +1452,7 @@ impl Mesh {
             return false;
         };
         let header = plain.header;
-        let polled = if self.dio0_follows {
-            0
-        } else {
-            POLL_US as i64 / 2
-        };
+        let polled = self.radio.seen_late_us();
         let start = done - airtime_us(len) - ARRIVAL_LATENCY_US - polled;
         let Some(slot) = self
             .schedule
@@ -1803,7 +1733,7 @@ impl Mesh {
         let plain_len = builder.finish();
         let len = seal::seal(group.key(), &mut packet, plain_len);
 
-        let Some((done, flags)) = self.transmit(&packet[..len], Some(send_at)).await else {
+        let Some((done, flags)) = self.radio.transmit(&packet[..len], Some(send_at)).await else {
             return;
         };
         self.table.sent(&entries[..n]);
@@ -1837,35 +1767,6 @@ impl Mesh {
         );
     }
 
-    /// Sends `packet`, at local time `at` or at once. Returns whether TxDone was seen and the
-    /// flags after, and leaves the radio as [`Mesh::idle_receive`] does.
-    async fn transmit(&mut self, packet: &[u8], at: Option<i64>) -> Option<(bool, Option<u8>)> {
-        if self.load(packet).await.is_err() {
-            warn!("[MESH] loading a {}-byte packet failed", packet.len());
-            self.idle_receive().await;
-            return None;
-        }
-        let _ = self.path.transmit().await;
-        if let Some(at) = at {
-            until(at).await;
-        }
-        let started = local();
-        if let Some(at) = at
-            && started - at > 1_000
-        {
-            warn!("[MESH] sent {}us late", started - at);
-        }
-        let _ = self.lora.set_device_mode(DeviceMode::TX).await;
-        let done = self.wait_for(IRQ_TX_DONE, started + SEND_TIMEOUT_US).await;
-        let flags = self.lora.read(IRQ_FLAGS).await.ok();
-        if self.dio0_follows && !done && flags.is_some_and(|flags| flags & IRQ_TX_DONE != 0) {
-            warn!("[MESH] DIO0 did not rise for TxDone; polling the radio's flags from here");
-            self.dio0_follows = false;
-        }
-        self.idle_receive().await;
-        Some((done, flags))
-    }
-
     /// Runs a pairing in `role` on the pairing channel until it ends, then returns to the mesh's
     /// channel. A node that joins, or founds a group, starts its timebase afresh.
     async fn pair(&mut self, role: Role) {
@@ -1882,6 +1783,7 @@ impl Mesh {
             return;
         };
         if !self
+            .radio
             .tune(PAIR_FREQUENCY_HZ, PAIR_SYNC_WORD, PAIR_POWER_DBM)
             .await
         {
@@ -1907,7 +1809,7 @@ impl Mesh {
         loop {
             let now = local();
             if let Some(len) = pairing.poll(now, &mut frame) {
-                let sent = self.transmit(&frame[..len], None).await;
+                let sent = self.radio.transmit(&frame[..len], None).await;
                 debug!(
                     "[PAIR] sent kind={} len={} done={}",
                     frame[1],
@@ -1960,7 +1862,7 @@ impl Mesh {
                 continue;
             }
             if !listening {
-                if self.lora.rx(None).await.is_err() {
+                if !self.radio.start_receiving().await {
                     warn!("[PAIR] receive start failed");
                 }
                 listening = true;
@@ -1972,9 +1874,9 @@ impl Mesh {
                     None => core::future::pending().await,
                 }
             };
-            match select3(self.wait_for(IRQ_RX_DONE, wake), COMMANDS.receive(), saved).await {
+            match select3(self.radio.wait_received(wake), COMMANDS.receive(), saved).await {
                 Either3::First(true) => {
-                    if let Some((packet, done)) = self.read_packet().await {
+                    if let Some((packet, done)) = self.radio.read_packet().await {
                         #[cfg(feature = "pair-inject")]
                         if inject::is_deaf() {
                             info!("[PAIR] deaf to kind={}", packet.payload[1]);
@@ -2051,7 +1953,7 @@ impl Mesh {
             }
             _ => {}
         }
-        if !self.tune(FREQUENCY_HZ, SYNC_WORD, POWER_DBM).await {
+        if !self.radio.tune(FREQUENCY_HZ, SYNC_WORD, POWER_DBM).await {
             warn!("[MESH] tuning back to the mesh's channel failed");
         }
     }
@@ -2692,11 +2594,11 @@ impl Mesh {
             }
             return;
         }
-        if self.lora.rx(None).await.is_err() {
+        if !self.radio.start_receiving().await {
             warn!("[MESH] receive start failed");
         }
-        while self.wait_for(IRQ_RX_DONE, end).await {
-            let Some((packet, done)) = self.read_packet().await else {
+        while self.radio.wait_received(end).await {
+            let Some((packet, done)) = self.radio.read_packet().await else {
                 continue;
             };
             let Some(founded) = self.founding.as_ref().map(|founding| &founding.group) else {
@@ -2708,14 +2610,14 @@ impl Mesh {
                 continue;
             }
             info!("[MESH] heard the joining device; storing the founded group");
-            let _ = self.lora.set_device_mode(DeviceMode::STDBY).await;
+            self.radio.standby().await;
             self.store_founded(Some((packet, done))).await;
             return;
         }
         info!("[MESH] the joining device was not heard; this device founded no group");
         self.founding = None;
         self.set_recovery(RecoveryPhase::Expired);
-        let _ = self.lora.set_device_mode(DeviceMode::STDBY).await;
+        self.radio.standby().await;
     }
 
     /// Stores the group a founding left unconfirmed, its joining device heard, and takes it up
@@ -2836,51 +2738,6 @@ impl Mesh {
             self.refresh_known = None;
             info!("[MESH] refresh stopped for a pairing");
         }
-    }
-
-    /// Waits until local time `deadline` for the radio to raise `flag`, the one `DIO0` is mapped
-    /// to. Returns whether it did.
-    async fn wait_for(&mut self, flag: u8, deadline: i64) -> bool {
-        if self.dio0_follows {
-            return matches!(
-                select(self.dio0.wait_for_high(), until(deadline)).await,
-                Either::First(())
-            );
-        }
-        loop {
-            if self
-                .lora
-                .read(IRQ_FLAGS)
-                .await
-                .is_ok_and(|flags| flags & flag != 0)
-            {
-                return true;
-            }
-            if local() >= deadline {
-                return false;
-            }
-            Timer::after(Duration::from_micros(POLL_US)).await;
-        }
-    }
-
-    /// Puts the packet in the radio's FIFO, ready to send on one mode change.
-    async fn load(&mut self, packet: &[u8]) -> Result<(), ()> {
-        let lora = &mut self.lora;
-        lora.set_device_mode(DeviceMode::STDBY)
-            .await
-            .map_err(|_| ())?;
-        lora.map_dio0::<TxDone>().await.map_err(|_| ())?;
-        lora.clear_all_interrupts().await.map_err(|_| ())?;
-        lora.write(FIFO_TX_BASE_ADDR, FIFO_TX_BASE_ADDR_VALUE)
-            .await
-            .map_err(|_| ())?;
-        lora.write(FIFO_ADDR_PTR, FIFO_TX_BASE_ADDR_VALUE)
-            .await
-            .map_err(|_| ())?;
-        lora.write_fifo(packet).await.map_err(|_| ())?;
-        lora.set_payload_length(packet.len() as u8)
-            .await
-            .map_err(|_| ())
     }
 }
 
