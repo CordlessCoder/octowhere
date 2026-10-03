@@ -133,7 +133,10 @@ impl Clock {
 
     /// Takes a packet whose transmission started at local time `start`. A sender starts at its
     /// slot's start, `slot` on its timebase, which its header names to the group's schedule.
+    /// Outside a sweep, a packet more than the guard away from its slot does not refine the
+    /// clock: it was heard in another slot's window, or replayed.
     pub fn arrival(&mut self, header: &Header, slot: i64, start: i64, now: i64) -> Arrival {
+        let sweeping = self.is_sweeping(now);
         let offset = start - slot;
         let late_us = self
             .clock
@@ -146,7 +149,11 @@ impl Clock {
             match self.clock {
                 None => Taken::Adopted,
                 Some((_, mine)) if theirs.source.outranks(mine.source) => Taken::Adopted,
-                Some((_, mine)) if theirs.source == mine.source && theirs.hops < mine.hops => {
+                Some((_, mine))
+                    if theirs.source == mine.source
+                        && theirs.hops < mine.hops
+                        && (sweeping || late_us.is_some_and(|late| late.abs() <= GUARD_US)) =>
+                {
                     Taken::Refined
                 }
                 Some(_) => Taken::Ignored,
@@ -378,6 +385,34 @@ mod tests {
             }
         );
         assert_eq!(clock.at(0).unwrap().1.hops, 2);
+    }
+
+    #[test]
+    fn outside_a_sweep_only_a_packet_in_its_window_refines() {
+        let mut clock = Clock::new(28, 0);
+        // Round 1 of the timebase, which is no sweep round.
+        let now = ROUND_US + SECOND;
+        sent(&mut clock, 9, Source::Gps, 2, 0, now);
+        assert!(!clock.is_sweeping(now));
+        assert_eq!(
+            sent(&mut clock, 11, Source::Gps, 1, 30 * SECOND, now + SECOND),
+            Arrival {
+                taken: Taken::Ignored,
+                late_us: Some(30 * SECOND)
+            }
+        );
+        assert_eq!(clock.local(UTC), Some(UTC));
+        let near = sent(&mut clock, 11, Source::Gps, 1, GUARD_US, now + 2 * SECOND);
+        assert_eq!(near.taken, Taken::Refined);
+        assert_eq!(clock.local(UTC), Some(UTC + GUARD_US));
+
+        let sweep = SWEEP_EVERY * ROUND_US + SECOND;
+        assert!(clock.is_sweeping(sweep));
+        assert_eq!(
+            sent(&mut clock, 10, Source::Gps, 0, 30 * SECOND, sweep).taken,
+            Taken::Refined,
+            "a sweep takes any"
+        );
     }
 
     #[test]

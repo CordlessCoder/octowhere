@@ -883,12 +883,15 @@ protocol does not need this.
   packet of the other, since a notice brings the lower one over: up to about 30 minutes for
   idle nodes (`docs/logs/lora/founding-and-listening-2026-10-02/`). A node that hears nobody
   sends every round, which leaves it one sweep.
-- The clock takes every packet whose timebase ranks above its own or is closer to its root
-  (`Clock::arrival`), with no check that the packet fits. Outside a sweep, the window holds the
-  error to the guard. In a sweep, a replayed packet can set the clock anywhere, and the node
-  recovers only at its lost sweep, about 10 rounds later; a replayed notice forces a sweep.
-  Refining only within the guard, and adopting only on two packets that agree, would close it.
-  Jamming does more harm more easily, so it waits.
+- The clock takes every packet whose timebase ranks above its own (`Clock::arrival`), with no
+  check that the packet fits, since there is nothing to compare it with. Outside a sweep, one
+  closer to its root refines it only if it arrived within the guard of its slot (owner,
+  2026-10-03). Before that, a packet heard in another slot's window, or replayed, moved it by
+  any amount: a review's replayed packet moved a clock by a day, and on the boards a late
+  learner moved its own by 32 s. In a sweep, a replayed packet can still set the clock
+  anywhere, and the node recovers only at its lost sweep, about 10 rounds later; a replayed
+  notice forces a sweep. Adopting only on two packets that agree would close that. Jamming
+  does more harm more easily, so it waits.
 - A member being removed can still see that a removal is under way before the switch: key
   messages are marked as such, and none comes to it. Firmware changed to act on that can
   remove its remover first, and the lower of the two keys' hashes then decides which removal
