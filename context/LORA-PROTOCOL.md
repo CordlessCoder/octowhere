@@ -929,11 +929,13 @@ protocol does not need this.
   holds. Each device's user is shown both and can decline the one they do not want. A member
   can grind its key's hash, about 2^16 tries to beat a given key, so it can always win that
   race. Bounding a key message's switch round and refusing a key that names no member stop its
-  cheapest uses (owner, 2026-10-03). The rule that settles rivals needs a design round of its
-  own.
-- For step 5, two answers from the owner: the cell's capacity and how long the device should
-  last on it, which set the floor, the sweeps and how far CAD has to go; and when both boards
-  can have a GPS fix at once, which CAD's two measurements need.
+  cheapest uses (owner, 2026-10-03). The lower hash stays for now: the removal screens show
+  both rivals, and each user declines the one they do not want. The rule is revisited once
+  the multi-board simulator can stage rival removals (owner, 2026-10-03).
+- For step 5: the power budget is two days on a cell of about 1,000 mAh (owner, 2026-10-03),
+  which sets the floor, the sweeps and how far CAD has to go. CAD's two measurements need both
+  boards with a GPS fix at once, which will not be possible for a while, so step 5 waits
+  behind the simulator and the next design round (owner, 2026-10-03).
 - A shorter floor once CAD is measured (see "CAD is required at this size").
 - Measuring GNSS time sync (see "Time sync").
 

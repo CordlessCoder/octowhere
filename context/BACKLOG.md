@@ -14,8 +14,9 @@ until the feature set is complete, because profiling an incomplete firmware pric
     `transmit`, `listen` and `read_packet`), embassy time (about 45 places), the hardware
     random source, firmware statics (`FIX`, `RTC_TIME`, `GPS_TIME`, `COMMANDS`, `VIEW`,
     `GROUP_WRITES` and `GROUP_SAVED` in `main.rs`) and defmt.
-  - Step 1, seams: move the node into a crate that builds on the host (`octowhere-mesh` or a
-    new `octowhere-node`, not yet chosen), generic over a `Radio` (send at a time, listen until
+  - Step 1, seams: move the node into a new crate that builds on the host, `octowhere-node`,
+    depending on `octowhere-mesh`, which stays rules alone (owner, 2026-10-03); generic over a
+    `Radio` (send at a time, listen until
     a time and return what arrived with RSSI and SNR, tune channel and power), a clock (local
     time, sleep until a local deadline), a store for group writes that can fail, and a random
     source; the fix, RTC and GPS time and commands come in as inputs; logging through a macro
@@ -48,15 +49,15 @@ until the feature set is complete, because profiling an incomplete firmware pric
     reading a conversation with the group or one member, sent and delivered, and how a new
     message makes itself known, since nothing notifies today (`LORA-PROTOCOL.md`, "Messages").
   - Removing a member: choosing one (MEMBER DETAIL shows the removal as unavailable today), the
-    wait to the switch (about 6 minutes for 8 members, 15 for 32), every other device's prompt
+    wait to the switch (about 8 minutes for 8 members, 27 for 32), every other device's prompt
     naming who asked to remove whom with a decline before the switch, the day-long decline
     after it, and the removed device's notice of who removed it ("Removing a member").
   - GNSS failing while running: the self-test's fault is the only GNSS fault designed (entry
     "Show GNSS as faulted" below).
   - Where outlined text belongs, which the owner named; the primitive is built and unused.
   - What the BOOT key does: it is wired and does nothing.
-  Not the design agent's: the rule that settles rival removals (`LORA-PROTOCOL.md`, "Open"),
-  and step 5's answers on the battery and a fix.
+  Not the design agent's: the rule that settles rival removals, which stays the lower hash
+  for now (`LORA-PROTOCOL.md`, "Open").
 - Build the 2026-09-26 design, [`design/`](design/README.md), which the owner approved in full
   (`design/DECISIONS.md`). One piece at a time, each compared against the hand-off's renders
   (`tools/design-compare.py`), reviewed by the owner in `ui-sim`, and measured on the board
@@ -176,8 +177,8 @@ until the feature set is complete, because profiling an incomplete firmware pric
   step 6 is its screens, which need a design round: sending and reading messages, a removal's
   confirmation, and removing a member.
   Then step 5, CAD, which needs the slot timing it depends on measured first ("Time sync"
-  there), the owner's answers on the battery and a GPS fix for both boards (its "Open"), and
-  then step 7.
+  there) and both boards with a GPS fix at once, which will not be possible for a while; its
+  power budget is two days on about 1,000 mAh (owner, 2026-10-03; its "Open"). Then step 7.
 - Close what the 2026-10-03 security review of the mesh left open. It found seven defects,
   confirmed by host tests, and the fixes since are in the history from `0999a8a` to `6750e8d`.
   Still open:
@@ -194,7 +195,8 @@ until the feature set is complete, because profiling an incomplete firmware pric
   - A packet whose timebase ranks above the node's own is adopted at any time, in or out of a
     sweep, and a replayed one moves the clock anywhere (the protocol's "Open").
   - Rival removals of one generation are settled by a hash a member can grind (the protocol's
-    "Open"); the rule needs a design round.
+    "Open"). The owner keeps it for now, with the removal screens letting each user decline
+    the rival they do not want, and revisits it once the simulator can stage rivals.
 - Simplify `src/mesh.rs` and the mesh crate's surface, from the 2026-10-03 code-quality review
   (none started). In order of value: move `send()`'s packet-filling policy and `take()`'s records
   loop into the crate, where they can be tested; gather the `unsaved`, `unsaved_group` and
