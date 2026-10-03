@@ -660,24 +660,46 @@ Revocation is a group rekey.
 Decided by the owner on 2026-10-03, after a review showed that any key holder could replace a
 member's public key with its own. The review's case: such a key holder is then sent that
 member's private messages, and is the one sealed that member's key message when a removal
-comes. Not built yet.
+comes. Being built.
 
-- **Which key.** Each device signs with an Ed25519 key derived from its X25519 secret by HKDF,
-  so nothing new is stored. Its public key goes in the device's member record and in the
-  pairing transcript the code is made from.
-- **Member records.** A member signs its own record, the id included, so a node can check it
-  before merging it. A record replaces a member's held record only if the held public key
-  signed it. A signed record is about 160 bytes, so a packet carries one instead of three, and
-  a full table resync takes about three times as many rounds.
-- **Gone records.** One that a device sends as it leaves is signed by that device. One that a
-  removal makes is made by every node at its own switch and is not taken from others.
+- **One key.** A device's identity is an Ed25519 key pair, from a 32-byte seed it stores. Its
+  X25519 key for pairwise keys and pairing is derived from it, as libsodium does: the secret
+  from the seed's expanded scalar, and the public key by converting the Ed25519 public key,
+  which anyone can do. So a record names one public key, and nobody can pair another device's
+  X25519 key with a signing key of their own (owner, choosing this over a separate signing key
+  beside the X25519 one, which left that gap). Using one key for both is analysed in IACR
+  eprint 2021/509. Every device's key pair changed once with this, so devices paired before it
+  pair again.
+- **Member records.** A member signs its own record: its id, public key, joining and change
+  times, MAC and name, after the domain string `octowhere member`. A node checks the signature
+  against the record's public key before the record changes anything. A device is the same
+  device only by its public key, so a record replaces a held one only if the held key signed
+  it, and a MAC proves nothing. A device signs its record again whenever it changes: a rename,
+  or moving to another id. A record is about 127 bytes, so a packet carries one instead of
+  three, and a full table resync takes about three times as many rounds.
+- **Pairing.** The joining device's record is the first one made of it, so the joining device
+  signs it: the welcome gives it its id and the time the adding device dates the record, it
+  builds the same record the adding device built, and it returns the signature with its last
+  acknowledgement. The adding device checks it before storing the member. The welcome carries
+  every other record with its signature.
+- **Gone records.** One that a device sends as it leaves is signed by that device, after the
+  domain string `octowhere gone`, over its id, public key and time. One that a removal makes is
+  made by every node at its own switch, carries no signature, and is never sent. A node takes a
+  gone record from another node only if it is signed; a pairing's welcome carries both kinds.
 - **Lost keys.** A device that lost its keys, through a flash erase, pairs again as a new
-  member at a new id. Its old record stays until a member removes it, and nobody can take over
-  an identity by its MAC.
-- **Key messages.** A key message carries its remover's signature, so that a relay can check
-  where it came from and keep only real ones for catch-up. One signed key message fills a
+  member at a new id. Its old record stays until a member removes it.
+- **Key messages.** A key message carries its generation in the clear and its remover's
+  signature, after the domain string `octowhere key`, over the message's origin, destination,
+  sequence number, previous, timestamp, generation and sealed body. A relay checks it against
+  the origin's record, and keeps for catch-up only those from the member that removed for that
+  generation, as the relay learned it from its own key message. One signed key message takes a
   packet's room for two unsigned ones, so a removal's switch is further off: about 8 minutes
   for 8 members and 27 for 32, against 6 and 15.
+- **Catch-up.** A node keeps, for each member still waited for, the key message of each
+  generation after the one it is on, past the message horizon, while it keeps the old key. A
+  member heard under an old key is sent the key message for the generation after it, under that
+  key, so it takes one generation at a time, and is shown and can decline each removal in turn.
+  The kept messages are in RAM only (owner).
 
 ### Pairing
 
