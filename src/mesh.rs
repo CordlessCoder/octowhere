@@ -4,6 +4,7 @@
 //! screens ask. `octowhere_mesh` holds the protocol and `context/LORA-PROTOCOL.md` the design.
 
 mod radio;
+mod unsaved;
 
 use alloc::boxed::Box;
 use core::{
@@ -48,6 +49,7 @@ use octowhere_mesh::{
 use sx127xlora::types::RxPacket;
 
 pub use self::radio::Radio;
+use self::unsaved::{Due, Unsaved};
 use super::GPS_TIME;
 
 /// Band O's lower 125 kHz channel.
@@ -589,10 +591,8 @@ pub struct Mesh {
     /// The members' addresses as a refresh under way started, which tell the members it learns
     /// from one that moved to another id.
     refresh_known: Option<Box<[Option<[u8; 6]>; IDS as usize]>>,
-    /// The ids whose member records changed and are not yet queued to be stored, as a set.
-    unsaved: u32,
-    /// The group's key or this node's id changed, so the whole group is to be stored.
-    unsaved_group: bool,
+    /// What changed in the group and its removals and is not yet queued to be stored.
+    unsaved: Unsaved,
     clock: Clock,
     table: Table,
     /// The timebase time the next own slot is looked for from, past the last one decided.
@@ -634,8 +634,6 @@ pub struct Mesh {
     /// timebase was missing.
     /// The numbers of the writes queued without waiting, whose results are yet to be checked.
     writes: heapless::Vec<u32, 8>,
-    /// The removal state changed and is not yet queued to be stored.
-    rekey_unsaved: bool,
     /// A switch's generation and remover, whose key messages are to be kept for catch-up.
     refill: Option<(u16, u8)>,
     /// A summary made before the slot it goes in, with the origin the next one starts from.
@@ -675,8 +673,7 @@ impl Mesh {
             schedule: None,
             requests: Requests::default(),
             refresh_known: None,
-            unsaved: 0,
-            unsaved_group: false,
+            unsaved: Unsaved::default(),
             clock: Clock::new(own, now),
             table: Table::new(own),
             after: i64::MIN,
@@ -699,7 +696,6 @@ impl Mesh {
             notify: None,
             caught_up: [0; IDS as usize],
             writes: heapless::Vec::new(),
-            rekey_unsaved: false,
             refill: None,
             summary: None,
         };
@@ -824,8 +820,7 @@ impl Mesh {
                 }
                 if left {
                     self.forget_messages();
-                    self.unsaved = 0;
-                    self.unsaved_group = false;
+                    self.unsaved.group_replaced();
                     self.shown.refresh = None;
                     self.refresh_known = None;
                     info!("[MESH] left the group");
@@ -842,7 +837,7 @@ impl Mesh {
                 let saved = rename(&mut self.me, group, name).await;
                 info!("[MESH] renamed {} saved={}", name, saved);
                 if saved && let Some(group) = &self.group {
-                    self.unsaved |= 1 << group.own();
+                    self.unsaved.slot(group.own());
                 }
                 self.shown.answer(Answer::Renamed(saved));
             }
@@ -868,7 +863,7 @@ impl Mesh {
                     };
                     record.sign(id, &phantom);
                     group.enrol(id, record);
-                    self.unsaved |= 1 << id;
+                    self.unsaved.slot(id);
                     info!("[MESH] enrolled a phantom at {}", id);
                 }
             }
@@ -897,46 +892,36 @@ impl Mesh {
             });
         if failed {
             warn!("[MESH] a write to the flash failed; the group is stored again");
-            self.unsaved_group = true;
-            self.rekey_unsaved = true;
+            self.unsaved.everything();
         }
-        let Some(group) = &mut self.group else {
-            if self.rekey_unsaved {
-                self.save_rekey();
-            }
-            return;
-        };
-        if self.rekey.changed(group.take_changed()) {
-            self.rekey_unsaved = true;
+        if let Some(group) = &mut self.group
+            && self.rekey.changed(group.take_changed())
+        {
+            self.unsaved.rekey();
         }
-        if self.unsaved_group {
-            let write = GroupWrite::Group(
-                Box::new(group.clone()),
-                self.rekey_unsaved.then(|| self.rekey.clone()),
-            );
-            if self.queue_write(write) {
-                self.unsaved_group = false;
-                self.unsaved = 0;
-                self.rekey_unsaved = false;
-            }
-            return;
-        }
-        if self.rekey_unsaved {
-            self.save_rekey();
-            if self.rekey_unsaved {
+        while let Some(due) = self.unsaved.due(self.group.is_some()) {
+            let write = match due {
+                Due::Group { rekey } => GroupWrite::Group(
+                    Box::new(
+                        self.group
+                            .clone()
+                            .expect("a whole group is due only with one"),
+                    ),
+                    rekey.then(|| self.rekey.clone()),
+                ),
+                Due::Rekey => GroupWrite::Rekey(self.rekey.clone()),
+                Due::Slot(id) => GroupWrite::Slot {
+                    id,
+                    slot: self
+                        .group
+                        .as_ref()
+                        .and_then(|group| group.slot(id).copied()),
+                },
+            };
+            if !self.queue_write(write) {
                 return;
             }
-        }
-        while self.unsaved != 0 {
-            let id = self.unsaved.trailing_zeros() as u8;
-            let slot = self
-                .group
-                .as_ref()
-                .and_then(|group| group.slot(id).copied());
-            if !self.queue_write(GroupWrite::Slot { id, slot }) {
-                return;
-            }
-            self.unsaved &= !(1 << id);
+            self.unsaved.queued(due);
         }
     }
 
@@ -949,8 +934,7 @@ impl Mesh {
         if self.writes.push(number).is_err() {
             // Too many to follow: store everything again rather than miss a failure.
             self.writes.clear();
-            self.unsaved_group = true;
-            self.rekey_unsaved = true;
+            self.unsaved.everything();
         }
         true
     }
@@ -958,8 +942,7 @@ impl Mesh {
     /// Queues the group and its removals to be stored in one write, as a change of key needs:
     /// apart, a restart between the two would pair the key with removals made for another.
     fn save_switch(&mut self) {
-        self.unsaved_group = true;
-        self.rekey_unsaved = true;
+        self.unsaved.everything();
         self.queue_unsaved();
     }
 
@@ -1537,9 +1520,9 @@ impl Mesh {
                         Merged::Unchanged => {}
                         Merged::Changed { vacated } => {
                             info!("[MESH] member {} is {} now", id, member.name);
-                            self.unsaved |= 1 << id;
+                            self.unsaved.slot(id);
                             if let Some(vacated) = vacated {
-                                self.unsaved |= 1 << vacated;
+                                self.unsaved.slot(vacated);
                                 // A member that moved is waited for at its new id, if at all.
                                 rekey_changed |= self.rekey.went(vacated);
                             }
@@ -1552,10 +1535,10 @@ impl Mesh {
                             group.sign_own(&self.me);
                             self.clock.renumber(to);
                             self.table.renumber(to);
-                            self.unsaved_group = true;
+                            self.unsaved.group();
                             moved = true;
                         }
-                        Merged::Went { at } => self.unsaved |= 1 << at,
+                        Merged::Went { at } => self.unsaved.slot(at),
                     }
                 }
                 Record::Gone(id, gone) => {
@@ -1564,7 +1547,7 @@ impl Mesh {
                         group.merge_gone(id, gone, now.unwrap_or_else(|| utc_seconds(done)))
                     {
                         info!("[MESH] member {} went", at);
-                        self.unsaved |= 1 << at;
+                        self.unsaved.slot(at);
                         rekey_changed |= self.rekey.went(at);
                     }
                 }
@@ -1846,9 +1829,9 @@ impl Mesh {
                 // The member added is one more id that declining the last removal forgets, and
                 // this write may stand in for a switch's not yet stored.
                 if self.rekey.changed(group.take_changed()) {
-                    self.rekey_unsaved = true;
+                    self.unsaved.rekey();
                 }
-                let rekey = self.rekey_unsaved.then(|| self.rekey.clone());
+                let rekey = self.unsaved.rekey_due().then(|| self.rekey.clone());
                 let number =
                     super::send_group_write(GroupWrite::Group(Box::new(group), rekey)).await;
                 saving = Some((Instant::now(), number));
@@ -1924,8 +1907,7 @@ impl Mesh {
         match (pairing.phase(), pairing.group()) {
             (Phase::Done(_), Some(group)) => {
                 self.group = Some(group.clone());
-                self.unsaved = 0;
-                self.unsaved_group = false;
+                self.unsaved.group_replaced();
                 if role == Role::Join || !had_group {
                     self.restart(group.own());
                     self.shown.refresh = None;
@@ -2001,16 +1983,14 @@ impl Mesh {
         self.summary = None;
     }
 
-    /// Queues the group's removals to be stored, now or, when the queue is full, at the next
-    /// step.
+    /// Queues the group's removals to be stored, now or, when the queue is full or they wait to
+    /// go with the group, at the next step.
     fn save_rekey(&mut self) {
-        self.rekey_unsaved = true;
-        // A change of key waits to go with the group, in one write.
-        if self.unsaved_group {
-            return;
-        }
-        if self.queue_write(GroupWrite::Rekey(self.rekey.clone())) {
-            self.rekey_unsaved = false;
+        self.unsaved.rekey();
+        if self.unsaved.due(self.group.is_some()) == Some(Due::Rekey)
+            && self.queue_write(GroupWrite::Rekey(self.rekey.clone()))
+        {
+            self.unsaved.queued(Due::Rekey);
         }
     }
 
@@ -2143,7 +2123,7 @@ impl Mesh {
         );
         if let Some(restored) = switched.restored {
             warn!("[REKEY] a rival key won; {} is a member again", restored);
-            self.unsaved |= 1 << restored;
+            self.unsaved.slot(restored);
         }
         if switched.undone != 0 {
             warn!(
@@ -2642,8 +2622,7 @@ impl Mesh {
         let own = founding.group.own();
         self.group = Some(founding.group);
         self.sync_schedule();
-        self.unsaved = 0;
-        self.unsaved_group = false;
+        self.unsaved.group_replaced();
         self.restart(own);
         if let Some((packet, done)) = heard {
             self.take(&packet, done);

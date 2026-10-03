@@ -204,9 +204,9 @@ until the feature set is complete, because profiling an incomplete firmware pric
   as they shrink the simulator's seams, then the seams (the entry above), then `send()` and
   `take()` into the crate before the simulator's scenarios. Leave the slot encoding and the
   flash header until tests cover them, since they touch the stored format. Done: the review's
-  quick wins (`96b6d81`), the radio's fields and methods as `mesh::Radio` (`471e8f7`). Left:
+  quick wins (`96b6d81`), the radio's fields and methods as `mesh::Radio` (`471e8f7`), and the `unsaved`,
+  `unsaved_group` and `rekey_unsaved` flags as `mesh::unsaved::Unsaved`. Left:
   - In `src/mesh.rs`, which has no tests:
-    - Gather the `unsaved`, `unsaved_group` and `rekey_unsaved` flags into one type.
     - Move `send()`'s packet-filling policy into the crate as a tested `compose()`: a summary
       only with room for the own position, slot and former records sharing `MAX_RECORDS`,
       messages oldest first, positions last.
