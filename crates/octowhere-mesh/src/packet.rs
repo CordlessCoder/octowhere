@@ -18,6 +18,10 @@ pub mod record {
     pub const MEMBER: u8 = 3;
     pub const MESSAGE: u8 = 4;
     pub const ACKNOWLEDGEMENT: u8 = 5;
+    /// A digest of the sender's member table.
+    pub const MEMBERS: u8 = 6;
+    /// The ids whose member records the sender asks for.
+    pub const REQUEST: u8 = 7;
 }
 
 /// Where a node's clock comes from.
@@ -277,8 +281,9 @@ pub fn positions_len(entries: usize) -> usize {
     2 + (entries * ENTRY_BITS).div_ceil(8)
 }
 
-/// The bytes a neighbours record takes.
-pub const NEIGHBOURS_LEN: usize = 6;
+/// The bytes a record of one 32-bit word takes: neighbours, a members digest or a request.
+pub const WORD_LEN: usize = 6;
+pub const NEIGHBOURS_LEN: usize = WORD_LEN;
 
 /// Writes a packet's plaintext: the header, then records in the order they are added.
 pub struct Builder<'a> {
@@ -300,7 +305,9 @@ impl<'a> Builder<'a> {
         }
     }
 
-    fn room(&self) -> usize {
+    /// The bytes left for records.
+    #[must_use]
+    pub fn room(&self) -> usize {
         self.buf.len().min(MAX_PLAIN) - self.len
     }
 
@@ -314,16 +321,29 @@ impl<'a> Builder<'a> {
         ((room - 2) * 8 / ENTRY_BITS).min(255 * 8 / ENTRY_BITS)
     }
 
-    pub fn neighbours(&mut self, heard: u32) -> Result<(), Full> {
-        if self.room() < NEIGHBOURS_LEN {
+    fn word(&mut self, kind: u8, value: u32) -> Result<(), Full> {
+        if self.room() < WORD_LEN {
             return Err(Full);
         }
         let at = self.len;
-        self.buf[at] = record::NEIGHBOURS;
+        self.buf[at] = kind;
         self.buf[at + 1] = 4;
-        self.buf[at + 2..at + 6].copy_from_slice(&heard.to_le_bytes());
-        self.len += NEIGHBOURS_LEN;
+        self.buf[at + 2..at + 6].copy_from_slice(&value.to_le_bytes());
+        self.len += WORD_LEN;
         Ok(())
+    }
+
+    pub fn neighbours(&mut self, heard: u32) -> Result<(), Full> {
+        self.word(record::NEIGHBOURS, heard)
+    }
+
+    pub fn members_digest(&mut self, digest: u32) -> Result<(), Full> {
+        self.word(record::MEMBERS, digest)
+    }
+
+    /// Asks for the member records of the ids in the set `ids`.
+    pub fn request(&mut self, ids: u32) -> Result<(), Full> {
+        self.word(record::REQUEST, ids)
     }
 
     /// Writes a positions record of `entries`, each of which must fit below the base timestamp.
@@ -409,6 +429,10 @@ pub enum Record<'a> {
     Positions(Positions<'a>),
     /// The ids the sender heard in its recent rounds.
     Neighbours(u32),
+    /// A digest of the sender's member table.
+    Members(u32),
+    /// The ids whose member records the sender asks for.
+    Request(u32),
     Member(u8, Member),
     /// A record of a type this version does not read, or one too short for its type.
     Other(u8, &'a [u8]),
@@ -433,9 +457,14 @@ impl<'a> Iterator for Records<'a> {
                 left: body.len() * 8 / ENTRY_BITS,
                 base: self.base,
             }),
-            record::NEIGHBOURS if body.len() >= 4 => Record::Neighbours(u32::from_le_bytes(
-                body[..4].try_into().expect("four bytes"),
-            )),
+            record::NEIGHBOURS | record::MEMBERS | record::REQUEST if body.len() >= 4 => {
+                let word = u32::from_le_bytes(body[..4].try_into().expect("four bytes"));
+                match kind {
+                    record::NEIGHBOURS => Record::Neighbours(word),
+                    record::MEMBERS => Record::Members(word),
+                    _ => Record::Request(word),
+                }
+            }
             record::MEMBER => match Member::decode(body) {
                 Some((id, member)) => Record::Member(id, member),
                 None => Record::Other(kind, body),
@@ -481,6 +510,20 @@ mod tests {
             phase: 0,
             notice: false,
         }
+    }
+
+    #[test]
+    fn a_digest_and_a_request_survive_the_packet() {
+        let mut buf = [0; MAX_PLAIN];
+        let mut builder = Builder::new(&mut buf, &header());
+        builder.members_digest(0xdead_beef).unwrap();
+        builder.request(1 << 4 | 1 << 31).unwrap();
+        let len = builder.finish();
+        let plain = Plain::parse(&buf[..len]).unwrap();
+        let mut records = plain.records();
+        assert!(matches!(records.next(), Some(Record::Members(0xdead_beef))));
+        assert!(matches!(records.next(), Some(Record::Request(0x8000_0010))));
+        assert!(records.next().is_none());
     }
 
     #[test]

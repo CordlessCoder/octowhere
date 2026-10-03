@@ -494,9 +494,10 @@ switch positions, and both are TCA9554 outputs rather than radio pins, so `LoraP
 loudly; it transmits or listens through the wrong path. That also couples the radio to the shared
 I2C bus, so any timing the protocol depends on includes an I2C transaction and waiting for the bus.
 
-`radio_task` runs the mesh, `src/mesh.rs` on `crates/octowhere-mesh`: slots carrying
-neighbours, a member record and positions, with a timebase taken from other nodes without a fix,
-under the group key pairing gave the node. A node in no group sends nothing and keeps the radio
+`radio_task` runs the mesh, `src/mesh.rs` on `crates/octowhere-mesh`: slots, in an order the
+group's key shuffles each round, carrying neighbours, a digest of the member table, the member
+records asked for or changed, and positions, with a timebase taken from other nodes without a
+fix, under the group key pairing gave the node. A node in no group sends nothing and keeps the radio
 asleep. Without a fix a node has no position of its own. Commands reach the mesh through
 `mesh::COMMANDS`: start a pairing to add or join, choose a device found, answer the code, cancel,
 leave the group, rename, refresh. A refresh listens throughout for three rounds and keeps

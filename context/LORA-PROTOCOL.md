@@ -281,8 +281,8 @@ its window every round, and is heard again at its first transmission back in ran
 A member added elsewhere, which the node does not know of yet, is found in a sweep round (see
 "Keeping time without a fix"), where timebases are found too. Every node on a timebase near the
 node's own sends in a sweep round, so a new member in range is heard at the next one, within
-about 10 minutes. Once heard it is a neighbour, and its member record follows in its packets;
-with records on request (see "Packet"), the node that heard it asks for the record.
+about 10 minutes. Once heard it is a neighbour, and the node that heard it asks for its member
+record (see "Member records on request").
 The sweep rounds keep the receiver on 7.7% of the time, about 18 mAh a day, and the packet each
 node sends in them costs about 0.5 mAh a day.
 
@@ -382,6 +382,8 @@ header still is one.
 | --- | --- |
 | positions | packed entries, padded to a byte |
 | neighbours | 32-bit set of the ids the sender heard in its recent rounds |
+| members digest | 32 bits of a hash of the sender's member table (see "Member records on request") |
+| request | 32-bit set of the ids whose member records the sender asks for |
 | member | id, X25519 public key, join time, change time, hardware address, then a name of 1 to 16 printable ASCII characters; 47 to 63 bytes |
 | message | see "Messages" |
 | acknowledgement | origin id and sequence number of a message delivered to the sender |
@@ -397,22 +399,23 @@ Position entry, 73 bits:
 | fix quality | 2 | |
 | hdop | 3 | log scale |
 
-With the neighbours record, which every packet carries:
+With the neighbours and members digest records, which every packet carries:
 
 | Entries | Packet | Airtime |
 | --- | --- | --- |
-| 0 | 30 B | 72 ms |
-| 1 | 42 B | 87 ms |
-| 2 | 51 B | 103 ms |
-| 8 | 105 B | 180 ms |
-| 16 | 178 B | 287 ms |
-| 24 | 251 B | 395 ms |
+| 0 | 36 B | 77 ms |
+| 1 | 48 B | 98 ms |
+| 2 | 57 B | 108 ms |
+| 8 | 111 B | 190 ms |
+| 16 | 184 B | 297 ms |
+| 23 | 248 B | 389 ms |
 
-A packet is filled in this order until it is full or nothing is left: the sender's neighbours, one
-member record in rotation, the sender's own entry, acknowledgements, messages oldest first, entries
-learned since this node last sent them (newest first), and the rest of the table in rotation. The
-member record goes ahead of the positions so a busy table cannot crowd it out; it costs a full
-packet about seven entries.
+A packet is filled in this order until it is full or nothing is left: the sender's neighbours, its
+members digest, a request if it has one, up to three member records it has not sent, the sender's
+own entry, acknowledgements, messages oldest first, entries learned since this node last sent them
+(newest first), and the rest of the table in rotation. The member records go ahead of the
+positions so a busy table cannot crowd them out, but leave room for the sender's own entry; each
+costs a full packet about seven entries.
 
 A member record's join time and change time are UTC seconds. The change time is the join's, or a
 later rename's, and the newer record of a member wins a merge. A node never takes a record about
@@ -425,7 +428,8 @@ the delta range; not worth it before the base design flies.
 
 ### Member records on request
 
-Agreed (owner, 2026-10-03), not built. It replaces the rotation in the fill order above.
+Owner, 2026-10-03. It replaced a rotation of one member record in every packet
+(`members::Requests`).
 
 - **No rotation.** A packet carries a member record only when the sender holds one not yet
   sent: its own after a rename, one that changed in a merge, one enrolled or renumbered, or one
@@ -443,8 +447,8 @@ Agreed (owner, 2026-10-03), not built. It replaces the rotation in the fill orde
 - **Answer.** A node that hears a request marks each record asked for that it holds as not yet
   sent, unless its digest matches the requester's. The cancel rule marks a record sent once a
   covering packet carried it, so usually one neighbour answers. Records go up to three a packet,
-  after the sender's own entry and ahead of the others. A whole table of 32 is about 11
-  packets, one a round, about 8 minutes.
+  ahead of the positions but leaving room for the sender's own entry. A whole table of 32 is
+  about 11 packets, one a round, about 8 minutes.
 - **What it covers.** Everything the rotation did: a member added elsewhere, a member whose
   last acknowledgement the adding device lost, a rename missed out of range, and the duplicate
   id two partitions can hand out (see "Identity and storage").
@@ -700,7 +704,7 @@ What is left goes in this order (owner, 2026-10-03):
 
 - Shuffled slots and member records on request (see "Medium access" and "Packet"), together
   and first. Both change what goes on the air, which is cheapest while there are two boards.
-  Shuffled slots are built.
+  Both are built, and the boards have not run them yet.
 - Step 6, ahead of step 5. A new group key goes to each member as a private message, so
   removing a member needs the message machinery: flooding, the seen-set, acknowledgements,
   sequence numbers kept in flash, and the pairwise seal. It is built with removal as its first

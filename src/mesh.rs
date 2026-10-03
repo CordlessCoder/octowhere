@@ -29,10 +29,10 @@ use octowhere::{
 use octowhere_mesh::{
     IDS,
     clock::{Clock, SWEEP_US, Taken},
-    members::{Group, Member, Merged, Name},
+    members::{Group, Member, Merged, Name, Requests},
     packet::{
         Builder, Entry, HEADER_LEN, Hdop, Header, MAX_PACKET, Plain, Quality, Record, Source,
-        Timebase,
+        Timebase, positions_len,
     },
     pair::{End, Identity, MAX_FRAME, Pairing, Phase, Role},
     schedule::{GUARD_US, ROUND_US, Schedule, airtime_us, base_of, round_at},
@@ -84,6 +84,8 @@ const PAIR_LISTEN_US: i64 = 250_000;
 /// for the joining device under the group's key. That device waits 30 s for done, sweeps for
 /// three rounds, then sends in its next slot, since it hears nobody: about 3½ minutes in all.
 const FOUNDING_WAIT_US: i64 = 10 * 60 * 1_000_000;
+/// Member records a packet carries at most.
+const MAX_RECORDS: usize = 3;
 /// How long after a failed write a founding's wait tries to store its group again.
 const STORE_RETRY_US: i64 = 10 * 1_000_000;
 const IRQ_TX_DONE: u8 = 0x08;
@@ -425,6 +427,8 @@ pub struct Mesh {
     founding: Option<Box<Founding>>,
     /// The order the group's ids send in, from its key.
     schedule: Option<Box<Schedule>>,
+    /// The member records the next packet asks for.
+    requests: Requests,
     /// The members' addresses as a refresh under way started, which tell the members it learns
     /// from one that moved to another id.
     refresh_known: Option<Box<[Option<[u8; 6]>; IDS as usize]>>,
@@ -473,6 +477,7 @@ impl Mesh {
             group,
             founding: None,
             schedule: None,
+            requests: Requests::default(),
             refresh_known: None,
             unsaved: 0,
             unsaved_group: false,
@@ -678,8 +683,9 @@ impl Mesh {
             return;
         }
         self.after = start + 1;
-        let sending =
-            self.table.wants_to_send(round) || self.group.as_ref().is_some_and(Group::has_unsent);
+        let sending = self.table.wants_to_send(round)
+            || self.requests.pending() != 0
+            || self.group.as_ref().is_some_and(Group::has_unsent);
         info!(
             "[MESH] round={} sending={} sweeping={}",
             round,
@@ -939,7 +945,8 @@ impl Mesh {
             .map(|(time, _)| (time / 1_000_000) as u32);
         let (mut entries, mut news, mut neighbours, mut moved) = (0, 0, 0, false);
         let mut carried = [None; IDS as usize];
-        let mut heard_record = None;
+        let mut heard_records = heapless::Vec::<(u8, Member), { MAX_RECORDS + 1 }>::new();
+        let (mut theirs, mut asked) = (None, None);
         for record in plain.records() {
             match record {
                 Record::Positions(positions) => {
@@ -954,8 +961,10 @@ impl Mesh {
                     }
                 }
                 Record::Neighbours(set) => neighbours = set,
+                Record::Members(digest) => theirs = Some(digest),
+                Record::Request(ids) => asked = Some(ids),
                 Record::Member(id, member) => {
-                    heard_record = Some((id, member));
+                    let _ = heard_records.push((id, member));
                     match group.merge(id, member, now.unwrap_or_else(|| utc_seconds(done))) {
                         Merged::Unchanged => {}
                         Merged::Changed { vacated } => {
@@ -983,10 +992,12 @@ impl Mesh {
         if self
             .table
             .covered_by(header.sender, &carried, neighbours, round)
-            && let Some((id, member)) = heard_record
         {
-            group.covered(id, &member);
+            for (id, member) in &heard_records {
+                group.covered(*id, member);
+            }
         }
+        self.requests.heard(group, header.sender, theirs, asked);
         self.shown.positions(&self.table);
         self.publish();
         info!(
@@ -1024,9 +1035,32 @@ impl Mesh {
         let mut builder = Builder::new(&mut packet[SIV_LEN..], &header);
         let neighbours = self.table.neighbours(round);
         let _ = builder.neighbours(neighbours);
-        // Ahead of the positions, so a busy table never crowds it out.
-        let (member_id, member) = group.next_record();
-        let _ = builder.member(member_id, &member);
+        let _ = builder.members_digest(group.digest());
+        let requests = self.requests.pending();
+        if requests != 0 {
+            let _ = builder.request(requests);
+        }
+        // Ahead of the positions, so a busy table never crowds them out, but leaving room for
+        // this node's own.
+        let own_room = if self.table.entry(group.own()).is_some() {
+            positions_len(1)
+        } else {
+            0
+        };
+        let (mut records, mut unsent) = (0u32, group.unsent());
+        while unsent != 0 && (records.count_ones() as usize) < MAX_RECORDS {
+            let id = unsent.trailing_zeros() as u8;
+            unsent &= !(1 << id);
+            let Some(member) = group.member(id).copied() else {
+                continue;
+            };
+            if builder.room() < member.record_len() + own_room
+                || builder.member(id, &member).is_err()
+            {
+                break;
+            }
+            records |= 1 << id;
+        }
         let mut entries = [Entry {
             id: 0,
             latitude: 0,
@@ -1047,9 +1081,15 @@ impl Mesh {
             return;
         };
         self.table.sent(&entries[..n]);
+        self.requests.sent(requests);
+        if let Some(group) = &mut self.group {
+            for id in (0..IDS).filter(|&id| records & 1 << id != 0) {
+                group.sent(id);
+            }
+        }
         info!(
-            "[MESH] sent round={} len={} entries={} member={} neighbours={=u32:#010x} done={} flags={}",
-            round, len, n, member_id, neighbours, done, flags
+            "[MESH] sent round={} len={} entries={} records={=u32:#010x} asked={=u32:#010x} neighbours={=u32:#010x} done={} flags={}",
+            round, len, n, records, requests, neighbours, done, flags
         );
     }
 
@@ -1277,6 +1317,7 @@ impl Mesh {
         self.after = i64::MIN;
         self.timebase_shown = None;
         self.notice = None;
+        self.requests = Requests::default();
         self.shown.heard = [None; IDS as usize];
         self.shown.positions = [None; IDS as usize];
     }
