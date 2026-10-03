@@ -3,7 +3,7 @@
 The product is a closed group of up to 32 equivalent nodes that share positions and carry messages
 between members, including private ones. GPS supplies both position and the time reference; LoRa
 carries the traffic. This document is the agreed design. Steps 1 to 4 of the build order below
-are implemented, and "Build order" says what comes next; [`AGENTS.md`](../AGENTS.md), "Radio",
+are implemented, and the mesh's side of step 6; "Build order" says what comes next; [`AGENTS.md`](../AGENTS.md), "Radio",
 says how.
 
 The first version of this design (commit `e57fe0a`) was eight nodes and positions only. The owner
@@ -802,7 +802,8 @@ What is left goes in this order (owner, 2026-10-03):
   sequence numbers kept in flash, and the pairwise seal. It is built with removal as its first
   use, then messages on top. Removal and messages need screens, which need a design round; the
   mesh's side goes first, driven over the USB JTAG as pairing's was. Its design was settled
-  with the owner on 2026-10-03 ("Messages", "Removing a member", "Identity and storage").
+  with the owner on 2026-10-03 ("Messages", "Removing a member", "Identity and storage"). The
+  mesh's side is built and ran on the two boards (`docs/logs/lora/step6-2026-10-03/`).
 - Step 5, then step 7.
 
 ## RTC calibration

@@ -83,10 +83,15 @@ until the feature set is complete, because profiling an incomplete firmware pric
   boards by the mesh's commands and through the screens (`docs/logs/lora/pairing-2026-10-02/`,
   `docs/logs/lora/pairing-screens-2026-10-02/`). Step 4 is done too: listening to members and
   neighbours with a sweep every 13 rounds, the cancel rule, and a changed member record sent in
-  the next slot (`docs/logs/lora/founding-and-listening-2026-10-02/`). What is left goes in the
-  order its "Build order" gives (owner, 2026-10-03): shuffled slots and member records on
-  request, then step 6 with removing a member as its first use, then step 5, CAD, which needs
-  the slot timing it depends on measured first ("Time sync" there).
+  the next slot (`docs/logs/lora/founding-and-listening-2026-10-02/`). Shuffled slots and member
+  records on request are done (`docs/logs/lora/refresh-and-recovery-2026-10-03/`), and so is
+  the mesh's side of step 6: leaving tells the group, messages are held and passed on by every
+  node, and a member can be removed by moving the group to a new key
+  (`docs/logs/lora/step6-2026-10-03/`). What is left of step 6 is its screens, which need a
+  design round: sending and reading messages, a removal's confirmation, and removing a member.
+  Then step 5, CAD, which needs the slot timing it depends on measured first ("Time sync"
+  there), the owner's answers on the battery and a GPS fix for both boards (its "Open"), and
+  then step 7.
 - Send the design agent its return package for the 2026-10-03 round (`design/DECISIONS.md`
   entry 29), which is built and ran on the two boards
   (`docs/logs/lora/refresh-and-recovery-2026-10-03/`): the `render` example's stills, the
