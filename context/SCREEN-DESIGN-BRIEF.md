@@ -320,7 +320,9 @@ two hand-offs:
   (TRANSFER FAILED) are red. Contact lost before the transfer says KEY EXCHANGE DID NOT FINISH.
   The other device's reported mismatch shows PEER DECLINED, as the paired render has it; its
   timeout shows TIME EXPIRED and its failed store SAVE FAILED. The mesh's refusals show IN A
-  GROUP and UNAVAILABLE (no random source).
+  GROUP and UNAVAILABLE (no random source), and, added with the mesh's removals (2026-10-03)
+  and drawn on IN A GROUP's layout without a render, REMOVING in orange: A MEMBER IS BEING
+  REMOVED / ADD ONCE THE KEY HAS CHANGED, for an ADD while a removal is under way.
 - **NO RADIO** shows when START is tapped without a radio. Leaving first checks the radio
   before it erases anything.
 - **Keyboard.** SAVE returns to where the keyboard opened once the write lands, and an
