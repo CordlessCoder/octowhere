@@ -1833,6 +1833,9 @@ async fn async_main(spawner: Spawner) {
     // core 0's stack gets the rest of DRAM.
     esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 72 * 1024);
     esp_alloc::heap_allocator!(size: 120 * 1024);
+    // The glyph raster, at the most any screen draws, before anything else can split the heap: the
+    // start-up's other buffers leave no block large enough for it to grow into later.
+    let raster = chrome::raster_buffer();
 
     // PERF: How low do we want to drop the clock speed?
     let mut peripherals =
@@ -1900,13 +1903,14 @@ async fn async_main(spawner: Spawner) {
     // The panel comes up first, so the self-test shows while the parts come up behind it.
     start_display_core!(peripherals, fb_st);
 
-    let stage = Stage::starting(PeripheralState {
+    let mut stage = Stage::starting(PeripheralState {
         brightness: saved.brightness.unwrap_or(DEFAULT_BRIGHTNESS),
         timeout: saved.timeout.unwrap_or_default(),
         always_on: saved.always_on.unwrap_or_default(),
         firmware: env!("CARGO_PKG_VERSION"),
         ..PeripheralState::default()
     });
+    stage.use_raster(raster);
     let parts = Parts {
         i2c: peripherals.I2C0,
         scl: peripherals.GPIO14,

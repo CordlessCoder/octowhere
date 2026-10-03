@@ -912,11 +912,34 @@ impl RgbColorExt for Gray8 {
     }
 }
 
+/// The cells of the largest glyph raster any screen draws, the start-up's fault screens' doubled
+/// text. A raster this large, made before the heap fills, never has to grow: growing needs the old
+/// and the new block at once, in one of the heap's two regions, which the start-up's other
+/// buffers can leave without room.
+pub const RASTER_CELLS: usize = 8_859;
+
+/// A buffer for [`FontdueRendererCtx::use_raster`], which the firmware makes first thing at boot.
+#[must_use]
+pub fn raster_buffer() -> alloc::vec::Vec<f32> {
+    alloc::vec::Vec::with_capacity(RASTER_CELLS)
+}
+
 pub struct FontdueRendererCtx {
     layout: fontdue::layout::Layout,
     canvas: fontdue::raster::Raster<'static>,
     /// One row of a glyph's coverage, as `BitmapIter::rows` fills it.
     coverage: alloc::vec::Vec<u8>,
+    /// A row of coverage drawn at twice its width.
+    doubled: alloc::vec::Vec<u8>,
+}
+
+/// Checks that the glyph just rasterized, `width` by `height` pixels, fitted the raster
+/// [`RASTER_CELLS`] reserves.
+fn fits(width: usize, height: usize) {
+    debug_assert!(
+        width * height + 3 <= RASTER_CELLS,
+        "a {width}x{height} glyph outgrew the raster reserved at boot",
+    );
 }
 
 /// Rasterizes one upright glyph and blends it with its top-left pixel at `corner`.
@@ -932,6 +955,7 @@ fn blend_glyph<D: CoverageTarget>(
     target: &mut D,
 ) {
     let (metrics, bitmap) = font.rasterize_indexed(canvas, index, px);
+    fits(metrics.width, metrics.height);
     row.resize(metrics.width, 0);
     bitmap.rows(row, |y, x, span| {
         target.blend_row(corner.x + x as i32, corner.y + y as i32, span, color);
@@ -1023,7 +1047,14 @@ impl FontdueRendererCtx {
             layout: Layout::new(fontdue::layout::CoordinateSystem::PositiveYDown),
             canvas: fontdue::raster::Raster::empty(),
             coverage: alloc::vec::Vec::new(),
+            doubled: alloc::vec::Vec::new(),
         }
+    }
+
+    /// Draws every glyph into `buffer` from now on, which [`raster_buffer`] made with room for
+    /// the largest.
+    pub fn use_raster(&mut self, buffer: alloc::vec::Vec<f32>) {
+        self.canvas = fontdue::raster::Raster::from_buf(buffer, 0, 0);
     }
     #[inline]
     #[must_use]
@@ -1175,6 +1206,7 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
             }
             let (metrics, bitmap) =
                 font.rasterize_indexed_transformed(&mut ctx.canvas, index, px, transform, pen);
+            fits(metrics.width, metrics.height);
             ctx.coverage.resize(metrics.width, 0);
             let color = self.text_color;
             bitmap.rows(&mut ctx.coverage, |y, x, row| {
@@ -1226,6 +1258,7 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
             }
             let (metrics, bitmap) =
                 font.rasterize_indexed_transformed(&mut ctx.canvas, index, px, transform, pen);
+            fits(metrics.width, metrics.height);
             ctx.coverage.resize(metrics.width, 0);
             let color = self.text_color;
             bitmap.rows(&mut ctx.coverage, |y, x, row| {
@@ -1291,6 +1324,7 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
             let pen = (origin.x as f32 + libm::roundf(offset), origin.y as f32);
             let (metrics, bitmap) =
                 font.rasterize_indexed_transformed(&mut ctx.canvas, index, px, transform, pen);
+            fits(metrics.width, metrics.height);
             target.begin_glyph(Rectangle::new(
                 Point::new(metrics.x, metrics.y),
                 Size::new(metrics.width as u32, metrics.height as u32),
@@ -1305,8 +1339,8 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
     }
 
     /// Draws `text` at twice this renderer's size with its pen at `origin` on the baseline. Each
-    /// glyph is rasterized at this size into a raster of its own, freed on return, and each pixel
-    /// drawn as a 2 × 2 block: at full size the largest glyph's raster would not fit the heap.
+    /// glyph is rasterized at this size and each pixel drawn as a 2 × 2 block: at full size the
+    /// largest glyph's raster would not fit the heap.
     pub fn draw_doubled_on_baseline<D: CoverageTarget<Color = C>>(
         &self,
         text: &str,
@@ -1316,8 +1350,13 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
         let px = self.font_size as f32;
         let font = self.fonts[self.font_index];
         let color = self.text_color;
-        let mut canvas = fontdue::raster::Raster::empty();
-        let (mut row, mut doubled) = (alloc::vec::Vec::new(), alloc::vec::Vec::new());
+        let ctx = &mut *self.ctx.borrow_mut();
+        let FontdueRendererCtx {
+            canvas,
+            coverage: row,
+            doubled,
+            ..
+        } = ctx;
         for (index, corner, metrics) in self.glyphs_on_baseline(text, Point::zero()) {
             let corner = origin + corner * 2;
             let size = Size::new(2 * metrics.width as u32, 2 * metrics.height as u32);
@@ -1325,18 +1364,19 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
             {
                 continue;
             }
-            let (metrics, bitmap) = font.rasterize_indexed(&mut canvas, index, px);
+            let (metrics, bitmap) = font.rasterize_indexed(canvas, index, px);
+            fits(metrics.width, metrics.height);
             target.begin_glyph(Rectangle::new(
                 corner,
                 Size::new(2 * metrics.width as u32, 2 * metrics.height as u32),
             ));
             row.resize(metrics.width, 0);
-            bitmap.rows(&mut row, |y, x, span| {
+            bitmap.rows(row, |y, x, span| {
                 doubled.clear();
                 doubled.extend(span.iter().flat_map(|&coverage| [coverage, coverage]));
                 let (x, y) = (corner.x + 2 * x as i32, corner.y + 2 * y as i32);
-                target.blend_row(x, y, &doubled, color);
-                target.blend_row(x, y + 1, &doubled, color);
+                target.blend_row(x, y, doubled, color);
+                target.blend_row(x, y + 1, doubled, color);
             });
         }
         Ok(())
@@ -1398,6 +1438,7 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
             layout,
             canvas,
             coverage,
+            ..
         } = &mut *ctx;
         for glyph in layout.glyphs().iter().filter(|g| g.char_data.rasterize()) {
             let corner = position + Point::new(glyph.x as i32, glyph.y as i32);
@@ -1593,6 +1634,7 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
                 continue;
             }
             let (metrics, bitmap) = font.rasterize_indexed(canvas, index, px);
+            fits(metrics.width, metrics.height);
             glyph.clear();
             glyph.resize(width * height, 0);
             coverage.resize(metrics.width, 0);

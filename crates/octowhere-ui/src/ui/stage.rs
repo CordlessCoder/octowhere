@@ -511,6 +511,12 @@ impl Stage {
         &self.mesh
     }
 
+    /// Draws every glyph into `buffer` from now on: one [`chrome::raster_buffer`] made before the
+    /// heap fills, so that it never has to grow.
+    pub fn use_raster(&mut self, buffer: alloc::vec::Vec<f32>) {
+        self.renderer.ctx.borrow_mut().use_raster(buffer);
+    }
+
     /// Whether the start-up sequence still shows.
     #[must_use]
     pub fn starting_up(&self) -> bool {
