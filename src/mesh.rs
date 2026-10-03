@@ -1505,6 +1505,11 @@ impl Mesh {
             .clock
             .at(done)
             .map(|(time, _)| (time / 1_000_000) as u32);
+        // Messages are judged by this node's clock: the header's own time is the sender's word.
+        let round_s = self
+            .clock
+            .at(done)
+            .map_or_else(|| round_start_s(slot), |(time, _)| round_start_s(time));
         let (mut entries, mut news, mut neighbours, mut moved) = (0, 0, 0, false);
         let mut carried = [None; IDS as usize];
         let own = group.own();
@@ -1570,7 +1575,7 @@ impl Mesh {
                 }
                 Record::Message(message) => {
                     let _ = carried_messages.push(message.name());
-                    match self.messages.insert(message, round_start_s(slot)) {
+                    match self.messages.insert(message, round_s) {
                         Insert::New => {
                             let _ = arrivals.push(message.name());
                             self.kept.keep(&message);

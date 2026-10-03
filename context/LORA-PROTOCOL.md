@@ -493,7 +493,8 @@ key, and a removal.
 - **Digest.** A packet carries a messages digest while its sender holds a message: 32 bits of
   a hash over the origin and sequence number of each one not yet past the horizon. A message
   passes the horizon at a round's start, the same for every node on a timebase, so two nodes'
-  digests agree when they hold the same messages.
+  digests agree when they hold the same messages. A node judges that against its own clock,
+  not the time in the header of the packet that carried the message.
 - **Summary.** A node whose digest has differed from a neighbour's in two of that neighbour's
   packets running sends a summary in its next packet: for each origin, the oldest and newest
   sequence numbers it holds, and those it knows it lacks between them. A message names the
@@ -534,8 +535,9 @@ since the header and record are under the group key.
   origin, because it names the message in every node's store. It is persisted in flash in
   reserved blocks of 64, and a boot skips to the next block, so a crash wastes numbers rather
   than reusing them. A new block starts no lower than the clock's second, so a device given a
-  freed id starts above every number its last holder used. It belongs to the device, not the
-  group, so leaving keeps it.
+  freed id starts above every number its last holder used. A clock past 2100 counts as 2100
+  there, so that a timebase set far ahead cannot use up the numbers left. It belongs to the
+  device, not the group, so leaving keeps it.
 
 ### Removing a member
 

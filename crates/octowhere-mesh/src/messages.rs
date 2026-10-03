@@ -233,6 +233,10 @@ impl Message {
     }
 }
 
+/// The latest timebase second a block of sequence numbers starts from, 2100-01-01: past it, a
+/// clock is taken to be wrong.
+pub const LATEST_S: u32 = 4_102_444_800;
+
 /// Whether `text` can be a message's text: 1 to [`TEXT_MAX`] printable ASCII characters.
 #[must_use]
 pub fn is_text(text: &[u8]) -> bool {
@@ -622,7 +626,8 @@ impl Sequence {
     /// The block to store before `count` more numbers can be taken, when the one held has fewer,
     /// at timebase second `now`: where it starts and the end to store. A new block starts no
     /// lower than `now`, so a device that takes a freed id starts above every number its last
-    /// holder used, as long as that one sent fewer than one message a second.
+    /// holder used, as long as that one sent fewer than one message a second. A clock set past
+    /// [`LATEST_S`] counts as that, so that it cannot spend the numbers left.
     #[must_use]
     pub fn to_reserve(&self, count: u32, now: u32) -> Option<(u32, u32)> {
         if self.reserved - self.next >= count {
@@ -630,7 +635,7 @@ impl Sequence {
         }
         // Numbers left in the block held are used first; a fresh block may start higher.
         let start = if self.next == self.reserved {
-            self.next.max(now)
+            self.next.max(now.min(LATEST_S))
         } else {
             self.next
         };
@@ -990,6 +995,17 @@ mod tests {
         assert_eq!(fresh.to_reserve(70, 0), Some((1, 1 + 2 * BLOCK)));
         fresh.reserved((1, 1 + 2 * BLOCK));
         assert!((0..70).all(|_| fresh.take().is_some()));
+    }
+
+    #[test]
+    fn a_clock_far_ahead_leaves_numbers_to_take() {
+        let mut sequence = Sequence::new(Some(65));
+        let block = sequence.to_reserve(1, u32::MAX - 50).unwrap();
+        assert_eq!(block, (LATEST_S, LATEST_S + BLOCK));
+        sequence.reserved(block);
+        assert!((0..BLOCK).all(|_| sequence.take().is_some()));
+        let next = sequence.to_reserve(1, u32::MAX - 50).unwrap();
+        assert_eq!(next, (LATEST_S + BLOCK, LATEST_S + 2 * BLOCK));
     }
 
     #[test]
