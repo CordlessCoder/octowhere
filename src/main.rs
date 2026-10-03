@@ -1615,7 +1615,7 @@ async fn radio_task(task: RadioTask) {
     }
 
     #[cfg(not(any(feature = "lora-link-tx", feature = "lora-link-rx")))]
-    mesh::Mesh::new(mesh::Radio::new(lora, dio0, path), mesh)
+    mesh::Mesh::new(mesh::BoardRadio::new(lora, dio0, path), mesh)
         .await
         .run()
         .await;

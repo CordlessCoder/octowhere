@@ -12,6 +12,9 @@ use core::{
     sync::atomic::{AtomicU32, Ordering},
 };
 
+pub use self::radio::BoardRadio;
+use self::unsaved::{Due, Unsaved};
+use super::GPS_TIME;
 use defmt::{debug, info, warn};
 use embassy_futures::select::{Either, Either3, select, select3};
 use embassy_sync::{
@@ -46,11 +49,6 @@ use octowhere_mesh::{
     seal::{self, Key, SIV_LEN},
     table::{Merge, Table},
 };
-use sx127xlora::types::RxPacket;
-
-pub use self::radio::Radio;
-use self::unsaved::{Due, Unsaved};
-use super::GPS_TIME;
 
 /// Band O's lower 125 kHz channel.
 const FREQUENCY_HZ: u32 = 869_462_500;
@@ -576,8 +574,42 @@ struct Founding {
     heard: bool,
 }
 
-pub struct Mesh {
-    radio: Radio,
+/// The longest packet a radio takes.
+pub const RECEIVED_MAX: usize = 255;
+
+/// A packet a radio received.
+pub struct Received {
+    pub payload: [u8; RECEIVED_MAX],
+    pub length: usize,
+    pub rssi: i16,
+    pub snr: i16,
+}
+
+/// The radio a node runs on, at local times in microseconds.
+pub trait Radio {
+    /// Tunes to `frequency` with `sync_word`, sending at `power` dBm, and leaves the radio as
+    /// [`Radio::idle_receive`] does. Returns whether every setting took.
+    async fn tune(&mut self, frequency: u32, sync_word: u8, power: u8) -> bool;
+    /// Puts the radio in standby, ready to receive, whatever was interrupted.
+    async fn idle_receive(&mut self);
+    async fn standby(&mut self);
+    async fn sleep(&mut self);
+    /// Starts receiving until the radio is put in standby. Returns whether it started.
+    async fn start_receiving(&mut self) -> bool;
+    /// Waits until local time `deadline` for a packet to arrive. Returns whether one did.
+    async fn wait_received(&mut self, deadline: i64) -> bool;
+    /// Reads the packet that arrived, and when its end was seen.
+    async fn read_packet(&mut self) -> Option<(Received, i64)>;
+    /// How late, on average, a packet's end is seen after it ends.
+    fn seen_late_us(&self) -> i64;
+    /// Sends `packet`, at local time `at` or at once, and leaves the radio as
+    /// [`Radio::idle_receive`] does. Returns whether it was seen to finish, or `None` when it
+    /// could not be loaded.
+    async fn transmit(&mut self, packet: &[u8], at: Option<i64>) -> Option<bool>;
+}
+
+pub struct Mesh<R> {
+    radio: R,
     me: Identity,
     group: Option<Group>,
     /// A group this device founded in a pairing whose last acknowledgement it never heard.
@@ -640,8 +672,8 @@ pub struct Mesh {
     summary: Option<Box<(heapless::Vec<u8, SUMMARY_MAX>, u8)>>,
 }
 
-impl Mesh {
-    pub async fn new(radio: Radio, start: Start) -> Self {
+impl<R: Radio> Mesh<R> {
+    pub async fn new(radio: R, start: Start) -> Self {
         let group = start.group.map(|group| *group);
         let own = group.as_ref().map_or(0, Group::own);
         let mut rekey = start.rekey.unwrap_or_default();
@@ -1095,7 +1127,7 @@ impl Mesh {
         info!(
             "[MESH] told the group it left round={} done={}",
             round,
-            sent.is_some_and(|(done, _)| done)
+            sent.is_some_and(|done| done)
         );
         if let Some(leaving) = &mut self.leaving {
             leaving.left -= 1;
@@ -1193,7 +1225,7 @@ impl Mesh {
             round,
             caught,
             len,
-            sent.is_some_and(|(done, _)| done)
+            sent.is_some_and(|done| done)
         );
     }
 
@@ -1227,10 +1259,7 @@ impl Mesh {
         let plain_len = Builder::new(&mut packet[SIV_LEN..], &header).finish();
         let len = seal::seal(group.key(), &mut packet, plain_len);
         let sent = self.radio.transmit(&packet[..len], Some(at)).await;
-        info!(
-            "[MESH] notice sent done={}",
-            sent.is_some_and(|(done, _)| done)
-        );
+        info!("[MESH] notice sent done={}", sent.is_some_and(|done| done));
     }
 
     fn take_readings(&mut self, own: u8) {
@@ -1400,7 +1429,7 @@ impl Mesh {
 
     /// Takes a packet whose RxDone was seen at local time `done`. Returns whether it moved the
     /// node to its timebase, or to another id.
-    fn take(&mut self, packet: &RxPacket, done: i64) -> bool {
+    fn take(&mut self, packet: &Received, done: i64) -> bool {
         #[cfg(feature = "pair-inject")]
         if inject::is_deaf() {
             return false;
@@ -1716,7 +1745,7 @@ impl Mesh {
         let plain_len = builder.finish();
         let len = seal::seal(group.key(), &mut packet, plain_len);
 
-        let Some((done, flags)) = self.radio.transmit(&packet[..len], Some(send_at)).await else {
+        let Some(done) = self.radio.transmit(&packet[..len], Some(send_at)).await else {
             return;
         };
         self.table.sent(&entries[..n]);
@@ -1736,7 +1765,7 @@ impl Mesh {
             }
         }
         info!(
-            "[MESH] sent round={} len={} entries={} records={=u32:#010x} asked={=u32:#010x} neighbours={=u32:#010x} messages={} summary={} done={} flags={}",
+            "[MESH] sent round={} len={} entries={} records={=u32:#010x} asked={=u32:#010x} neighbours={=u32:#010x} messages={} summary={} done={}",
             round,
             len,
             n,
@@ -1745,8 +1774,7 @@ impl Mesh {
             neighbours,
             carried.len(),
             summary,
-            done,
-            flags
+            done
         );
     }
 
@@ -1797,7 +1825,7 @@ impl Mesh {
                     "[PAIR] sent kind={} len={} done={}",
                     frame[1],
                     len,
-                    sent.is_some_and(|(done, _)| done)
+                    sent.is_some_and(|done| done)
                 );
                 listening = false;
                 continue;
@@ -2602,7 +2630,7 @@ impl Mesh {
 
     /// Stores the group a founding left unconfirmed, its joining device heard, and takes it up
     /// once it is stored. `heard` is the packet that proved the join, while it is fresh.
-    async fn store_founded(&mut self, heard: Option<(RxPacket, i64)>) {
+    async fn store_founded(&mut self, heard: Option<(Received, i64)>) {
         let Some(founding) = &mut self.founding else {
             return;
         };
