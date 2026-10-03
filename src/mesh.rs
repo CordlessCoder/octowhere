@@ -17,6 +17,7 @@ use embassy_sync::{
     signal::Signal,
 };
 use embassy_time::{Duration, Instant, Timer};
+use esp_alloc::EspHeap;
 use esp_hal::gpio::Input;
 use lc76g::FixQuality;
 use octowhere::{
@@ -27,15 +28,19 @@ use octowhere::{
     },
 };
 use octowhere_mesh::{
-    IDS,
+    IDS, Zeroable,
     clock::{Clock, SWEEP_US, Taken},
     members::{GONE_LEN, Gone, Group, Member, Merged, Name, Requests, Slot},
+    messages::{
+        self, BODY_MAX, Insert, Message, Pairwise, Sequence, Store, Summaries, TEXT_MAX, To, kind,
+    },
     packet::{
         Builder, Entry, HEADER_LEN, Hdop, Header, MAX_PACKET, Plain, Quality, Record, Source,
         Timebase, positions_len,
     },
     pair::{End, Identity, MAX_FRAME, Pairing, Phase, Role},
-    schedule::{GUARD_US, ROUND_US, Schedule, airtime_us, base_of, round_at},
+    rekey::{self, Kept, Learned, NewKey, Rekey},
+    schedule::{GUARD_US, ROUND_US, Schedule, airtime_us, base_of, is_sweep_round, round_at},
     seal::{self, Key, SIV_LEN},
     table::{Merge, Table},
 };
@@ -88,6 +93,8 @@ const FOUNDING_WAIT_US: i64 = 10 * 60 * 1_000_000;
 const MAX_RECORDS: usize = 3;
 /// How long after a failed write a founding's wait tries to store its group again.
 const STORE_RETRY_US: i64 = 10 * 1_000_000;
+/// The messages made here that can wait for a sequence number and a timebase.
+const OUTBOX: usize = 8;
 /// The slots a device that leaves sends its gone record in.
 const LEAVE_REPEATS: u8 = 2;
 /// How long a device that left tries to tell the others: its next slots, a round apart.
@@ -143,6 +150,125 @@ pub enum Command {
     Rename(Name),
     /// Listens throughout for three rounds.
     Refresh,
+    /// Sends text to one member, privately, or with `None` to the whole group.
+    Send {
+        to: Option<u8>,
+        text: Text,
+    },
+    /// Removes the member with this id from the group.
+    Remove(u8),
+    /// Declines the removal another member asked for, keeping the member it removes.
+    Keep,
+    /// Enrols a member no device stands behind, for removing on a bench of two boards.
+    #[cfg(feature = "pair-inject")]
+    Phantom,
+}
+
+/// A message's text: 1 to [`TEXT_MAX`] printable ASCII characters.
+#[derive(Clone, Copy)]
+pub struct Text {
+    len: u8,
+    bytes: [u8; TEXT_MAX],
+}
+
+impl Text {
+    #[must_use]
+    pub fn new(text: &[u8]) -> Option<Self> {
+        if !messages::is_text(text) {
+            return None;
+        }
+        let mut bytes = [0; TEXT_MAX];
+        bytes[..text.len()].copy_from_slice(text);
+        Some(Self {
+            len: text.len() as u8,
+            bytes,
+        })
+    }
+
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes[..usize::from(self.len)]
+    }
+}
+
+impl defmt::Format for Text {
+    fn format(&self, f: defmt::Formatter) {
+        defmt::write!(f, "{=[u8]:a}", self.as_bytes());
+    }
+}
+
+/// A message made here, waiting for a sequence number and a timebase: its kind and contents.
+#[derive(Clone, Copy)]
+struct Outgoing {
+    to: To,
+    key_message: bool,
+    len: u8,
+    plain: [u8; BODY_MAX],
+}
+
+impl Outgoing {
+    fn new(to: To, key_message: bool, plain: &[u8]) -> Self {
+        let mut bytes = [0; BODY_MAX];
+        bytes[..plain.len()].copy_from_slice(plain);
+        Self {
+            to,
+            key_message,
+            len: plain.len() as u8,
+            plain: bytes,
+        }
+    }
+}
+
+/// A value made in place in PSRAM, as the message store is: tens of kilobytes, too large to
+/// build on the stack.
+fn zeroed_in_psram<T: Zeroable>() -> Box<T, &'static EspHeap> {
+    // SAFETY: `Zeroable` promises that all zeroes is a valid `T`.
+    unsafe { Box::new_zeroed_in(&super::PSRAM_HEAP).assume_init() }
+}
+
+/// What [`Mesh::make`] made of a message.
+enum Made {
+    /// Its sequence number's block is not stored yet.
+    Wait,
+    Dropped,
+    Message(Message),
+}
+
+/// A member to send a message under an old key: one that missed a switch, or one removed.
+struct CatchUp {
+    id: u8,
+    key: Key,
+    generation: u16,
+}
+
+/// The message telling a member it was removed, held by its remover until the switch, then
+/// sent under the old key, which only the members that missed the switch and it still hold.
+struct RemovalNotice {
+    message: Message,
+    key: Key,
+    generation: u16,
+    /// How many more times it is sent, on hearing the member under the old key.
+    left: u8,
+}
+
+/// How many times a removal notice is sent.
+const NOTICE_SENDS: u8 = 3;
+
+/// Which key a packet heard opened under.
+enum Opened {
+    /// The group's, or the one it is about to switch to.
+    Current,
+    /// One the group switched away from, which its sender has not.
+    Old {
+        sender: u8,
+        generation: u16,
+    },
+    Not,
+}
+
+/// The timebase second the round holding timebase time `time` starts at.
+fn round_start_s(time: i64) -> u32 {
+    (round_at(time) * (ROUND_US / 1_000_000)) as u32
 }
 
 impl From<Request> for Command {
@@ -166,6 +292,10 @@ impl From<Request> for Command {
 pub struct Start {
     pub me: Identity,
     pub group: Option<Box<Group>>,
+    /// The end of the block of message sequence numbers reserved last.
+    pub sequence: Option<u32>,
+    /// The group's removals, as stored.
+    pub rekey: Option<Box<Rekey>>,
 }
 
 /// Passes what the screens asked on to the mesh. Returns false when the queue is full.
@@ -464,6 +594,24 @@ pub struct Mesh {
     /// Where a member heard on a timebase ranked below this node's places its slots, as its
     /// offset from the local timer, until a notice has gone to it.
     notice: Option<i64>,
+    /// Every message the node holds.
+    messages: Box<Store, &'static EspHeap>,
+    summaries: Summaries,
+    pairwise: Box<Pairwise>,
+    sequence: Sequence,
+    outbox: Box<heapless::Deque<Outgoing, OUTBOX>>,
+    /// The removal under way, the older keys kept, and those declined.
+    rekey: Box<Rekey>,
+    /// The newest key message to each member, for one that missed a switch.
+    kept: Box<Kept, &'static EspHeap>,
+    /// Members to send a message under an old key: their key message, or the removal notice.
+    catch_up: heapless::Vec<CatchUp, 4>,
+    /// The message telling the member this device removed that it was, until it has gone.
+    removal_notice: Option<Box<RemovalNotice>>,
+    /// The round the last header under an old key went out in.
+    beacon_round: i64,
+    /// Members this device removed that a rival key kept, to remove again, as a set.
+    remove_again: u32,
 }
 
 impl Mesh {
@@ -505,6 +653,17 @@ impl Mesh {
             shown: Shown::new(true),
             view: blank_view(),
             notice: None,
+            messages: zeroed_in_psram(),
+            summaries: Summaries::default(),
+            pairwise: Box::default(),
+            sequence: Sequence::new(start.sequence),
+            outbox: Box::default(),
+            rekey: start.rekey.unwrap_or_default(),
+            kept: zeroed_in_psram(),
+            catch_up: heapless::Vec::new(),
+            removal_notice: None,
+            beacon_round: i64::MIN,
+            remove_again: 0,
         };
         let tuned = mesh.tune(FREQUENCY_HZ, SYNC_WORD, POWER_DBM).await;
         info!("[MESH] tuned={}", tuned);
@@ -628,6 +787,7 @@ impl Mesh {
                     }));
                 }
                 if left {
+                    self.forget_messages();
                     self.unsaved = 0;
                     self.unsaved_group = false;
                     self.shown.refresh = None;
@@ -651,6 +811,36 @@ impl Mesh {
                 self.shown.answer(Answer::Renamed(saved));
             }
             Command::Refresh => self.start_refresh(),
+            Command::Send { to, text } => self.queue_text(to, text),
+            Command::Remove(id) => self.remove(id).await,
+            #[cfg(feature = "pair-inject")]
+            Command::Phantom => {
+                let now = utc_seconds(local());
+                if let (Some(group), Some(public), Some(mac)) =
+                    (&mut self.group, random::<32>(), random::<6>())
+                    && let Some(id) = group.lowest_free()
+                {
+                    group.enrol(
+                        id,
+                        Member {
+                            public,
+                            joined: now,
+                            changed: now,
+                            mac,
+                            name: Name::new(b"Phantom").expect("a printable name"),
+                        },
+                    );
+                    self.unsaved |= 1 << id;
+                    info!("[MESH] enrolled a phantom at {}", id);
+                }
+            }
+            Command::Keep => match &self.group {
+                Some(group) if self.rekey.decline(group) => {
+                    info!("[REKEY] declined: the member stays, and this device keeps its key");
+                    self.save_rekey();
+                }
+                _ => warn!("[REKEY] no removal to decline"),
+            },
             Command::Choose(_)
             | Command::ChooseMac(_)
             | Command::Accept
@@ -700,6 +890,19 @@ impl Mesh {
             self.listen(end).await;
             return;
         };
+        if self.rekey.is_due(round_at(time) as u32) {
+            self.switch_key(time);
+            return;
+        }
+        if self.remove_again != 0 && self.rekey.pending().is_none() {
+            let id = self.remove_again.trailing_zeros() as u8;
+            self.remove_again &= !(1 << id);
+            self.remove(id).await;
+        }
+        self.messages.expire(round_start_s(time), |_| {});
+        if !self.outbox.is_empty() {
+            self.post_outbox(time).await;
+        }
         let Some((round, start)) = self
             .schedule
             .as_deref()
@@ -719,6 +922,16 @@ impl Mesh {
             }
             return;
         }
+        if let Some((at, old_round)) = self.old_slot_at(now, own)
+            && at + airtime_us(MAX_PACKET) + PREPARE_US < send_at
+        {
+            if self.listen(at - PREPARE_US).await {
+                self.after = i64::MIN;
+            } else {
+                self.send_old(own, timebase, at, old_round).await;
+            }
+            return;
+        }
         if self.listen(send_at - PREPARE_US).await {
             self.after = i64::MIN;
             return;
@@ -726,7 +939,9 @@ impl Mesh {
         self.after = start + 1;
         let sending = self.table.wants_to_send(round)
             || self.requests.pending() != 0
-            || self.group.as_ref().is_some_and(Group::has_unsent);
+            || self.group.as_ref().is_some_and(Group::has_unsent)
+            || self.messages.has_unsent()
+            || self.summaries.pending();
         info!(
             "[MESH] round={} sending={} sweeping={}",
             round,
@@ -785,6 +1000,97 @@ impl Mesh {
         if let Some(leaving) = &mut self.leaving {
             leaving.left -= 1;
         }
+    }
+
+    /// The old key a packet under one goes out under, with whom it catches up: the key a member
+    /// waiting for its key message is on, or in a sweep round while any member is waited for,
+    /// the newest old key, so that parts of the group on rival keys still hear each other.
+    fn old_packet(&self, round: i64) -> Option<(&Key, u16, heapless::Vec<u8, 4>)> {
+        if let Some(first) = self.catch_up.first() {
+            let ids = self
+                .catch_up
+                .iter()
+                .filter(|up| up.generation == first.generation)
+                .map(|up| up.id)
+                .collect();
+            return Some((&first.key, first.generation, ids));
+        }
+        (is_sweep_round(round) && round != self.beacon_round && self.rekey.is_waiting())
+            .then(|| self.rekey.old().next())
+            .flatten()
+            .map(|old| (&old.key, old.generation, heapless::Vec::new()))
+    }
+
+    /// When this node's slot comes next in the order of the old key a packet under one would go
+    /// out under, on the local timer, and its round.
+    fn old_slot_at(&self, now: i64, own: u8) -> Option<(i64, i64)> {
+        if self.catch_up.is_empty() && !self.rekey.is_waiting() {
+            return None;
+        }
+        let (time, _) = self.clock.at(now)?;
+        let from = time + 2 * PREPARE_US;
+        let (key, _, _) = self.old_packet(round_at(from))?;
+        let (round, start) = Schedule::new(key).next_slot(from, own);
+        // A sweep round's header goes in that round only.
+        if self.catch_up.is_empty() && round != round_at(from) {
+            return None;
+        }
+        Some((start + (now - time), round))
+    }
+
+    /// Sends a packet under an old key at local time `at`, in this node's slot in that key's
+    /// order: a header, and the key message of each member waiting for one on that key.
+    async fn send_old(&mut self, own: u8, timebase: Option<Timebase>, at: i64, round: i64) {
+        let (Some(timebase), Some((time, _))) = (timebase, self.clock.at(at)) else {
+            return;
+        };
+        let Some((key, generation, ids)) = self.old_packet(round) else {
+            return;
+        };
+        let key = key.clone();
+        let header = Header {
+            sender: own,
+            timebase,
+            base: base_of(time),
+            phase: 0,
+            notice: false,
+        };
+        let mut packet = [0u8; MAX_PACKET];
+        let mut builder = Builder::new(&mut packet[SIV_LEN..], &header);
+        let mut caught = 0u32;
+        for &id in &ids {
+            let message = match &self.removal_notice {
+                Some(notice) if notice.message.to() == To::Member(id) => Some(&notice.message),
+                _ => self.kept.get(id),
+            };
+            if let Some(message) = message
+                && builder.message(message).is_ok()
+            {
+                caught |= 1 << id;
+            }
+        }
+        let plain_len = builder.finish();
+        let len = seal::seal(&key, &mut packet, plain_len);
+        let sent = self.transmit(&packet[..len], Some(at)).await;
+        self.catch_up.retain(|up| caught & 1 << up.id == 0);
+        if let Some(notice) = &mut self.removal_notice
+            && let To::Member(id) = notice.message.to()
+            && caught & 1 << id != 0
+        {
+            notice.left -= 1;
+            if notice.left == 0 {
+                self.removal_notice = None;
+            }
+        }
+        self.beacon_round = round;
+        info!(
+            "[REKEY] sent under generation {} round={} caught={=u32:#010x} len={} done={}",
+            generation,
+            round,
+            caught,
+            len,
+            sent.is_some_and(|(done, _)| done)
+        );
     }
 
     /// When the member a notice is for next listens for this node's slot, on the local timer.
@@ -861,6 +1167,13 @@ impl Mesh {
             if self.update_refresh(now) {
                 self.publish();
             }
+            // A switch moves every slot.
+            if self.switch_at(now).is_some_and(|at| at <= now)
+                && let Some((time, _)) = self.clock.at(now)
+            {
+                self.switch_key(time);
+                return true;
+            }
             if now >= end {
                 return false;
             }
@@ -893,13 +1206,18 @@ impl Mesh {
                     self.clock.sweep_ends(now).map_or(end, |ends| ends.min(end)),
                 ),
             };
-            // A refresh's end is shown as it comes, whatever the window.
-            let close = match self.refresh_until() {
-                Some(until) if until > now => close.min(until),
-                _ => close,
+            // A refresh's end is shown as it comes, and a switch is made as it comes, whatever
+            // the window.
+            let event = [self.refresh_until(), self.switch_at(now)]
+                .into_iter()
+                .flatten()
+                .filter(|&at| at > now)
+                .min();
+            let close = match event {
+                Some(at) => close.min(at),
+                None => close,
             };
-            if let Some(ends) = self.refresh_until()
-                && ends > now
+            if let Some(ends) = event
                 && ends < open.min(end)
             {
                 let _ = self.lora.set_device_mode(DeviceMode::STDBY).await;
@@ -973,19 +1291,57 @@ impl Mesh {
         self.take(&packet, done)
     }
 
+    /// Opens a sealed packet in place under the group's key, or the key it is about to switch
+    /// to, which a node that switched a moment early sends under. Says instead which old key
+    /// opens it, which tells of a member that missed a switch.
+    fn open(&self, packet: &mut [u8]) -> Opened {
+        let Some(group) = &self.group else {
+            return Opened::Not;
+        };
+        let pending = self.rekey.pending().map(|pending| &pending.new.key);
+        if core::iter::once(group.key())
+            .chain(pending)
+            .any(|key| seal::open(key, packet).is_ok())
+        {
+            return Opened::Current;
+        }
+        for old in self.rekey.old() {
+            if let Ok(plain) = seal::open(&old.key, packet)
+                && let Ok(plain) = Plain::parse(plain)
+            {
+                return Opened::Old {
+                    sender: plain.header.sender,
+                    generation: old.generation,
+                };
+            }
+        }
+        Opened::Not
+    }
+
     /// Takes a packet whose RxDone was seen at local time `done`. Returns whether it moved the
     /// node to its timebase, or to another id.
     fn take(&mut self, packet: &RxPacket, done: i64) -> bool {
+        #[cfg(feature = "pair-inject")]
+        if inject::is_deaf() {
+            return false;
+        }
+        let len = packet.length;
+        let mut bytes = packet.payload;
+        match self.open(&mut bytes[..len]) {
+            Opened::Current => {}
+            Opened::Old { sender, generation } => {
+                self.heard_on_old(sender, generation);
+                return false;
+            }
+            Opened::Not => {
+                info!("[MESH] not ours len={} rssi={}", len, packet.rssi);
+                return false;
+            }
+        }
         let Some(group) = &mut self.group else {
             return false;
         };
-        let len = packet.length;
-        let mut bytes = packet.payload;
-        let Ok(plain) = seal::open(group.key(), &mut bytes[..len]) else {
-            info!("[MESH] not ours len={} rssi={}", len, packet.rssi);
-            return false;
-        };
-        let Ok(plain) = Plain::parse(plain) else {
+        let Ok(plain) = Plain::parse(&bytes[SIV_LEN..len]) else {
             warn!("[MESH] malformed len={}", len);
             return false;
         };
@@ -1043,6 +1399,13 @@ impl Mesh {
             .map(|(time, _)| (time / 1_000_000) as u32);
         let (mut entries, mut news, mut neighbours, mut moved) = (0, 0, 0, false);
         let mut carried = [None; IDS as usize];
+        let own = group.own();
+        let mut rekey_changed = self.rekey.heard(header.sender);
+        let mut late_key = None;
+        let (mut their_messages, mut summary) = (0, None);
+        // A packet has room for about a dozen of the shortest messages.
+        let mut carried_messages = heapless::Vec::<messages::Name, 16>::new();
+        let mut arrivals = heapless::Vec::<messages::Name, 16>::new();
         let mut heard_records = heapless::Vec::<(u8, Slot), { MAX_RECORDS + 1 }>::new();
         let (mut theirs, mut asked) = (None, None);
         for record in plain.records() {
@@ -1090,8 +1453,25 @@ impl Mesh {
                     if let Merged::Went { at } = group.merge_gone(id, gone) {
                         info!("[MESH] member {} went", at);
                         self.unsaved |= 1 << at;
+                        rekey_changed |= self.rekey.went(at);
                     }
                 }
+                Record::Message(message) => {
+                    let _ = carried_messages.push(message.name());
+                    match self.messages.insert(message, round_start_s(slot)) {
+                        Insert::New => {
+                            let _ = arrivals.push(message.name());
+                            self.kept.keep(&message);
+                        }
+                        // Catching up a member away for longer than the horizon.
+                        Insert::Old if message.is_key() && message.to() == To::Member(own) => {
+                            late_key = Some(message);
+                        }
+                        _ => {}
+                    }
+                }
+                Record::Messages(digest) => their_messages = digest,
+                Record::Summary(body) => summary = Some(body),
                 Record::Other(..) => {}
             }
         }
@@ -1102,12 +1482,36 @@ impl Mesh {
             for (id, slot) in &heard_records {
                 group.covered(*id, slot);
             }
+            for name in &carried_messages {
+                self.messages.sent(*name);
+            }
         }
         self.requests.heard(group, header.sender, theirs, asked);
+        // A packet with no members digest is no full account of its sender.
+        if theirs.is_some() {
+            self.summaries
+                .heard(&mut self.messages, header.sender, their_messages, summary);
+        }
+        for name in &arrivals {
+            if let Some(message) = self.messages.get(*name).copied() {
+                self.arrived(&message, own);
+            }
+        }
+        if let Some(message) = late_key {
+            self.arrived(&message, own);
+        }
+        if rekey_changed {
+            if !self.rekey.is_waiting() {
+                info!("[REKEY] every member is on the new key; the old one is dropped");
+                self.kept.clear();
+                self.catch_up.clear();
+            }
+            self.save_rekey();
+        }
         self.shown.positions(&self.table);
         self.publish();
         info!(
-            "[MESH] heard id={} timebase={} hops={} taken={} late_us={} len={} rssi={} snr={} entries={} new={} neighbours={=u32:#010x}",
+            "[MESH] heard id={} timebase={} hops={} taken={} late_us={} len={} rssi={} snr={} entries={} new={} neighbours={=u32:#010x} messages={}/{} summary={}",
             header.sender,
             header.timebase.source,
             header.timebase.hops,
@@ -1119,6 +1523,9 @@ impl Mesh {
             entries,
             news,
             neighbours,
+            arrivals.len(),
+            carried_messages.len(),
+            summary.is_some(),
         );
         arrival.taken == Taken::Adopted || moved
     }
@@ -1142,6 +1549,9 @@ impl Mesh {
         let neighbours = self.table.neighbours(round);
         let _ = builder.neighbours(neighbours);
         let _ = builder.members_digest(group.digest());
+        if !self.messages.is_empty() {
+            let _ = builder.messages_digest(self.messages.digest());
+        }
         let requests = self.requests.pending();
         if requests != 0 {
             let _ = builder.request(requests);
@@ -1153,6 +1563,7 @@ impl Mesh {
         } else {
             0
         };
+        let summary = self.summaries.pending() && builder.summary(&self.messages, own_room).is_ok();
         let (mut records, mut unsent) = (0u32, group.unsent());
         while unsent != 0 && (records.count_ones() as usize) < MAX_RECORDS {
             let id = unsent.trailing_zeros() as u8;
@@ -1175,6 +1586,18 @@ impl Mesh {
             }
             former |= 1 << at;
         }
+        // Oldest first, ahead of the other members' positions but leaving room for this node's.
+        let mut carried = heapless::Vec::<messages::Name, 8>::new();
+        let mut after = None;
+        while let Some(message) = self.messages.next_unsent(after.as_ref()) {
+            if builder.room() < message.record_len() + own_room
+                || carried.push(message.name()).is_err()
+                || builder.message(message).is_err()
+            {
+                break;
+            }
+            after = Some(*message);
+        }
         let mut entries = [Entry {
             id: 0,
             latitude: 0,
@@ -1196,6 +1619,12 @@ impl Mesh {
         };
         self.table.sent(&entries[..n]);
         self.requests.sent(requests);
+        for name in &carried {
+            self.messages.sent(*name);
+        }
+        if summary {
+            self.summaries.sent();
+        }
         if let Some(group) = &mut self.group {
             for id in (0..IDS).filter(|&id| records & 1 << id != 0) {
                 group.sent(id);
@@ -1205,8 +1634,17 @@ impl Mesh {
             }
         }
         info!(
-            "[MESH] sent round={} len={} entries={} records={=u32:#010x} asked={=u32:#010x} neighbours={=u32:#010x} done={} flags={}",
-            round, len, n, records, requests, neighbours, done, flags
+            "[MESH] sent round={} len={} entries={} records={=u32:#010x} asked={=u32:#010x} neighbours={=u32:#010x} messages={} summary={} done={} flags={}",
+            round,
+            len,
+            n,
+            records,
+            requests,
+            neighbours,
+            carried.len(),
+            summary,
+            done,
+            flags
         );
     }
 
@@ -1437,6 +1875,367 @@ impl Mesh {
         self.requests = Requests::default();
         self.shown.heard = [None; IDS as usize];
         self.shown.positions = [None; IDS as usize];
+        self.forget_messages();
+    }
+
+    /// Forgets the messages and removals of a group this device no longer belongs to.
+    fn forget_messages(&mut self) {
+        *self.messages = Store::zeroed();
+        self.summaries = Summaries::default();
+        self.outbox.clear();
+        self.rekey.clear();
+        self.kept.clear();
+        self.catch_up.clear();
+        self.removal_notice = None;
+        self.remove_again = 0;
+    }
+
+    /// Queues the group's removals to be stored.
+    fn save_rekey(&mut self) {
+        if !super::queue_group_write(GroupWrite::Rekey(self.rekey.clone())) {
+            warn!("[REKEY] the write queue is full; the removal is not stored");
+        }
+    }
+
+    /// Removes the member `id`: makes a new key, sends it to every other member, and tells
+    /// `id`. The group switches to the key when the round the key messages name starts.
+    async fn remove(&mut self, id: u8) {
+        let (Some(group), Some((time, _))) = (&self.group, self.clock.at(local())) else {
+            warn!("[REKEY] no group, or no timebase to time a switch on");
+            return;
+        };
+        let Some(key) = random::<32>() else {
+            warn!("[REKEY] no random source for a key");
+            return;
+        };
+        let round = round_at(time) as u32;
+        let Some(new) = self.rekey.start(group, id, Key::new(key), round) else {
+            warn!("[REKEY] cannot remove {} now", id);
+            return;
+        };
+        let remaining = group.ids() & !(1 << id) & !(1 << group.own());
+        info!(
+            "[REKEY] removing {}: generation {} from round {} (now {}), {} to tell",
+            id,
+            new.generation,
+            new.switch,
+            round,
+            remaining.count_ones()
+        );
+        self.save_rekey();
+        let body = new.encode();
+        for member in (0..IDS).filter(|&member| remaining & 1 << member != 0) {
+            self.post(&Outgoing::new(To::Member(member), true, &body), time)
+                .await;
+            // Each key takes an X25519 the first time; let the other tasks run between.
+            Timer::after(Duration::from_millis(1)).await;
+        }
+        // Told only after the switch, so that it cannot answer by removing this device first.
+        let notice = Outgoing::new(To::Member(id), false, &[kind::REMOVED]);
+        if let Made::Message(message) = self.make(&notice, time).await
+            && let Some(group) = &self.group
+        {
+            self.removal_notice = Some(Box::new(RemovalNotice {
+                message,
+                key: group.key().clone(),
+                generation: group.generation(),
+                left: NOTICE_SENDS,
+            }));
+        }
+    }
+
+    /// Takes a key message from `remover`.
+    fn learned_key(&mut self, remover: u8, new: NewKey) {
+        let (Some(group), Some((time, _))) = (&self.group, self.clock.at(local())) else {
+            return;
+        };
+        let round = round_at(time) as u32;
+        let (removed, generation, switch) = (new.removed, new.generation, new.switch);
+        match self.rekey.learned(group, remover, new, round) {
+            Learned::Ignored => info!(
+                "[REKEY] key message from {} for generation {} ignored",
+                remover, generation
+            ),
+            Learned::Pending => {
+                info!(
+                    "[REKEY] {} asks to remove {}: generation {} from round {} (now {}) unless declined",
+                    remover, removed, generation, switch, round
+                );
+                self.save_rekey();
+            }
+            Learned::Due => {
+                info!(
+                    "[REKEY] {} removed {}: generation {} is due",
+                    remover, removed, generation
+                );
+                self.switch_key(time);
+            }
+        }
+    }
+
+    /// Switches the group to the pending key at timebase time `time`.
+    fn switch_key(&mut self, time: i64) {
+        let Some(group) = &mut self.group else {
+            return;
+        };
+        let Some(switched) = self.rekey.switch(group, (time / 1_000_000) as u32) else {
+            return;
+        };
+        info!(
+            "[REKEY] switched to generation {}: {} removed {}",
+            group.generation(),
+            switched.remover,
+            switched.removed
+        );
+        if switched.undone != 0 {
+            warn!(
+                "[REKEY] a rival key won; removing {=u32:#010x} again",
+                switched.undone
+            );
+            self.remove_again |= switched.undone;
+        }
+        if let (Some(removed), Some(notice)) = (switched.removed, &self.removal_notice)
+            && notice.message.to() == To::Member(removed)
+        {
+            let _ = self.catch_up.push(CatchUp {
+                id: removed,
+                key: notice.key.clone(),
+                generation: notice.generation,
+            });
+        }
+        self.unsaved_group = true;
+        self.save_rekey();
+        self.sync_schedule();
+    }
+
+    /// When the pending key's switch round starts, on the local clock.
+    fn switch_at(&self, now: i64) -> Option<i64> {
+        let pending = self.rekey.pending()?;
+        let (time, _) = self.clock.at(now)?;
+        Some(now + i64::from(pending.new.switch) * ROUND_US - time)
+    }
+
+    /// Takes a packet from `sender` under the old key of generation `generation`: it missed a
+    /// switch, and its key message goes to it.
+    fn heard_on_old(&mut self, sender: u8, generation: u16) {
+        if let Some(notice) = &self.removal_notice
+            && notice.message.to() == To::Member(sender)
+            && notice.generation == generation
+        {
+            if notice.left > 0 && self.catch_up.iter().all(|up| up.id != sender) {
+                let _ = self.catch_up.push(CatchUp {
+                    id: sender,
+                    key: notice.key.clone(),
+                    generation,
+                });
+            }
+            return;
+        }
+        if !self.rekey.is_waiting_for(generation, sender) {
+            info!("[REKEY] heard {} on generation {}", sender, generation);
+            return;
+        }
+        if self.kept.get(sender).is_none() {
+            info!(
+                "[REKEY] {} is on generation {}; no key message is held for it",
+                sender, generation
+            );
+            return;
+        }
+        let Some(key) = self
+            .rekey
+            .old()
+            .find(|old| old.generation == generation)
+            .map(|old| old.key.clone())
+        else {
+            return;
+        };
+        if self.catch_up.iter().all(|up| up.id != sender)
+            && self
+                .catch_up
+                .push(CatchUp {
+                    id: sender,
+                    key,
+                    generation,
+                })
+                .is_ok()
+        {
+            info!(
+                "[REKEY] {} is on generation {}; its key message goes to it",
+                sender, generation
+            );
+        }
+    }
+
+    /// Queues text to `to`, a member, or the whole group with `None`.
+    fn queue_text(&mut self, to: Option<u8>, text: Text) {
+        let Some(group) = &self.group else {
+            warn!("[MSG] in no group to send to");
+            return;
+        };
+        let to = match to {
+            None => To::Group,
+            Some(id) if id != group.own() && group.member(id).is_some() => To::Member(id),
+            Some(id) => {
+                warn!("[MSG] no other member has id {}", id);
+                return;
+            }
+        };
+        let mut plain = [0; 1 + TEXT_MAX];
+        plain[0] = kind::TEXT;
+        plain[1..1 + text.as_bytes().len()].copy_from_slice(text.as_bytes());
+        let outgoing = Outgoing::new(to, false, &plain[..1 + text.as_bytes().len()]);
+        if self.outbox.push_back(outgoing).is_err() {
+            warn!("[MSG] the outbox is full");
+            return;
+        }
+        info!("[MSG] queued to {}: {}", to, text);
+    }
+
+    /// Posts each message waiting in the outbox, in order, until one has to wait.
+    async fn post_outbox(&mut self, time: i64) {
+        while let Some(outgoing) = self.outbox.front().copied() {
+            if !self.post(&outgoing, time).await {
+                return;
+            }
+            self.outbox.pop_front();
+        }
+    }
+
+    /// Gives a message made here a sequence number and seals it, at timebase time `time`. A
+    /// number needs its block stored first.
+    async fn make(&mut self, outgoing: &Outgoing, time: i64) -> Made {
+        if let Some(end) = self.sequence.to_reserve() {
+            if !super::save_group(GroupWrite::Sequence(end)).await {
+                warn!("[MSG] no sequence numbers: their block was not stored");
+                return Made::Wait;
+            }
+            self.sequence.reserved(end);
+        }
+        let Some(group) = &self.group else {
+            return Made::Dropped;
+        };
+        let own = group.own();
+        let plain = &outgoing.plain[..usize::from(outgoing.len)];
+        let stamp = (time / 1_000_000) as u32;
+        let made = match outgoing.to {
+            To::Group => self
+                .sequence
+                .take()
+                .and_then(|(seq, prev)| Message::to_group(own, seq, prev, stamp, plain)),
+            To::Member(dest) => {
+                let Some(public) = group.member(dest).map(|member| member.public) else {
+                    warn!("[MSG] id {} went before its message did", dest);
+                    return Made::Dropped;
+                };
+                let Some(key) = self.pairwise.key(&self.me.secret, dest, &public) else {
+                    warn!("[MSG] no key shared with id {}", dest);
+                    return Made::Dropped;
+                };
+                let key = key.clone();
+                self.sequence.take().and_then(|(seq, prev)| {
+                    Message::private(
+                        own,
+                        dest,
+                        outgoing.key_message,
+                        seq,
+                        prev,
+                        stamp,
+                        plain,
+                        &key,
+                    )
+                })
+            }
+        };
+        match made {
+            Some(message) => Made::Message(message),
+            None => {
+                warn!("[MSG] a message could not be made");
+                Made::Dropped
+            }
+        }
+    }
+
+    /// Puts a message made here in the store to be sent, at timebase time `time`. Returns false
+    /// when it has to wait, and true once it is posted or cannot be.
+    async fn post(&mut self, outgoing: &Outgoing, time: i64) -> bool {
+        let message = match self.make(outgoing, time).await {
+            Made::Wait => return false,
+            Made::Dropped => return true,
+            Made::Message(message) => message,
+        };
+        self.kept.keep(&message);
+        let inserted = self.messages.insert(message, round_start_s(time));
+        info!("[MSG] posted {} {}", message, inserted);
+        true
+    }
+
+    /// Takes a message new to this node: shows one for it, opens a private one, and
+    /// acknowledges what it opens. `own` is this node's id.
+    fn arrived(&mut self, message: &Message, own: u8) {
+        let origin = message.origin;
+        match message.to() {
+            To::Group if origin != own => match message.body().split_first() {
+                Some((&kind::TEXT, text)) => info!("[MSG] from {} to all: {=[u8]:a}", origin, text),
+                _ => info!("[MSG] from {} to all, kind unknown", origin),
+            },
+            To::Member(dest) if dest == own && origin != own => {
+                let Some(public) = self
+                    .group
+                    .as_ref()
+                    .and_then(|group| group.member(origin))
+                    .map(|member| member.public)
+                else {
+                    warn!(
+                        "[MSG] a private message from id {}, which no member holds",
+                        origin
+                    );
+                    return;
+                };
+                let Some(key) = self.pairwise.key(&self.me.secret, origin, &public) else {
+                    return;
+                };
+                let mut out = [0; BODY_MAX];
+                let Ok(plain) = message.open(key, &mut out) else {
+                    warn!("[MSG] a private message from {} did not open", origin);
+                    return;
+                };
+                match plain.split_first() {
+                    Some((&kind::TEXT, text)) => {
+                        info!("[MSG] from {} to this device: {=[u8]:a}", origin, text);
+                    }
+                    Some((&kind::ACK, seq)) => {
+                        let seq = seq.try_into().map(u32::from_be_bytes).unwrap_or(0);
+                        info!("[MSG] {}/{} delivered to {}", own, seq, origin);
+                        return;
+                    }
+                    Some((&kind::KEY, _)) => match NewKey::decode(plain) {
+                        Some(new) => self.learned_key(origin, new),
+                        None => warn!("[REKEY] a key message from {} is malformed", origin),
+                    },
+                    Some((&kind::REMOVED, _)) => {
+                        warn!("[REKEY] {} removed this device from the group", origin);
+                    }
+                    Some((&kind, _)) => {
+                        warn!("[MSG] from {}, kind {} unknown", origin, kind);
+                    }
+                    None => return,
+                }
+                let mut ack = [kind::ACK, 0, 0, 0, 0];
+                ack[1..].copy_from_slice(&message.seq.to_be_bytes());
+                if self
+                    .outbox
+                    .push_back(Outgoing::new(To::Member(origin), false, &ack))
+                    .is_err()
+                {
+                    warn!(
+                        "[MSG] the outbox is full; {}/{} goes unacknowledged",
+                        origin, message.seq
+                    );
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Listens throughout for a packet under the group a founding left unconfirmed, until its
@@ -1737,7 +2536,7 @@ pub mod inject {
     use embassy_time::{Duration, Instant, Timer};
     use octowhere_mesh::members::Name;
 
-    use super::{COMMANDS, Command};
+    use super::{COMMANDS, Command, Text};
 
     /// The command's code in the low byte and its argument in the next. The debugger writes it
     /// last.
@@ -1746,6 +2545,9 @@ pub mod inject {
     /// A new name's bytes, little-endian in each word; the command's argument is its length.
     #[unsafe(no_mangle)]
     static OCTOWHERE_PAIR_NAME: [AtomicU32; 4] = [const { AtomicU32::new(0) }; 4];
+    /// A message's text, little-endian in each word; its length is the command's third byte.
+    #[unsafe(no_mangle)]
+    static OCTOWHERE_PAIR_TEXT: [AtomicU32; 40] = [const { AtomicU32::new(0) }; 40];
     /// The local time in milliseconds until which a pairing drops every frame it hears.
     static DEAF_UNTIL_MS: AtomicU32 = AtomicU32::new(0);
 
@@ -1785,10 +2587,32 @@ pub mod inject {
                     }
                 }
                 11 => Command::Refresh,
+                13 => Command::Remove(argument),
+                14 => Command::Keep,
+                15 => Command::Phantom,
+                12 => {
+                    let mut bytes = [0; 160];
+                    for (i, word) in OCTOWHERE_PAIR_TEXT.iter().enumerate() {
+                        bytes[4 * i..4 * i + 4]
+                            .copy_from_slice(&word.load(Ordering::Relaxed).to_le_bytes());
+                    }
+                    let len = usize::from((word >> 16) as u8).min(160);
+                    match Text::new(&bytes[..len]) {
+                        // 255 is the whole group.
+                        Some(text) => Command::Send {
+                            to: (argument != u8::MAX).then_some(argument),
+                            text,
+                        },
+                        None => {
+                            defmt::warn!("[MESH] injected text refused");
+                            continue;
+                        }
+                    }
+                }
                 10 => {
                     let now = Instant::now().as_millis() as u32;
                     DEAF_UNTIL_MS.store(now + 1000 * u32::from(argument), Ordering::Relaxed);
-                    defmt::info!("[PAIR] deaf for {}s", argument);
+                    defmt::info!("[MESH] deaf for {}s", argument);
                     continue;
                 }
                 other => {

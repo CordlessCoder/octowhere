@@ -545,11 +545,12 @@ Owner, 2026-10-03, except where it says otherwise.
   remover. A device whose user does not answer switches with the group. One that learns of
   the removal only after the switch switches at once.
 - **The new key.** The remover makes a random group key and sends it to each remaining member
-  as a private message, a key message, with the round the group switches at, counted on its
-  timebase, and the id and SHA-256 fingerprint of the member removed. The remover sends two a
-  packet, so the switch is as many rounds away as its own key messages take, and three more
-  for hops: about 5 minutes for 8 members, 15 for 32. Until then the removed device still
-  reads everything.
+  as a private message, a key message, with its generation, one past the current key's, the
+  round the group switches at, counted on its timebase, and the id and SHA-256 fingerprint of
+  the member removed. The remover sends two a packet, so the switch is as many rounds away as
+  its key messages and the removal message take, and four more: the round it is in, and three
+  for hops. That is about 6 minutes for 8 members, 15 for 32. Until then the removed device
+  still reads everything.
 - **The switch.** Before it nodes send under the old key, and from it under the new one, in the
   order the new key gives (see "Shuffled slots"). Every node tries both keys on receive, but
   after the switch merges nothing that arrives under the old key. Such a packet only shows that
@@ -563,14 +564,20 @@ Owner, 2026-10-03, except where it says otherwise.
   under the new one. A member can be away for any length of time and come back without pairing
   again. While some are not heard, a node sends a header under the old key in its slot of each
   sweep round, so parts of the group that switched to different keys still hear each other.
-- **The removed device** is sent one private message saying it was removed and by whom. Its
+- **The removed device** is sent a private message saying it was removed and by whom. Its
   screen shows that, and it does not leave the group by itself, so a stolen device that removes
-  everyone else cannot take them out of their group.
+  everyone else cannot take them out of their group. The remover sends it only after the
+  switch, under the old key, at its own slot in that key's order, where the removed device
+  still listens, and again when it hears the device under the old key, three times in all.
+  Told before the switch, the device could answer by removing its remover, and the two keys
+  would be rivals that the lower hash settles.
 - **Its record.** At the switch every node replaces the removed member's record with a gone
   record. Its id is free for the next pairing at once.
-- **Two at once.** Two removals made apart at the same time make two keys. The one whose key
-  has the lower SHA-256 wins wherever both are known, and the other remover makes its removal
-  again under it (proposed, 2026-10-03).
+- **Two at once.** Two removals made apart at the same time make two keys of one generation.
+  The one whose key has the lower SHA-256 wins wherever both are known, even after a switch
+  to the other, and the other remover makes its removal again under it (proposed,
+  2026-10-03). A key of a later generation is taken whatever it replaces, so a member that
+  missed two switches takes the newest at once; one of an earlier generation is stale.
 - **What is kept across a restart.** A pending removal, the old keys and which members each
   still waits for. The key messages themselves are in the message store, so a restarted node
   gets them back from its neighbours within the horizon.
@@ -825,6 +832,10 @@ protocol does not need this.
   recovers only at its lost sweep, about 10 rounds later; a replayed notice forces a sweep.
   Refining only within the guard, and adopting only on two packets that agree, would close it.
   Jamming does more harm more easily, so it waits.
+- A member being removed can still see that a removal is under way before the switch: key
+  messages are marked as such, and none comes to it. Firmware changed to act on that can
+  remove its remover first, and the lower of the two keys' hashes then decides which removal
+  holds. Each device's user is shown both and can decline the one they do not want.
 - For step 5, two answers from the owner: the cell's capacity and how long the device should
   last on it, which set the floor, the sweeps and how far CAD has to go; and when both boards
   can have a GPS fix at once, which CAD's two measurements need.

@@ -7,11 +7,16 @@
 pub mod bits;
 pub mod clock;
 pub mod members;
+pub mod messages;
 pub mod packet;
 pub mod pair;
+pub mod rekey;
 pub mod schedule;
 pub mod seal;
 pub mod table;
+
+/// All zeroes is a valid value of a type that has it, which lets a large one be made in place.
+pub use bytemuck::Zeroable;
 
 /// The number of ids, and of slots in a round.
 pub const IDS: u8 = 32;

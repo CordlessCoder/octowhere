@@ -18,6 +18,7 @@ use esp_storage::{FlashStorage, FlashStorageError};
 use octowhere_mesh::{
     IDS,
     members::{GONE_LEN, Gone, Group, Member, Name, RECORD_FIXED_LEN, RECORD_MAX_LEN, Slot},
+    rekey::{self, Rekey},
     seal::Key,
 };
 use octowhere_ui::{
@@ -51,18 +52,26 @@ const SETTINGS_KEYS: [&[u8]; 6] = [
     KEY_TIMEOUT,
     KEY_ZONE_MODE,
 ];
-/// The group key and this device's id in it.
+/// The group key, this device's id in it, and the key's generation.
 const KEY_GROUP: &[u8] = b"group";
+/// A removal under way, the old keys kept and those declined, as `Rekey::encode` writes them.
+/// It sorts after every member's key.
+const KEY_REKEY: &[u8] = b"group.rekey";
 /// This device's X25519 secret. It is in the clear: `context/LORA-PROTOCOL.md` defers flash
 /// encryption.
 const KEY_IDENTITY: &[u8] = b"identity";
 const KEY_NAME: &[u8] = b"name";
+/// The end of the block of message sequence numbers reserved last, little-endian: every number
+/// below it may have been used.
+const KEY_SEQUENCE: &[u8] = b"sequence";
 /// The first byte of each mesh value, so a later layout can tell this one apart.
 const MESH_VERSION: u8 = 1;
 const MODE_AUTOMATIC: u8 = 0;
 const MODE_MANUAL: u8 = 1;
 /// Long enough for the longest zone name.
 const VALUE_BUFFER: usize = 64;
+/// Long enough for the longest mesh value, a removal's state, behind its version byte.
+const MESH_BUFFER: usize = 1 + rekey::STORED_MAX;
 
 /// What the settings held when the firmware started.
 #[derive(Clone, Copy, Debug, Default)]
@@ -99,12 +108,18 @@ pub struct MeshSaved {
     pub secret: Option<[u8; 32]>,
     pub name: Option<Name>,
     pub group: Option<Box<Group>>,
+    pub sequence: Option<u32>,
+    pub rekey: Option<Box<Rekey>>,
 }
 
 /// One change to the mesh's state to save.
 pub enum GroupWrite {
     Identity([u8; 32]),
     Name(Name),
+    /// The end of a new block of message sequence numbers.
+    Sequence(u32),
+    /// The group's removals: the one under way, the old keys and those declined.
+    Rekey(Box<Rekey>),
     /// The whole group, replacing what was stored.
     Group(Box<Group>),
     /// What the id `id` holds: a member's record, a gone record, or nothing.
@@ -121,6 +136,13 @@ impl defmt::Format for GroupWrite {
         match self {
             Self::Identity(_) => defmt::write!(f, "Identity"),
             Self::Name(name) => defmt::write!(f, "Name({})", name),
+            Self::Sequence(end) => defmt::write!(f, "Sequence({})", end),
+            Self::Rekey(rekey) => defmt::write!(
+                f,
+                "Rekey(pending={} old={})",
+                rekey.pending().is_some(),
+                rekey.old().count()
+            ),
             Self::Group(group) => {
                 defmt::write!(f, "Group(own={} members={})", group.own(), group.count())
             }
@@ -377,8 +399,8 @@ impl Store {
         };
         embassy_futures::block_on(async {
             let transaction = database.read_transaction().await;
-            let mut buffer = [0; VALUE_BUFFER];
-            let mut value = async |key: &[u8]| -> Option<heapless::Vec<u8, VALUE_BUFFER>> {
+            let mut buffer = [0; MESH_BUFFER];
+            let mut value = async |key: &[u8]| -> Option<heapless::Vec<u8, MESH_BUFFER>> {
                 match transaction.read(key, &mut buffer).await {
                     Ok(length) => match buffer[..length].split_first() {
                         Some((&MESH_VERSION, rest)) => heapless::Vec::from_slice(rest).ok(),
@@ -421,11 +443,23 @@ impl Store {
                 .await
                 .and_then(|secret| secret.as_slice().try_into().ok());
             let name = value(KEY_NAME).await.and_then(|name| Name::new(&name));
+            let sequence = value(KEY_SEQUENCE)
+                .await
+                .and_then(|end| Some(u32::from_le_bytes(end.as_slice().try_into().ok()?)));
+            let rekey = match &group {
+                Some(_) => value(KEY_REKEY)
+                    .await
+                    .and_then(|bytes| Rekey::decode(&bytes))
+                    .map(Box::new),
+                None => None,
+            };
             self.stored_members = stored_members;
             MeshSaved {
                 secret,
                 name,
                 group: group.map(Box::new),
+                sequence,
+                rekey,
             }
         })
     }
@@ -437,7 +471,7 @@ impl Store {
         };
         embassy_futures::block_on(async {
             let mut transaction = database.write_transaction().await;
-            let mut value = [0; VALUE_BUFFER];
+            let mut value = [0; MESH_BUFFER];
             value[0] = MESH_VERSION;
             let mut stored = self.stored_members;
             // A transaction takes its keys in ascending order.
@@ -450,6 +484,16 @@ impl Store {
                     let name = name.as_bytes();
                     value[1..1 + name.len()].copy_from_slice(name);
                     transaction.write(KEY_NAME, &value[..1 + name.len()]).await
+                }
+                GroupWrite::Sequence(end) => {
+                    value[1..5].copy_from_slice(&end.to_le_bytes());
+                    transaction.write(KEY_SEQUENCE, &value[..5]).await
+                }
+                GroupWrite::Rekey(rekey) => {
+                    let mut bytes = [0; rekey::STORED_MAX];
+                    let len = rekey.encode(&mut bytes);
+                    value[1..1 + len].copy_from_slice(&bytes[..len]);
+                    transaction.write(KEY_REKEY, &value[..1 + len]).await
                 }
                 GroupWrite::Group(group) => {
                     value[1..33].copy_from_slice(group.key().bytes());
@@ -474,6 +518,9 @@ impl Store {
                         if written.is_ok() {
                             written = write_member(&mut transaction, &mut stored, id, None).await;
                         }
+                    }
+                    if written.is_ok() {
+                        written = transaction.delete(KEY_REKEY).await;
                     }
                     written
                 }

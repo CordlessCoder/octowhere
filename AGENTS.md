@@ -20,9 +20,10 @@ initialization or peripheral mappings.
   It has no board or renderer dependency and builds for the host.
 - `crates/octowhere-mesh/` owns the location mesh in `context/LORA-PROTOCOL.md`: the slot
   schedule, the packet's header and records, sealing them with AES-SIV, the table of positions,
-  the timebase, the group and its members (`members`), and pairing (`pair`), the exchange
-  without a radio. It has no radio or board dependency and builds for the host. `src/mesh.rs`
-  runs it on the radio.
+  the timebase, the group and its members (`members`), pairing (`pair`), the exchange
+  without a radio, messages and the store every node holds them in (`messages`), and removing
+  a member by moving the group to a new key (`rekey`). It has no radio or board dependency and
+  builds for the host. `src/mesh.rs` runs it on the radio.
 - `crates/octowhere-ui/` owns screen state, drawing and touch handling. It has no board dependency,
   so it also builds for the host. `src/ui/` there owns dirty tracking, geometry,
   gestures and paging, the clock and compass screens with
@@ -57,8 +58,9 @@ initialization or peripheral mappings.
 - `src/settings.rs` keeps settings in flash across restarts, in an ekv database: the time zone
   mode, the manually chosen zone, the zone GNSS last placed the device in, the display's
   brightness, the screen timeout, and whether the screen rests on the always-on face. The
-  mesh's state sits beside them: this device's X25519 secret and name, and its group's key, id
-  and members. Clearing the settings leaves the mesh's state (owner). `partitions.csv` is the flash layout, and the cargo runner flashes it.
+  mesh's state sits beside them: this device's X25519 secret and name, the end of its block of
+  message sequence numbers, and its group's key and its generation, id, members and gone
+  members, and removals. Clearing the settings leaves the mesh's state (owner). `partitions.csv` is the flash layout, and the cargo runner flashes it.
 - `tools/compass-texture.py` records the design's compass fields into
   `crates/octowhere-ui/src/ui/compass_texture.rs`, from the design's own generator, and checks
   the recording repaints it exactly.
@@ -210,7 +212,7 @@ Weigh that cost before adding one.
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 1,493,168 bytes, 9.53% of the 15,663,104-byte app partition that
+The image is currently 1,536,080 bytes, 9.81% of the 15,663,104-byte app partition that
 `partitions.csv` gives it. Measure with `espflash save-image --chip esp32s3 --flash-size 16mb
 --partition-table partitions.csv <elf> <out>`; without those two options it assumes 4 MB of flash
 and the default table. The time zone
@@ -496,12 +498,19 @@ I2C bus, so any timing the protocol depends on includes an I2C transaction and w
 
 `radio_task` runs the mesh, `src/mesh.rs` on `crates/octowhere-mesh`: slots, in an order the
 group's key shuffles each round, carrying neighbours, a digest of the member table, the member
-records asked for or changed, and positions, with a timebase taken from other nodes without a
-fix, under the group key pairing gave the node. A node in no group sends nothing and keeps the radio
-asleep. Without a fix a node has no position of its own. Commands reach the mesh through
+and gone records asked for or changed, a digest of the messages held, a summary of them when
+a neighbour's differs, messages, and positions, with a timebase taken from other nodes without
+a fix, under the group key pairing gave the node. A node in no group sends nothing and keeps the
+radio asleep. Without a fix a node has no position of its own. Commands reach the mesh through
 `mesh::COMMANDS`: start a pairing to add or join, choose a device found, answer the code, cancel,
-leave the group, rename, refresh. A refresh listens throughout for three rounds and keeps
-sending; a pairing stops it. A pairing takes the radio to band O's upper channel at +2 dBm until it
+leave the group, rename, refresh, send text, remove a member, keep one another member removes.
+A refresh listens throughout for three rounds and keeps sending; a pairing stops it. A device
+that leaves sends its gone record in its next two slots before it forgets the key. Every node
+holds every message for 24 hours in a store in PSRAM, lost at a restart, and the summaries
+bring back what a neighbour lacks. A removal sends the new key to each remaining member, and
+the group switches to it at the round the key names; a node keeps the old key for any member
+not yet heard on the new one, and in a sweep round sends that member its key message under the
+old key. There are no screens for messages or removals yet: they wait for a design round. A pairing takes the radio to band O's upper channel at +2 dBm until it
 ends; the protocol's "The exchange as built" has the frames and their order, and
 `docs/logs/lora/pairing-2026-10-02/` the first pairings between the two boards. The group
 screens send the commands, and `pair-inject` lets `tools/pair-inject.py` send them over the USB
@@ -538,7 +547,7 @@ errata workaround, are in [`docs/hardware-notes.md`](docs/hardware-notes.md).
 - The internal heap is 192 KiB, from two `esp_alloc::heap_allocator!` calls in `main`: 72 KiB
   in the RAM the second-stage bootloader frees after boot (`#[esp_hal::ram(reclaimed)]`), and
   120 KiB as a static in `.bss`. Core 0's stack is whatever DRAM `.data` and `.bss` leave,
-  115,156 bytes on 2026-10-03; `_stack_end_cpu0` and `_stack_start_cpu0` in the ELF give it
+  112,340 bytes on 2026-10-03; `_stack_end_cpu0` and `_stack_start_cpu0` in the ELF give it
   exactly. The tasks' futures are statics, so the stack shrinks as they grow. It was about
   19 KiB with the whole heap in `.bss`, and the clock face overflowed it. The mesh's work took
   it to about 60 KB, and the radio task overflowed it from under a group screen. Tasks on
@@ -552,7 +561,9 @@ errata workaround, are in [`docs/hardware-notes.md`](docs/hardware-notes.md).
   and the compass (`bench/clock-draw`); 18 KB is in use after boot. `context/BACKLOG.md` has
   the plan for laying SRAM out deliberately.
 - PSRAM is registered in the separate `PSRAM_HEAP` static. Framebuffers must be allocated with
-  `FB::alloc(&PSRAM_HEAP)` rather than the global allocator.
+  `FB::alloc(&PSRAM_HEAP)` rather than the global allocator. The mesh's message store, about
+  49 KB, and the key messages it keeps for catch-up, about 6 KB, are made in place there by
+  `zeroed_in_psram` in `src/mesh.rs`, from types whose all-zero value is valid (`Zeroable`).
 - The current RGB565 configuration uses 466 × 466 × 2 = 434,312 bytes per framebuffer, with two
   framebuffers.
 - Core 1 uses the 8 KiB `CORE1_STACK` static.
@@ -574,9 +585,10 @@ All default off. None belongs in normal firmware behavior.
   though GNSS set it or as the RTC's own unconfirmed time, without a reset. After one, GNSS no
   longer sets the clock until the firmware restarts.
 - `pair-inject` lets `tools/pair-inject.py` give the mesh its commands over the USB JTAG,
-  beside the screens: add, join, choose, accept, decline, mismatch, cancel, leave, rename and
-  refresh.
-  Its `deaf` makes a pairing drop what it hears for a while, to lose a frame on purpose.
+  beside the screens: add, join, choose, accept, decline, mismatch, cancel, leave, rename,
+  refresh, send, remove and keep. Its `deaf` makes a pairing or the mesh drop what it hears for
+  a while, to lose a frame or a switch on purpose, and its `phantom` enrols a member no device
+  stands behind, so that two boards can try a removal with a member left to tell.
 - `touch-inject` lets `tools/touch-inject.py` tap, swipe and cover the screen and press the
   power key over the USB JTAG, and read the framebuffer drawn last back to a PNG, for driving
   the screens on a board nobody holds. A read takes about 11 s and interrupts the board.

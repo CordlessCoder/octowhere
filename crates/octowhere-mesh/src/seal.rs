@@ -57,6 +57,36 @@ pub fn open<'a>(key: &Key, packet: &'a mut [u8]) -> Result<&'a [u8], Inauthentic
     Ok(sealed)
 }
 
+/// Seals `buf[SIV_LEN..SIV_LEN + plain_len]` in place under `key`, bound to `associated`, with
+/// its IV in front, and returns the sealed length.
+pub fn seal_bound(key: &Key, associated: &[u8], buf: &mut [u8], plain_len: usize) -> usize {
+    let len = SIV_LEN + plain_len;
+    let (siv, plain) = buf[..len].split_at_mut(SIV_LEN);
+    let tag = key
+        .cipher()
+        .encrypt_inout_detached([associated], plain.into())
+        .expect("one associated data component, so S2V cannot run out of components");
+    siv.copy_from_slice(&tag);
+    len
+}
+
+/// Opens what [`seal_bound`] sealed, in place, returning its plaintext.
+pub fn open_bound<'a>(
+    key: &Key,
+    associated: &[u8],
+    buf: &'a mut [u8],
+) -> Result<&'a [u8], Inauthentic> {
+    if buf.len() < SIV_LEN {
+        return Err(Inauthentic);
+    }
+    let (siv, sealed) = buf.split_at_mut(SIV_LEN);
+    let tag = (&*siv).try_into().map_err(|_| Inauthentic)?;
+    key.cipher()
+        .decrypt_inout_detached([associated], sealed.into(), &tag)
+        .map_err(|_| Inauthentic)?;
+    Ok(sealed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -107,6 +137,24 @@ mod tests {
         let mut other = packet;
         assert_eq!(
             open(&Key::new([8; 32]), &mut other[..len]),
+            Err(Inauthentic)
+        );
+    }
+
+    #[test]
+    fn a_bound_seal_opens_only_with_its_associated_data() {
+        let key = Key::new([3; 32]);
+        let mut buf = [0u8; SIV_LEN + 5];
+        buf[SIV_LEN..].copy_from_slice(b"hello");
+        let len = seal_bound(&key, b"origin 1 seq 9", &mut buf, 5);
+        let mut copy = buf;
+        assert_eq!(
+            open_bound(&key, b"origin 1 seq 9", &mut copy[..len]),
+            Ok(&b"hello"[..])
+        );
+        let mut copy = buf;
+        assert_eq!(
+            open_bound(&key, b"origin 1 seq 8", &mut copy[..len]),
             Err(Inauthentic)
         );
     }

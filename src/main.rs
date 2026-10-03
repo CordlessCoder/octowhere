@@ -1927,6 +1927,8 @@ fn mesh_start(saved: settings::MeshSaved) -> mesh::Start {
                 .unwrap_or_else(|| octowhere_mesh::members::Name::from_mac(&mac)),
         },
         group: saved.group,
+        sequence: saved.sequence,
+        rekey: saved.rekey,
     }
 }
 

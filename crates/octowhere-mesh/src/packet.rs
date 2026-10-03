@@ -3,6 +3,7 @@
 
 use crate::bits::{BitReader, BitWriter, Full};
 use crate::members::{GONE_LEN, Gone, Member, RECORD_MAX_LEN, Slot};
+use crate::messages::{BODY_MAX, FIXED_LEN, Message, Store};
 use crate::seal::SIV_LEN;
 
 pub const VERSION: u8 = 1;
@@ -351,6 +352,40 @@ impl<'a> Builder<'a> {
         self.word(record::REQUEST, ids)
     }
 
+    pub fn messages_digest(&mut self, digest: u32) -> Result<(), Full> {
+        self.word(record::MESSAGES, digest)
+    }
+
+    /// Writes a summary of what `store` holds, as much of it as fits in the room left less
+    /// `spare`.
+    pub fn summary(&mut self, store: &Store, spare: usize) -> Result<(), Full> {
+        let room = self.room().saturating_sub(spare);
+        if room < 2 + 4 {
+            return Err(Full);
+        }
+        let at = self.len;
+        let end = at + 2 + (room - 2).min(255);
+        let len = store.summary(&mut self.buf[at + 2..end]);
+        self.buf[at] = record::SUMMARY;
+        self.buf[at + 1] = len as u8;
+        self.len += 2 + len;
+        Ok(())
+    }
+
+    pub fn message(&mut self, message: &Message) -> Result<(), Full> {
+        if message.record_len() > self.room() {
+            return Err(Full);
+        }
+        let mut body = [0; FIXED_LEN + BODY_MAX];
+        let len = message.encode(&mut body);
+        let at = self.len;
+        self.buf[at] = record::MESSAGE;
+        self.buf[at + 1] = len as u8;
+        self.buf[at + 2..at + 2 + len].copy_from_slice(&body[..len]);
+        self.len += 2 + len;
+        Ok(())
+    }
+
     /// Writes a positions record of `entries`, each of which must fit below the base timestamp.
     pub fn positions(&mut self, entries: &[Entry]) -> Result<(), Full> {
         let len = positions_len(entries.len());
@@ -463,6 +498,11 @@ pub enum Record<'a> {
     Request(u32),
     Member(u8, Member),
     Gone(u8, Gone),
+    Message(Message),
+    /// A digest of the messages the sender holds.
+    Messages(u32),
+    /// What the sender holds from each origin, as [`Store::summary`] writes it.
+    Summary(&'a [u8]),
     /// A record of a type this version does not read, or one too short for its type.
     Other(u8, &'a [u8]),
 }
@@ -486,14 +526,22 @@ impl<'a> Iterator for Records<'a> {
                 left: body.len() * 8 / ENTRY_BITS,
                 base: self.base,
             }),
-            record::NEIGHBOURS | record::MEMBERS | record::REQUEST if body.len() >= 4 => {
+            record::NEIGHBOURS | record::MEMBERS | record::REQUEST | record::MESSAGES
+                if body.len() >= 4 =>
+            {
                 let word = u32::from_le_bytes(body[..4].try_into().expect("four bytes"));
                 match kind {
                     record::NEIGHBOURS => Record::Neighbours(word),
                     record::MEMBERS => Record::Members(word),
+                    record::MESSAGES => Record::Messages(word),
                     _ => Record::Request(word),
                 }
             }
+            record::MESSAGE => match Message::decode(body) {
+                Some(message) => Record::Message(message),
+                None => Record::Other(kind, body),
+            },
+            record::SUMMARY => Record::Summary(body),
             record::MEMBER => match Member::decode(body) {
                 Some((id, member)) => Record::Member(id, member),
                 None => Record::Other(kind, body),
@@ -626,6 +674,40 @@ mod tests {
     }
 
     #[test]
+    fn messages_and_a_summary_read_back() {
+        use crate::Zeroable;
+        use crate::messages::{Store, kind};
+        extern crate std;
+
+        let message = Message::to_group(3, 9, 8, 1_790_000_000, &[kind::TEXT, b'o', b'k']).unwrap();
+        let mut store = std::boxed::Box::new(Store::zeroed());
+        store.insert(message, 1_790_000_000);
+        let mut buf = [0; MAX_PLAIN];
+        let mut builder = Builder::new(&mut buf, &header());
+        builder.messages_digest(store.digest()).unwrap();
+        builder.summary(&store, 0).unwrap();
+        builder.message(&message).unwrap();
+        let len = builder.finish();
+        assert_eq!(
+            len,
+            HEADER_LEN + WORD_LEN + 2 + 4 + 10 + message.record_len()
+        );
+        let plain = Plain::parse(&buf[..len]).unwrap();
+        let mut records = plain.records();
+        assert!(matches!(records.next(), Some(Record::Messages(d)) if d == store.digest()));
+        let Some(Record::Summary(summary)) = records.next() else {
+            panic!("no summary");
+        };
+        let mut other = std::boxed::Box::new(Store::zeroed());
+        other.insert(message, 1_790_000_000);
+        other.sent((3, 9));
+        other.answer(summary);
+        assert!(!other.has_unsent(), "it holds what the summary says");
+        assert!(matches!(records.next(), Some(Record::Message(read)) if read == message));
+        assert!(records.next().is_none());
+    }
+
+    #[test]
     fn a_gone_record_reads_back() {
         let gone = Gone {
             public: [3; 32],
@@ -694,11 +776,11 @@ mod tests {
     fn unknown_records_are_skipped_and_overruns_refused() {
         let mut buf = [0; MAX_PLAIN];
         let len = Builder::new(&mut buf, &header()).finish();
-        buf[len..len + 5].copy_from_slice(&[9, 3, 1, 2, 3]);
+        buf[len..len + 5].copy_from_slice(&[99, 3, 1, 2, 3]);
         let plain = Plain::parse(&buf[..len + 5]).unwrap();
         assert!(matches!(
             plain.records().next(),
-            Some(Record::Other(9, [1, 2, 3]))
+            Some(Record::Other(99, [1, 2, 3]))
         ));
         assert_eq!(Plain::parse(&buf[..len + 4]).err(), Some(Malformed::Record));
         buf[0] ^= 0xf0;
