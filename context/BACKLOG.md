@@ -5,6 +5,38 @@ until the feature set is complete, because profiling an incomplete firmware pric
 
 ## Next
 
+- Simulate several boards on the host, the next step (owner, 2026-10-03). The plan is the
+  owner's doc "Simulating several boards"
+  (https://claude.ai/code/artifact/a4ba14e7-4007-415c-ad9c-e42dd61cc83b); its essentials:
+  - The protocol's rules already build on the host (`crates/octowhere-mesh`), but the node that
+    applies them over time, `src/mesh.rs` (3,058 lines, no tests), reaches the board through
+    the SX127x driver, DIO0 and the RF switch (about 22 calls, already behind its own
+    `transmit`, `listen` and `read_packet`), embassy time (about 45 places), the hardware
+    random source, firmware statics (`FIX`, `RTC_TIME`, `GPS_TIME`, `COMMANDS`, `VIEW`,
+    `GROUP_WRITES` and `GROUP_SAVED` in `main.rs`) and defmt.
+  - Step 1, seams: move the node into a crate that builds on the host (`octowhere-mesh` or a
+    new `octowhere-node`, not yet chosen), generic over a `Radio` (send at a time, listen until
+    a time and return what arrived with RSSI and SNR, tune channel and power), a clock (local
+    time, sleep until a local deadline), a store for group writes that can fail, and a random
+    source; the fix, RTC and GPS time and commands come in as inputs; logging through a macro
+    that is defmt on the board and text on the host. Keep the node async; no state-machine
+    rewrite. Small commits, each confirmed on the boards with the scripts in
+    `~/.claude/projects/-home-me-Projects-Rust-octowhere/board-scripts/`. This overlaps the
+    code-quality review's entry below (extract the radio, stop reading statics).
+  - Step 2, the air: a discrete-event loop on virtual time. A packet occupies its channel for
+    its airtime (`schedule::airtime_us`); a node hears it only if it listened on that channel
+    throughout and nothing overlapped it there, unless the stronger signal wins by a margin; a
+    node never hears while it sends. A link matrix gives each pair's delivery, loss chance, RSSI,
+    SNR and delay, and can change mid-run (full = broadcast; sparse = relays, splits, rejoins).
+    Each node's clock has its own offset and drift. Faults: deafen, drop a frame, fail a store,
+    restart with what was stored. Seeded random sources, so a run repeats.
+  - Step 3, headless scenarios as Rust tests, like `ui::script`: pairing, the two missed
+    switches (`docs/logs/lora/catch-up-2026-10-03/`; must fail before `d6b9389`), a removal
+    declined after its switch, a restart mid-removal.
+  - Step 4, several boards in `tools/ui-sim`, side by side, input to the panel clicked, the
+    matrix editable live; the web simulator too (its build already compiles the mesh's crypto).
+  - Board tests stay for RF (CRC overload up close), the radio's DIO0 quirk, I2C bus contention
+    and slot latency, interrupt timing, flash stalls, and the GNSS module sticking.
 - Build the 2026-09-26 design, [`design/`](design/README.md), which the owner approved in full
   (`design/DECISIONS.md`). One piece at a time, each compared against the hand-off's renders
   (`tools/design-compare.py`), reviewed by the owner in `ui-sim`, and measured on the board
