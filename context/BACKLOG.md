@@ -83,8 +83,10 @@ until the feature set is complete, because profiling an incomplete firmware pric
   boards by the mesh's commands and through the screens (`docs/logs/lora/pairing-2026-10-02/`,
   `docs/logs/lora/pairing-screens-2026-10-02/`). Step 4 is done too: listening to members and
   neighbours with a sweep every 13 rounds, the cancel rule, and a changed member record sent in
-  the next slot (`docs/logs/lora/founding-and-listening-2026-10-02/`). Step 5, CAD, needs the
-  slot timing it depends on measured first ("Time sync" there).
+  the next slot (`docs/logs/lora/founding-and-listening-2026-10-02/`). What is left goes in the
+  order its "Build order" gives (owner, 2026-10-03): shuffled slots and member records on
+  request, then step 6 with removing a member as its first use, then step 5, CAD, which needs
+  the slot timing it depends on measured first ("Time sync" there).
 - A REFRESH DEVICES control on the group screens (owner, 2026-10-03), for a user who knows new
   devices are near: it starts a three-round sweep, which spans every node's floor round. It needs
   a place in the group screens' design first. A refresh on the device whose timebase ranks
@@ -200,6 +202,9 @@ until the feature set is complete, because profiling an incomplete firmware pric
   the trigger itself.
 
 ## Deferred, with detail elsewhere
+
+- Tuning the mesh for range, once the protocol carries everything (owner, 2026-10-03):
+  `LORA-PROTOCOL.md`, "Deferred".
 
 - Touch-to-frame latency during a drag is about 60 ms at the median, 75 ms at p90, from the
   controller's report to the end of the flush that shows it (`bench/touch-latency`, 2026-09-30,

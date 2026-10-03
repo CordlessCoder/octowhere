@@ -2,8 +2,9 @@
 
 The product is a closed group of up to 32 equivalent nodes that share positions and carry messages
 between members, including private ones. GPS supplies both position and the time reference; LoRa
-carries the traffic. This document is the agreed design. Steps 1 to 3 of the build order below
-are implemented; [`AGENTS.md`](../AGENTS.md), "Radio", says how.
+carries the traffic. This document is the agreed design. Steps 1 to 4 of the build order below
+are implemented, and "Build order" says what comes next; [`AGENTS.md`](../AGENTS.md), "Radio",
+says how.
 
 The first version of this design (commit `e57fe0a`) was eight nodes and positions only. The owner
 extended it on 2026-09-29 to 32 nodes, messages and private messages, moved it to band O, and kept
@@ -79,7 +80,8 @@ the sender's own entry and the entries that most need spreading, chosen as descr
 
 A relay passes an entry on in its own next slot, 1.4 s to one round after hearing it, depending on
 the ids along the path. A chain in id order crosses in one round; against id order, one round per
-hop.
+hop. Shuffled slots (see "Medium access") make it a little over half a round a hop on average,
+whatever the ids.
 
 Messages cannot ride the digest's merge, since each one must arrive, and arrive once. They are
 flooded through the same slots with their own ids and seen-set; see "Messages".
@@ -113,8 +115,8 @@ A node transmits in its slot when it has something to say, and stays silent othe
   the node is alone
 
 Triggers promote a transmission to the node's next slot rather than sending immediately, so trigger
-latency is at most one round. Off-slot transmission has no audience, because the power saving
-depends on every node sleeping outside slots.
+latency is at most one round, or about two once slots are shuffled. Off-slot transmission has
+no audience, because the power saving depends on every node sleeping outside slots.
 
 The floor is every third round, at fixed rounds: node `k` transmits in every round `r` (UTC seconds
 divided by 45) with `r mod 3 == k mod 3`, whether or not it has anything new. So every node in range
@@ -128,6 +130,34 @@ cancel starves a node that only this one reaches. A floor transmission is never 
 As built, the rule works entry by entry. Each entry such a packet carried at the stamp this node
 holds counts as sent, and so does its member record, so the node still sends whatever news is
 left. A node heard for the first time stays news, since the packet cannot say this node heard it.
+
+### Shuffled slots
+
+Agreed (owner, 2026-10-03), not built. As built, a node's slot is its id.
+
+- **Order.** Each round, the 32 ids are sorted by AES-256 of the round's number on the node's
+  timebase and the id, under a key HKDF-SHA256 derives from the group key. An id's slot is its
+  place in that order. Members on one timebase share the round number, and only members hold
+  the key. The round number cannot be the key: every group with a fix shares it, so the order
+  would be every group's, and anyone's with GPS time.
+- **Why.** Every group's ids start at 0 and take the lowest free, so with slot = id, member k
+  of every group with a fix sends at the same instant, in the same floor rounds, as member k of
+  every other. Two groups in one place collide in every slot they share, and a receiver that
+  locks onto the other group's packet misses its own. Under their own keys, groups of n₁ and n₂
+  share about n₁·n₂/32 slots a round, rarely the same pair two rounds running. A transmitter
+  outside the group whose period divides the round hits a different member each round rather
+  than the same one for ever. And a listener with GPS time can no longer read the sender's id
+  from its slot, which it can as built (see "Packet").
+- **What stays.** Floor and sweep rounds go by the round number and the id. The header names
+  the slot as before: its base timestamp gives the round, and the order the slot. A notice's
+  sender works out the round of the node it notifies from that node's arrival, and its own slot
+  in that round from the order.
+- **Cost.** A node with news waits up to about two rounds for its slot, a little over half a
+  round on average, against at most one round and half on average with slot = id. A relay
+  chain in id order no longer crosses in one round. 32 AES blocks a round, cached for the round
+  and the next.
+- **Rekeying.** The order's key changes with the group key at the switch time, so a member
+  left on the old key sends in other slots from then on. Removal's design has to cover that.
 
 ### Time sync
 
@@ -245,7 +275,8 @@ its window every round, and is heard again at its first transmission back in ran
 A member added elsewhere, which the node does not know of yet, is found in a sweep round (see
 "Keeping time without a fix"), where timebases are found too. Every node on a timebase near the
 node's own sends in a sweep round, so a new member in range is heard at the next one, within
-about 10 minutes. Once heard it is a neighbour, and its member record follows in its packets.
+about 10 minutes. Once heard it is a neighbour, and its member record follows in its packets;
+with records on request (see "Packet"), the node that heard it asks for the record.
 The sweep rounds keep the receiver on 7.7% of the time, about 18 mAh a day, and the packet each
 node sends in them costs about 0.5 mAh a day.
 
@@ -257,6 +288,11 @@ state):
 | 8 | 12% | about 28 mAh |
 | 16 | 24% | about 57 mAh |
 | 32 | 49% | about 114 mAh |
+
+The table counts a typical packet. As built, a window stays open for the longest packet and
+past the one it was for, about 0.9 s, so 8 slots keep the receiver on about 16% of the time.
+Ending a window at its guard when no packet started, with the radio's single receive and a
+symbol timeout, and at the end of the packet it was for, would bring it below the table.
 
 ### CAD is required at this size
 
@@ -279,6 +315,19 @@ neighbours' receive. Two things are unmeasured: what CAD costs across a slot who
 only to the ±250 ms guard, which a node never heard has, and how closely phase refined against GPS
 agrees between nodes that have never heard each other. Decide the floor once both are measured.
 
+Two levers found on 2026-10-03, for when this step comes:
+
+- **A guard per neighbour.** A root hears the nodes timing from it within about 0.15 ms of
+  where it expects them (see "Keeping time without a fix"), and `late_us` measures every
+  arrival against the node's clock, two nodes timing from their own fixes included. Sized from that, a heard neighbour's window
+  shrinks to milliseconds without CAD, which is left for the windows that stay wide: members not
+  heard yet, and sweeps. The receive time is read when the radio task runs after `DIO0`, not at
+  its edge, which a window of milliseconds has to account for.
+- **Sweeps.** They then cost the most: 18 mAh a day, against about 14 for listening to three
+  members as built. A member added elsewhere most likely has the lowest id free in this node's
+  table, so listening to that id's slot finds it at its next floor round, and nodes timing from
+  a fix could sweep less often.
+
 ### Why not contention
 
 Contention needs continuous receive, about 9.7 mA or 233 mAh a day, or low-power listening, where
@@ -299,11 +348,12 @@ synthetic IV (16) | ciphertext: header (8) + records
 AES-SIV (RFC 5297, AES-CMAC-SIV with a 256-bit key) under the group key, with no associated data.
 The synthetic IV is computed from the key and the whole plaintext, and is both the IV and the
 authentication tag, so the packet carries no nonce and nothing in the clear. A sender id in the
-clear would tell a direction-finding listener which node transmitted. SIV's determinism reveals
-only that two packets are identical, and a packet's timestamp keeps that from happening. Sending
-needs no random numbers, so a faulty random source leaks nothing. The owner chose it over
-ChaCha20-Poly1305 with a random 12-byte nonce, which cost 12 bytes a packet more, about 18 ms of
-airtime (2026-10-01).
+clear would tell a direction-finding listener which node transmitted. As built, the slot tells
+it anyway, to a listener with GPS time; shuffled slots (see "Medium access") close that. SIV's
+determinism reveals only that two packets are identical, and a packet's timestamp keeps that
+from happening. Sending needs no random numbers, so a faulty random source leaks nothing. The
+owner chose it over ChaCha20-Poly1305 with a random 12-byte nonce, which cost 12 bytes a packet
+more, about 18 ms of airtime (2026-10-01).
 
 Header, 8 bytes, encrypted:
 
@@ -366,6 +416,32 @@ Sizing fields to their true ranges is the compression. Entropy coding gains noth
 residual bits are close to uniform and the packets are far too short for a dictionary method. Delta
 coordinates against a reference position would save more but need an escape path for a node outside
 the delta range; not worth it before the base design flies.
+
+### Member records on request
+
+Agreed (owner, 2026-10-03), not built. It replaces the rotation in the fill order above.
+
+- **No rotation.** A packet carries a member record only when the sender holds one not yet
+  sent: its own after a rename, one that changed in a merge, one enrolled or renumbered, or one
+  asked for.
+- **Digest.** Every packet carries a members-digest record: 4 bytes of a hash over each
+  member's id, public key and change time, 6 with the record's type and length. A packet with
+  no positions drops from 85 bytes to 36, and from 149 ms of airtime to 77. A full one has room
+  for about seven more entries.
+- **Request.** A request record holds the set of ids whose records the sender wants, and rides
+  in the sender's own next packet. Unlike a notice's target, its neighbours already listen to
+  its slot, and a new record type needs no header change. A node asks for one id when it hears
+  a sender it holds no record for. It asks for the whole table when a neighbour's digest has
+  differed from its own in two of that neighbour's packets running. Waiting for the second
+  gives an ordinary change, which goes out in the next slot, time to arrive.
+- **Answer.** A node that hears a request marks each record asked for that it holds as not yet
+  sent, unless its digest matches the requester's. The cancel rule marks a record sent once a
+  covering packet carried it, so usually one neighbour answers. Records go up to three a packet,
+  after the sender's own entry and ahead of the others. A whole table of 32 is about 11
+  packets, one a round, about 8 minutes.
+- **What it covers.** Everything the rotation did: a member added elsewhere, a member whose
+  last acknowledgement the adding device lost, a rename missed out of range, and the duplicate
+  id two partitions can hand out (see "Identity and storage").
 
 ## Messages
 
@@ -543,7 +619,9 @@ The protocol id is 5 bits, 0–31. The enroller gives the joiner the lowest id f
 Two members enrolling in separate places at once can hand out the same id; member records reveal it
 when the partitions meet. The member whose public key has the lower SHA-256 keeps the id, and the
 other takes the lowest id free in its table and announces it with a member record. The user sees
-nothing. An id is freed only by removing its member.
+nothing. An id is freed only by removing its member. Removing is not built: leaving forgets the
+group on the leaving device only, so the others keep its record, listen for its slot every
+round and never free its id.
 
 The eFuse base MAC is the stable hardware identity, used to recognise a re-pair of the same physical
 device rather than issuing a second id.
@@ -611,6 +689,17 @@ and the restore after are each short with the bus free between them.
 6. Messages, then private messages.
 7. Pruning relays from the gossiped graph.
 
+What is left goes in this order (owner, 2026-10-03):
+
+- Shuffled slots and member records on request (see "Medium access" and "Packet"), together
+  and first. Both change what goes on the air, which is cheapest while there are two boards.
+- Step 6, ahead of step 5. A new group key goes to each member as a private message, so
+  removing a member needs the message machinery: flooding, the seen-set, acknowledgements,
+  sequence numbers kept in flash, and the pairwise seal. It is built with removal as its first
+  use, then messages on top. Removal and messages need screens, which need a design round; the
+  mesh's side goes first, driven over the USB JTAG as pairing's was.
+- Step 5, then step 7.
+
 ## RTC calibration
 
 Record `(gps_utc, rtc_reading)` pairs on each fix, fit the drift over a long baseline, and program
@@ -632,12 +721,21 @@ protocol does not need this.
   packet of the other, since a notice brings the lower one over: up to about 30 minutes for
   idle nodes (`docs/logs/lora/founding-and-listening-2026-10-02/`). A node that hears nobody
   sends every round, which leaves it one sweep.
+- The clock takes every packet whose timebase ranks above its own or is closer to its root
+  (`Clock::arrival`), with no check that the packet fits. Outside a sweep, the window holds the
+  error to the guard. In a sweep, a replayed packet can set the clock anywhere, and the node
+  recovers only at its lost sweep, about 10 rounds later; a replayed notice forces a sweep.
+  Refining only within the guard, and adopting only on two packets that agree, would close it.
+  Jamming does more harm more easily, so it waits.
 - The limit after which a rekey drops the old key.
 - A shorter floor once CAD is measured (see "CAD is required at this size").
 - Measuring GNSS time sync (see "Time sync").
 
 ## Deferred
 
+- Tuning for range, the spreading factor and with it the slot length, once the protocol
+  carries everything (owner, 2026-10-03). Range has not been measured. SF8 fits today's slot:
+  a 255-byte packet takes about 707 ms, which with the 500 ms guard is inside 1,406 ms.
 - Moving a running group to the fallback band.
 - Messages longer than one packet.
 - Flash encryption, as above.
