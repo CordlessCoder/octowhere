@@ -37,6 +37,26 @@ until the feature set is complete, because profiling an incomplete firmware pric
     matrix editable live; the web simulator too (its build already compiles the mesh's crypto).
   - Board tests stay for RF (CRC overload up close), the radio's DIO0 quirk, I2C bus contention
     and slot latency, interrupt timing, flash stalls, and the GNSS module sticking.
+- Brief the design agent's next round (owner, 2026-10-03: ready to hand more off; the owner picks
+  its scope). The 2026-10-03 return package, entry below, goes first or with it. Screen work that
+  waits on a design:
+  - Where the other members are, the device's purpose, which no screen shows: each member's
+    bearing and distance from this device, and how old its position is. Positions reach the
+    firmware but not the screens (`SCREEN-DESIGN-BRIEF.md`, "Data a screen can show", grade 2),
+    so plumbing them is firmware work.
+  - Messages: writing up to 160 printable ASCII characters (the name keyboard takes 16),
+    reading a conversation with the group or one member, sent and delivered, and how a new
+    message makes itself known, since nothing notifies today (`LORA-PROTOCOL.md`, "Messages").
+  - Removing a member: choosing one (MEMBER DETAIL shows the removal as unavailable today), the
+    wait to the switch (about 6 minutes for 8 members, 15 for 32), every other device's prompt
+    naming who asked to remove whom with a decline before the switch, the day-long decline
+    after it, and the removed device's notice of who removed it ("Removing a member").
+  - GNSS failing while running: the self-test's fault is the only GNSS fault designed (entry
+    "Show GNSS as faulted" below).
+  - Where outlined text belongs, which the owner named; the primitive is built and unused.
+  - What the BOOT key does: it is wired and does nothing.
+  Not the design agent's: the rule that settles rival removals (`LORA-PROTOCOL.md`, "Open"),
+  and step 5's answers on the battery and a fix.
 - Build the 2026-09-26 design, [`design/`](design/README.md), which the owner approved in full
   (`design/DECISIONS.md`). One piece at a time, each compared against the hand-off's renders
   (`tools/design-compare.py`), reviewed by the owner in `ui-sim`, and measured on the board
