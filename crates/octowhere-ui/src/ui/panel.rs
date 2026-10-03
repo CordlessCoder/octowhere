@@ -501,8 +501,11 @@ pub fn draw_scatter<D: CoverageTarget<Color = Color>>(
 
 /// Marks the scatter's marks that differ between `before` and `after`.
 pub fn scatter_damage(before: &Accents, after: &Accents, damage: &mut chrome::Dirty) {
-    let shown = |accents| SCATTER.shown_clear_of(&scatter_looks(accents), &SCATTER_CLEAR);
-    SCATTER.changed(&shown(before), &shown(after), damage);
+    SCATTER.changed_between(
+        (&scatter_looks(before), &SCATTER_CLEAR),
+        (&scatter_looks(after), &SCATTER_CLEAR),
+        damage,
+    );
 }
 
 pub fn draw<D: CoverageTarget<Color = Color>>(
