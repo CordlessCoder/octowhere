@@ -212,7 +212,7 @@ Weigh that cost before adding one.
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 1,536,080 bytes, 9.81% of the 15,663,104-byte app partition that
+The image is currently 1,546,896 bytes, 9.88% of the 15,663,104-byte app partition that
 `partitions.csv` gives it. Measure with `espflash save-image --chip esp32s3 --flash-size 16mb
 --partition-table partitions.csv <elf> <out>`; without those two options it assumes 4 MB of flash
 and the default table. The time zone
@@ -550,7 +550,7 @@ errata workaround, are in [`docs/hardware-notes.md`](docs/hardware-notes.md).
 - The internal heap is 192 KiB, from two `esp_alloc::heap_allocator!` calls in `main`: 72 KiB
   in the RAM the second-stage bootloader frees after boot (`#[esp_hal::ram(reclaimed)]`), and
   120 KiB as a static in `.bss`. Core 0's stack is whatever DRAM `.data` and `.bss` leave,
-  112,340 bytes on 2026-10-03; `_stack_end_cpu0` and `_stack_start_cpu0` in the ELF give it
+  111,748 bytes on 2026-10-03; `_stack_end_cpu0` and `_stack_start_cpu0` in the ELF give it
   exactly. The tasks' futures are statics, so the stack shrinks as they grow. It was about
   19 KiB with the whole heap in `.bss`, and the clock face overflowed it. The mesh's work took
   it to about 60 KB, and the radio task overflowed it from under a group screen. Tasks on
