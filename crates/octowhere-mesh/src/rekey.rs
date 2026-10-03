@@ -456,6 +456,7 @@ impl Rekey {
             }),
             (None, None) => None,
         };
+        self.wait_only_for(group.ids());
         let waiting = group.ids() & !(1 << group.own());
         if waiting != 0 {
             self.old.rotate_right(1);
@@ -493,13 +494,19 @@ impl Rekey {
     /// Takes a packet from `sender` under the newest key: it needs no older one. Returns
     /// whether that changed what is kept.
     pub fn heard(&mut self, sender: u8) -> bool {
+        self.wait_only_for(!(1 << sender))
+    }
+
+    /// Stops waiting for anyone outside `members`, a set of ids: a member removed or gone is
+    /// never heard on a newer key. Returns whether that changed what is kept.
+    pub fn wait_only_for(&mut self, members: u32) -> bool {
         let mut changed = false;
         for old in self.old.iter_mut() {
             if let Some(held) = old
-                && held.waiting & 1 << sender != 0
+                && held.waiting & !members != 0
             {
                 changed = true;
-                held.waiting &= !(1 << sender);
+                held.waiting &= members;
                 if held.waiting == 0 {
                     *old = None;
                 }
@@ -901,6 +908,23 @@ mod tests {
             "dropped once everyone is heard on the new key"
         );
         assert_eq!(rekey.old().count(), 0);
+    }
+
+    #[test]
+    fn a_member_removed_later_is_waited_for_on_no_key() {
+        let mut g = group(0, &[(0, 1), (1, 2), (2, 3), (3, 4)]);
+        let mut rekey = Rekey::default();
+        rekey.start(&g, 2, Key::new([9; 32]), 1_000).unwrap();
+        rekey.switch(&mut g).unwrap();
+        rekey.start(&g, 3, Key::new([8; 32]), 1_100).unwrap();
+        rekey.switch(&mut g).unwrap();
+        assert_eq!(rekey.old().count(), 2);
+        assert!(
+            rekey.old().all(|old| old.waiting == 1 << 1),
+            "the second removal's member is waited for on neither key"
+        );
+        rekey.heard(1);
+        assert!(!rekey.is_waiting());
     }
 
     #[test]

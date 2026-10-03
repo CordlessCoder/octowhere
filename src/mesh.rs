@@ -661,6 +661,12 @@ impl Mesh {
     pub async fn new(lora: SensorLora, dio0: Input<'static>, path: LoraPath, start: Start) -> Self {
         let group = start.group.map(|group| *group);
         let own = group.as_ref().map_or(0, Group::own);
+        let mut rekey = start.rekey.unwrap_or_default();
+        // The stored state may still wait on an older key for a member removed since, as
+        // earlier builds left it.
+        if let Some(group) = &group {
+            rekey.wait_only_for(group.ids());
+        }
         match &group {
             Some(group) => info!(
                 "[MESH] id={} name={} members={} mac={=[u8]:02x}",
@@ -701,7 +707,7 @@ impl Mesh {
             pairwise: Box::default(),
             sequence: Sequence::new(start.sequence),
             outbox: Box::default(),
-            rekey: start.rekey.unwrap_or_default(),
+            rekey,
             kept: zeroed_in_psram(),
             catch_up: heapless::Vec::new(),
             removal_notice: None,
@@ -775,12 +781,13 @@ impl Mesh {
     pub async fn run(mut self) -> ! {
         if let Some(group) = &self.group {
             info!(
-                "[MESH] id={} members={} generation={} removal pending={} declinable until={}",
+                "[MESH] id={} members={} generation={} removal pending={} declinable until={} old keys={}",
                 group.own(),
                 group.count(),
                 group.generation(),
                 self.rekey.pending().is_some(),
-                self.rekey.undo_until()
+                self.rekey.undo_until(),
+                self.rekey.old().count()
             );
         }
         loop {
