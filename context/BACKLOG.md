@@ -61,6 +61,31 @@ until the feature set is complete, because profiling an incomplete firmware pric
   what IRAM holds (15 KiB of `.rwtext`), the two 8 KiB display DMA buffers and the 8 KiB
   core-1 stack. Do not measure core 0's stack by painting it from `_stack_end` up to the stack
   pointer: that crash-looped the board, probably because esp-rtos keeps data there.
+- Reduce the UI's heap allocations (owner, 2026-10-03). The internal heap is two regions, the
+  72 KiB reclaimed one and 120 KiB in `.bss`, which esp-alloc 0.11 serves first fit in that
+  order, and it grows a block by allocating the new one and copying, so the old and the new live
+  at once in one region. A large request therefore needs that much contiguous room, and how much
+  is free in total says little. On 2026-10-03 both boards panicked 5.44 s after boot, booting
+  with a stored signed group, when fontdue's glyph raster could not grow on the identity's first
+  frame (`docs/logs/lora/signing-2026-10-03/`). `dfcc637` reserves the raster at its largest,
+  `chrome::RASTER_CELLS`, first thing at boot, and a debug assertion fails a test that draws a
+  glyph larger. What is left, measured on the host by `bench/ui-allocations`
+  (`crates/octowhere-ui/tests/heap_requests.rs`, its command in the header; it can print a
+  backtrace for a request's size):
+  - The identity's title holds its coverage, filled and hollow, in two 45,828-byte buffers
+    while the identity plays (`ui::identity::Title`). They are the start-up's only large
+    requests now. By the boot figures they would leave about 20 KB in the larger region, an
+    estimate the board has not confirmed.
+  - Each fault screen makes 550 to 880 requests of 16 KiB or more over the start-up, the
+    largest 40,800 bytes: `chrome::Knockout`, made anew every frame, holds two glyphs' coverage
+    and a row table in fresh vectors, grown glyph by glyph. A fault screen is what must work
+    when a part has already failed. Keeping its buffers between frames, as the raster now is,
+    would end the churn.
+  - The faces draw with no large request: the clock's largest is 46 bytes and the compass's
+    512.
+  Do not add PSRAM to the global allocator as a fallback: a value holding an atomic could land
+  there, and atomics in PSRAM break (owner). Move a specific buffer to `PSRAM_HEAP` explicitly
+  instead, if one must leave internal RAM.
 - Move the CO5300 driver into its own crate under `crates/`, with the QSPI command layer it
   needs, and implement more of the controller reusably (owner, 2026-09-24). Today
   `src/drivers/co5300.rs` covers init, address windows, brightness, TE and pixel streaming.
@@ -76,11 +101,50 @@ until the feature set is complete, because profiling an incomplete firmware pric
   records on request are done (`docs/logs/lora/refresh-and-recovery-2026-10-03/`), and so is
   the mesh's side of step 6: leaving tells the group, messages are held and passed on by every
   node, and a member can be removed by moving the group to a new key
-  (`docs/logs/lora/step6-2026-10-03/`). What is left of step 6 is its screens, which need a
-  design round: sending and reading messages, a removal's confirmation, and removing a member.
+  (`docs/logs/lora/step6-2026-10-03/`). After a review of the whole mesh on 2026-10-03 the
+  records, gone records and key messages are signed on an Ed25519 identity, a removal can be
+  declined for a day after its switch, and a member that missed switches is caught up one
+  generation at a time (the protocol's "Signatures" and "Removing a member";
+  `docs/logs/lora/signing-2026-10-03/`). Catching up across two missed switches has not run on
+  the boards: the run met the start-up panic above. What is left of step 6 is its screens, which
+  need a design round: sending and reading messages, a removal's confirmation, and removing a
+  member.
   Then step 5, CAD, which needs the slot timing it depends on measured first ("Time sync"
   there), the owner's answers on the battery and a GPS fix for both boards (its "Open"), and
   then step 7.
+- Close what the 2026-10-03 security review of the mesh left open. It found seven defects,
+  confirmed by host tests, and the fixes since are in the history from `0999a8a` to `6750e8d`.
+  Still open:
+  - The oscillator-stop gate is not built. A node with no RTC time and no fix that hears nobody
+    roots its clock at its boot, near 1970, and then refuses every record and position stamped
+    in 2026 as too far ahead (`clock.rs`'s `tick`, `members.rs`'s `is_ahead`, `table.rs`'s
+    `merge`). The lowest root wins, so a group with no fix can converge on that clock, and switch
+    rounds counted in 2026 never come due on it. The protocol says a node with the flag set
+    skips the check.
+  - Header sender ids are unauthenticated within the group. Any member can send under another
+    member's id: under the new key that takes the member off the waiting set
+    (`Rekey::heard`), and replaying a member's old packets in sweep rounds spends the three
+    catch-ups a node sends it (`caught_up`).
+  - A packet whose timebase ranks above the node's own is adopted at any time, in or out of a
+    sweep, and a replayed one moves the clock anywhere (the protocol's "Open").
+  - Rival removals of one generation are settled by a hash a member can grind (the protocol's
+    "Open"); the rule needs a design round.
+- Simplify `src/mesh.rs` and the mesh crate's surface, from the 2026-10-03 code-quality review
+  (none started). In order of value: move `send()`'s packet-filling policy and `take()`'s records
+  loop into the crate, where they can be tested; gather the `unsaved`, `unsaved_group` and
+  `rekey_unsaved` flags into one type, and the ten removal fields (`rekey`, `kept`, `catch_up`,
+  `caught_up`, `removal_notice`, `notify`, `remove_again`, `keys_posted`, `beacon_round`,
+  `refill`) into another, each with named resets; extract the radio's fields and methods; stop
+  protocol decisions reading the view (`lagging` from `shown.heard`, the refresh's timer in
+  `shown.refresh`); give `arrived` and `learned_key` enums for results. In the crate: one slot
+  encoding (`Builder::slot`, the pairing welcome and `settings` each have their own, telling a
+  member from a gone record by different length rules); the group header's byte layout with a
+  round-trip test; one `record(kind, len, ...)` in `Builder`; an `Ids(u32)` set type; one round
+  and seconds conversion in `schedule` (`(time / 1_000_000) as u32` truncates where `base_of`
+  floors); `messages::Name` renamed so it does not collide with `members::Name`; `Pending.switch`
+  and `Pending.new.switch` named apart; `now: u32` with 0 for unknown made an `Option`
+  throughout; the pairing's `Phase` duplicates of its own fields; `MeshView`'s refused pairing
+  as its own state instead of a placeholder phase. `src/mesh.rs` has no tests.
 - Send the design agent its return package for the 2026-10-03 round (`design/DECISIONS.md`
   entry 29). It is ready, for the owner to send: `context/design-captures-2026-10-03-2.7z`
   (local, like the design files), with `design/handoffs/IMPLEMENTATION-RESPONSE-2026-10-03.md`

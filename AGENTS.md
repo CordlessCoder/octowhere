@@ -586,8 +586,17 @@ errata workaround, are in [`docs/hardware-notes.md`](docs/hardware-notes.md).
   the plan for laying SRAM out deliberately.
 - PSRAM is registered in the separate `PSRAM_HEAP` static. Framebuffers must be allocated with
   `FB::alloc(&PSRAM_HEAP)` rather than the global allocator. The mesh's message store, about
-  49 KB, and the key messages it keeps for catch-up, about 6 KB, are made in place there by
+  49 KB, and the key messages it keeps for catch-up, about 25 KB, are made in place there by
   `zeroed_in_psram` in `src/mesh.rs`, from types whose all-zero value is valid (`Zeroable`).
+  Never add PSRAM to the global allocator, even as a fallback after the internal regions: a value
+  holding an atomic could land there, and atomics in PSRAM break (owner).
+- esp-alloc serves the internal heap's two regions first fit, the 72 KiB one first, and grows a
+  block by allocating the new one and copying, so a large request needs that much contiguous
+  room in one region. The start-up's identity holds two 45,828-byte buffers for its title, and
+  with them a raster that still had to grow left no room on 2026-10-03, which panicked both
+  boards at boot. fontdue's glyph raster is now made at its largest right after the heap comes up
+  (`chrome::raster_buffer`, `Stage::use_raster`) and never grows. `context/BACKLOG.md` has the
+  rest of the UI's large requests, and `bench/ui-allocations` counts them on the host.
 - The current RGB565 configuration uses 466 × 466 × 2 = 434,312 bytes per framebuffer, with two
   framebuffers.
 - Core 1 uses the 8 KiB `CORE1_STACK` static.
