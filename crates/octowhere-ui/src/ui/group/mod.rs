@@ -94,7 +94,8 @@ enum From {
     Members,
 }
 
-/// A list dragged up and down, which settles on a whole row.
+/// A list dragged up and down, which settles on a whole row, or at its end, where the last row
+/// shows whole.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct Scroll {
     offset: i32,
@@ -153,7 +154,12 @@ impl Scroll {
             }
             GestureEvent::DragEnd(_) => {
                 if self.grabbed.take().is_some() {
-                    let to = ((self.offset + ROW / 2) / ROW * ROW).clamp(0, max);
+                    let row = ((self.offset + ROW / 2) / ROW * ROW).min(max);
+                    let to = if max - self.offset < (self.offset - row).abs() {
+                        max
+                    } else {
+                        row
+                    };
                     self.settle = (to != self.offset).then_some((self.offset, to, now));
                 }
             }
@@ -2563,4 +2569,47 @@ fn recovery_screen(list: &mut List, recovery: &RecoveryView, now: Micros) {
             action: Some("VIEW GROUP"),
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::gesture::Drag;
+
+    /// Drags a list of `rows` on MEMBERS up by `by` and lets it settle.
+    fn dragged(rows: usize, by: i32) -> i32 {
+        let mut scroll = Scroll::default();
+        let start = Point::new(233, 380);
+        let drag = |up: i32| Drag {
+            start,
+            current: start - Point::new(0, up),
+            velocity: (0.0, 0.0),
+        };
+        scroll.handle(&GestureEvent::Down(start), rows, 0, MEMBER_ROWS);
+        scroll.handle(&GestureEvent::DragStart(drag(10)), rows, 0, MEMBER_ROWS);
+        scroll.handle(&GestureEvent::DragMove(drag(by)), rows, 0, MEMBER_ROWS);
+        scroll.handle(&GestureEvent::DragEnd(drag(by)), rows, 0, MEMBER_ROWS);
+        let mut now = 0;
+        while scroll.step(rows, now, MEMBER_ROWS) {
+            now += 16_667;
+        }
+        scroll.offset
+    }
+
+    #[test]
+    fn a_list_dragged_to_its_end_rests_there() {
+        for rows in [2, 8] {
+            assert_eq!(
+                dragged(rows, 1_000),
+                Scroll::max(rows, MEMBER_ROWS),
+                "{rows} rows"
+            );
+        }
+        assert_eq!(dragged(2, 10), 0, "a short drag settles back");
+        assert_eq!(
+            dragged(8, 120),
+            ROW,
+            "between rows it settles on the nearer"
+        );
+    }
 }
