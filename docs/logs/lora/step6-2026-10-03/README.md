@@ -189,6 +189,24 @@ learned of the removal late.
 - **After a restart** `1c1c` came back on generation 7 with nothing to decline, and a second
   `keep 2` found nothing.
 
+## Declining after a switch both boards made
+
+`final-1a38.log`, `final-1c1c.log` and `final-restart-1c1c.log`, on the build of `14b8402`.
+`1c1c` first left the group it had kept by declining, and paired again at id 1
+(`returning: true`).
+
+- **Both switched.** `1a38` removed a phantom at 190.2 s, and `1c1c` showed the removal at
+  244.5 s. Both switched to generation 9 at the start of round 39800864, and each stored the
+  group and its removals in one write.
+- **Declined.** `1c1c` took a group text from after the switch, then declined the phantom's
+  removal 28 s after its switch. It went back to generation 8 and forgot the phantom's gone
+  record and the text.
+- **Still waited for.** `1a38` had not heard `1c1c` under generation 9 in those 28 s, so it
+  still kept generation 8 for it. In round 39800865 it sent `1c1c` its key message under that
+  key. `1c1c` already held the message and took nothing from it.
+- **After a restart** `1c1c` came back on generation 8 with nothing to decline. It then left
+  and paired again, and the boards end as one group on generation 9.
+
 ## Not run on the boards
 
 - Two removals at once, and the lower key winning after a switch to the higher, need three
