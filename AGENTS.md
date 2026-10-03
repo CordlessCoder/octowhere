@@ -210,7 +210,7 @@ Weigh that cost before adding one.
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 1,471,696 bytes, 9.40% of the 15,663,104-byte app partition that
+The image is currently 1,493,168 bytes, 9.53% of the 15,663,104-byte app partition that
 `partitions.csv` gives it. Measure with `espflash save-image --chip esp32s3 --flash-size 16mb
 --partition-table partitions.csv <elf> <out>`; without those two options it assumes 4 MB of flash
 and the default table. The time zone
@@ -331,9 +331,10 @@ software interrupt at level 1, so they preempt thread mode instead of waiting fo
 Core 1 owns the display SPI/DMA path.
 
 - `async_main`, in thread mode, loads the settings, starts core 1, then runs `bring_up` and
-  `frame_loop` together. `bring_up` brings each part up against its deadline, reports each
-  outcome to the start-up's self-test through `BOOT_REPORTS`, then spawns the tasks below with
-  the parts that answered, the bus tasks through `start_bus_tasks`. A part that fails is left
+  `frame_loop` together. `bring_up` brings each part up against its deadline, reports when
+  each check starts and how it ends to the start-up's self-test through `BOOT_REPORTS`, the
+  radio's last, then spawns the tasks below with the parts that answered, the bus tasks through
+  `start_bus_tasks`. A part that fails is left
   out, and its owner runs without it; there is no motion task without the IMU. `frame_loop`
   owns drawing. It takes touch reads from `TOUCH_READS`, asking for one through `TOUCH_POLL`
   while a contact is held, and the latest sensor values from `SENSOR_STATE` and
@@ -498,7 +499,8 @@ neighbours, a member record and positions, with a timebase taken from other node
 under the group key pairing gave the node. A node in no group sends nothing and keeps the radio
 asleep. Without a fix a node has no position of its own. Commands reach the mesh through
 `mesh::COMMANDS`: start a pairing to add or join, choose a device found, answer the code, cancel,
-leave the group, rename. A pairing takes the radio to band O's upper channel at +2 dBm until it
+leave the group, rename, refresh. A refresh listens throughout for three rounds and keeps
+sending; a pairing stops it. A pairing takes the radio to band O's upper channel at +2 dBm until it
 ends; the protocol's "The exchange as built" has the frames and their order, and
 `docs/logs/lora/pairing-2026-10-02/` the first pairings between the two boards. The group
 screens send the commands, and `pair-inject` lets `tools/pair-inject.py` send them over the USB
@@ -535,12 +537,14 @@ errata workaround, are in [`docs/hardware-notes.md`](docs/hardware-notes.md).
 - The internal heap is 192 KiB, from two `esp_alloc::heap_allocator!` calls in `main`: 72 KiB
   in the RAM the second-stage bootloader frees after boot (`#[esp_hal::ram(reclaimed)]`), and
   120 KiB as a static in `.bss`. Core 0's stack is whatever DRAM `.data` and `.bss` leave,
-  115,724 bytes on 2026-10-02; `_stack_end_cpu0` and `_stack_start_cpu0` in the ELF give it
+  115,156 bytes on 2026-10-03; `_stack_end_cpu0` and `_stack_start_cpu0` in the ELF give it
   exactly. The tasks' futures are statics, so the stack shrinks as they grow. It was about
   19 KiB with the whole heap in `.bss`, and the clock face overflowed it. The mesh's work took
   it to about 60 KB, and the radio task overflowed it from under a group screen. Tasks on
   `BUS_EXECUTOR` run on the stack thread mode left, so their depth adds to the frame loop's.
-  Each function's frame is the `entry a1, N` that opens it in `xtensa-esp-elf-objdump -d`.
+  Each function's frame is the `entry a1, N` that opens it in `xtensa-esp-elf-objdump -d`, in
+  hex once it is large. The dump names code with no symbol of its own after the symbol before
+  it, so a large frame can carry an unlikely name.
   The mesh's view and the group screens' list are each kilobytes, so they are filled where they
   live on the heap rather than built on the stack. An overflow is caught by esp-hal's stack
   guard as a panic, or corrupts memory silently. The heap peaked at about 50 KB over the clock
@@ -569,7 +573,8 @@ All default off. None belongs in normal firmware behavior.
   though GNSS set it or as the RTC's own unconfirmed time, without a reset. After one, GNSS no
   longer sets the clock until the firmware restarts.
 - `pair-inject` lets `tools/pair-inject.py` give the mesh its commands over the USB JTAG,
-  beside the screens: add, join, choose, accept, decline, mismatch, cancel, leave and rename.
+  beside the screens: add, join, choose, accept, decline, mismatch, cancel, leave, rename and
+  refresh.
   Its `deaf` makes a pairing drop what it hears for a while, to lose a frame on purpose.
 - `touch-inject` lets `tools/touch-inject.py` tap, swipe and cover the screen and press the
   power key over the USB JTAG, and read the framebuffer drawn last back to a PNG, for driving

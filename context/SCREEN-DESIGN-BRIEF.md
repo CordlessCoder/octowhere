@@ -46,15 +46,16 @@ later decisions are in this brief's "as built" sections.
 
 ## This round
 
-This round adds the radio to the start-up's self-test, a REFRESH DEVICES control to the group
-screens, and a founder's wait for the device it added. Its brief is
-`design/handoffs/REFRESH-AND-RADIO-ROUND-BRIEF-2026-10-03.md`.
+The last round added the radio to the start-up's self-test, a REFRESH DEVICES control to the
+group screens, and a founder's wait for the device it added. Its brief is
+`design/handoffs/REFRESH-AND-RADIO-ROUND-BRIEF-2026-10-03.md`, and the owner approved its
+hand-off, `design/handoffs/octowhere-radio-refresh-handoff-2026-10-03/` (`design/DECISIONS.md`
+entry 29). It is built and checked on the host; the boards have not run it yet. "Start-up as
+built" and "Group and pairing as built" say where the build interpreted it.
 
 The round before was pairing and the group, the screens for step 3 of the location mesh. Its brief
 is `design/handoffs/PAIRING-ROUND-BRIEF-2026-10-02.md`, and the owner approved its hand-off,
-`design/handoffs/octowhere-pairing-handoff-2026-10-02/` (`design/DECISIONS.md` entry 27). The
-radio side and the screens are built, and "Group and pairing as built" says where the build
-interpreted the hand-off.
+`design/handoffs/octowhere-pairing-handoff-2026-10-02/` (`design/DECISIONS.md` entry 27).
 
 Round 3 answered the owner's last three questions: smoother changes between the compass's
 states, pixel shift against burn-in, and a screen timeout with dimming. Its spec is built,
@@ -288,8 +289,9 @@ it draws each step, and a step damages only the items that differ, so a countdow
 digits and a scroll its rows. The scatter is the panel's. The firmware publishes what the
 screens show (`group::view`): this device's name and address, the stored group's members, when
 each was last heard directly and when its position was observed, the radio's state at boot,
-and the pairing under way. The screens ask the mesh through `Request`, and `group::sim` stands
-in for the mesh on the host. Where the build interpreted the hand-off:
+the pairing under way, a refresh and a founder's wait. The screens ask the mesh through
+`Request`, and `group::sim` stands in for the mesh on the host. Where the build interpreted the
+two hand-offs:
 
 - **No names before the code.** Announcements carry only keys and addresses (owner), so a
   device found shows its 12-digit address and NAME NOT SENT YET, and the code screens name the
@@ -303,10 +305,9 @@ in for the mesh on the host. Where the build interpreted the hand-off:
 - **Commit order**, which the hand-off asked for. The joining device stores the group, then
   acknowledges the last part; the adding device stores the member on that acknowledgement,
   then says so. If that acknowledgement is lost, the adding device has not stored the member
-  and shows CHECK MEMBER; the member reaches its table later through member records. The
-  joining device shows GROUP STORED / PEER RECEIPT NOT CONFIRMED. A device founding a group
-  has no group yet in that case. It shows CHECK MEMBER too, and the group appears once it hears
-  the joining device on the mesh, within about 3½ minutes.
+  and shows CHECK MEMBER / YOUR GROUP REMAINS STORED; the member reaches its table later
+  through member records. The joining device shows GROUP STORED / PEER RECEIPT NOT CONFIRMED.
+  A device founding a group has no group yet in that case: it waits, below.
 - **CANCEL** sends the cancel and stays to show what the mesh reports, normally CANCELLED,
   rather than going straight back to the group: the mesh may already be storing. While it
   stores, the top button is left out, since the mesh can no longer cancel.
@@ -335,9 +336,37 @@ in for the mesh on the host. Where the build interpreted the hand-off:
   renders have them; Sans Light now carries all printable ASCII so that case shows.
 - **Timeout.** A pairing holds the screen awake from START to its end. A cover and either
   power key press cancel it first.
+- **Spacing** (2026-10-03). The group screen's count, card and buttons are 18 px apart, and
+  every button without a note under its label centres the label by its ink, where the pairing
+  hand-off set it 13 px high. REMOVE and its UNAVAILABLE keep their places as a block.
+- **The status glyph** stays at the top right of the 2026-10-03 screens, where their renders
+  leave it out, since every other group screen has one: the group's on a refresh, the wait's
+  orange on CHECK MEMBER, GROUP PENDING and END CURRENT WAIT?, and the fault's red on NO
+  RADIO and SAVE FAILED.
+- **MEMBERS** moves its list down to y 244 under the refresh strip, showing a row and part of
+  the next. A row's own layout is the pairing hand-off's, 1 to 2 px lower than the 2026-10-03
+  render. BACK's tap region there ends at y 141, short of the strip at y 148 (owner).
+- **REFRESH DEVICES.** The strip reads LISTENING and the time left while a refresh runs, and
+  NO RADIO in red without one. It opens the refresh running, an ended one the first time after
+  it ends, and otherwise the screen that starts one, which has BACK (owner). So a second
+  refresh can start: the hand-off had the strip open a kept result every time, and the result
+  offers no way to start another. Every result offers VIEW MEMBERS (owner). A refresh counts
+  the devices it heard packets from itself, and apart from those the members the group gained
+  while it ran, by address, so a member that moved to another id is not counted as new. Its
+  result says REFRESH ENDED, or NOTHING NEW when it neither heard nor learned anything. One
+  that a pairing stopped says REFRESH STOPPED / PAIRING TOOK THE RADIO with what it had by
+  then. The caption under the title reads REFRESH / JUST ENDED for a minute, then its age.
+  Without a group or with a pairing under way it says why it cannot run.
+- **A founder's wait.** The hub shows GROUP PENDING with the device it waits for and the time
+  left, and its PAIR asks END CURRENT WAIT? first, which BACK leaves. The wait ends only when a
+  new pairing actually starts. CHECK MEMBER counts down, says STORING THE GROUP once the
+  joining device is heard, and GROUP STORED once the write lands. If the write fails it shows
+  SAVE FAILED in red and tries again every 10 s while the ten minutes last. An ended wait shows
+  its outcome on the hub once, GROUP STORED or NO GROUP / WAIT ENDED / NOTHING HEARD, and VIEW
+  GROUP goes on to the hub as it now is.
 
-Host stills of every state are in the `render` example, named after the hand-off's renders
-where they match, and the atlas's GROUP + NAME and PAIRING sections. The boards' own
+Host stills of every state are in the `render` example, named after the hand-offs' renders
+where they match, and the atlas's GROUP + NAME, PAIRING and REFRESH + RECOVERY sections. The boards' own
 framebuffers through a pairing, a rename and a cover are in
 `docs/logs/lora/pairing-screens-2026-10-02/`. Typing on the 39 px keys with a finger is
 accurate and responsive (owner, 2026-10-02). Nobody has judged legibility on the panel yet.
@@ -427,20 +456,32 @@ interpreted them:
 - **Boot order.** The firmware loads its settings, starts the panel, and draws the self-test
   while the parts come up behind it. The panel comes on dark and climbs to the stored level over
   the first 200 ms. The parts come up in cell order, and the clock, touch, motion and magnet
-  checks run during the second the GNSS module needs to settle after its reset. On the device
-  the last cell decides about 2 s after power-on.
+  checks run during the second the GNSS module needs to settle after its reset. The radio's
+  check starts as GNSS's ends and takes about 2 ms. On the device the last cell decides about
+  2.35 s after power-on.
 - **What passes.** A cell passes when its part's driver brings it up: the power controller's
   chip ID, the clock's registers read (a clock that holds no valid time still passes, and the
   clock face shows it as stopped), the touch controller's start-up, the IMU's mode set, and the
   magnetometer's first compensated sample. GNSS passes if the receiver accepts any command or
-  a read of its output succeeds. A part that fails is left out: the compass shows NO DATA
-  without the IMU, the clock face shows NO DATA without the clock, and a failed touch
-  controller leaves the device without touch.
+  a read of its output succeeds. The radio passes when it reads back the SX1272's version and
+  takes its configuration; all zeros or all ones is no reply, and another version a reply not
+  as expected. A part that fails is left out: the compass shows NO DATA without the IMU, the
+  clock face shows NO DATA without the clock, a failed touch controller leaves the device
+  without touch, and without the radio the device keeps its name and can leave its group.
 - **Deadlines.** POWER 200 ms, CLOCK 200 ms, TOUCH 600 ms (its start-up waits 220 ms),
-  MOTION 500 ms, MAGNET 500 ms, GNSS 1.5 s.
+  MOTION 500 ms, MAGNET 500 ms, GNSS 1.5 s to answer and 4.5 s with a reset, RADIO 200 ms.
+- **Seven parts in six rows** (2026-10-03). As the radio's check starts, the list scrolls up a
+  row over 160 ms, the settle every sliding surface shares, timed by the clock. Each row is as
+  wide as where its middle is: 342 px across the middle four places, 302 px at either end,
+  and in between as it moves. Its index, glyph, name and status move with its edges and keep
+  their sizes. The status stays 13 px inside the row's right edge, as built from S1, where the
+  render's renderer redrew it 8 px in and smaller. A failed part keeps the built hard cut, the
+  NO DATA glyph and the red bar, where the render tints the part's glyph. If POWER failed, the
+  list comes back once the radio has decided and shown its result for 200 ms. The counter
+  counts every decided part, shown or not. The scroll damages only the list.
 - **A demonstration's self-test** reads `DEMO, NOT A HARDWARE TEST` where a boot's reads its
   version.
-- **Typography** is the 2026-10-01 update's: the six parts' names in KH Interference Bold 18,
+- **Typography** is the 2026-10-01 update's: the parts' names in KH Interference Bold 18,
   their visible ink from (left + 82, row + 12); the title, indices, statuses and metadata keep
   their faces.
 - **Colours.** The design's dim marks are tokens dimmed toward black (`chrome::shade`): the
@@ -462,8 +503,8 @@ interpreted them:
   dark on frame 22, the digits in 4 × 5 px modules, the GNSS symbol in 5 px modules, and the two
   lines of copy in KH Interference Regular 18 with their ink from x 261 at tops 309 and 325 (the
   2026-10-01 update). The barcode takes what the 400 px row leaves after the copy's widest
-  line, 172 px. After a failed boot the second line still reads `SELF TEST n/6 OK`, as the
-  owner chose over `n/6 FAIL`, which is 194 px and would not fit. Its fractional edges are blended
+  line, 172 px. After a failed boot the second line still reads `SELF TEST n/7 OK`, as the
+  owner chose over `n/7 FAIL`, which is 194 px and would not fit. Its fractional edges are blended
   rather than rounded, and each row of set modules is one span, so no seam shows between them.
 - **The pluses** replace the ticks: 7 px arms, 1 px thick, 10 px out from the title's ink
   corners, at (23, 167) and (442, 298), with the ticks' flicker.
@@ -526,10 +567,11 @@ interpreted them:
   frames are counted by the clock, so a slow frame is skipped rather than stretching the
   sequence. The identity runs 120 frames and the card 19, 4.6 s together.
 - **Replay.** The spec's Replay section matches what is built, except that the identity's
-  line reads `SELF TEST 5/6 OK` after a failed boot, as the fault screen's does, where the spec
+  line reads `SELF TEST 6/7 OK` after a failed boot, as the fault screen's does, where the spec
   has `SELF TEST 5/6`. Beyond the spec, `REPLAY START-UP` opens a chooser of a good start-up
-  or a demonstration of one part failing (settings spec decision 12). Its chooser uses D3's
-  violet GOOD choice and orange marked demonstration.
+  or a demonstration of one part failing (settings spec decision 12), nine choices with BACK.
+  Its chooser uses D3's violet GOOD choice and orange marked demonstration. A demonstration's
+  radio starts as its GNSS decides, 1.3 s in, and fails 2 ms later.
 
 ## Power key as built
 

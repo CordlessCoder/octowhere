@@ -87,11 +87,14 @@ until the feature set is complete, because profiling an incomplete firmware pric
   order its "Build order" gives (owner, 2026-10-03): shuffled slots and member records on
   request, then step 6 with removing a member as its first use, then step 5, CAD, which needs
   the slot timing it depends on measured first ("Time sync" there).
-- A REFRESH DEVICES control on the group screens (owner, 2026-10-03), for a user who knows new
-  devices are near: it starts a three-round sweep, which spans every node's floor round. It needs
-  a place in the group screens' design first. A refresh on the device whose timebase ranks
-  higher still brings the other over, by the notice (`LORA-PROTOCOL.md`, "Keeping time without a
-  fix").
+- Run the 2026-10-03 round on the boards (`design/DECISIONS.md` entry 29), which is built and
+  checked on the host only; the boards were not attached. Time the radio's check and the
+  self-test's scroll, and check the scroll redraws only the list and holds nothing back. Refresh
+  between the two boards with their clocks apart (`tools/rtc-inject.py`), from each side, and
+  read the counts it reports against the logs. Lose a founding's last acknowledgement with
+  `pair-inject.py deaf` and watch GROUP PENDING through to GROUP STORED, and to NO GROUP with
+  the joining device off. Then send the design agent its return package: the native captures,
+  the start-up recordings and these board results.
 - Finish what step 3's screens leave open (`SCREEN-DESIGN-BRIEF.md`, "Group and pairing as
   built"):
   - Every group screen's legibility on the panel, which nobody has judged yet. Typing on the
@@ -170,10 +173,6 @@ until the feature set is complete, because profiling an incomplete firmware pric
   clearing a buffer after flushing it. Either changes the buffer hand-off in `util::Swap`, and
   partial redraws rely on a buffer keeping its own pixels, so only damaged spans may be cleared.
 - Subset PP Fraktion Mono Bold to the glyphs in use, to recover some of the 54 KB it added.
-- Add the LoRa radio to the self-test (owner, 2026-10-02). Its six cells, POWER to GNSS, are
-  laid out by the S1 hand-off, so a seventh needs a place in that design first. `bring_up`
-  already brings the radio up, and spawns `mesh::offline` when it does not answer, which the
-  group screens show as NO RADIO; it reports nothing to `BOOT_REPORTS`.
 - Bring the self-test's parts up concurrently (owner, 2026-09-28). `bring_up` joins the GNSS
   settle with one future that probes the clock, touch, IMU and magnetometer in turn, so each
   part's own waits (touch's 100 ms settle, the magnetometer's trim reads) add up. Give each part

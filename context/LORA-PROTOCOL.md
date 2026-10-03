@@ -250,6 +250,9 @@ GPS ranks above any node's clock, and between node clocks the lower root id rank
   RTC's time, as its root. Groups started this way merge as their sweeps find each other, to the
   lowest root. A node that gets a fix moves to GPS time, and the nodes timing from it find it again
   at their next sweep.
+- **Refreshing.** REFRESH DEVICES on the screens starts the same three-round sweep at once
+  (owner, 2026-10-03). It counts the members it heard directly apart from those the group
+  gained while it ran, and a pairing stops it.
 - **Notices.** A node that hears a member on a timebase ranked below its own sends it a notice
   (owner, 2026-10-03): a header alone, flagged, 24 bytes, at the time that member listens for
   the sender's slot on its own timebase, which the packet's arrival told it. The notice is sent
@@ -601,7 +604,8 @@ transcript. A key whose shared secret is not contributory ends the pairing.
   mesh, at the id it was given. A device that was founding the group has no group to hear that
   under, so it listens throughout for 10 minutes under the founded group's key instead. A packet
   under that key shows the joining device stored the group, and the founding device then stores
-  it and takes it up. The joining device is heard within about 3½ minutes: it waits 30 s for
+  it, and takes it up only once the write lands. A failed write is tried again every 10 s while
+  the wait lasts. The joining device is heard within about 3½ minutes: it waits 30 s for
   done, sweeps for three rounds, then sends in its next slot, since it hears nobody. Starting
   another pairing or leaving ends the wait.
 - **Capacity.** A full group refuses to add before it searches, a returning device included (design
