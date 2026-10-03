@@ -24,9 +24,10 @@ initialization or peripheral mappings.
 - `crates/octowhere-mesh/` owns the location mesh in `context/LORA-PROTOCOL.md`: the slot
   schedule, the packet's header and records, sealing them with AES-SIV, the table of positions,
   the timebase, the group and its members (`members`), pairing (`pair`), the exchange
-  without a radio, messages and the store every node holds them in (`messages`), and removing
-  a member by moving the group to a new key (`rekey`). It has no radio or board dependency and
-  builds for the host. `src/mesh.rs` runs it on the radio.
+  without a radio, messages and the store every node holds them in (`messages`), removing
+  a member by moving the group to a new key (`rekey`), and a device's Ed25519 identity, with
+  its X25519 key derived from it, which signs its records (`identity`). It has no radio or
+  board dependency and builds for the host. `src/mesh.rs` runs it on the radio.
 - `crates/octowhere-ui/` owns screen state, drawing and touch handling. It has no board dependency,
   so it also builds for the host. `src/ui/` there owns dirty tracking, geometry,
   gestures and paging, the clock and compass screens with
@@ -61,7 +62,7 @@ initialization or peripheral mappings.
 - `src/settings.rs` keeps settings in flash across restarts, in an ekv database: the time zone
   mode, the manually chosen zone, the zone GNSS last placed the device in, the display's
   brightness, the screen timeout, and whether the screen rests on the always-on face. The
-  mesh's state sits beside them: this device's X25519 secret and name, the end of its block of
+  mesh's state sits beside them: this device's Ed25519 seed, which its keys come from, and name, the end of its block of
   message sequence numbers, and its group's key and its generation, id, members and gone
   members, and removals. Clearing the settings leaves the mesh's state (owner). `partitions.csv` is the flash layout, and the cargo runner flashes it.
 - `tools/compass-texture.py` records the design's compass fields into
@@ -219,7 +220,7 @@ Weigh that cost before adding one.
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 1,546,896 bytes, 9.88% of the 15,663,104-byte app partition that
+The image is currently 1,641,648 bytes, 10.48% of the 15,663,104-byte app partition that
 `partitions.csv` gives it. Measure with `espflash save-image --chip esp32s3 --flash-size 16mb
 --partition-table partitions.csv <elf> <out>`; without those two options it assumes 4 MB of flash
 and the default table. The time zone
@@ -510,7 +511,9 @@ I2C bus, so any timing the protocol depends on includes an I2C transaction and w
 group's key shuffles each round, carrying neighbours, a digest of the member table, the member
 and gone records asked for or changed, a digest of the messages held, a summary of them when
 a neighbour's differs, messages, and positions, with a timebase taken from other nodes without
-a fix, under the group key pairing gave the node. A node in no group sends nothing and keeps the
+a fix, under the group key pairing gave the node. Member, gone and key records carry their
+device's Ed25519 signature, which a node checks before taking them (the protocol's
+"Signatures"); a check takes about 32 ms on the board, and a signature about 35. A node in no group sends nothing and keeps the
 radio asleep. Without a fix a node has no position of its own. Commands reach the mesh through
 `mesh::COMMANDS`: start a pairing to add or join, choose a device found, answer the code, cancel,
 leave the group, rename, refresh, send text, remove a member, keep one another member removes.
@@ -566,7 +569,13 @@ errata workaround, are in [`docs/hardware-notes.md`](docs/hardware-notes.md).
   `Mesh::run` 9,488 and `Mesh::pair` 11,008, about 45 KB on its deepest path, against about
   30 KB before. Painted at boot, the stack's deepest use was 45,336 bytes of 111,212 after the
   start-up, 66,544 on the device adding in a pairing with its group screens drawn and
-  messages sent, and 72,076 on the device joining, 65% (`bench/stack-watermark`).
+  messages sent, and 72,076 on the device joining, 65% (`bench/stack-watermark`). Signed
+  records then doubled a group's size, to about 5 KB, and every frame that held or moved one
+  grew with it, until a pairing overflowed the stack into the tasks' state. A group's records
+  and a pairing's welcome now live on the heap: the radio task's poll takes 11,808 bytes,
+  `Mesh::pair` 6,448 and `Mesh::run` 2,608, and the largest frames left are leaves,
+  `Group::restore` 6,000, Ed25519's `verify` 5,392 and `Group::clone` 5,136. The watermark
+  figures predate signing; remeasure before relying on them.
   Each function's frame is the `entry a1, N` that opens it in `xtensa-esp-elf-objdump -d`, in
   hex once it is large. The dump names code with no symbol of its own after the symbol before
   it, so a large frame can carry an unlikely name.
