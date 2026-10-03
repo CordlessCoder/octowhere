@@ -82,7 +82,8 @@ A relay passes an entry on in its own next slot. Slots are shuffled every round 
 access"), so that takes a little over half a round a hop on average, and at most about two.
 
 Messages cannot ride the digest's merge, since each one must arrive, and arrive once. They are
-flooded through the same slots with their own ids and seen-set; see "Messages".
+flooded through the same slots with their own ids, and every node holds them for a day and
+passes on any a neighbour lacks; see "Messages".
 
 ## Medium access
 
@@ -106,7 +107,7 @@ A node transmits in its slot when it has something to say, and stays silent othe
 - its own position moved more than ~25 m since the last one it sent, which is above GPS noise
 - it learned an entry materially newer than what it last relayed for that node
 - a node appeared for the first time
-- it holds a message, acknowledgement or member record not yet sent
+- it holds a message, member or gone record, request or summary not yet sent
 - the round is one of its floor rounds (below)
 - the round is a sweep round (see "Keeping time without a fix")
 - it hears no other node, so that another node's one-round sweep finds it wherever their slots
@@ -159,8 +160,10 @@ Owner, 2026-10-03 (`schedule::Schedule`).
   round on average, against at most one round and half on average with slot = id. A relay
   chain in id order no longer crosses in one round. 32 AES blocks a round, cached for the two
   rounds asked about last.
-- **Rekeying.** The order's key changes with the group key at the switch time, so a member
-  left on the old key sends in other slots from then on. Removal's design has to cover that.
+- **Rekeying.** The order's key changes with the group key at the switch (owner, 2026-10-03).
+  Keeping the old order would let a removed member tell who sends from when they send. A
+  member that missed the switch sends in the old order from then on, and is found in a sweep
+  round (see "Removing a member").
 
 ### Time sync
 
@@ -387,8 +390,10 @@ header still is one.
 | members digest | 32 bits of a hash of the sender's member table (see "Member records on request") |
 | request | 32-bit set of the ids whose member records the sender asks for |
 | member | id, X25519 public key, join time, change time, hardware address, then a name of 1 to 16 printable ASCII characters; 47 to 63 bytes |
+| gone | id, X25519 public key and change time of a member that left or was removed; 37 bytes |
 | message | see "Messages" |
-| acknowledgement | origin id and sequence number of a message delivered to the sender |
+| messages digest | 32 bits of a hash of the messages the sender holds (see "Messages") |
+| summary | the messages the sender holds from each origin, to be sent what it lacks (see "Messages") |
 
 Position entry, 73 bits:
 
@@ -413,9 +418,10 @@ With the neighbours and members digest records, which every packet carries:
 | 23 | 248 B | 389 ms |
 
 A packet is filled in this order until it is full or nothing is left: the sender's neighbours, its
-members digest, a request if it has one, up to three member records it has not sent, the sender's
-own entry, acknowledgements, messages oldest first, entries learned since this node last sent them
-(newest first), and the rest of the table in rotation. The member records go ahead of the
+members digest, its messages digest while it holds a message, a request and a summary if it has
+them, up to three member and gone records it has not sent, the sender's own entry, messages
+oldest first, entries learned since this node last sent them (newest first), and the rest of
+the table in rotation. The member records go ahead of the
 positions so a busy table cannot crowd them out, but leave room for the sender's own entry; each
 costs a full packet about seven entries.
 
@@ -457,22 +463,52 @@ Owner, 2026-10-03. It replaced a rotation of one member record in every packet
 
 ## Messages
 
+Owner, 2026-10-03: store and forward, the body, and keeping messages in PSRAM. The design it
+replaced had relays pass each message on once and the origin repeat it until acknowledged. A
+repeat carried the same sequence number, so relays dropped it, and it reached only the origin's
+own neighbours.
+
 A message record carries:
 
 | Field | Bytes | Note |
 | --- | --- | --- |
 | origin id | 1 | 5 bits used |
-| destination | 1 | an id, or the whole group |
-| sequence number | 4 | per origin, never reused |
-| timestamp, UTC seconds | 4 | set by the origin, copied by relays |
-| body | rest | text, or for a private message its ciphertext and a 16-byte tag |
+| destination | 1 | an id; bit 7 the whole group instead; bit 6 a group key (see "Removing a member") |
+| sequence number | 4 | per origin, never reused, never 0 |
+| previous | 4 | the origin's sequence number before this one, 0 for none |
+| timestamp | 4 | timebase seconds, set by the origin, copied by relays |
+| body | rest | a kind byte and what it holds; to one member, sealed (see "Private messages") |
 
-- **Flooding.** Every node relays each message once, in its next slot, while it is younger than the
-  message horizon, 24 hours. The seen-set is keyed by origin and sequence number and holds
-  entries until the horizon passes, about 9 bytes each. The origin repeats a message until it is
-  acknowledged or expires, doubling the gap between repeats up to 15 minutes.
-- **Acknowledgement.** The destination floods an acknowledgement back the same way. A message to the
-  whole group is not acknowledged.
+A message to one member is always private. The kinds are text, an acknowledgement, a new group
+key, and a removal.
+
+- **Body.** Text is printable ASCII, the fonts' characters, up to 160 of them. A private message
+  that long fills one packet with the sender's own entry and the records every packet carries.
+- **Flooding.** A node relays each message new to it once, in its next slot, oldest first. It
+  counts as sent once a covering packet carried it, as an entry does (the cancel rule).
+- **Store and forward.** Every node holds every message for the message horizon, 24 hours
+  from its timestamp, private ones included, and passes on any a neighbour lacks. The origin
+  does not repeat it. A message reaches a member who comes back into range of anyone holding it
+  within the horizon.
+- **Digest.** A packet carries a messages digest while its sender holds a message: 32 bits of
+  a hash over the origin and sequence number of each one not yet past the horizon. A message
+  passes the horizon at a round's start, the same for every node on a timebase, so two nodes'
+  digests agree when they hold the same messages.
+- **Summary.** A node whose digest has differed from a neighbour's in two of that neighbour's
+  packets running sends a summary in its next packet: for each origin, the oldest and newest
+  sequence numbers it holds, and those it knows it lacks between them. A message names the
+  origin's one before it, which is how a node knows. Sequence numbers skip at a restart, so a
+  gap in the numbers alone says nothing. A neighbour that hears a summary marks to be sent every
+  message it holds outside those ranges or among those lacked, unless its digest matches the
+  summary's sender's.
+- **Acknowledgement.** The destination of a private message answers with an acknowledgement,
+  itself a private message, which travels and is held the same way. Acknowledgements and
+  messages to the whole group are not acknowledged.
+- **Storage.** Messages are held in PSRAM and lost at a restart, to begin with. A restarted
+  node gets the horizon's messages back from its neighbours, but not which it had read. The
+  store holds the newest 256; a node holding that many takes no message older than all of them,
+  so every node keeps the same ones. The sequence number is kept in flash (see "Private
+  messages").
 - **Latency.** Each hop waits for the relaying node's slot, 1.4 s to one round.
 - **Capacity.** Every node carries every message once, so the group's message throughput is what fits
   in one node's packet beside its positions, whatever the group's size. Beside an eight-entry digest
@@ -491,22 +527,58 @@ since the header and record are under the group key.
 - **Key.** 256 bits of HKDF-SHA256 over the X25519 shared secret of the two members' keys, bound to
   both public keys. Every member learns the others' public keys from pairing and from member
   records.
-- **Associated data.** The origin id and the sequence number, which bind the body to its record.
-  SIV needs no nonce. The sequence number must still never repeat for an origin, because it names
-  the message in every seen-set. It is persisted in flash in reserved blocks, and a boot skips to
-  the next block, so a crash wastes numbers rather than reusing them.
-- **Rekeying.** Removing a member is a new group key with a UTC switch time, sent to each remaining
-  member as a private message. Before the switch nodes send under the old key, and after it under
-  the new one. Every node tries both keys on receive. A node on the new key that hears a member still
-  on the old one sends it the new key as a private message in a packet under the old key: the
-  removed member can see that packet but cannot open the pairwise-sealed key inside. The old key is
-  dropped once every remaining member has been heard under the new one, or after a limit not chosen
-  yet.
+- **Associated data.** The origin id, the destination and the sequence number, which bind the
+  body to its record. SIV needs no nonce. The sequence number must still never repeat for an
+  origin, because it names the message in every node's store. It is persisted in flash in
+  reserved blocks of 64, and a boot skips to the next block, so a crash wastes numbers rather
+  than reusing them. It belongs to the device, not the group, so leaving keeps it.
+
+### Removing a member
+
+Owner, 2026-10-03, except where it says otherwise.
+
+- **Who.** Any member can remove any other, as any member can add one. The new key reaches
+  each member sealed under the key it shares with the remover, so each knows who asked.
+- **Confirming.** Each device's user is shown who asked to remove whom, and can decline until
+  the switch. A device whose user declines ignores the removal and stays on the old key, so a
+  member removing another out of malice can be overruled; its group can then remove the
+  remover. A device whose user does not answer switches with the group. One that learns of
+  the removal only after the switch switches at once.
+- **The new key.** The remover makes a random group key and sends it to each remaining member
+  as a private message, a key message, with the round the group switches at, counted on its
+  timebase, and the id and SHA-256 fingerprint of the member removed. The remover sends two a
+  packet, so the switch is as many rounds away as its own key messages take, and three more
+  for hops: about 5 minutes for 8 members, 15 for 32. Until then the removed device still
+  reads everything.
+- **The switch.** Before it nodes send under the old key, and from it under the new one, in the
+  order the new key gives (see "Shuffled slots"). Every node tries both keys on receive, but
+  after the switch merges nothing that arrives under the old key. Such a packet only shows that
+  its sender missed the change. A node holding that member's key message sends it again, in a
+  packet under the old key, when the member next listens for its slot there. The removed
+  device can see that packet but cannot open the key inside. Key messages are held past the
+  message horizon while the old key is, but are left out of the digest after it. A member that
+  missed the switch sends in the old order; nodes on the new key hear it in a sweep round,
+  where they listen throughout, within about 10 minutes.
+- **The old key** is kept with no time limit, until every remaining member has been heard
+  under the new one. A member can be away for any length of time and come back without pairing
+  again. While some are not heard, a node sends a header under the old key in its slot of each
+  sweep round, so parts of the group that switched to different keys still hear each other.
+- **The removed device** is sent one private message saying it was removed and by whom. Its
+  screen shows that, and it does not leave the group by itself, so a stolen device that removes
+  everyone else cannot take them out of their group.
+- **Its record.** At the switch every node replaces the removed member's record with a gone
+  record. Its id is free for the next pairing at once.
+- **Two at once.** Two removals made apart at the same time make two keys. The one whose key
+  has the lower SHA-256 wins wherever both are known, and the other remover makes its removal
+  again under it (proposed, 2026-10-03).
+- **What is kept across a restart.** A pending removal, the old keys and which members each
+  still waits for. The key messages themselves are in the message store, so a restarted node
+  gets them back from its neighbours within the horizon.
 
 ## Time and freshness
 
-Entries and messages carry absolute UTC seconds, set once by the originator and copied verbatim by
-every relay. Relays never recompute them, so error does not accumulate across hops and a clockless
+Entries carry absolute UTC seconds, and messages their timebase's seconds, which are UTC as well
+as its root's RTC was. Each is set once by the originator and copied verbatim by every relay. Relays never recompute them, so error does not accumulate across hops and a clockless
 node can forward entries whose freshness it cannot evaluate. Merge keeps the larger timestamp.
 
 A fix and a UTC stamp arrive in the same RMC sentence, so there is no state with fresh position and
@@ -632,9 +704,16 @@ The protocol id is 5 bits, 0–31. The enroller gives the joiner the lowest id f
 Two members enrolling in separate places at once can hand out the same id; member records reveal it
 when the partitions meet. The member whose public key has the lower SHA-256 keeps the id, and the
 other takes the lowest id free in its table and announces it with a member record. The user sees
-nothing. An id is freed only by removing its member. Removing is not built: leaving forgets the
-group on the leaving device only, so the others keep its record, listen for its slot every
-round and never free its id.
+nothing.
+
+An id is freed when its member leaves or is removed (see "Removing a member"). A device that
+leaves sends a gone record for itself in its next slot, at most about two rounds later, from
+memory, and then forgets the key; the others replace its record with the gone record and free
+its id, with no new key (owner, 2026-10-03). A device that may still hold the key is removed
+instead. A gone record wins a merge against the same device's record when it is newer, and a
+node that hears a record for a device it holds as gone sends the gone record back. When a new
+member takes a gone member's id, the gone record moves to a list of the last 32, which still
+answers for it. Pairing a device again gives it a newer record, which wins.
 
 The eFuse base MAC is the stable hardware identity, used to recognise a re-pair of the same physical
 device rather than issuing a second id.
@@ -645,7 +724,8 @@ key and this device's id under one key, each member's record under its own, and 
 X25519 secret and name apart from the group, each value behind a one-byte version. A device keeps
 its name and key pair when it leaves a group, and CLEAR SETTINGS keeps all of it (owner,
 2026-10-02). A member that changes is stored with the whole group in one transaction. The
-sequence-number block comes with messages.
+sequence-number block is stored with the identity, and a pending removal and the old keys with
+the group.
 
 ### Flash encryption is deferred
 
@@ -711,7 +791,8 @@ What is left goes in this order (owner, 2026-10-03):
   removing a member needs the message machinery: flooding, the seen-set, acknowledgements,
   sequence numbers kept in flash, and the pairwise seal. It is built with removal as its first
   use, then messages on top. Removal and messages need screens, which need a design round; the
-  mesh's side goes first, driven over the USB JTAG as pairing's was.
+  mesh's side goes first, driven over the USB JTAG as pairing's was. Its design was settled
+  with the owner on 2026-10-03 ("Messages", "Removing a member", "Identity and storage").
 - Step 5, then step 7.
 
 ## RTC calibration
@@ -741,7 +822,9 @@ protocol does not need this.
   recovers only at its lost sweep, about 10 rounds later; a replayed notice forces a sweep.
   Refining only within the guard, and adopting only on two packets that agree, would close it.
   Jamming does more harm more easily, so it waits.
-- The limit after which a rekey drops the old key.
+- For step 5, two answers from the owner: the cell's capacity and how long the device should
+  last on it, which set the floor, the sweeps and how far CAD has to go; and when both boards
+  can have a GPS fix at once, which CAD's two measurements need.
 - A shorter floor once CAD is measured (see "CAD is required at this size").
 - Measuring GNSS time sync (see "Time sync").
 
