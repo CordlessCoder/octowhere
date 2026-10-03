@@ -130,6 +130,11 @@ partially. `HARDWARE-VERIFICATION.md` has what has been checked of that since.
 The `esp` toolchain from [`rust-toolchain.toml`](rust-toolchain.toml) and the target from
 [`.cargo/config.toml`](.cargo/config.toml) are selected automatically.
 
+The host lines below use `+stable`, but nightly is fine on the host (owner, 2026-10-03): a host
+crate may require it for a feature stable lacks, such as the allocator API before Rust 1.100.
+Move that crate's lines, and those of the crates that build it, to `+nightly` in the change
+that needs it, not before.
+
 ```text
 cargo +stable fmt --all --check
 cargo +stable fmt --all --manifest-path host-tests/Cargo.toml --check
