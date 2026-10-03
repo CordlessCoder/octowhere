@@ -651,7 +651,8 @@ impl Pairing {
         }
         let public: [u8; PUBLIC_LEN] = frame[2..34].try_into().expect("32 bytes");
         let mac: [u8; MAC_LEN] = frame[34..40].try_into().expect("6 bytes");
-        if public == self.public {
+        // One with this device's MAC would be given this device's id, and its record.
+        if public == self.public || mac == self.me.mac {
             return;
         }
         if let Some(known) = self
@@ -1496,6 +1497,20 @@ mod tests {
         );
         assert_eq!(joiner.phase(), Phase::Ended(End::Cancelled));
         assert_eq!(adder.phase(), Phase::Ended(End::Peer(Reason::Cancelled)));
+    }
+
+    #[test]
+    fn a_device_announcing_the_adders_own_mac_is_not_listed() {
+        let a = identity(1);
+        let mut adder = Pairing::add(&a, group(&a, &[]), [1; 16], 0, UTC);
+        let mut out = [0; MAX_FRAME];
+        let mut twin = identity(2);
+        twin.mac = a.mac;
+        let mut joiner = Pairing::join(&twin, [2; 16], 0);
+        let len = joiner.poll(0, &mut out).unwrap();
+        adder.receive(&mut out[..len], 0);
+        assert_eq!(adder.candidates().count(), 0);
+        assert_eq!(adder.phase(), Phase::Searching);
     }
 
     #[test]

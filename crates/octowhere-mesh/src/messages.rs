@@ -311,6 +311,8 @@ pub struct Store {
     messages: [Message; CAPACITY],
     /// The places holding a message to be sent, as bits.
     unsent: [u32; CAPACITY / 32],
+    /// The places holding a message this node has yet to take, as bits.
+    unread: [u32; CAPACITY / 32],
     /// The exclusive or of each message's hash.
     digest: u32,
 }
@@ -392,6 +394,7 @@ impl Store {
         self.digest ^= hash(self.messages[at].name());
         self.messages[at] = Message::zeroed();
         self.unsent[at / 32] &= !(1 << (at % 32));
+        self.unread[at / 32] &= !(1 << (at % 32));
     }
 
     /// Drops the messages past the horizon at `now`, the timebase second a round started at,
@@ -418,6 +421,28 @@ impl Store {
             }
         }
         forgotten
+    }
+
+    /// Marks a message held as one this node has yet to take, to try again.
+    pub fn mark_unread(&mut self, name: Name) {
+        if let Some(at) = self.place(name) {
+            self.unread[at / 32] |= 1 << (at % 32);
+        }
+    }
+
+    /// Counts a message as taken.
+    pub fn read(&mut self, name: Name) {
+        if let Some(at) = self.place(name) {
+            self.unread[at / 32] &= !(1 << (at % 32));
+        }
+    }
+
+    /// The first message marked unread from place `from` on, with its place.
+    #[must_use]
+    pub fn unread_from(&self, from: usize) -> Option<(usize, &Message)> {
+        (from..CAPACITY)
+            .find(|&at| self.unread[at / 32] & 1 << (at % 32) != 0)
+            .map(|at| (at, &self.messages[at]))
     }
 
     /// Marks a message held to be sent.
@@ -995,6 +1020,22 @@ mod tests {
         assert_eq!(fresh.to_reserve(70, 0), Some((1, 1 + 2 * BLOCK)));
         fresh.reserved((1, 1 + 2 * BLOCK));
         assert!((0..70).all(|_| fresh.take().is_some()));
+    }
+
+    #[test]
+    fn a_message_marked_unread_is_found_until_read_or_gone() {
+        let mut held = store();
+        held.insert(text(1, 5, 0, NOW), NOW);
+        held.insert(text(2, 7, 0, NOW), NOW);
+        held.mark_unread((2, 7));
+        let (at, message) = held.unread_from(0).unwrap();
+        assert_eq!(message.name(), (2, 7));
+        assert!(held.unread_from(at + 1).is_none());
+        held.read((2, 7));
+        assert!(held.unread_from(0).is_none());
+        held.mark_unread((1, 5));
+        held.expire(NOW + HORIZON_S, |_| {});
+        assert!(held.unread_from(0).is_none(), "past the horizon");
     }
 
     #[test]

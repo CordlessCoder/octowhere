@@ -917,16 +917,12 @@ async fn settings_task(mut store: Store) {
     }
 }
 
-/// Queues a change to the mesh's state without waiting. Returns false when the queue is full.
-fn queue_group_write(write: settings::GroupWrite) -> bool {
-    match GROUP_WRITES.try_send(write) {
-        Ok(()) => {
-            SETTINGS_QUEUED.fetch_add(1, Ordering::Relaxed);
-            GROUP_QUEUED.fetch_add(1, Ordering::Relaxed);
-            true
-        }
-        Err(_) => false,
-    }
+/// Queues a change to the mesh's state without waiting, and returns its number for
+/// [`group_result`], or `None` when the queue is full.
+fn queue_group_write(write: settings::GroupWrite) -> Option<u32> {
+    GROUP_WRITES.try_send(write).ok()?;
+    SETTINGS_QUEUED.fetch_add(1, Ordering::Relaxed);
+    Some(GROUP_QUEUED.fetch_add(1, Ordering::Relaxed).wrapping_add(1))
 }
 
 /// Queues a change to the mesh's state, waiting for room, and returns its number for
@@ -937,23 +933,30 @@ async fn send_group_write(write: settings::GroupWrite) -> u32 {
     GROUP_QUEUED.fetch_add(1, Ordering::Relaxed).wrapping_add(1)
 }
 
+/// Whether the group write numbered `number` reached the flash, once it is done. Only the last
+/// 32 writes' results are kept.
+fn group_result(number: u32) -> Option<bool> {
+    // Wrapping: a write up to half the range behind is done.
+    (GROUP_DONE.load(Ordering::Acquire).wrapping_sub(number) < u32::MAX / 2)
+        .then(|| GROUP_RESULTS.load(Ordering::Relaxed) & 1 << (number % 32) != 0)
+}
+
 /// Waits for the group write numbered `number` and says whether it reached the flash.
 async fn group_saved(number: u32) -> bool {
     loop {
-        // Wrapping: a write up to half the range behind is done.
-        if GROUP_DONE.load(Ordering::Acquire).wrapping_sub(number) < u32::MAX / 2 {
-            return GROUP_RESULTS.load(Ordering::Relaxed) & 1 << (number % 32) != 0;
+        if let Some(saved) = group_result(number) {
+            return saved;
         }
         GROUP_SAVED.wait().await;
     }
 }
 
-/// Saves a change to the mesh's state, and says whether it reached the flash.
+/// Saves a change to the mesh's state, and says whether it reached the flash. It waits however
+/// long the writes ahead of it take: one that gave up early would report a write as failed that
+/// may still land.
 async fn save_group(write: settings::GroupWrite) -> bool {
     let number = send_group_write(write).await;
-    with_timeout(Duration::from_secs(10), group_saved(number))
-        .await
-        .unwrap_or(false)
+    group_saved(number).await
 }
 
 #[embassy_executor::task]
@@ -1939,7 +1942,9 @@ fn mesh_start(saved: settings::MeshSaved) -> mesh::Start {
     let secret = saved.secret.or_else(|| {
         let secret = mesh::random::<32>()?;
         info!("[MESH] made this device's key pair");
-        queue_group_write(settings::GroupWrite::Identity(secret));
+        if queue_group_write(settings::GroupWrite::Identity(secret)).is_none() {
+            warn!("[MESH] the key pair could not be queued to store");
+        }
         Some(secret)
     });
     let secret = secret.unwrap_or_else(|| {

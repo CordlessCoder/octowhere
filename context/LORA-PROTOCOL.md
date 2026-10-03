@@ -749,7 +749,8 @@ transcript. A key whose shared secret is not contributory ends the pairing.
   part is never acknowledged has not added the member, and says the outcome is unknown. If the
   joining device did store the group, its own member record reaches the adding device through the
   mesh, at the id it was given. A device that was founding the group has no group to hear that
-  under, so it listens throughout for 10 minutes under the founded group's key instead. A packet
+  under, so it listens throughout for 10 minutes under the founded group's key instead, as it
+  does when its own write of the group failed after it sent done. A packet
   under that key shows the joining device stored the group, and the founding device then stores
   it, and takes it up only once the write lands. A failed write is tried again every 10 s while
   the wait lasts. The joining device is heard within about 3½ minutes: it waits 30 s for

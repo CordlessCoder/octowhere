@@ -633,7 +633,8 @@ pub struct Mesh {
     caught_up: [u8; IDS as usize],
     /// Private messages to this device it could not act on yet: its sender's record or a
     /// timebase was missing.
-    unread: heapless::Vec<messages::Name, 8>,
+    /// The numbers of the writes queued without waiting, whose results are yet to be checked.
+    writes: heapless::Vec<u32, 8>,
     /// The removal state changed and is not yet queued to be stored.
     rekey_unsaved: bool,
     /// A summary made before the slot it goes in, with the origin the next one starts from.
@@ -693,7 +694,7 @@ impl Mesh {
             keys_posted: false,
             notify: None,
             caught_up: [0; IDS as usize],
-            unread: heapless::Vec::new(),
+            writes: heapless::Vec::new(),
             rekey_unsaved: false,
             summary: None,
         };
@@ -899,6 +900,20 @@ impl Mesh {
     /// that changed reach the removals first, so that a restart never keeps a change that
     /// declining the last removal would not forget.
     fn queue_unsaved(&mut self) {
+        let mut failed = false;
+        self.writes
+            .retain(|&number| match super::group_result(number) {
+                Some(saved) => {
+                    failed |= !saved;
+                    false
+                }
+                None => true,
+            });
+        if failed {
+            warn!("[MESH] a write to the flash failed; the group is stored again");
+            self.unsaved_group = true;
+            self.rekey_unsaved = true;
+        }
         let Some(group) = &mut self.group else {
             if self.rekey_unsaved {
                 self.save_rekey();
@@ -909,8 +924,11 @@ impl Mesh {
             self.rekey_unsaved = true;
         }
         if self.unsaved_group {
-            let rekey = self.rekey_unsaved.then(|| self.rekey.clone());
-            if super::queue_group_write(GroupWrite::Group(Box::new(group.clone()), rekey)) {
+            let write = GroupWrite::Group(
+                Box::new(group.clone()),
+                self.rekey_unsaved.then(|| self.rekey.clone()),
+            );
+            if self.queue_write(write) {
                 self.unsaved_group = false;
                 self.unsaved = 0;
                 self.rekey_unsaved = false;
@@ -923,15 +941,32 @@ impl Mesh {
                 return;
             }
         }
-        let Some(group) = &self.group else { return };
         while self.unsaved != 0 {
             let id = self.unsaved.trailing_zeros() as u8;
-            let slot = group.slot(id).copied();
-            if !super::queue_group_write(GroupWrite::Slot { id, slot }) {
+            let slot = self
+                .group
+                .as_ref()
+                .and_then(|group| group.slot(id).copied());
+            if !self.queue_write(GroupWrite::Slot { id, slot }) {
                 return;
             }
             self.unsaved &= !(1 << id);
         }
+    }
+
+    /// Queues a write to the flash without waiting, and keeps its number to check its result.
+    /// Returns false when the queue is full.
+    fn queue_write(&mut self, write: GroupWrite) -> bool {
+        let Some(number) = super::queue_group_write(write) else {
+            return false;
+        };
+        if self.writes.push(number).is_err() {
+            // Too many to follow: store everything again rather than miss a failure.
+            self.writes.clear();
+            self.unsaved_group = true;
+            self.rekey_unsaved = true;
+        }
+        true
     }
 
     /// Queues the group and its removals to be stored in one write, as a change of key needs:
@@ -1612,9 +1647,8 @@ impl Mesh {
         for name in &arrivals {
             if let Some(message) = self.messages.get(*name).copied()
                 && !self.arrived(&message, own)
-                && self.unread.push(*name).is_err()
             {
-                warn!("[MSG] too many unread; {}/{} is left", name.0, name.1);
+                self.messages.mark_unread(*name);
             }
         }
         if let Some(message) = late_key {
@@ -1970,7 +2004,11 @@ impl Mesh {
                     self.shown.refresh = None;
                 }
             }
-            (Phase::Ended(End::Unconfirmed), Some(group)) if !had_group => {
+            // A founder whose write failed has sent its done all the same, so the joining
+            // device holds the group: the wait stores it again.
+            (Phase::Ended(End::Unconfirmed | End::StoreFailed), Some(group))
+                if !had_group && role == Role::Add =>
+            {
                 info!("[MESH] listening for the joining device under the founded group's key");
                 let until = local() + FOUNDING_WAIT_US;
                 self.shown.recovery = Some(RecoveryView {
@@ -2032,7 +2070,6 @@ impl Mesh {
         self.keys_posted = false;
         self.notify = None;
         self.caught_up = [0; IDS as usize];
-        self.unread.clear();
         self.summary = None;
     }
 
@@ -2044,7 +2081,7 @@ impl Mesh {
         if self.unsaved_group {
             return;
         }
-        if super::queue_group_write(GroupWrite::Rekey(self.rekey.clone())) {
+        if self.queue_write(GroupWrite::Rekey(self.rekey.clone())) {
             self.rekey_unsaved = false;
         }
     }
@@ -2528,17 +2565,12 @@ impl Mesh {
 
     /// Acts on the private messages to this device that could not be acted on as they came.
     fn retry_unread(&mut self, own: u8) {
-        let mut at = 0;
-        while let Some(&name) = self.unread.get(at) {
-            let done = match self.messages.get(name).copied() {
-                Some(message) => self.arrived(&message, own),
-                // Past the horizon.
-                None => true,
-            };
-            if done {
-                self.unread.swap_remove(at);
-            } else {
-                at += 1;
+        let mut from = 0;
+        while let Some((at, message)) = self.messages.unread_from(from) {
+            let message = *message;
+            from = at + 1;
+            if self.arrived(&message, own) {
+                self.messages.read(message.name());
             }
         }
     }
