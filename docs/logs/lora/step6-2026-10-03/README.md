@@ -139,9 +139,9 @@ added it again at its old id (`returning: true`).
 
 ## CRC errors between these boards
 
-`1c1c` received 12 of the 37 packets `1a38` sent it in these runs with a CRC error, about one
-in three of those over 100 bytes, at -17 to -30 dBm. `1a38` received all 35 of `1c1c`'s, at
-about -10 dBm. Overload alone would fail the stronger link first. On 2026-10-02 the errors
+In these runs `1c1c` received 37 of `1a38`'s packets intact and 12 with a CRC error, at -17 to
+-30 dBm; a failed packet's length is not logged. `1a38` received all 35 of `1c1c`'s, at about
+-10 dBm. Overload alone would fail the stronger link first. On 2026-10-02 the errors
 ran the other way, at about 1% (`docs/logs/lora/crc-2026-10-02/`). Every loss here was made
 good by the protocol: summaries, member record requests and catching up a member on its old
 key. Whether `1a38`'s transmitter or `1c1c`'s receiver is at fault, or how the boards sit on
