@@ -593,9 +593,11 @@ Owner, 2026-10-03, except where it says otherwise.
   message this way at most three times for each old key: one that declined never takes it,
   and is not acknowledged, so that it would otherwise draw one every sweep round.
 - **The old key** is kept with no time limit, until every remaining member has been heard
-  under the new one; a node keeps the four newest such keys. A member can be away for any length of time and come back without pairing
-  again. While some are not heard, a node sends a header under the old key in its slot of each
-  sweep round, so parts of the group that switched to different keys still hear each other.
+  under the new one; a member a later removal takes, or that leaves, is no longer waited for. A
+  node keeps the four newest such keys. A member can be away for any length of time and come
+  back without pairing again. While some are not heard, a node sends a header under the old key
+  in its slot of each sweep round, so parts of the group that switched to different keys still
+  hear each other.
 - **The removed device** is sent a private message saying it was removed and by whom. Its
   screen shows that, and it does not leave the group by itself, so a stolen device that removes
   everyone else cannot take them out of their group. The remover sends it only after the

@@ -134,10 +134,11 @@ until the feature set is complete, because profiling an incomplete firmware pric
   records, gone records and key messages are signed on an Ed25519 identity, a removal can be
   declined for a day after its switch, and a member that missed switches is caught up one
   generation at a time (the protocol's "Signatures" and "Removing a member";
-  `docs/logs/lora/signing-2026-10-03/`). Catching up across two missed switches has not run on
-  the boards: the run met the start-up panic above. What is left of step 6 is its screens, which
-  need a design round: sending and reading messages, a removal's confirmation, and removing a
-  member.
+  `docs/logs/lora/signing-2026-10-03/`). A member deaf through two removals was caught up on
+  the boards in 19 minutes, and the run found an old key kept for good for a member a later
+  removal took, fixed in `d6b9389` (`docs/logs/lora/catch-up-2026-10-03/`). What is left of
+  step 6 is its screens, which need a design round: sending and reading messages, a removal's
+  confirmation, and removing a member.
   Then step 5, CAD, which needs the slot timing it depends on measured first ("Time sync"
   there), the owner's answers on the battery and a GPS fix for both boards (its "Open"), and
   then step 7.
