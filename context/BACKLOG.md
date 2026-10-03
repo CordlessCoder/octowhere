@@ -96,6 +96,14 @@ until the feature set is complete, because profiling an incomplete firmware pric
   built"):
   - Every group screen's legibility on the panel, which nobody has judged yet. Typing on the
     name keyboard's 39 × 53 px keys with a finger is accurate and responsive (owner, 2026-10-02).
+  - A very short press on the keyboard shows the key responding, "the outline turns purple",
+    and types nothing (owner, 2026-10-03). There is no minimum press time: a contact that
+    lands and lifts is a tap 30 ms after the lift (`LIFT_GRACE`), and a tap types the key it
+    came down on. In the keyboard's own code, a press that showed can type nothing only by
+    ending as a drag outside its key, or by the stage swallowing the rest of the contact, so a
+    position that jumps more than `TAP_SLOP`, 16 px, as a short contact lands or leaves is the
+    likeliest cause, the lift report's last position included. `touch-read-log` on
+    `bench/touch-latency` logs every read with its bytes, which would show it.
   - The joining device cannot tell it was returning, so its RESTORED screen never shows. The
     group it receives would need to say so.
   - Reading a screen back with `touch-inject` takes about 11 s and interrupts the board. The
