@@ -252,7 +252,8 @@ K1 (`design/renderer/concept/family-pass-v1-out/clock-K1-*`) on the round 4 spec
 ## Settings as built
 
 S1 has four rows on each of two pages. Each row keeps its action and live value from the older
-panel; the rules, index, label and smaller icon follow the selected S1 layout. Row names are
+panel; the rules, index, label and smaller icon follow the selected S1 layout, except that a
+rule between two rows spans the wider of them (`DECISIONS.md` 30). Row names are
 KH Interference Bold 20, and the values Fraktion Mono Bold 20 (the 2026-09-30 update). The
 outer arcs' halftone follows the S1 prototype's law (`settings_study.py`): an 8 px grid inside
 radius 219, 43 % of points in the two lobes beside the rows and 9 % elsewhere, none over the

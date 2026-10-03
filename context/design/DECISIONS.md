@@ -162,3 +162,7 @@ Recorded 2026-09-26. These override the hand-off where they differ.
     it starts, for the scroll, and has a deadline of its own; on MEMBERS, BACK's tap region ends
     at y 141, so it does not reach the refresh strip at y 148; and every refresh result offers
     VIEW MEMBERS, back to where the refresh started, and the refresh's first screen has BACK.
+30. **The settings panel's rules span the wider row beside them** (owner, 2026-10-03). S1
+    drew each rule at its row's width, so the rule under the third row was as short as the
+    fourth row's. Each rule between two rows now spans the wider of them: the top and bottom
+    rules stay x 83–383, and the three between run x 57–409. The design has not seen it.
