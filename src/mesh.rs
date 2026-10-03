@@ -264,8 +264,11 @@ const SUMMARY_MAX: usize = 120;
 
 /// Which key a packet heard opened under.
 enum Opened {
-    /// The group's, or the one it is about to switch to.
     Current,
+    /// The one the group is about to switch to, which its sender already has.
+    Pending {
+        sender: u8,
+    },
     /// One the group switched away from, which its sender has not.
     Old {
         sender: u8,
@@ -1350,19 +1353,23 @@ impl Mesh {
         self.take(&packet, done)
     }
 
-    /// Opens a sealed packet in place under the group's key, or the key it is about to switch
-    /// to, which a node that switched a moment early sends under. Says instead which old key
-    /// opens it, which tells of a member that missed a switch.
+    /// Opens a sealed packet in place under the group's key. Says instead which other key
+    /// opens it: the one the group is about to switch to, or an old one, which tells of a member
+    /// that missed a switch.
     fn open(&self, packet: &mut [u8]) -> Opened {
         let Some(group) = &self.group else {
             return Opened::Not;
         };
-        let pending = self.rekey.pending().map(|pending| &pending.new.key);
-        if core::iter::once(group.key())
-            .chain(pending)
-            .any(|key| seal::open(key, packet).is_ok())
-        {
+        if seal::open(group.key(), packet).is_ok() {
             return Opened::Current;
+        }
+        if let Some(pending) = self.rekey.pending()
+            && let Ok(plain) = seal::open(&pending.new.key, packet)
+            && let Ok(plain) = Plain::parse(plain)
+        {
+            return Opened::Pending {
+                sender: plain.header.sender,
+            };
         }
         for old in self.rekey.old() {
             if let Ok(plain) = seal::open(&old.key, packet)
@@ -1388,6 +1395,15 @@ impl Mesh {
         let mut bytes = packet.payload;
         match self.open(&mut bytes[..len]) {
             Opened::Current => {}
+            // Nothing in it is taken: this node sends under the old key, which the member being
+            // removed reads, and its slot order and clock are still the old key's.
+            Opened::Pending { sender } => {
+                info!("[REKEY] heard {} on the key to switch to", sender);
+                if let Some(heard) = self.shown.heard.get_mut(usize::from(sender)) {
+                    *heard = Some(done);
+                }
+                return false;
+            }
             Opened::Old { sender, generation } => {
                 self.heard_on_old(sender, generation);
                 return false;

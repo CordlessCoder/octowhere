@@ -562,7 +562,9 @@ Owner, 2026-10-03, except where it says otherwise.
 - **The switch.** Before it nodes send under the old key, and from it under the new one, in the
   order the new key gives (see "Shuffled slots"). Every node tries both keys on receive, but
   after the switch merges nothing that arrives under the old key. Such a packet only shows that
-  its sender missed the change. A node holding that member's key message sends it again, in a
+  its sender missed the change. Before its own switch a node takes nothing from a packet under
+  the new key either: it still sends under the old key, which the removed device reads, and
+  its slot order is still the old key's, so the packet's timing says nothing about its clock. A node holding that member's key message sends it again, in a
   packet under the old key, when the member next listens for its slot there. The removed
   device can see that packet but cannot open the key inside. Key messages are held past the
   message horizon while the old key is, but are left out of the digest after it. A member that
