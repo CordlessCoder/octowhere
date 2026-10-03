@@ -649,8 +649,31 @@ One group key, which every member encrypts and decrypts packets with, and a pair
 pair of members, for private message bodies.
 
 A group key proves membership, not identity: a compromised node can forge any other node's entry.
-Per-node authenticity would need Ed25519 signatures at 64 bytes each, which does not fit the payload
-budget. Revocation is a group rekey.
+Revocation is a group rekey.
+
+### Signatures
+
+Decided by the owner on 2026-10-03, after a review showed that any key holder could replace a
+member's public key with its own. The review's case: such a key holder is then sent that
+member's private messages, and is the one sealed that member's key message when a removal
+comes. Not built yet.
+
+- **Which key.** Each device signs with an Ed25519 key derived from its X25519 secret by HKDF,
+  so nothing new is stored. Its public key goes in the device's member record and in the
+  pairing transcript the code is made from.
+- **Member records.** A member signs its own record, the id included, so a node can check it
+  before merging it. A record replaces a member's held record only if the held public key
+  signed it. A signed record is about 160 bytes, so a packet carries one instead of three, and
+  a full table resync takes about three times as many rounds.
+- **Gone records.** One that a device sends as it leaves is signed by that device. One that a
+  removal makes is made by every node at its own switch and is not taken from others.
+- **Lost keys.** A device that lost its keys, through a flash erase, pairs again as a new
+  member at a new id. Its old record stays until a member removes it, and nobody can take over
+  an identity by its MAC.
+- **Key messages.** A key message carries its remover's signature, so that a relay can check
+  where it came from and keep only real ones for catch-up. One signed key message fills a
+  packet's room for two unsigned ones, so a removal's switch is further off: about 8 minutes
+  for 8 members and 27 for 32, against 6 and 15.
 
 ### Pairing
 
@@ -869,7 +892,11 @@ protocol does not need this.
 - A member being removed can still see that a removal is under way before the switch: key
   messages are marked as such, and none comes to it. Firmware changed to act on that can
   remove its remover first, and the lower of the two keys' hashes then decides which removal
-  holds. Each device's user is shown both and can decline the one they do not want.
+  holds. Each device's user is shown both and can decline the one they do not want. A member
+  can grind its key's hash, about 2^16 tries to beat a given key, so it can always win that
+  race. Bounding a key message's switch round and refusing a key that names no member stop its
+  cheapest uses (owner, 2026-10-03). The rule that settles rivals needs a design round of its
+  own.
 - For step 5, two answers from the owner: the cell's capacity and how long the device should
   last on it, which set the floor, the sweeps and how far CAD has to go; and when both boards
   can have a GPS fix at once, which CAD's two measurements need.
