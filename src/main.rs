@@ -528,8 +528,13 @@ macro_rules! start_display_core {
     };
 }
 
+#[cfg(feature = "stack-watermark-bench")]
+mod stack_watermark;
+
 #[esp_hal::main]
 fn main() -> ! {
+    #[cfg(feature = "stack-watermark-bench")]
+    stack_watermark::paint();
     let mut executor = esp_rtos::embassy::Executor::new();
     let executor: &'static mut esp_rtos::embassy::Executor =
         unsafe { core::mem::transmute(&mut executor) };
@@ -954,6 +959,17 @@ async fn save_group(write: settings::GroupWrite) -> bool {
     with_timeout(Duration::from_secs(10), group_saved(number))
         .await
         .unwrap_or(false)
+}
+
+/// Logs the deepest core 0's stack has been used, every 15 s.
+#[cfg(feature = "stack-watermark-bench")]
+#[embassy_executor::task]
+async fn stack_task() {
+    loop {
+        Timer::after(Duration::from_secs(15)).await;
+        let (deepest, size) = stack_watermark::deepest();
+        info!("[STACK] deepest={} of {}", deepest, size);
+    }
 }
 
 #[embassy_executor::task]
@@ -2211,6 +2227,8 @@ async fn bring_up(spawner: Spawner, parts: Parts, zones: ZoneTracker, mesh: mesh
 
     ZONE_STATE.lock(|state| state.set(zones.state()));
     spawner.spawn(zone_task(zones).unwrap());
+    #[cfg(feature = "stack-watermark-bench")]
+    spawner.spawn(stack_task().unwrap());
     // From here on the bus belongs to `BUS_EXECUTOR`'s tasks.
     bus.spawn(
         start_bus_tasks(OnCore0(BusTasks {

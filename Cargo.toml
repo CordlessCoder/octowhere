@@ -62,6 +62,8 @@ pair-inject = []
 # Lets a debugger touch and cover the screen, press the power key and read the screen back; see
 # `tools/touch-inject.py`.
 touch-inject = []
+# Paints core 0's stack at boot and logs how deep it has been used since, every 15 s.
+stack-watermark-bench = []
 
 [patch.crates-io]
 tca9554 = { git = "https://github.com/CordlessCoder/tca9554-rs", rev = "dd76e69" }
