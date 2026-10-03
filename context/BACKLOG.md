@@ -200,21 +200,67 @@ until the feature set is complete, because profiling an incomplete firmware pric
     "Open"). The owner keeps it for now, with the removal screens letting each user decline
     the rival they do not want, and revisits it once the simulator can stage rivals.
 - Simplify `src/mesh.rs` and the mesh crate's surface, from the 2026-10-03 code-quality review
-  (none started). In order of value: move `send()`'s packet-filling policy and `take()`'s records
-  loop into the crate, where they can be tested; gather the `unsaved`, `unsaved_group` and
-  `rekey_unsaved` flags into one type, and the ten removal fields (`rekey`, `kept`, `catch_up`,
-  `caught_up`, `removal_notice`, `notify`, `remove_again`, `keys_posted`, `beacon_round`,
-  `refill`) into another, each with named resets; extract the radio's fields and methods; stop
-  protocol decisions reading the view (`lagging` from `shown.heard`, the refresh's timer in
-  `shown.refresh`); give `arrived` and `learned_key` enums for results. In the crate: one slot
-  encoding (`Builder::slot`, the pairing welcome and `settings` each have their own, telling a
-  member from a gone record by different length rules); the group header's byte layout with a
-  round-trip test; one `record(kind, len, ...)` in `Builder`; an `Ids(u32)` set type; one round
-  and seconds conversion in `schedule` (`(time / 1_000_000) as u32` truncates where `base_of`
-  floors); `messages::Name` renamed so it does not collide with `members::Name`; `Pending.switch`
-  and `Pending.new.switch` named apart; `now: u32` with 0 for unknown made an `Option`
-  throughout; the pairing's `Phase` duplicates of its own fields; `MeshView`'s refused pairing
-  as its own state instead of a placeholder phase. `src/mesh.rs` has no tests.
+  of `337717f`, in the order the owner agreed on 2026-10-04: the radio and the save flags first,
+  as they shrink the simulator's seams, then the seams (the entry above), then `send()` and
+  `take()` into the crate before the simulator's scenarios. Leave the slot encoding and the
+  flash header until tests cover them, since they touch the stored format. Done: the review's
+  quick wins (`96b6d81`), the radio's fields and methods as `mesh::Radio` (`471e8f7`). Left:
+  - In `src/mesh.rs`, which has no tests:
+    - Gather the `unsaved`, `unsaved_group` and `rekey_unsaved` flags into one type.
+    - Move `send()`'s packet-filling policy into the crate as a tested `compose()`: a summary
+      only with room for the own position, slot and former records sharing `MAX_RECORDS`,
+      messages oldest first, positions last.
+    - Move `take()`'s records loop into the crate, returning what it changed. Its rule that a
+      packet with no members digest gets no summary answer exists only there.
+    - Gather the ten removal fields (`rekey`, `kept`, `catch_up`, `caught_up`,
+      `removal_notice`, `notify`, `remove_again`, `keys_posted`, `beacon_round`, `refill`) into
+      one type with named resets; `forget_messages`, `switch_key`, `keep` and `take` reset
+      overlapping subsets of them today.
+    - Split `step()`'s choice of what goes out next into a plain function returning an enum;
+      make `listen` reset `after` itself rather than its three callers; `send`, `send_old` and
+      `send_notice` take a `Timebase`, not an `Option` whose `None` cannot happen.
+    - Stop protocol decisions reading the view: `lagging` from `shown.heard`, and the refresh's
+      timer in `shown.refresh`, which drives `clock.sweep_to`.
+    - Give `arrived()` and `learned_key()` enums for their results.
+  - Duplication in the crate and `settings.rs`:
+    - One slot encoding: `Builder::slot`, the pairing's `welcome` and `read_welcome`, and
+      `settings`' `write_member` and `read_slot` each have their own, and the decoders tell a
+      member from a gone record by different length rules.
+    - The group header's flash layout (key, own id, generation), written and read in
+      `settings.rs` at offsets one apart, in the crate with a round-trip test.
+    - One `record(kind, len, ...)` in `Builder`, which frames records five ways; `Header::new`
+      and a sealing builder for the four headers `mesh.rs` builds from literals.
+    - An `Ids(u32)` set type for the review's 66 `1 << id` sites.
+    - One mismatch counter for `Requests::heard` and `Summaries::heard`, whose names also hide
+      that they change the group and the store.
+    - `ROUND_S` and one seconds conversion in `schedule`: `rekey.rs` keeps its own `ROUND_S`,
+      `mesh.rs` recomputes it, `(time / 1_000_000) as u32` truncates in four places where
+      `base_of` floors, and rounds are `u32` in `rekey` and `i64` elsewhere.
+  - Names and types: `messages::Name` renamed so it does not collide with `members::Name`;
+    `Pending.switch` (this device's round) and `Pending.new.switch` (the group's) named apart;
+    `now: u32` with 0 for unknown made an `Option` throughout; the pairing's `Phase::Transfer`
+    and `Compare` duplicating its own fields; `MeshView`'s refused pairing as its own state
+    rather than a placeholder `Searching` phase. Not rechecked since `337717f`: `rekey::Last`
+    and `rekey::Undo` public with public fields though nothing outside uses them, `bits`
+    public likewise, and `Group::new` used only by tests, with a stale doc.
+  - Say what the code cannot: record type 5 is never to be reused; `IDS` is bound by 5-bit
+    fields and `u32` sets; the pairing's frame lengths 40 and 26 are literals though
+    `OFFER_LEN` exists; `STORED_MAX` is 22 unlabelled terms; a packet sends at most 8 messages
+    and takes 16; `MAX_RECORDS + 1` is unexplained; `members.rs`'s copy of `set()` leaves out
+    `unsent` without a comment; `MESH_VERSION` is still 1 though the layouts grew through
+    shims, while its comment says a later layout can tell itself apart; `pair.rs` has two
+    stacked docs, the first stale.
+  - Tests: `messages.rs` builds a `lacking` store it never asserts on, and `a.sent((30, 1))`
+    changes nothing asserted; the rekey tests repeat the rival search loop three times and
+    define their `group(own, ids)` helper three ways.
+  - Work and stack: `start_transfer` in `pair.rs` clones the 2.6 KB group on the receive path
+    though its only failure comes before any change; `old_slot_at` rebuilds a 1 KB `Schedule`,
+    an HKDF and 32 AES blocks, every step while catching a member up; check the remaining
+    `Box::new(group.clone())` temporaries.
+  - Matters of taste, for when their code is touched anyway: `Group` mixes replicated data
+    with send bookkeeping; positional bools (`Message::private` takes eight arguments) and
+    `Clock`'s `(i64, i64)` tuples; mixed byte orders (do not churn; pick one for new formats);
+    `seal`/`open` and `seal_bound`/`open_bound` could be one pair.
 - Finish what step 3's screens leave open (`SCREEN-DESIGN-BRIEF.md`, "Group and pairing as
   built"):
   - Every group screen's legibility on the panel, which nobody has judged yet. Typing on the
