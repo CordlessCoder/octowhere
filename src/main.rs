@@ -1754,8 +1754,10 @@ const CLOCK_DEADLINE: Duration = Duration::from_millis(200);
 const TOUCH_DEADLINE: Duration = Duration::from_millis(600);
 const MOTION_DEADLINE: Duration = Duration::from_millis(500);
 const MAGNET_DEADLINE: Duration = Duration::from_millis(500);
-/// Reading the radio's version and configuring it takes about 2 ms over its own SPI bus.
-const RADIO_DEADLINE: Duration = Duration::from_millis(200);
+/// Reading the radio's version and configuring it takes about 2 ms over its own SPI bus, but it
+/// shares thread mode with the frame loop, whose self-test frames take up to about 30 ms each
+/// while the list scrolls to the radio's row: on the boards the check took 7 to 138 ms.
+const RADIO_DEADLINE: Duration = Duration::from_millis(500);
 /// With a fix, how often the GNSS module copies its navigation data to its flash, so a loss of
 /// power keeps the satellites' orbits and the last position. Its RTC RAM keeps them otherwise.
 const NAVIGATION_SAVE_INTERVAL: Duration = Duration::from_secs(30 * 60);

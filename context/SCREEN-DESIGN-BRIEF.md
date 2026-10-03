@@ -472,7 +472,7 @@ interpreted them:
   clock face shows NO DATA without the clock, a failed touch controller leaves the device
   without touch, and without the radio the device keeps its name and can leave its group.
 - **Deadlines.** POWER 200 ms, CLOCK 200 ms, TOUCH 600 ms (its start-up waits 220 ms),
-  MOTION 500 ms, MAGNET 500 ms, GNSS 1.5 s to answer and 4.5 s with a reset, RADIO 200 ms.
+  MOTION 500 ms, MAGNET 500 ms, GNSS 1.5 s to answer and 4.5 s with a reset, RADIO 500 ms.
 - **Seven parts in six rows** (2026-10-03). As the radio's check starts, the list scrolls up a
   row over 160 ms, the settle every sliding surface shares, timed by the clock. Each row is as
   wide as where its middle is: 342 px across the middle four places, 302 px at either end,
