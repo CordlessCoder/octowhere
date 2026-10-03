@@ -38,12 +38,11 @@ until the feature set is complete, because profiling an incomplete firmware pric
     matrix editable live; the web simulator too (its build already compiles the mesh's crypto).
   - Board tests stay for RF (CRC overload up close), the radio's DIO0 quirk, I2C bus contention
     and slot latency, interrupt timing, flash stalls, and the GNSS module sticking.
-- Send the design agent its next round (owner, 2026-10-03): every open item at once, which the
-  owner scopes with the design agent. The brief is
-  `design/handoffs/MESH-FEATURES-ROUND-BRIEF-2026-10-03.md` (local, like the design files), and
-  `context/design-captures-2026-10-03-3.7z` (local) packs it with what it cites, the stills and
-  the web simulator at `07ad32d`, ready for the owner to send. The 2026-10-03 return package
-  has gone. The items:
+- Build the design agent's next round once its hand-off comes back. The owner handed it off on
+  2026-10-03 with every open item at once, to scope with the design agent. The brief is
+  `design/handoffs/MESH-FEATURES-ROUND-BRIEF-2026-10-03.md` (local, like the design files), sent
+  in `context/design-captures-2026-10-03-3.7z` (local) with what it cites, the stills and the
+  web simulator at `07ad32d`. The items:
   - Where the other members are, the device's purpose, which no screen shows: each member's
     bearing and distance from this device, and how old its position is. Positions reach the
     firmware but not the screens (`SCREEN-DESIGN-BRIEF.md`, "Data a screen can show", grade 2),
