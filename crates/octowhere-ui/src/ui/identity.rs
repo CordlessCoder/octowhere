@@ -650,7 +650,9 @@ impl Title {
         color: Color,
         target: &mut D,
     ) {
-        self.coverage.draw(glyphs, columns, color, target);
+        for glyph in glyphs {
+            self.coverage.draw(glyph, columns.clone(), color, target);
+        }
     }
 }
 

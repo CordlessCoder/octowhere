@@ -654,8 +654,6 @@ impl Part {
     }
 }
 
-/// The most parts [`Recording::draw`] blends together.
-const PARTS_TOGETHER: usize = 16;
 /// A row's header: its row, first column and pixel count, [`ROW_FIELD`] bits each.
 const ROW_HEADER: usize = 4;
 const ROW_FIELD: u32 = 9;
@@ -697,116 +695,63 @@ impl Recording {
         part
     }
 
-    /// Blends `parts`' rows onto `target` in `color`, those of their pixels in `columns`, a row
-    /// of the target at a time: what the parts hold for one row goes in one call, so the
-    /// target's rows are walked once rather than once a part. Each part's rows must come top to
-    /// bottom, as a glyph's do, and no two parts' rows may overlap.
+    /// Blends `part`'s rows onto `target` in `color`, those of their pixels in `columns`.
     pub fn draw<D: CoverageTarget<Color = Color>>(
         &self,
-        parts: &[Part],
+        part: &Part,
         columns: core::ops::Range<i32>,
         color: Color,
         target: &mut D,
     ) {
-        assert!(
-            parts.len() <= PARTS_TOGETHER,
-            "at most {PARTS_TOGETHER} parts are drawn together"
+        let columns = columns.start.max(part.columns.start)..columns.end.min(part.columns.end);
+        if columns.is_empty() {
+            return;
+        }
+        let shown = Rectangle::new(
+            Point::new(columns.start, part.rows.start),
+            Size::new(columns.len() as u32, part.rows.len() as u32),
         );
-        let union = |a: Option<core::ops::Range<i32>>, b: core::ops::Range<i32>| match a {
-            Some(a) => a.start.min(b.start)..a.end.max(b.end),
-            None => b,
-        };
-        // Where the next row of each part that reaches `columns` is stored, and where it ends.
-        let mut next = heapless::Vec::<(usize, usize), PARTS_TOGETHER>::new();
-        let (mut reach, mut rows) = (None, None);
-        for part in parts.iter().filter(|part| {
-            !part.bytes.is_empty()
-                && part.columns.start < columns.end
-                && columns.start < part.columns.end
-        }) {
-            let _ = next.push((part.bytes.start, part.bytes.end));
-            reach = Some(union(reach, part.columns.clone()));
-            rows = Some(union(rows, part.rows.clone()));
-        }
-        let (Some(reach), Some(rows)) = (reach, rows) else {
-            return;
-        };
-        let reach = reach.start.max(columns.start)..reach.end.min(columns.end);
-        if reach.is_empty()
-            || !target.visible(&Rectangle::new(
-                Point::new(reach.start, rows.start),
-                Size::new(reach.len() as u32, rows.len() as u32),
-            ))
-        {
+        if !target.visible(&shown) {
             return;
         }
-        // Zero but where a row is being gathered.
         let mut line = [0u8; board::LCD_WIDTH as usize];
-        for y in rows {
-            let mut gathered = None;
-            for (at, end) in &mut next {
-                while *at < *end && self.header(*at).0 <= y {
-                    debug_assert_eq!(self.header(*at).0, y, "a part's rows come top to bottom");
-                    let (x, cells) = self.decode(at, &mut line);
-                    gathered = Some(union(gathered, x..x + cells as i32));
-                }
+        let mut bytes = &self.bytes[part.bytes.clone()];
+        while let Some((header, rest)) = bytes.split_at_checked(ROW_HEADER) {
+            let header = u32::from_le_bytes([header[0], header[1], header[2], header[3]]);
+            let field = |n: u32| (header >> (n * ROW_FIELD)) % (1 << ROW_FIELD);
+            let (y, x, cells) = (field(0) as i32, field(1) as i32, field(2) as usize);
+            bytes = rest;
+            let mut filled = 0;
+            while filled < cells {
+                let run = bytes[0];
+                let length = usize::from(run) % RUN_LENGTH + 1;
+                let cells = &mut line[filled..filled + length];
+                bytes = match run / RUN_LENGTH as u8 {
+                    RUN_UNCOVERED => {
+                        cells.fill(0);
+                        &bytes[1..]
+                    }
+                    RUN_COVERED => {
+                        cells.fill(u8::MAX);
+                        &bytes[1..]
+                    }
+                    _ => {
+                        cells.copy_from_slice(&bytes[1..=length]);
+                        &bytes[1 + length..]
+                    }
+                };
+                filled += length;
             }
-            let Some(gathered) = gathered else {
-                continue;
-            };
-            let (from, to) = (
-                gathered.start.max(columns.start),
-                gathered.end.min(columns.end),
-            );
+            let (from, to) = (x.max(columns.start), (x + cells as i32).min(columns.end));
             if from < to {
-                target.blend_row(from, y, &line[from as usize..to as usize], color);
+                target.blend_row(
+                    from,
+                    y,
+                    &line[(from - x) as usize..(to - x) as usize],
+                    color,
+                );
             }
-            line[gathered.start as usize..gathered.end as usize].fill(0);
         }
-    }
-
-    /// The row, first column and pixel count of the row stored at `at`.
-    fn header(&self, at: usize) -> (i32, i32, usize) {
-        let header = u32::from_le_bytes([
-            self.bytes[at],
-            self.bytes[at + 1],
-            self.bytes[at + 2],
-            self.bytes[at + 3],
-        ]);
-        let field = |n: u32| (header >> (n * ROW_FIELD)) % (1 << ROW_FIELD);
-        (field(0) as i32, field(1) as i32, field(2) as usize)
-    }
-
-    /// Writes the row stored at `at` into `line` at its columns, moves `at` past it, and returns
-    /// its first column and pixel count.
-    fn decode(&self, at: &mut usize, line: &mut [u8; board::LCD_WIDTH as usize]) -> (i32, usize) {
-        let (_, x, cells) = self.header(*at);
-        let line = &mut line[x as usize..x as usize + cells];
-        debug_assert!(
-            line.iter().all(|&cell| cell == 0),
-            "parts' rows do not overlap"
-        );
-        let mut bytes = &self.bytes[*at + ROW_HEADER..];
-        let mut filled = 0;
-        while filled < cells {
-            let run = bytes[0];
-            let length = usize::from(run) % RUN_LENGTH + 1;
-            let cells = &mut line[filled..filled + length];
-            bytes = match run / RUN_LENGTH as u8 {
-                RUN_UNCOVERED => &bytes[1..],
-                RUN_COVERED => {
-                    cells.fill(u8::MAX);
-                    &bytes[1..]
-                }
-                _ => {
-                    cells.copy_from_slice(&bytes[1..=length]);
-                    &bytes[1 + length..]
-                }
-            };
-            filled += length;
-        }
-        *at = self.bytes.len() - bytes.len();
-        (x, cells)
     }
 }
 

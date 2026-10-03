@@ -69,12 +69,7 @@ fn a_recording_draws_what_was_recorded() {
 
     for columns in [i32::MIN..i32::MAX, 65..131] {
         let mut drawn = background();
-        recording.draw(
-            core::slice::from_ref(&first_part),
-            columns.clone(),
-            chrome::LIME,
-            &mut *drawn,
-        );
+        recording.draw(&first_part, columns.clone(), chrome::LIME, &mut *drawn);
         let mut expected = background();
         blend_into(&mut expected, &first, columns.clone());
         assert!(
@@ -82,70 +77,11 @@ fn a_recording_draws_what_was_recorded() {
             "the first part in {columns:?}"
         );
 
-        recording.draw(
-            core::slice::from_ref(&second_part),
-            columns.clone(),
-            chrome::LIME,
-            &mut *drawn,
-        );
+        recording.draw(&second_part, columns.clone(), chrome::LIME, &mut *drawn);
         blend_into(&mut expected, &second, columns.clone());
         assert!(
             drawn.buffer() == expected.buffer(),
             "both parts in {columns:?}"
-        );
-
-        let mut together = background();
-        recording.draw(
-            &[first_part.clone(), second_part.clone()],
-            columns.clone(),
-            chrome::LIME,
-            &mut *together,
-        );
-        assert!(
-            together.buffer() == expected.buffer(),
-            "both parts together in {columns:?}"
-        );
-    }
-}
-
-#[test]
-fn parts_side_by_side_draw_together_as_each_alone() {
-    // Two glyphs' worth of rows on the same rows, apart in columns, each row starting a little
-    // further in.
-    let side = |left: i32, seed: usize| -> Vec<(i32, i32, Vec<u8>)> {
-        (300..330)
-            .map(|y| {
-                let coverage = (0..60)
-                    .map(|x| ((x * 13 + y as usize * 7 + seed) % 256) as u8)
-                    .collect();
-                (left + y % 4, y, coverage)
-            })
-            .collect()
-    };
-    let (left, right) = (side(20, 1), side(120, 2));
-    let mut recording = Recording::with_capacity(0);
-    for (x, y, coverage) in &left {
-        recording.blend_row(*x, *y, coverage, chrome::WHITE);
-    }
-    let left_part = recording.part();
-    for (x, y, coverage) in &right {
-        recording.blend_row(*x, *y, coverage, chrome::WHITE);
-    }
-    let right_part = recording.part();
-    for columns in [i32::MIN..i32::MAX, 50..150] {
-        let mut together = background();
-        recording.draw(
-            &[left_part.clone(), right_part.clone()],
-            columns.clone(),
-            chrome::LIME,
-            &mut *together,
-        );
-        let mut expected = background();
-        blend_into(&mut expected, &left, columns.clone());
-        blend_into(&mut expected, &right, columns.clone());
-        assert!(
-            together.buffer() == expected.buffer(),
-            "side by side in {columns:?}"
         );
     }
 }
