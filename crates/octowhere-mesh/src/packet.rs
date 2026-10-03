@@ -2,7 +2,7 @@
 //! body. `seal` puts the synthetic IV in front of it.
 
 use crate::bits::{BitReader, BitWriter, Full};
-use crate::members::{Member, RECORD_MAX_LEN};
+use crate::members::{GONE_LEN, Gone, Member, RECORD_MAX_LEN, Slot};
 use crate::seal::SIV_LEN;
 
 pub const VERSION: u8 = 1;
@@ -17,11 +17,16 @@ pub mod record {
     pub const NEIGHBOURS: u8 = 2;
     pub const MEMBER: u8 = 3;
     pub const MESSAGE: u8 = 4;
-    pub const ACKNOWLEDGEMENT: u8 = 5;
     /// A digest of the sender's member table.
     pub const MEMBERS: u8 = 6;
     /// The ids whose member records the sender asks for.
     pub const REQUEST: u8 = 7;
+    /// A digest of the messages the sender holds.
+    pub const MESSAGES: u8 = 8;
+    /// The messages the sender holds from each origin.
+    pub const SUMMARY: u8 = 9;
+    /// A member that left or was removed.
+    pub const GONE: u8 = 10;
 }
 
 /// Where a node's clock comes from.
@@ -382,6 +387,29 @@ impl<'a> Builder<'a> {
         Ok(())
     }
 
+    /// Writes a gone record for `id`.
+    pub fn gone(&mut self, id: u8, gone: &Gone) -> Result<(), Full> {
+        if 2 + GONE_LEN > self.room() {
+            return Err(Full);
+        }
+        let mut body = [0; GONE_LEN];
+        gone.encode(id, &mut body);
+        let at = self.len;
+        self.buf[at] = record::GONE;
+        self.buf[at + 1] = GONE_LEN as u8;
+        self.buf[at + 2..at + 2 + GONE_LEN].copy_from_slice(&body);
+        self.len += 2 + GONE_LEN;
+        Ok(())
+    }
+
+    /// Writes what the slot at `id` holds: a member record or a gone record.
+    pub fn slot(&mut self, id: u8, slot: &Slot) -> Result<(), Full> {
+        match slot {
+            Slot::Member(member) => self.member(id, member),
+            Slot::Gone(gone) => self.gone(id, gone),
+        }
+    }
+
     /// The plaintext's length.
     #[must_use]
     pub fn finish(self) -> usize {
@@ -434,6 +462,7 @@ pub enum Record<'a> {
     /// The ids whose member records the sender asks for.
     Request(u32),
     Member(u8, Member),
+    Gone(u8, Gone),
     /// A record of a type this version does not read, or one too short for its type.
     Other(u8, &'a [u8]),
 }
@@ -467,6 +496,10 @@ impl<'a> Iterator for Records<'a> {
             }
             record::MEMBER => match Member::decode(body) {
                 Some((id, member)) => Record::Member(id, member),
+                None => Record::Other(kind, body),
+            },
+            record::GONE => match Gone::decode(body) {
+                Some((id, gone)) => Record::Gone(id, gone),
                 None => Record::Other(kind, body),
             },
             _ => Record::Other(kind, body),
@@ -589,6 +622,24 @@ mod tests {
         assert!(matches!(
             plain.records().next(),
             Some(Record::Member(12, read)) if read == member
+        ));
+    }
+
+    #[test]
+    fn a_gone_record_reads_back() {
+        let gone = Gone {
+            public: [3; 32],
+            changed: 1_790_000_002,
+        };
+        let mut buf = [0; MAX_PLAIN];
+        let mut builder = Builder::new(&mut buf, &header());
+        builder.slot(30, &Slot::Gone(gone)).unwrap();
+        let len = builder.finish();
+        assert_eq!(len, HEADER_LEN + 2 + GONE_LEN);
+        let plain = Plain::parse(&buf[..len]).unwrap();
+        assert!(matches!(
+            plain.records().next(),
+            Some(Record::Gone(30, read)) if read == gone
         ));
     }
 

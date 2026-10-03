@@ -14,9 +14,9 @@
 
 The commands stand in for the screens until they are built: `add` and `join` start a pairing,
 `choose` picks a device the adding side found, `accept`, `decline` and `mismatch` answer the code,
-and `cancel` ends a pairing. `leave` forgets the group, and `name` renames this device. `deaf`
-makes a pairing drop every frame it hears for that many seconds, up to 255, to lose an
-acknowledgement on purpose. `refresh` listens throughout for three rounds, as REFRESH DEVICES does.
+and `cancel` ends a pairing. `leave` tells the group and forgets it, and `name` renames this
+device. `deaf` makes a pairing drop every frame it hears for that many seconds, up to 255, to lose
+an acknowledgement on purpose. `refresh` listens throughout for three rounds, as REFRESH DEVICES does.
 With two boards attached, `--probe` picks one by its MAC, which
 `probe-rs list` shows. The ELF must be the one flashed, since the addresses come from it. The
 firmware logs `[MESH] command …` when it takes one.

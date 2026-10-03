@@ -29,7 +29,7 @@ use octowhere::{
 use octowhere_mesh::{
     IDS,
     clock::{Clock, SWEEP_US, Taken},
-    members::{Group, Member, Merged, Name, Requests},
+    members::{GONE_LEN, Gone, Group, Member, Merged, Name, Requests, Slot},
     packet::{
         Builder, Entry, HEADER_LEN, Hdop, Header, MAX_PACKET, Plain, Quality, Record, Source,
         Timebase, positions_len,
@@ -88,6 +88,10 @@ const FOUNDING_WAIT_US: i64 = 10 * 60 * 1_000_000;
 const MAX_RECORDS: usize = 3;
 /// How long after a failed write a founding's wait tries to store its group again.
 const STORE_RETRY_US: i64 = 10 * 1_000_000;
+/// The slots a device that leaves sends its gone record in.
+const LEAVE_REPEATS: u8 = 2;
+/// How long a device that left tries to tell the others: its next slots, a round apart.
+const LEAVE_WAIT_US: i64 = 3 * ROUND_US;
 const IRQ_TX_DONE: u8 = 0x08;
 const IRQ_RX_DONE: u8 = 0x40;
 
@@ -348,16 +352,16 @@ fn refused(session: u32, role: Role, refused: Refused) -> PairingView {
     }
 }
 
-/// Forgets the group, once that is stored. A node in no group has nothing to forget.
-async fn leave(group: &mut Option<Group>) -> bool {
+/// Forgets the group, once that is stored, and hands it back to be told of the leaving. A node
+/// in no group has nothing to forget.
+async fn leave(group: &mut Option<Group>) -> (bool, Option<Group>) {
     if group.is_none() {
-        return true;
+        return (true, None);
     }
-    let left = super::save_group(GroupWrite::Leave).await;
-    if left {
-        *group = None;
+    if !super::save_group(GroupWrite::Leave).await {
+        return (false, None);
     }
-    left
+    (true, group.take())
 }
 
 /// Stores `name` as this device's, and only then takes it up, so a failed write leaves the
@@ -404,6 +408,16 @@ fn utc_now(now: i64) -> Option<i64> {
         .map(|utc| utc / 1_000_000)
 }
 
+/// A group this device left, kept until it has told the others in its own slots.
+struct Leaving {
+    group: Group,
+    gone: Gone,
+    /// The slots it is still to be sent in.
+    left: u8,
+    /// When it is given up, on the local clock.
+    until: i64,
+}
+
 /// A group founded in a pairing whose last acknowledgement never came. A packet under its key
 /// shows the joining device stored it; this device then stores it too, and only then takes it
 /// up.
@@ -425,6 +439,8 @@ pub struct Mesh {
     group: Option<Group>,
     /// A group this device founded in a pairing whose last acknowledgement it never heard.
     founding: Option<Box<Founding>>,
+    /// A group this device left and has yet to tell.
+    leaving: Option<Box<Leaving>>,
     /// The order the group's ids send in, from its key.
     schedule: Option<Box<Schedule>>,
     /// The member records the next packet asks for.
@@ -476,6 +492,7 @@ impl Mesh {
             me: start.me,
             group,
             founding: None,
+            leaving: None,
             schedule: None,
             requests: Requests::default(),
             refresh_known: None,
@@ -499,7 +516,11 @@ impl Mesh {
     /// Keeps the slot schedule the group's key gives. Call it once the group changes, before
     /// placing a slot.
     fn sync_schedule(&mut self) {
-        match &self.group {
+        let group = self
+            .group
+            .as_ref()
+            .or(self.leaving.as_ref().map(|leaving| &leaving.group));
+        match group {
             Some(group)
                 if !self
                     .schedule
@@ -563,6 +584,16 @@ impl Mesh {
                         command
                     }
                 }
+            } else if self.leaving.is_some() {
+                match select(self.tell_leaving(), COMMANDS.receive()).await {
+                    Either::First(()) => continue,
+                    Either::Second(command) => {
+                        // Whatever comes next takes the radio; the others can still remove it.
+                        self.leaving = None;
+                        self.idle_receive().await;
+                        command
+                    }
+                }
             } else {
                 let _ = self.lora.set_device_mode(DeviceMode::SLEEP).await;
                 COMMANDS.receive().await
@@ -585,7 +616,17 @@ impl Mesh {
             Command::Leave => {
                 self.founding = None;
                 self.shown.recovery = None;
-                let left = leave(&mut self.group).await;
+                let now = local();
+                let (left, group) = leave(&mut self.group).await;
+                if let Some(group) = group {
+                    let gone = group.leaving(utc_seconds(now));
+                    self.leaving = Some(Box::new(Leaving {
+                        group,
+                        gone,
+                        left: LEAVE_REPEATS,
+                        until: now + LEAVE_WAIT_US,
+                    }));
+                }
                 if left {
                     self.unsaved = 0;
                     self.unsaved_group = false;
@@ -631,8 +672,8 @@ impl Mesh {
         }
         while self.unsaved != 0 {
             let id = self.unsaved.trailing_zeros() as u8;
-            let member = group.member(id).copied();
-            if !super::queue_group_write(GroupWrite::Member { id, member }) {
+            let slot = group.slot(id).copied();
+            if !super::queue_group_write(GroupWrite::Slot { id, slot }) {
                 return;
             }
             self.unsaved &= !(1 << id);
@@ -694,6 +735,55 @@ impl Mesh {
         );
         if sending {
             self.send(round, start, timebase, send_at).await;
+        }
+    }
+
+    /// Sends the gone record of the group this device left in its next own slot, and forgets
+    /// the group once it has gone out in [`LEAVE_REPEATS`] of them or the wait is over.
+    async fn tell_leaving(&mut self) {
+        let now = local();
+        let (Some(leaving), Some((time, timebase)), Some(schedule)) =
+            (&self.leaving, self.clock.at(now), self.schedule.as_deref())
+        else {
+            info!("[MESH] left with no timebase to tell the others on");
+            self.leaving = None;
+            return;
+        };
+        if now >= leaving.until || leaving.left == 0 {
+            self.leaving = None;
+            return;
+        }
+        let own = leaving.group.own();
+        let (round, start) = schedule.next_slot((time + PREPARE_US).max(self.after), own);
+        let send_at = start + (now - time);
+        if send_at > leaving.until {
+            self.leaving = None;
+            return;
+        }
+        let _ = self.lora.set_device_mode(DeviceMode::STDBY).await;
+        until(send_at - PREPARE_US).await;
+        self.after = start + 1;
+        let header = Header {
+            sender: own,
+            timebase,
+            base: base_of(start),
+            phase: 0,
+            notice: false,
+        };
+        let mut packet = [0u8; MAX_PACKET];
+        let mut builder = Builder::new(&mut packet[SIV_LEN..], &header);
+        let _ = builder.neighbours(self.table.neighbours(round));
+        let _ = builder.gone(own, &leaving.gone);
+        let plain_len = builder.finish();
+        let len = seal::seal(leaving.group.key(), &mut packet, plain_len);
+        let sent = self.transmit(&packet[..len], Some(send_at)).await;
+        info!(
+            "[MESH] told the group it left round={} done={}",
+            round,
+            sent.is_some_and(|(done, _)| done)
+        );
+        if let Some(leaving) = &mut self.leaving {
+            leaving.left -= 1;
         }
     }
 
@@ -953,7 +1043,7 @@ impl Mesh {
             .map(|(time, _)| (time / 1_000_000) as u32);
         let (mut entries, mut news, mut neighbours, mut moved) = (0, 0, 0, false);
         let mut carried = [None; IDS as usize];
-        let mut heard_records = heapless::Vec::<(u8, Member), { MAX_RECORDS + 1 }>::new();
+        let mut heard_records = heapless::Vec::<(u8, Slot), { MAX_RECORDS + 1 }>::new();
         let (mut theirs, mut asked) = (None, None);
         for record in plain.records() {
             match record {
@@ -972,7 +1062,7 @@ impl Mesh {
                 Record::Members(digest) => theirs = Some(digest),
                 Record::Request(ids) => asked = Some(ids),
                 Record::Member(id, member) => {
-                    let _ = heard_records.push((id, member));
+                    let _ = heard_records.push((id, Slot::Member(member)));
                     match group.merge(id, member, now.unwrap_or_else(|| utc_seconds(done))) {
                         Merged::Unchanged => {}
                         Merged::Changed { vacated } => {
@@ -992,6 +1082,14 @@ impl Mesh {
                             self.unsaved_group = true;
                             moved = true;
                         }
+                        Merged::Went { at } => self.unsaved |= 1 << at,
+                    }
+                }
+                Record::Gone(id, gone) => {
+                    let _ = heard_records.push((id, Slot::Gone(gone)));
+                    if let Merged::Went { at } = group.merge_gone(id, gone) {
+                        info!("[MESH] member {} went", at);
+                        self.unsaved |= 1 << at;
                     }
                 }
                 Record::Other(..) => {}
@@ -1001,8 +1099,8 @@ impl Mesh {
             .table
             .covered_by(header.sender, &carried, neighbours, round)
         {
-            for (id, member) in &heard_records {
-                group.covered(*id, member);
+            for (id, slot) in &heard_records {
+                group.covered(*id, slot);
             }
         }
         self.requests.heard(group, header.sender, theirs, asked);
@@ -1059,15 +1157,23 @@ impl Mesh {
         while unsent != 0 && (records.count_ones() as usize) < MAX_RECORDS {
             let id = unsent.trailing_zeros() as u8;
             unsent &= !(1 << id);
-            let Some(member) = group.member(id).copied() else {
+            let Some(slot) = group.slot(id).copied() else {
                 continue;
             };
-            if builder.room() < member.record_len() + own_room
-                || builder.member(id, &member).is_err()
-            {
+            if builder.room() < slot.record_len() + own_room || builder.slot(id, &slot).is_err() {
                 break;
             }
             records |= 1 << id;
+        }
+        let mut former = 0u8;
+        for (at, id, gone) in group.former_unsent() {
+            if (records.count_ones() + former.count_ones()) as usize >= MAX_RECORDS
+                || builder.room() < 2 + GONE_LEN + own_room
+                || builder.gone(id, &gone).is_err()
+            {
+                break;
+            }
+            former |= 1 << at;
         }
         let mut entries = [Entry {
             id: 0,
@@ -1093,6 +1199,9 @@ impl Mesh {
         if let Some(group) = &mut self.group {
             for id in (0..IDS).filter(|&id| records & 1 << id != 0) {
                 group.sent(id);
+            }
+            for at in (0..8).filter(|&at| former & 1 << at != 0) {
+                group.former_sent(at);
             }
         }
         info!(
@@ -1599,16 +1708,17 @@ pub async fn offline(start: Start) {
         publish(&mut view);
         match COMMANDS.receive().await {
             Command::Leave => {
-                let left = leave(&mut group).await;
+                // With no radio there is nobody to tell.
+                let (left, _) = leave(&mut group).await;
                 shown.answer(Answer::Left(left));
             }
             Command::Rename(name) => {
                 let saved = rename(&mut me, group.as_mut(), name).await;
                 if saved && let Some(group) = &group {
                     let id = group.own();
-                    super::queue_group_write(GroupWrite::Member {
+                    super::queue_group_write(GroupWrite::Slot {
                         id,
-                        member: group.member(id).copied(),
+                        slot: group.slot(id).copied(),
                     });
                 }
                 shown.answer(Answer::Renamed(saved));

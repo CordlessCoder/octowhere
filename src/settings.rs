@@ -17,7 +17,7 @@ use esp_bootloader_esp_idf::partitions::{self, DataPartitionSubType, PartitionTy
 use esp_storage::{FlashStorage, FlashStorageError};
 use octowhere_mesh::{
     IDS,
-    members::{Group, Member, Name, RECORD_MAX_LEN},
+    members::{GONE_LEN, Gone, Group, Member, Name, RECORD_FIXED_LEN, RECORD_MAX_LEN, Slot},
     seal::Key,
 };
 use octowhere_ui::{
@@ -107,10 +107,10 @@ pub enum GroupWrite {
     Name(Name),
     /// The whole group, replacing what was stored.
     Group(Box<Group>),
-    /// One member's record, or its absence, at `id`.
-    Member {
+    /// What the id `id` holds: a member's record, a gone record, or nothing.
+    Slot {
         id: u8,
-        member: Option<Member>,
+        slot: Option<Slot>,
     },
     /// Forget the group: its key, the members and this device's id.
     Leave,
@@ -124,44 +124,62 @@ impl defmt::Format for GroupWrite {
             Self::Group(group) => {
                 defmt::write!(f, "Group(own={} members={})", group.own(), group.count())
             }
-            Self::Member { id, member } => defmt::write!(
-                f,
-                "Member({}, {})",
-                id,
-                member.as_ref().map(|member| member.name)
-            ),
+            Self::Slot { id, slot } => match slot {
+                Some(Slot::Member(member)) => defmt::write!(f, "Member({}, {})", id, member.name),
+                Some(Slot::Gone(_)) => defmt::write!(f, "Gone({})", id),
+                None => defmt::write!(f, "Empty({})", id),
+            },
             Self::Leave => defmt::write!(f, "Leave"),
         }
     }
 }
 
-/// Writes `member` at `id`, or deletes the key if it is stored and `member` is `None`, and keeps
-/// `stored` in step.
+/// Writes `slot` at `id`, or deletes the key if it is stored and `slot` is `None`, and keeps
+/// `stored` in step. A gone record's value is shorter than any member's, which tells them apart.
 async fn write_member(
     transaction: &mut ekv::WriteTransaction<'_, Partition, NoopRawMutex>,
     stored: &mut u32,
     id: u8,
-    member: Option<&Member>,
+    slot: Option<&Slot>,
 ) -> Result<(), ekv::WriteError<FlashStorageError>> {
-    match member {
-        Some(member) => {
-            let mut value = [0; 1 + RECORD_MAX_LEN];
-            value[0] = MESH_VERSION;
+    let mut value = [0; 1 + RECORD_MAX_LEN];
+    value[0] = MESH_VERSION;
+    let len = match slot {
+        Some(Slot::Member(member)) => {
             let mut record = [0; RECORD_MAX_LEN];
             let len = member.encode(id, &mut record);
             value[1..1 + len].copy_from_slice(&record[..len]);
-            transaction
-                .write(&member_key(id), &value[..1 + len])
-                .await?;
-            *stored |= 1 << id;
+            len
+        }
+        Some(Slot::Gone(gone)) => {
+            let mut record = [0; GONE_LEN];
+            gone.encode(id, &mut record);
+            value[1..1 + GONE_LEN].copy_from_slice(&record);
+            GONE_LEN
         }
         None if *stored & 1 << id != 0 => {
             transaction.delete(&member_key(id)).await?;
             *stored &= !(1 << id);
+            return Ok(());
         }
-        None => {}
-    }
+        None => return Ok(()),
+    };
+    transaction
+        .write(&member_key(id), &value[..1 + len])
+        .await?;
+    *stored |= 1 << id;
     Ok(())
+}
+
+/// Reads a slot's stored value, after its version byte.
+fn read_slot(id: u8, value: &[u8]) -> Option<Slot> {
+    if value.len() > RECORD_FIXED_LEN {
+        let (at, member) = Member::decode(value)?;
+        (at == id).then_some(Slot::Member(member))
+    } else {
+        let (at, gone) = Gone::decode(value)?;
+        (at == id).then_some(Slot::Gone(gone))
+    }
 }
 
 /// A member's key: `group.member.` and its id in two digits, which sorts after `group`.
@@ -377,7 +395,7 @@ impl Store {
                 }
             };
             let group = value(KEY_GROUP).await;
-            let mut members = [None; IDS as usize];
+            let mut slots = [None; IDS as usize];
             let mut stored_members = 0;
             if group.is_some() {
                 for id in 0..IDS {
@@ -385,15 +403,19 @@ impl Store {
                         continue;
                     };
                     stored_members |= 1 << id;
-                    match Member::decode(&record) {
-                        Some((at, member)) if at == id => members[usize::from(id)] = Some(member),
-                        _ => warn!("[SETTINGS] member {} unreadable", id),
+                    match read_slot(id, &record) {
+                        Some(slot) => slots[usize::from(id)] = Some(slot),
+                        None => warn!("[SETTINGS] member {} unreadable", id),
                     }
                 }
             }
             let group = group.and_then(|group| {
                 let (key, own) = (group.get(..32)?, *group.get(32)?);
-                Group::new(Key::new(key.try_into().ok()?), own, members)
+                // Stored before the key had generations: its first.
+                let generation = group
+                    .get(33..35)
+                    .map_or(0, |bytes| u16::from_le_bytes([bytes[0], bytes[1]]));
+                Group::restore(Key::new(key.try_into().ok()?), generation, own, slots)
             });
             let secret = value(KEY_IDENTITY)
                 .await
@@ -432,18 +454,19 @@ impl Store {
                 GroupWrite::Group(group) => {
                     value[1..33].copy_from_slice(group.key().bytes());
                     value[33] = group.own();
-                    let mut written = transaction.write(KEY_GROUP, &value[..34]).await;
+                    value[34..36].copy_from_slice(&group.generation().to_le_bytes());
+                    let mut written = transaction.write(KEY_GROUP, &value[..36]).await;
                     for id in 0..IDS {
                         if written.is_err() {
                             break;
                         }
                         written =
-                            write_member(&mut transaction, &mut stored, id, group.member(id)).await;
+                            write_member(&mut transaction, &mut stored, id, group.slot(id)).await;
                     }
                     written
                 }
-                GroupWrite::Member { id, member } => {
-                    write_member(&mut transaction, &mut stored, *id, member.as_ref()).await
+                GroupWrite::Slot { id, slot } => {
+                    write_member(&mut transaction, &mut stored, *id, slot.as_ref()).await
                 }
                 GroupWrite::Leave => {
                     let mut written = transaction.delete(KEY_GROUP).await;

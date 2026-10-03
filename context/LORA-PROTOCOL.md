@@ -707,13 +707,16 @@ other takes the lowest id free in its table and announces it with a member recor
 nothing.
 
 An id is freed when its member leaves or is removed (see "Removing a member"). A device that
-leaves sends a gone record for itself in its next slot, at most about two rounds later, from
+leaves sends a gone record for itself in its next two slots, within about three rounds, from
 memory, and then forgets the key; the others replace its record with the gone record and free
-its id, with no new key (owner, 2026-10-03). A device that may still hold the key is removed
-instead. A gone record wins a merge against the same device's record when it is newer, and a
-node that hears a record for a device it holds as gone sends the gone record back. When a new
-member takes a gone member's id, the gone record moves to a list of the last 32, which still
-answers for it. Pairing a device again gives it a newer record, which wins.
+its id, with no new key (owner, 2026-10-03). A pairing started meanwhile ends that, and a
+device with no timebase has nobody to tell; the others can still remove it. A device that may
+still hold the key is removed instead. A gone record wins a merge against the same device's
+record when it is newer, and a node that hears a record for a device it holds as gone sends the
+gone record back. When a new member takes a gone member's id, the gone record moves to a list
+of the last eight, kept in RAM, which still answers for it. Of two gone records for one id,
+every node keeps the newer. Pairing a device again gives it a newer record, which wins, and a
+pairing carries the gone records with the members.
 
 The eFuse base MAC is the stable hardware identity, used to recognise a re-pair of the same physical
 device rather than issuing a second id.

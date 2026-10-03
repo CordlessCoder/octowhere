@@ -23,10 +23,13 @@ use x25519_dalek::PublicKey;
 pub use x25519_dalek::StaticSecret;
 
 use crate::IDS;
-use crate::members::{Group, MAC_LEN, Member, Name, PUBLIC_LEN, RECORD_MAX_LEN};
+use crate::members::{
+    GONE_LEN, Gone, Group, MAC_LEN, Member, Name, PUBLIC_LEN, RECORD_MAX_LEN, Slot,
+};
 use crate::seal::{self, Key, SIV_LEN};
 
-pub const VERSION: u8 = 1;
+/// 2 added the key's generation and gone records to the group's transfer.
+pub const VERSION: u8 = 2;
 /// The radio's largest payload.
 pub const MAX_FRAME: usize = 255;
 pub const NONCE_LEN: usize = 16;
@@ -77,7 +80,9 @@ const PART_HEADER: usize = 3;
 const PART_DATA: usize = MAX_FRAME - SEALED_HEADER - SIV_LEN - PART_HEADER;
 /// The group key, the joining device's id, the member count, and each member's record with its
 /// length.
-const WELCOME_MAX: usize = 32 + 2 + IDS as usize * (1 + RECORD_MAX_LEN);
+/// The key, its generation, the joining device's id, the count, then each slot's record behind
+/// its length.
+const WELCOME_MAX: usize = 32 + 2 + 2 + IDS as usize * (1 + RECORD_MAX_LEN);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -942,42 +947,86 @@ fn commitment(nonce: &[u8; NONCE_LEN], adding: &[u8; 32], joining: &[u8; 32]) ->
 
 fn welcome(group: &Group, id: u8, out: &mut [u8; WELCOME_MAX]) -> usize {
     out[..32].copy_from_slice(group.key().bytes());
-    out[32] = id;
-    out[33] = group.count() as u8;
-    let mut len = 34;
-    for (member_id, member) in group.members() {
-        let mut record = [0; RECORD_MAX_LEN];
-        let n = member.encode(member_id, &mut record);
+    out[32..34].copy_from_slice(&group.generation().to_le_bytes());
+    out[34] = id;
+    let mut count = 0;
+    let mut len = 36;
+    for slot_id in 0..IDS {
+        let n = match group.slot(slot_id) {
+            Some(Slot::Member(member)) => {
+                let mut record = [0; RECORD_MAX_LEN];
+                let n = member.encode(slot_id, &mut record);
+                out[len + 1..len + 1 + n].copy_from_slice(&record[..n]);
+                n
+            }
+            Some(Slot::Gone(gone)) => {
+                let mut record = [0; GONE_LEN];
+                gone.encode(slot_id, &mut record);
+                out[len + 1..len + 1 + GONE_LEN].copy_from_slice(&record);
+                GONE_LEN
+            }
+            None => continue,
+        };
         out[len] = n as u8;
-        out[len + 1..len + 1 + n].copy_from_slice(&record[..n]);
         len += 1 + n;
+        count += 1;
     }
+    out[35] = count;
     len
 }
 
+/// Reads what [`welcome`] wrote. A gone record is shorter than any member record, which tells
+/// them apart.
 fn read_welcome(blob: &[u8]) -> Option<Group> {
     let key = Key::new(blob.get(..32)?.try_into().ok()?);
-    let own = *blob.get(32)?;
-    let count = *blob.get(33)?;
-    let mut members = [None; IDS as usize];
-    let mut rest = blob.get(34..)?;
+    let generation = u16::from_le_bytes(blob.get(32..34)?.try_into().ok()?);
+    let own = *blob.get(34)?;
+    let count = *blob.get(35)?;
+    let mut slots = [None; IDS as usize];
+    let mut rest = blob.get(36..)?;
     for _ in 0..count {
         let (&n, after) = rest.split_first()?;
         let (record, after) = after.split_at_checked(usize::from(n))?;
-        let (id, member) = Member::decode(record)?;
-        members[usize::from(id)] = Some(member);
+        let (id, slot) = if record.len() == GONE_LEN {
+            let (id, gone) = Gone::decode(record)?;
+            (id, Slot::Gone(gone))
+        } else {
+            let (id, member) = Member::decode(record)?;
+            (id, Slot::Member(member))
+        };
+        slots[usize::from(id)] = Some(slot);
         rest = after;
     }
     if !rest.is_empty() {
         return None;
     }
-    Group::new(key, own, members)
+    Group::restore(key, generation, own, slots)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::members::tests::member;
+
+    #[test]
+    fn a_transfer_keeps_the_generation_and_gone_records() {
+        let mut slots = [None; IDS as usize];
+        slots[0] = Some(Slot::Member(member(1, 100)));
+        slots[2] = Some(Slot::Gone(Gone {
+            public: [2; 32],
+            changed: 200,
+        }));
+        slots[31] = Some(Slot::Member(member(3, 300)));
+        let group = Group::restore(Key::new([6; 32]), 9, 0, slots).unwrap();
+        let mut blob = [0; WELCOME_MAX];
+        let len = welcome(&group, 31, &mut blob);
+        let theirs = read_welcome(&blob[..len]).unwrap();
+        assert_eq!(theirs.own(), 31);
+        assert_eq!(theirs.generation(), 9);
+        assert!(theirs.key() == group.key());
+        assert_eq!(theirs.digest(), group.digest());
+        assert!(read_welcome(&blob[..len - 1]).is_none());
+    }
 
     const MS: i64 = 1_000;
     const UTC: u32 = 1_790_000_000;
