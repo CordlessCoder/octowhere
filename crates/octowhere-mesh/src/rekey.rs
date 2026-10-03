@@ -99,9 +99,13 @@ fn is_newer(a: u16, b: u16) -> bool {
 /// How many rounds from now a removal's switch is, for a remover sending `messages` key and
 /// removal messages.
 #[must_use]
-pub fn switch_rounds(messages: u32) -> u32 {
+pub const fn switch_rounds(messages: u32) -> u32 {
     messages.div_ceil(KEYS_PER_PACKET) + HOP_ROUNDS + 1
 }
+
+/// The furthest a key message's switch can be past the round it arrives in: as far as a removal
+/// from the largest group needs, and a round for clocks that disagree.
+pub const SWITCH_AHEAD: u32 = switch_rounds(IDS as u32) + 1;
 
 /// A removal learned and not yet switched to.
 #[derive(Clone, Debug)]
@@ -267,6 +271,8 @@ impl Rekey {
         if remover == group.own()
             || group.member(remover).is_none()
             || new.fingerprint == fingerprint(&group.me().public)
+            || !group.names(&new.fingerprint)
+            || new.switch > round.saturating_add(SWITCH_AHEAD)
             || self
                 .declined()
                 .any(|declined| *declined == fingerprint(new.key.bytes()))
@@ -720,7 +726,7 @@ pub struct Switched {
 mod tests {
     use super::*;
     use crate::members::tests::member;
-    use crate::members::{Slot, fingerprint};
+    use crate::members::{Gone, Slot, fingerprint};
 
     fn group(own: u8, ids: &[(u8, u8)]) -> Group {
         let mut slots = [None; IDS as usize];
@@ -728,6 +734,18 @@ mod tests {
             slots[usize::from(id)] = Some(Slot::Member(member(n, 100)));
         }
         Group::restore(Key::new([5; 32]), 3, own, slots).unwrap()
+    }
+
+    /// Holds the device `of` as gone from id `id`: a key that names it removes nobody.
+    fn left(g: &mut Group, id: u8, of: u8) {
+        g.merge_gone(
+            id,
+            Gone {
+                public: [of; 32],
+                changed: 50,
+            },
+            0,
+        );
     }
 
     fn new(n: u8, generation: u16, switch: u32, removed: u8, of: u8) -> NewKey {
@@ -880,6 +898,43 @@ mod tests {
             "a key message never removes the device it goes to"
         );
         assert!(rekey.pending().is_none());
+    }
+
+    #[test]
+    fn a_key_naming_nobody_or_switching_too_far_ahead_is_ignored() {
+        let mut g = group(0, &[(0, 1), (1, 2), (2, 3)]);
+        let mut rekey = Rekey::default();
+        assert_eq!(
+            rekey.learned(&g, 1, new(9, 4, 1_010, 2, 99), 1_000, false),
+            Learned::Ignored,
+            "names nobody"
+        );
+        assert_eq!(
+            rekey.learned(&g, 1, new(9, 4, u32::MAX, 2, 3), 1_000, false),
+            Learned::Ignored,
+            "never due"
+        );
+        assert_eq!(
+            rekey.learned(
+                &g,
+                1,
+                new(9, 4, 1_000 + SWITCH_AHEAD + 1, 2, 3),
+                1_000,
+                false
+            ),
+            Learned::Ignored
+        );
+        assert_eq!(
+            rekey.learned(&g, 1, new(9, 4, 1_000 + SWITCH_AHEAD, 2, 3), 1_000, false),
+            Learned::Pending
+        );
+        left(&mut g, 6, 99);
+        let mut rekey = Rekey::default();
+        assert_eq!(
+            rekey.learned(&g, 1, new(9, 4, 1_010, 6, 99), 1_000, false),
+            Learned::Pending,
+            "a member gone by the time the key arrives"
+        );
     }
 
     #[test]
@@ -1142,6 +1197,7 @@ mod tests {
     #[test]
     fn a_key_that_removes_nobody_leaves_the_last_removal_to_decline() {
         let mut g = group(0, &[(0, 1), (1, 2), (2, 3), (3, 4)]);
+        left(&mut g, 6, 99);
         let mut rekey = Rekey::default();
         rekey.learned(&g, 1, new(9, 4, 1_010, 2, 3), 1_000, false);
         rekey.switch(&mut g).unwrap();
@@ -1161,6 +1217,7 @@ mod tests {
     fn a_rival_that_removes_nobody_leaves_nothing_to_decline() {
         let (low, high) = rivals();
         let mut g = group(0, &[(0, 1), (1, 2), (2, 3), (3, 4)]);
+        left(&mut g, 6, 99);
         let mut rekey = Rekey::default();
         rekey.learned(&g, 1, new(high, 4, 1_010, 2, 3), 1_000, false);
         rekey.switch(&mut g).unwrap();
@@ -1175,6 +1232,7 @@ mod tests {
     fn declining_a_rival_of_a_key_that_removed_nobody_goes_back_to_that_key() {
         let (low, high) = rivals();
         let mut g = group(0, &[(0, 1), (1, 2), (2, 3), (3, 4), (4, 5)]);
+        left(&mut g, 6, 99);
         let mut rekey = Rekey::default();
         rekey.learned(&g, 1, new(9, 4, 1_010, 2, 3), 1_000, false);
         rekey.switch(&mut g).unwrap();

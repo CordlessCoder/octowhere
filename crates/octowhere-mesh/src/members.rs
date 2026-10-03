@@ -388,6 +388,17 @@ impl Group {
             .map(|(id, _)| id)
     }
 
+    /// Whether `print` names a member, or a gone record held, as a key message's member removed
+    /// must. A member may have left by the time the key reaches a node.
+    #[must_use]
+    pub fn names(&self, print: &[u8; 8]) -> bool {
+        self.by_fingerprint(print).is_some()
+            || (0..IDS)
+                .filter_map(|id| self.gone(id))
+                .chain(self.former.iter().flatten().map(|(_, gone)| gone))
+                .any(|gone| fingerprint(&gone.public) == *print)
+    }
+
     /// The id with `fingerprint`'s member, which a key message names.
     #[must_use]
     pub fn by_fingerprint(&self, fingerprint: &[u8; 8]) -> Option<u8> {

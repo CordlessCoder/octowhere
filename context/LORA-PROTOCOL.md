@@ -574,7 +574,9 @@ Owner, 2026-10-03, except where it says otherwise.
   still reads everything. The remover reserves every sequence number its key messages need
   before it starts, and a remover that restarts before they have gone sends them again.
   Adding a device is refused while a removal is under way, since it would get the key the
-  group is leaving.
+  group is leaving. A node ignores a key message whose switch round is further off than a
+  removal from a group of 32 needs, which would leave the removal pending for good, or whose
+  member removed is neither a member nor a gone record it holds (owner, 2026-10-03).
 - **The switch.** Before it nodes send under the old key, and from it under the new one, in the
   order the new key gives (see "Shuffled slots"). Every node tries both keys on receive, but
   after the switch merges nothing that arrives under the old key. Such a packet only shows that
