@@ -78,8 +78,6 @@ const OFFER_LEN: usize = 2 + 32 + 32 + 32 + MAC_LEN;
 const SEALED_HEADER: usize = 2 + SESSION_LEN;
 const PART_HEADER: usize = 3;
 const PART_DATA: usize = MAX_FRAME - SEALED_HEADER - SIV_LEN - PART_HEADER;
-/// The group key, the joining device's id, the member count, and each member's record with its
-/// length.
 /// The key, its generation, the joining device's id, the count, then each slot's record behind
 /// its length.
 const WELCOME_MAX: usize = 32 + 2 + 2 + IDS as usize * (1 + RECORD_MAX_LEN);

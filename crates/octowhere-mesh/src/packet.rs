@@ -18,6 +18,8 @@ pub mod record {
     pub const NEIGHBOURS: u8 = 2;
     pub const MEMBER: u8 = 3;
     pub const MESSAGE: u8 = 4;
+    // 5 was an acknowledgement record, since taken out. It is not used again, so that a node
+    // built with it never misreads another record.
     /// A digest of the sender's member table.
     pub const MEMBERS: u8 = 6;
     /// The ids whose member records the sender asks for.

@@ -2,7 +2,7 @@
 name = "octowhere-mesh"
 version = "0.1.0"
 edition = "2024"
-description = "The octowhere location mesh's packets, slot schedule and timebase"
+description = "The octowhere location mesh: packets, slots, timebase, members, pairing, messages and removals"
 
 [workspace]
 

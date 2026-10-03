@@ -7,14 +7,12 @@ use hkdf::Hkdf;
 use sha2::{Digest, Sha256};
 use x25519_dalek::{PublicKey, StaticSecret};
 
-use crate::IDS;
 use crate::members::{MISMATCHES, PUBLIC_LEN};
 use crate::seal::{self, Inauthentic, Key, SIV_LEN};
+use crate::{AHEAD_S, IDS};
 
 /// How long every node holds a message, from its timestamp.
 pub const HORIZON_S: u32 = 24 * 60 * 60;
-/// A message stamped further ahead of a node's clock than this is refused.
-pub const AHEAD_S: u32 = 60 * 60;
 /// The most messages a store holds.
 pub const CAPACITY: usize = 256;
 pub const TEXT_MAX: usize = 160;
@@ -57,13 +55,14 @@ pub enum To {
 #[derive(Clone, Copy, PartialEq, Eq, Zeroable)]
 #[repr(C)]
 pub struct Message {
-    /// Never 0, which marks an empty place in a store.
-    pub seq: u32,
+    /// Never 0, which marks an empty place in a store. The seal binds it and `origin`, so
+    /// neither changes after sealing.
+    pub(crate) seq: u32,
     /// The origin's sequence number before this one, 0 for none known.
-    pub prev: u32,
+    pub(crate) prev: u32,
     /// Timebase seconds the origin sent it at.
-    pub stamp: u32,
-    pub origin: u8,
+    pub(crate) stamp: u32,
+    pub(crate) origin: u8,
     dest: u8,
     len: u8,
     body: [u8; BODY_MAX],
@@ -98,6 +97,28 @@ impl defmt::Format for Message {
 
 /// What a node knows of a message by: its origin and sequence number.
 pub type Name = (u8, u32);
+
+impl Message {
+    #[must_use]
+    pub fn seq(&self) -> u32 {
+        self.seq
+    }
+
+    #[must_use]
+    pub fn prev(&self) -> u32 {
+        self.prev
+    }
+
+    #[must_use]
+    pub fn stamp(&self) -> u32 {
+        self.stamp
+    }
+
+    #[must_use]
+    pub fn origin(&self) -> u8 {
+        self.origin
+    }
+}
 
 impl Message {
     /// A message to the whole group, `body` its kind and what it holds. `None` when the body is
@@ -930,9 +951,6 @@ mod tests {
         let covered = u32::from_le_bytes(summary[..4].try_into().unwrap());
         assert_eq!(covered, 1 << 29 | 1 << 30 | 1 << 31 | 1 | 1 << 1);
         assert_eq!(next, 2, "it wraps round");
-        a.sent((30, 1));
-        let mut lacking = store();
-        lacking.answer(&summary[..len]);
         b.answer(&summary[..len]);
         assert!(!b.has_unsent(), "a holds 30/1 too");
 

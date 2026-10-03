@@ -1296,6 +1296,47 @@ mod tests {
     }
 
     #[test]
+    fn the_most_a_restart_keeps_fills_its_buffer_exactly() {
+        let mut rekey = Rekey {
+            pending: Some(Pending {
+                new: new(9, 4, 1_010, 2, 3),
+                remover: 1,
+                switch: 1_010,
+            }),
+            removing: Some((4, 2)),
+            last: Some(Last {
+                generation: 4,
+                removed: 2,
+                fingerprint: [3; 8],
+            }),
+            undo: Some(Undo {
+                key: Key::new([5; 32]),
+                generation: 3,
+                new_generation: 4,
+                switched: 1_010,
+                until: 2_930,
+                changed: u32::MAX,
+                removed: 2,
+                theirs: true,
+            }),
+            ..Rekey::default()
+        };
+        for at in 0..OLD_KEYS {
+            rekey.old[at] = Some(Old {
+                key: Key::new([at as u8; 32]),
+                generation: at as u16,
+                waiting: u32::MAX,
+            });
+        }
+        for at in 0..DECLINED {
+            rekey.declined[at] = Some([at as u8; 8]);
+        }
+        let mut out = [0; STORED_MAX];
+        assert_eq!(rekey.encode(&mut out), STORED_MAX);
+        assert!(Rekey::decode(&out).is_some());
+    }
+
+    #[test]
     fn what_a_restart_keeps_reads_back() {
         let mut g = group(0, &[(0, 1), (1, 2), (2, 3), (3, 4)]);
         let mut rekey = Rekey::default();

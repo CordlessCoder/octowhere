@@ -5,8 +5,8 @@ use core::cell::Cell;
 
 use sha2::{Digest, Sha256};
 
-use crate::IDS;
 use crate::seal::Key;
+use crate::{AHEAD_S, IDS};
 
 pub const NAME_LEN: usize = 16;
 pub const MAC_LEN: usize = 6;
@@ -228,16 +228,13 @@ pub enum Merged {
     },
 }
 
-/// How far ahead of this node's clock a record's change time may be: one stamped later would win
-/// every merge until then, a clock's error kept for ever.
-pub const AHEAD_S: u32 = 60 * 60;
-
 fn is_ahead(changed: u32, now: u32) -> bool {
     now != 0 && changed > now.saturating_add(AHEAD_S)
 }
 
 /// The most gone records kept once new members have taken their ids.
 pub const FORMER: usize = 8;
+const _: () = assert!(FORMER <= 8, "`former_unsent` is a `u8` set");
 
 #[derive(Clone)]
 pub struct Group {
@@ -269,10 +266,10 @@ impl Group {
         Self::restore(key, 0, 0, slots).expect("it holds this node's record")
     }
 
-    /// A group of members with its first key, as pairing delivered it before generations.
-    /// `None` unless it holds this node's record.
+    /// A group of members with its first key. `None` unless it holds this node's record.
+    #[cfg(test)]
     #[must_use]
-    pub fn new(key: Key, own: u8, members: [Option<Member>; SLOTS]) -> Option<Self> {
+    pub(crate) fn new(key: Key, own: u8, members: [Option<Member>; SLOTS]) -> Option<Self> {
         Self::restore(key, 0, own, members.map(|member| member.map(Slot::Member)))
     }
 
@@ -311,7 +308,7 @@ impl Group {
     }
 
     /// Takes up a new key, which the group switched to.
-    pub fn rekey(&mut self, key: Key, generation: u16) {
+    pub(crate) fn rekey(&mut self, key: Key, generation: u16) {
         self.key = key;
         self.generation = generation;
     }
@@ -526,7 +523,7 @@ impl Group {
 
     /// Replaces the member `fingerprint` names with a gone record at UTC `at`, as a switch to a
     /// new key that removes it does. Returns its id, or `None` when no member has it.
-    pub fn remove(&mut self, fingerprint: &[u8; 8], at: u32) -> Option<u8> {
+    pub(crate) fn remove(&mut self, fingerprint: &[u8; 8], at: u32) -> Option<u8> {
         let id = self.by_fingerprint(fingerprint)?;
         if id == self.own {
             return None;
@@ -545,7 +542,7 @@ impl Group {
     /// Gives the member that a gone record at `id` names by `fingerprint` its id back, as a
     /// removal undone. Its record comes back from nodes that still hold it. Returns whether
     /// there was such a gone record.
-    pub fn forget_gone(&mut self, id: u8, fingerprint: &[u8; 8]) -> bool {
+    pub(crate) fn forget_gone(&mut self, id: u8, fingerprint: &[u8; 8]) -> bool {
         if self
             .gone(id)
             .is_some_and(|gone| self::fingerprint(&gone.public) == *fingerprint)
@@ -560,7 +557,7 @@ impl Group {
     /// apart, as declining a removal after its switch does. Those are never stored, so a restart
     /// forgets them too. The nodes that never switched send the rest again as they hold them.
     /// Returns the ids that held something, as a set.
-    pub fn forget_changed(&mut self, ids: u32) -> u32 {
+    pub(crate) fn forget_changed(&mut self, ids: u32) -> u32 {
         let mut forgotten = 0;
         let own = self.own;
         for id in (0..IDS).filter(|&id| ids & 1 << id != 0 && id != own) {
@@ -716,7 +713,7 @@ impl Group {
     }
 
     /// Marks the slots held of the ids in the set `ids` to be sent, as another node asked.
-    pub fn ask(&mut self, ids: u32) {
+    pub(crate) fn ask(&mut self, ids: u32) {
         self.unsent |= ids & self.held();
     }
 

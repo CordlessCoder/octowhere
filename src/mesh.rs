@@ -420,24 +420,37 @@ impl Shown {
     /// Makes `view` the view of `me` in `group` at local time `now`. Times in UTC become local
     /// times on the stage's clock, which is the same as this one.
     fn fill(&self, view: &mut MeshView, me: &Identity, group: Option<&Group>, now: i64) {
-        view.radio = self.radio;
-        view.mac = me.mac;
-        view.name = me.name;
-        view.sessions = self.sessions;
-        view.pairing.clone_from(&self.pairing);
-        view.answered = self.answered;
-        view.answer = self.answer;
-        view.refresh = self.refresh;
-        view.recovery = self.recovery;
+        // Named in full, so that a field added to the view cannot be left unfilled.
+        let MeshView {
+            radio,
+            mac,
+            name,
+            group: shown_group,
+            sessions,
+            pairing,
+            answered,
+            answer,
+            refresh,
+            recovery,
+        } = view;
+        *radio = self.radio;
+        *mac = me.mac;
+        *name = me.name;
+        *sessions = self.sessions;
+        pairing.clone_from(&self.pairing);
+        *answered = self.answered;
+        *answer = self.answer;
+        *refresh = self.refresh;
+        *recovery = self.recovery;
         let Some(group) = group else {
-            view.group = None;
+            *shown_group = None;
             return;
         };
         let utc = utc_now(now);
         let local_at = |stamp: u32| utc.map(|utc| now - (utc - i64::from(stamp)) * 1_000_000);
-        let shown = match &mut view.group {
+        let shown = match shown_group {
             Some(shown) => shown,
-            None => blank_group(&mut view.group),
+            None => blank_group(shown_group),
         };
         shown.own = group.own();
         for (index, slot) in shown.members.iter_mut().enumerate() {
@@ -2483,7 +2496,7 @@ impl Mesh {
     /// Takes a message new to this node: shows one for it, opens a private one, and
     /// acknowledges what it opens. `own` is this node's id.
     fn arrived(&mut self, message: &Message, own: u8) -> bool {
-        let origin = message.origin;
+        let origin = message.origin();
         match message.to() {
             To::Group if origin != own => {
                 match message.body().split_first() {
@@ -2546,7 +2559,7 @@ impl Mesh {
                     None => return true,
                 }
                 let mut ack = [kind::ACK, 0, 0, 0, 0];
-                ack[1..].copy_from_slice(&message.seq.to_be_bytes());
+                ack[1..].copy_from_slice(&message.seq().to_be_bytes());
                 if self
                     .outbox
                     .push_back(Outgoing::new(To::Member(origin), false, &ack))
@@ -2554,7 +2567,8 @@ impl Mesh {
                 {
                     warn!(
                         "[MSG] the outbox is full; {}/{} goes unacknowledged",
-                        origin, message.seq
+                        origin,
+                        message.seq()
                     );
                 }
                 true

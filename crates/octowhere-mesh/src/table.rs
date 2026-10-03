@@ -1,14 +1,12 @@
 //! What a node knows of every id's position, which ids it has heard, and what its next packet
 //! carries.
 
-use crate::IDS;
 use crate::packet::{Entry, MAX_DELTA};
 use crate::schedule::{is_floor, is_sweep_round};
+use crate::{AHEAD_S, IDS};
 
 /// An id heard within this many rounds is a neighbour.
 pub const NEIGHBOUR_ROUNDS: i64 = 7;
-/// How far ahead of the node's own clock an entry may be stamped.
-pub const AHEAD_S: u32 = 3_600;
 /// An entry this much newer than the one last sent for its id is worth sending again, as is one
 /// that moved [`MOVED_M`]: a floor period, so a still node's entry stays current.
 pub const NEWER_S: u32 = 135;

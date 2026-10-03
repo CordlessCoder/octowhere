@@ -220,16 +220,30 @@ impl MeshView {
     /// Makes this view a copy of `other` a field at a time, which keeps a whole view's copy off
     /// the stack.
     pub fn copy_from(&mut self, other: &Self) {
-        self.radio = other.radio;
-        self.mac = other.mac;
-        self.name = other.name;
-        self.group = other.group;
-        self.sessions = other.sessions;
-        self.pairing.clone_from(&other.pairing);
-        self.answered = other.answered;
-        self.answer = other.answer;
-        self.refresh = other.refresh;
-        self.recovery = other.recovery;
+        // Named in full, so that a field added later cannot be left out: the views are swapped,
+        // and one left out would show a value two views old.
+        let Self {
+            radio,
+            mac,
+            name,
+            group,
+            sessions,
+            pairing,
+            answered,
+            answer,
+            refresh,
+            recovery,
+        } = other;
+        self.radio = *radio;
+        self.mac = *mac;
+        self.name = *name;
+        self.group = *group;
+        self.sessions = *sessions;
+        self.pairing.clone_from(pairing);
+        self.answered = *answered;
+        self.answer = *answer;
+        self.refresh = *refresh;
+        self.recovery = *recovery;
     }
 
     /// The pairing asked for after `sessions` had started, once the mesh has taken it up.
