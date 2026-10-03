@@ -74,11 +74,6 @@ pub trait CoverageTarget: DrawTarget {
         self.blend_row(x, y, coverage, color);
     }
 
-    /// Called by text drawings before each glyph's rows, with the box its rows fall in.
-    fn begin_glyph(&mut self, bounds: Rectangle) {
-        let _ = bounds;
-    }
-
     /// Replaces every pixel of the row: `color` mixed over `background` by its coverage, so 0
     /// writes `background`. It writes each pixel once where filling and then blending writes twice.
     fn paint_row(
@@ -532,46 +527,19 @@ impl<T: CoverageTarget> CoverageTarget for Clip<'_, T> {
 }
 
 /// A view of `parent` that paints text over a solid `background` across a run of rows, writing
-/// each pixel once where filling and then blending writes twice. Each glyph's coverage is
-/// gathered, then its whole box is painted when the next glyph begins, combined with the glyph
-/// before it where their boxes overlap. [`finish`](Self::finish) paints the last glyph and fills
-/// the rest of the rows. It keeps two glyphs' coverage, so it takes only text drawn left to right
-/// through [`CoverageTarget::begin_glyph`], whose glyphs overlap only their neighbours.
+/// each pixel once where filling and then blending writes twice. Each row a glyph sends is
+/// painted as it arrives, with the background before it that no glyph has reached; where it
+/// reaches back over pixels already painted, it is blended over them. [`finish`](Self::finish)
+/// fills the rest of the rows. Text drawn left to right reaches back only where a glyph overlaps
+/// the one before.
 pub struct Knockout<'a, T> {
     parent: &'a mut T,
     rows: core::ops::Range<i32>,
     /// Rows inside `rows` left untouched, for something drawn over them afterwards.
     skip: core::ops::Range<i32>,
     background: Color,
-    color: Color,
-    glyphs: [GlyphCoverage; 2],
-    /// Which of `glyphs` gathers the glyph being drawn.
-    current: usize,
-    /// Per row, the column up to which it has been painted.
-    painted: alloc::vec::Vec<i32>,
-}
-
-#[derive(Default)]
-struct GlyphCoverage {
-    bounds: Rectangle,
-    coverage: alloc::vec::Vec<u8>,
-}
-
-impl GlyphCoverage {
-    fn rows(&self, y: i32) -> Option<core::ops::Range<usize>> {
-        let width = self.bounds.size.width as usize;
-        let i = y - self.bounds.top_left.y;
-        (0..self.bounds.size.height as i32)
-            .contains(&i)
-            .then(|| i as usize * width..(i as usize + 1) * width)
-    }
-
-    /// Row `y`'s coverage in columns `columns`, which must lie inside the box.
-    fn span(&self, y: i32, columns: core::ops::Range<i32>) -> Option<&[u8]> {
-        let row = self.rows(y)?;
-        let left = self.bounds.top_left.x;
-        Some(&self.coverage[row][(columns.start - left) as usize..(columns.end - left) as usize])
-    }
+    /// Per row of the panel, the column up to which it has been painted.
+    painted: [u16; board::LCD_HEIGHT as usize],
 }
 
 impl<'a, T: CoverageTarget<Color = Color>> Knockout<'a, T> {
@@ -583,68 +551,18 @@ impl<'a, T: CoverageTarget<Color = Color>> Knockout<'a, T> {
     ) -> Self {
         Self {
             parent,
-            painted: alloc::vec![0; rows.len()],
-            rows,
+            rows: rows.start.max(0)..rows.end.min(board::LCD_HEIGHT as i32),
             skip,
             background,
-            color: background,
-            glyphs: Default::default(),
-            current: 0,
+            painted: [0; board::LCD_HEIGHT as usize],
         }
     }
 
-    /// Paints the glyph gathered so far, and the background left of it on each of its rows. Where
-    /// its box overlaps the glyph before, the earlier coverage is folded into it first.
-    fn paint_current(&mut self) {
+    /// Fills what no glyph reached.
+    pub fn finish(self) {
         const WIDTH: i32 = board::LCD_WIDTH as i32;
-        let [first, second] = &mut self.glyphs;
-        let (current, previous) = if self.current == 0 {
-            (first, &*second)
-        } else {
-            (second, &*first)
-        };
-        let (left, right) = (
-            current.bounds.top_left.x,
-            current.bounds.top_left.x + current.bounds.size.width as i32,
-        );
-        let shared = left.max(previous.bounds.top_left.x)
-            ..right.min(previous.bounds.top_left.x + previous.bounds.size.width as i32);
-        for y in current.bounds.rows() {
-            if self.skip.contains(&y) {
-                continue;
-            }
-            let Some(row) = current.rows(y) else {
-                continue;
-            };
-            if let Some(before) = (!shared.is_empty())
-                .then(|| previous.span(y, shared.clone()))
-                .flatten()
-            {
-                let over = &mut current.coverage[row.clone()]
-                    [(shared.start - left) as usize..(shared.end - left) as usize];
-                for (over, &under) in over.iter_mut().zip(before) {
-                    *over = lerp_u8(under, u8::MAX, *over);
-                }
-            }
-            let painted = &mut self.painted[(y - self.rows.start) as usize];
-            if *painted < left {
-                let gap = Rectangle::new(
-                    Point::new(*painted, y),
-                    Size::new((left.min(WIDTH) - *painted) as u32, 1),
-                );
-                let _ = self.parent.fill_solid(&gap, self.background);
-            }
-            *painted = (*painted).max(right.clamp(0, WIDTH));
-            self.parent
-                .paint_row(left, y, &current.coverage[row], self.color, self.background);
-        }
-    }
-
-    /// Paints the last glyph and fills what no glyph reached.
-    pub fn finish(mut self) {
-        const WIDTH: i32 = board::LCD_WIDTH as i32;
-        self.paint_current();
-        for (y, &painted) in self.rows.clone().zip(&self.painted) {
+        for y in self.rows.clone() {
+            let painted = i32::from(self.painted[y as usize]);
             if painted < WIDTH && !self.skip.contains(&y) {
                 let rest = Rectangle::new(
                     Point::new(painted, y),
@@ -679,44 +597,31 @@ impl<T: CoverageTarget<Color = Color>> CoverageTarget for Knockout<'_, T> {
         self.parent.visible(area)
     }
 
-    fn begin_glyph(&mut self, bounds: Rectangle) {
-        self.paint_current();
-        self.current = 1 - self.current;
-        let (top, bottom) = (
-            bounds.top_left.y.max(self.rows.start),
-            (bounds.top_left.y + bounds.size.height as i32).min(self.rows.end),
-        );
-        let glyph = &mut self.glyphs[self.current];
-        glyph.bounds = Rectangle::new(
-            Point::new(bounds.top_left.x, top),
-            Size::new(bounds.size.width, (bottom - top).max(0) as u32),
-        );
-        glyph.coverage.clear();
-        glyph.coverage.resize(
-            (glyph.bounds.size.width * glyph.bounds.size.height) as usize,
-            0,
-        );
-    }
-
-    /// A glyph sends each of its rows once, so its coverage is stored rather than blended.
     fn blend_row(&mut self, x: i32, y: i32, coverage: &[u8], color: Self::Color) {
-        self.color = color;
-        if self.skip.contains(&y) {
+        const WIDTH: i32 = board::LCD_WIDTH as i32;
+        if !self.rows.contains(&y) || self.skip.contains(&y) {
             return;
         }
-        let glyph = &mut self.glyphs[self.current];
-        let Some(row) = glyph.rows(y) else {
+        let (start, end) = (x.max(0), x.saturating_add(coverage.len() as i32).min(WIDTH));
+        if start >= end {
             return;
-        };
-        let left = glyph.bounds.top_left.x;
-        let start = x.max(left);
-        let end = x
-            .saturating_add(coverage.len() as i32)
-            .min(left + glyph.bounds.size.width as i32);
-        if start < end {
-            glyph.coverage[row][(start - left) as usize..(end - left) as usize]
-                .copy_from_slice(&coverage[(start - x) as usize..(end - x) as usize]);
         }
+        let coverage = &coverage[(start - x) as usize..(end - x) as usize];
+        let painted = &mut self.painted[y as usize];
+        let from = i32::from(*painted);
+        if from < start {
+            let gap = Rectangle::new(Point::new(from, y), Size::new((start - from) as u32, 1));
+            let _ = self.parent.fill_solid(&gap, self.background);
+        }
+        let (over, fresh) = coverage.split_at((from.clamp(start, end) - start) as usize);
+        if !over.is_empty() {
+            self.parent.blend_row(start, y, over, color);
+        }
+        if !fresh.is_empty() {
+            self.parent
+                .paint_row(end - fresh.len() as i32, y, fresh, color, self.background);
+        }
+        *painted = (*painted).max(end as u16);
     }
 }
 
@@ -1325,10 +1230,6 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
             let (metrics, bitmap) =
                 font.rasterize_indexed_transformed(&mut ctx.canvas, index, px, transform, pen);
             fits(metrics.width, metrics.height);
-            target.begin_glyph(Rectangle::new(
-                Point::new(metrics.x, metrics.y),
-                Size::new(metrics.width as u32, metrics.height as u32),
-            ));
             ctx.coverage.resize(metrics.width, 0);
             let color = self.text_color;
             bitmap.rows(&mut ctx.coverage, |y, x, row| {
@@ -1366,10 +1267,6 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
             }
             let (metrics, bitmap) = font.rasterize_indexed(canvas, index, px);
             fits(metrics.width, metrics.height);
-            target.begin_glyph(Rectangle::new(
-                corner,
-                Size::new(2 * metrics.width as u32, 2 * metrics.height as u32),
-            ));
             row.resize(metrics.width, 0);
             bitmap.rows(row, |y, x, span| {
                 doubled.clear();
