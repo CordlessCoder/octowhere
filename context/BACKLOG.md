@@ -282,7 +282,10 @@ until the feature set is complete, because profiling an incomplete firmware pric
   and `take()`'s records loop as the mesh crate's tested `compose` and `absorb`, and the ten
   removal fields as `Removals` (`0a25c3d`, plan step 1), and `step()`'s choice of what goes
   out as the tested `Next::choose` (`7381762`, step 2), and one group fixture for the member and
-  rekey tests (`2e21c2c`, step 3; the `messages.rs` half was done in `96b6d81`). Left:
+  rekey tests (`2e21c2c`, step 3; the `messages.rs` half was done in `96b6d81`), and the
+  comments the review asked for (`5307b20`, step 4), and time and rounds converted one way in
+  `schedule` (`f4e58b7`, step 5), and sets of ids as `octowhere_mesh::Ids` (`e2921f7` to
+  `23c7762`, step 6). Left:
   - Duplication in the crate and `settings.rs`:
     - One slot encoding: `Builder::slot`, the pairing's `welcome` and `read_welcome`, and
       `settings`' `write_member` and `read_slot` each have their own, and the decoders tell a
@@ -291,12 +294,8 @@ until the feature set is complete, because profiling an incomplete firmware pric
       `settings.rs` at offsets one apart, in the crate with a round-trip test.
     - One `record(kind, len, ...)` in `Builder`, which frames records five ways; `Header::new`
       and a sealing builder for the four headers `mesh.rs` builds from literals.
-    - An `Ids(u32)` set type for the review's 66 `1 << id` sites.
     - One mismatch counter for `Requests::heard` and `Summaries::heard`, whose names also hide
       that they change the group and the store.
-    - `ROUND_S` and one seconds conversion in `schedule`: `rekey.rs` keeps its own `ROUND_S`,
-      `mesh.rs` recomputes it, `(time / 1_000_000) as u32` truncates in four places where
-      `base_of` floors, and rounds are `u32` in `rekey` and `i64` elsewhere.
   - Names and types: `messages::Name` renamed so it does not collide with `members::Name`;
     `Pending.switch` (this device's round) and `Pending.new.switch` (the group's) named apart;
     `now: u32` with 0 for unknown made an `Option` throughout; the pairing's `Phase::Transfer`
@@ -304,15 +303,6 @@ until the feature set is complete, because profiling an incomplete firmware pric
     rather than a placeholder `Searching` phase. Not rechecked since `337717f`: `rekey::Last`
     and `rekey::Undo` public with public fields though nothing outside uses them, `bits`
     public likewise, and `Group::new` used only by tests, with a stale doc.
-  - Say what the code cannot: record type 5 is never to be reused; `IDS` is bound by 5-bit
-    fields and `u32` sets; the pairing's frame lengths 40 and 26 are literals though
-    `OFFER_LEN` exists; `STORED_MAX` is 22 unlabelled terms; a packet sends at most 8 messages
-    and takes 16; `MAX_RECORDS + 1` is unexplained, and `MAX_RECORDS` itself, 3, cannot bind
-    since records were signed: a member or gone record takes over 100 of a packet's 239 bytes,
-    so no more than two fit; `members.rs`'s copy of `set()` leaves out
-    `unsent` without a comment; `MESH_VERSION` is still 1 though the layouts grew through
-    shims, while its comment says a later layout can tell itself apart; `pair.rs` has two
-    stacked docs, the first stale.
   - Work and stack: `start_transfer` in `pair.rs` clones the 2.6 KB group on the receive path
     though its only failure comes before any change; `old_slot_at` rebuilds a 1 KB `Schedule`,
     an HKDF and 32 AES blocks, every step while catching a member up; check the remaining
