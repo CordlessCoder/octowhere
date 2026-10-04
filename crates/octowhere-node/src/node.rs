@@ -1853,7 +1853,10 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                     }
                 }
                 Either3::Third(ok) => {
-                    if saving.is_some() && phase == Phase::Storing {
+                    // Its result is in, and the write's future would be ready on every turn
+                    // after, so that the loop never waited.
+                    saving = None;
+                    if phase == Phase::Storing {
                         pairing.stored(ok, self.time.now());
                     }
                 }
