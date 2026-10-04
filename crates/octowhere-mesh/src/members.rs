@@ -360,6 +360,8 @@ pub struct Group {
     unsent: u32,
     /// The places in `former` whose records are to be sent, as a set.
     former_unsent: u8,
+    /// The id whose slot went last. The next goes from the one after it.
+    sent_last: u8,
     /// The slots' digest, until they change.
     digest: Cell<Option<u32>>,
     /// The ids whose slots changed since [`Group::take_changed`] last took them, as a set.
@@ -414,6 +416,7 @@ impl Group {
             }),
             unsent: 0,
             former_unsent: 0,
+            sent_last: IDS - 1,
             digest: Cell::new(None),
             changed: 0,
             unsigned_own: false,
@@ -886,9 +889,20 @@ impl Group {
         self.unsent & self.held() & !unsigned & !own
     }
 
+    /// The ids of [`Group::unsent`] in the order they take their turns: from the one after the
+    /// slot that went last. One record fits in a packet, so lowest first would let ids that a
+    /// neighbour asks for again and again keep a higher one waiting for good.
+    pub fn unsent_in_turn(&self) -> impl Iterator<Item = u8> + '_ {
+        let unsent = self.unsent();
+        (1..=IDS)
+            .map(move |step| (self.sent_last + step) % IDS)
+            .filter(move |&id| unsent & 1 << id != 0)
+    }
+
     /// Counts the slot at `id` as sent, once a packet carries it.
     pub fn sent(&mut self, id: u8) {
         self.unsent &= !(1 << id);
+        self.sent_last = id;
     }
 
     /// The gone records kept apart from the slots that are to be sent, with their places.

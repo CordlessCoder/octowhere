@@ -123,10 +123,10 @@ pub fn compose(builder: &mut Builder, round: i64, base: u32, from: Sources) -> C
     carried.summary = summary.is_some_and(|summary| {
         builder.room() >= 2 + summary.len() + own_room && builder.summary(summary).is_ok()
     });
-    let mut unsent = group.unsent();
-    while unsent != 0 && (carried.records.count_ones() as usize) < MAX_RECORDS {
-        let id = unsent.trailing_zeros() as u8;
-        unsent &= !(1 << id);
+    for id in group.unsent_in_turn() {
+        if carried.records.count_ones() as usize >= MAX_RECORDS {
+            break;
+        }
         let Some(slot) = group.slot(id).copied() else {
             continue;
         };
@@ -347,6 +347,30 @@ mod tests {
             });
             assert_eq!(carried.summary, carries, "own position: {own_position}");
         }
+    }
+
+    #[test]
+    fn records_asked_for_again_keep_no_other_waiting() {
+        let (mut table, mut group, mut store) = (table(&[]), group(3), store(0));
+        let mut requests = Requests::default();
+        let mut went = 0;
+        for _ in 0..3 {
+            let (carried, _) = compose_kinds(Sources {
+                table: &table,
+                group: &group,
+                messages: &store,
+                requests: &requests,
+                summary: None,
+            });
+            carried.sent(&mut table, &mut requests, &mut store, &mut group);
+            went |= carried.records;
+            // A neighbour whose digest differs asks for every id it holds again.
+            group.ask(0b011);
+        }
+        assert_eq!(
+            went, 0b111,
+            "every record waiting went within three packets"
+        );
     }
 
     #[test]
