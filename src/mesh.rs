@@ -3,33 +3,26 @@
 //! channel of its own, until it ends. A refresh listens throughout for three rounds when the
 //! screens ask. `octowhere_mesh` holds the protocol and `context/LORA-PROTOCOL.md` the design.
 
+mod device;
 mod radio;
 mod random;
 mod time;
 mod unsaved;
 
 use alloc::boxed::Box;
-use core::{
-    cell::{Cell, RefCell},
-    sync::atomic::{AtomicU32, Ordering},
-};
 
+use self::device::publish;
+pub use self::device::{
+    BoardDevice, COMMANDS, FIX, RTC_TIME, VIEW_CHANGED, quality, request, view_since,
+};
 pub use self::radio::BoardRadio;
 pub use self::random::{BoardRandom, random};
 pub use self::time::BoardTime;
 use self::time::local;
 use self::unsaved::{Due, Unsaved};
-use super::GPS_TIME;
 use defmt::{debug, info, warn};
 use embassy_futures::select::{Either, Either3, select, select3};
-use embassy_sync::{
-    blocking_mutex::{Mutex as BlockingMutex, raw::CriticalSectionRawMutex},
-    channel::Channel,
-    signal::Signal,
-};
-use embassy_time::Instant;
 use esp_alloc::EspHeap;
-use lc76g::FixQuality;
 use octowhere::{
     settings::GroupWrite,
     ui::group::view::{
@@ -96,22 +89,6 @@ const LEAVE_REPEATS: u8 = 2;
 /// How long a device that left tries to tell the others: its next slots, a round apart.
 const LEAVE_WAIT_US: i64 = 3 * ROUND_US;
 
-/// The latest fix and the UTC second it was made in, from `gnss_task`.
-pub static FIX: BlockingMutex<CriticalSectionRawMutex, Cell<Option<Fix>>> =
-    BlockingMutex::new(Cell::new(None));
-/// The RTC's UTC seconds and when they were read, from `sensor_task`, while its oscillator has
-/// not stopped.
-pub static RTC_TIME: BlockingMutex<CriticalSectionRawMutex, Cell<Option<(i64, Instant)>>> =
-    BlockingMutex::new(Cell::new(None));
-/// What the user asks of the mesh.
-pub static COMMANDS: Channel<CriticalSectionRawMutex, Command, 4> = Channel::new();
-/// What the screens show of the mesh, as last published, and a signal that it changed.
-static VIEW: BlockingMutex<CriticalSectionRawMutex, RefCell<Option<Box<MeshView>>>> =
-    BlockingMutex::new(RefCell::new(None));
-pub static VIEW_CHANGED: Signal<CriticalSectionRawMutex, ()> = Signal::new();
-/// Counts the views published, so a reader can tell when there is a new one.
-static VIEWS: AtomicU32 = AtomicU32::new(0);
-
 #[derive(Clone, Copy)]
 pub struct Fix {
     /// Degrees × 10⁷.
@@ -119,7 +96,7 @@ pub struct Fix {
     pub longitude: i32,
     /// UTC seconds.
     pub stamp: u32,
-    pub quality: FixQuality,
+    pub quality: Quality,
     pub hdop_milli: Option<u32>,
 }
 
@@ -305,22 +282,6 @@ pub struct Start {
     pub rekey: Option<Box<Rekey>>,
 }
 
-/// Passes what the screens asked on to the mesh. Returns false when the queue is full.
-pub fn request(request: Request) -> bool {
-    COMMANDS.try_send(request.into()).is_ok()
-}
-
-/// Copies the mesh as last published into `into`, if it changed after the view counted `seen`,
-/// and returns its count.
-pub fn view_since(seen: u32, into: &mut MeshView) -> Option<u32> {
-    let count = VIEWS.load(Ordering::Acquire);
-    if count == seen {
-        return None;
-    }
-    VIEW.lock(|view| view.borrow().as_deref().map(|view| into.copy_from(view)))?;
-    Some(count)
-}
-
 /// A view to fill, on the heap. A view is a couple of kilobytes, and the radio's task runs on
 /// whatever stack the frame loop left, so none is built or copied on the stack.
 #[inline(never)]
@@ -339,29 +300,18 @@ fn blank_group(group: &mut Option<GroupView>) -> &mut GroupView {
     })
 }
 
-/// Publishes `view` when it differs from what the screens were last shown. It trades places
-/// with the view it replaces, so it holds an older one after.
-fn publish(view: &mut Box<MeshView>) {
-    let changed = VIEW.lock(|current| {
-        let mut current = current.borrow_mut();
-        match &mut *current {
-            Some(current) if **current == **view => return false,
-            Some(current) => core::mem::swap(current, view),
-            None => *current = Some(core::mem::replace(view, blank_view())),
-        }
-        VIEWS.fetch_add(1, Ordering::Release);
-        true
-    });
-    if changed {
-        VIEW_CHANGED.signal(());
-    }
-}
-
 /// Publishes the stored identity and group before the radio is known, for the screens to show
 /// from the start.
 pub fn publish_start(start: &Start) {
     let mut view = blank_view();
-    Shown::new(false).fill(&mut view, &start.me, start.group.as_deref(), local());
+    let now = local();
+    Shown::new(false).fill(
+        &mut view,
+        &start.me,
+        start.group.as_deref(),
+        now,
+        utc_now(&BoardDevice, now),
+    );
     publish(&mut view);
 }
 
@@ -414,7 +364,14 @@ impl Shown {
 
     /// Makes `view` the view of `me` in `group` at local time `now`. Times in UTC become local
     /// times on the stage's clock, which is the same as this one.
-    fn fill(&self, view: &mut MeshView, me: &Identity, group: Option<&Group>, now: i64) {
+    fn fill(
+        &self,
+        view: &mut MeshView,
+        me: &Identity,
+        group: Option<&Group>,
+        now: i64,
+        utc: Option<i64>,
+    ) {
         // Named in full, so that a field added to the view cannot be left unfilled.
         let MeshView {
             radio,
@@ -441,7 +398,6 @@ impl Shown {
             *shown_group = None;
             return;
         };
-        let utc = utc_now(now);
         let local_at = |stamp: u32| utc.map(|utc| now - (utc - i64::from(stamp)) * 1_000_000);
         let shown = match shown_group {
             Some(shown) => shown,
@@ -528,16 +484,16 @@ async fn rename(me: &mut Identity, group: Option<&mut Group>, name: Name, utc: u
 }
 
 /// UTC seconds at local time `now`, from GNSS or the RTC, or 0 with neither.
-fn utc_seconds(now: i64) -> u32 {
-    utc_now(now).map_or(0, |utc| utc.clamp(0, i64::from(u32::MAX)) as u32)
+fn utc_seconds(device: &impl Device, now: i64) -> u32 {
+    utc_now(device, now).map_or(0, |utc| utc.clamp(0, i64::from(u32::MAX)) as u32)
 }
 
 /// UTC seconds at local time `now`, from GNSS or the RTC.
-fn utc_now(now: i64) -> Option<i64> {
-    GPS_TIME
-        .lock(Cell::get)
+fn utc_now(device: &impl Device, now: i64) -> Option<i64> {
+    device
+        .gps_time()
         .map(|gps| now - gps.offset)
-        .or_else(|| rtc_now(now))
+        .or_else(|| device.rtc_utc(now))
         .map(|utc| utc / 1_000_000)
 }
 
@@ -613,10 +569,36 @@ pub trait Random {
     }
 }
 
-pub struct Mesh<R, T, G> {
+/// UTC on the local clock: UTC in microseconds is local time less `offset`, as fixes last
+/// refined it at local time `updated`.
+#[derive(Clone, Copy)]
+pub struct GpsTime {
+    pub offset: i64,
+    pub updated: i64,
+}
+
+/// The device a node runs in: what its other parts know, and the screens it shows its state on.
+pub trait Device {
+    /// The latest fix, and the UTC second it was made in.
+    fn fix(&self) -> Option<Fix>;
+    fn gps_time(&self) -> Option<GpsTime>;
+    /// The RTC's UTC in microseconds at local time `now`, to its whole second, unless its
+    /// oscillator stopped.
+    fn rtc_utc(&self, now: i64) -> Option<i64>;
+    /// Shows the screens `view`, if it changed. It may trade places with an older view.
+    fn publish(&self, view: &mut Box<MeshView>);
+}
+
+/// Where a node's commands come from.
+pub trait Commands {
+    async fn receive(&self) -> Command;
+}
+
+pub struct Mesh<R, T, G, D> {
     radio: R,
     time: T,
     random: G,
+    device: D,
     me: Identity,
     group: Option<Group>,
     /// A group this device founded in a pairing whose last acknowledgement it never heard.
@@ -679,8 +661,8 @@ pub struct Mesh<R, T, G> {
     summary: Option<Box<(heapless::Vec<u8, SUMMARY_MAX>, u8)>>,
 }
 
-impl<R: Radio, T: Time, G: Random> Mesh<R, T, G> {
-    pub async fn new(radio: R, time: T, random: G, start: Start) -> Self {
+impl<R: Radio, T: Time, G: Random, D: Device> Mesh<R, T, G, D> {
+    pub async fn new(radio: R, time: T, random: G, device: D, start: Start) -> Self {
         let group = start.group.map(|group| *group);
         let own = group.as_ref().map_or(0, Group::own);
         let mut rekey = start.rekey.unwrap_or_default();
@@ -707,6 +689,7 @@ impl<R: Radio, T: Time, G: Random> Mesh<R, T, G> {
             radio,
             time,
             random,
+            device,
             me: start.me,
             group,
             founding: None,
@@ -770,16 +753,18 @@ impl<R: Radio, T: Time, G: Random> Mesh<R, T, G> {
 
     #[inline(never)]
     fn publish(&mut self) {
+        let now = self.time.now();
         self.shown.fill(
             &mut self.view,
             &self.me,
             self.group.as_ref(),
-            self.time.now(),
+            now,
+            utc_now(&self.device, now),
         );
-        publish(&mut self.view);
+        self.device.publish(&mut self.view);
     }
 
-    pub async fn run(mut self) -> ! {
+    pub async fn run(mut self, commands: &impl Commands) -> ! {
         if let Some(group) = &self.group {
             info!(
                 "[MESH] id={} members={} generation={} removal pending={} declinable until={} old keys={}",
@@ -795,7 +780,7 @@ impl<R: Radio, T: Time, G: Random> Mesh<R, T, G> {
             self.sync_schedule();
             self.publish();
             let command = if self.group.is_some() {
-                match select(self.step(), COMMANDS.receive()).await {
+                match select(self.step(), commands.receive()).await {
                     Either::First(()) => continue,
                     Either::Second(command) => {
                         // The step may have stopped anywhere, a transmission included.
@@ -804,7 +789,7 @@ impl<R: Radio, T: Time, G: Random> Mesh<R, T, G> {
                     }
                 }
             } else if self.founding.is_some() {
-                match select(self.await_joiner(), COMMANDS.receive()).await {
+                match select(self.await_joiner(), commands.receive()).await {
                     Either::First(()) => continue,
                     Either::Second(command) => {
                         self.radio.idle_receive().await;
@@ -812,7 +797,7 @@ impl<R: Radio, T: Time, G: Random> Mesh<R, T, G> {
                     }
                 }
             } else if self.leaving.is_some() {
-                match select(self.tell_leaving(), COMMANDS.receive()).await {
+                match select(self.tell_leaving(), commands.receive()).await {
                     Either::First(()) => continue,
                     Either::Second(command) => {
                         // A pairing takes the radio; the others can still remove this device.
@@ -825,13 +810,13 @@ impl<R: Radio, T: Time, G: Random> Mesh<R, T, G> {
                 }
             } else {
                 self.radio.sleep().await;
-                COMMANDS.receive().await
+                commands.receive().await
             };
-            self.command(command).await;
+            self.command(command, commands).await;
         }
     }
 
-    async fn command(&mut self, command: Command) {
+    async fn command(&mut self, command: Command, commands: &impl Commands) {
         info!("[MESH] command {}", command);
         match command {
             // A device added now would get the key the group is about to leave.
@@ -841,21 +826,21 @@ impl<R: Radio, T: Time, G: Random> Mesh<R, T, G> {
                 self.shown.pairing =
                     Some(refused(self.shown.sessions, Role::Add, Refused::Removing));
             }
-            Command::Add => self.pair(Role::Add).await,
+            Command::Add => self.pair(Role::Add, commands).await,
             Command::Join if self.group.is_some() => {
                 warn!("[MESH] in a group; it must leave before it can join another");
                 self.shown.sessions += 1;
                 self.shown.pairing =
                     Some(refused(self.shown.sessions, Role::Join, Refused::InGroup));
             }
-            Command::Join => self.pair(Role::Join).await,
+            Command::Join => self.pair(Role::Join, commands).await,
             Command::Leave => {
                 self.founding = None;
                 self.shown.recovery = None;
                 let now = self.time.now();
                 let (left, group) = leave(&mut self.group).await;
                 if let Some(group) = group {
-                    let gone = group.leaving(utc_seconds(now), &self.me);
+                    let gone = group.leaving(utc_seconds(&self.device, now), &self.me);
                     self.leaving = Some(Box::new(Leaving {
                         group,
                         gone,
@@ -879,7 +864,13 @@ impl<R: Radio, T: Time, G: Random> Mesh<R, T, G> {
                     Some(founding) => Some(&mut founding.group),
                     None => self.group.as_mut(),
                 };
-                let saved = rename(&mut self.me, group, name, utc_seconds(self.time.now())).await;
+                let saved = rename(
+                    &mut self.me,
+                    group,
+                    name,
+                    utc_seconds(&self.device, self.time.now()),
+                )
+                .await;
                 info!("[MESH] renamed {} saved={}", name, saved);
                 if saved && let Some(group) = &self.group {
                     self.unsaved.slot(group.own());
@@ -891,7 +882,7 @@ impl<R: Radio, T: Time, G: Random> Mesh<R, T, G> {
             Command::Remove(id) => self.remove(id).await,
             #[cfg(feature = "pair-inject")]
             Command::Phantom => {
-                let now = utc_seconds(self.time.now());
+                let now = utc_seconds(&self.device, self.time.now());
                 if let (Some(group), Some(seed), Some(mac)) = (
                     &mut self.group,
                     self.random.bytes::<32>(),
@@ -1004,7 +995,7 @@ impl<R: Radio, T: Time, G: Random> Mesh<R, T, G> {
         };
         let now = self.time.now();
         self.take_readings(own);
-        self.clock.tick(now, rtc_now(now));
+        self.clock.tick(now, self.device.rtc_utc(now));
         self.update_refresh(now);
         let timebase = self.clock.at(now).map(|(_, timebase)| timebase);
         if timebase != self.timebase_shown {
@@ -1278,23 +1269,15 @@ impl<R: Radio, T: Time, G: Random> Mesh<R, T, G> {
     }
 
     fn take_readings(&mut self, own: u8) {
-        let gps = GPS_TIME.lock(Cell::get);
-        if let Some(gps) = gps {
-            self.clock.gps(gps.offset, gps.updated.as_micros() as i64);
-            if let Some(fix) = FIX.lock(Cell::get) {
+        if let Some(gps) = self.device.gps_time() {
+            self.clock.gps(gps.offset, gps.updated);
+            if let Some(fix) = self.device.fix() {
                 self.table.set_own(Entry {
                     id: own,
                     latitude: fix.latitude,
                     longitude: fix.longitude,
                     stamp: fix.stamp,
-                    quality: match fix.quality {
-                        FixQuality::Autonomous => Quality::Autonomous,
-                        FixQuality::Differential
-                        | FixQuality::Pps
-                        | FixQuality::Rtk
-                        | FixQuality::FloatRtk => Quality::Differential,
-                        _ => Quality::Estimated,
-                    },
+                    quality: fix.quality,
                     hdop: Hdop::from_milli(fix.hdop_milli.unwrap_or(u32::MAX)),
                 });
                 self.shown.positions(&self.table);
@@ -1560,7 +1543,11 @@ impl<R: Radio, T: Time, G: Random> Mesh<R, T, G> {
                 Record::Request(ids) => asked = Some(ids),
                 Record::Member(id, member) => {
                     let _ = heard_records.push((id, Slot::Member(member)));
-                    match group.merge(id, member, now.unwrap_or_else(|| utc_seconds(done))) {
+                    match group.merge(
+                        id,
+                        member,
+                        now.unwrap_or_else(|| utc_seconds(&self.device, done)),
+                    ) {
                         Merged::Unchanged => {}
                         Merged::Changed { vacated } => {
                             info!("[MESH] member {} is {} now", id, member.name);
@@ -1587,9 +1574,11 @@ impl<R: Radio, T: Time, G: Random> Mesh<R, T, G> {
                 }
                 Record::Gone(id, gone) => {
                     let _ = heard_records.push((id, Slot::Gone(gone)));
-                    if let Merged::Went { at } =
-                        group.merge_gone(id, gone, now.unwrap_or_else(|| utc_seconds(done)))
-                    {
+                    if let Merged::Went { at } = group.merge_gone(
+                        id,
+                        gone,
+                        now.unwrap_or_else(|| utc_seconds(&self.device, done)),
+                    ) {
                         info!("[MESH] member {} went", at);
                         self.unsaved.slot(at);
                         rekey_changed |= self.rekey.went(at);
@@ -1795,7 +1784,7 @@ impl<R: Radio, T: Time, G: Random> Mesh<R, T, G> {
 
     /// Runs a pairing in `role` on the pairing channel until it ends, then returns to the mesh's
     /// channel. A node that joins, or founds a group, starts its timebase afresh.
-    async fn pair(&mut self, role: Role) {
+    async fn pair(&mut self, role: Role, commands: &impl Commands) {
         if self.founding.take().is_some() {
             info!("[MESH] no longer listening for the device a founding left unconfirmed");
         }
@@ -1821,7 +1810,7 @@ impl<R: Radio, T: Time, G: Random> Mesh<R, T, G> {
         let mut pairing = match role {
             Role::Join => Pairing::join(&self.me, nonce, now),
             Role::Add => {
-                let utc = utc_seconds(now);
+                let utc = utc_seconds(&self.device, now);
                 let group = self
                     .group
                     .clone()
@@ -1859,8 +1848,14 @@ impl<R: Radio, T: Time, G: Random> Mesh<R, T, G> {
                     Phase::Done(_) => pairing.group(),
                     _ => self.group.as_ref(),
                 };
-                self.shown.fill(&mut self.view, &self.me, group, now);
-                publish(&mut self.view);
+                self.shown.fill(
+                    &mut self.view,
+                    &self.me,
+                    group,
+                    now,
+                    utc_now(&self.device, now),
+                );
+                self.device.publish(&mut self.view);
             }
             if pairing.is_over(now) {
                 break;
@@ -1901,7 +1896,7 @@ impl<R: Radio, T: Time, G: Random> Mesh<R, T, G> {
                     None => core::future::pending().await,
                 }
             };
-            match select3(self.radio.wait_received(wake), COMMANDS.receive(), saved).await {
+            match select3(self.radio.wait_received(wake), commands.receive(), saved).await {
                 Either3::First(true) => {
                     if let Some((packet, done)) = self.radio.read_packet().await {
                         #[cfg(feature = "pair-inject")]
@@ -2787,13 +2782,6 @@ fn log_pairing(pairing: &Pairing, phase: Phase, now: i64) {
     info!("[PAIR] {} {} ({}s left)", pairing.role(), phase, left);
 }
 
-/// The RTC's UTC in microseconds at local time `now`, to the RTC's whole second.
-fn rtc_now(now: i64) -> Option<i64> {
-    RTC_TIME
-        .lock(Cell::get)
-        .map(|(seconds, read)| seconds * 1_000_000 + now - read.as_micros() as i64)
-}
-
 fn log_timebase(timebase: Option<Timebase>, sweeping: bool) {
     match timebase {
         None => info!("[MESH] no timebase, sweeping={}", sweeping),
@@ -2817,7 +2805,14 @@ pub async fn offline(start: Start) {
     let mut shown = Shown::new(false);
     let mut view = blank_view();
     loop {
-        shown.fill(&mut view, &me, group.as_ref(), local());
+        let now = local();
+        shown.fill(
+            &mut view,
+            &me,
+            group.as_ref(),
+            now,
+            utc_now(&BoardDevice, now),
+        );
         publish(&mut view);
         match COMMANDS.receive().await {
             Command::Leave => {
@@ -2826,7 +2821,13 @@ pub async fn offline(start: Start) {
                 shown.answer(Answer::Left(left));
             }
             Command::Rename(name) => {
-                let saved = rename(&mut me, group.as_mut(), name, utc_seconds(local())).await;
+                let saved = rename(
+                    &mut me,
+                    group.as_mut(),
+                    name,
+                    utc_seconds(&BoardDevice, local()),
+                )
+                .await;
                 if saved && let Some(group) = &group {
                     let id = group.own();
                     super::queue_group_write(GroupWrite::Slot {

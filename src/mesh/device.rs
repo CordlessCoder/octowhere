@@ -1,0 +1,113 @@
+//! The board around the node: the fix and the GNSS and RTC times the other tasks set, the
+//! commands the screens send, and the view they are shown.
+
+use alloc::boxed::Box;
+use core::{
+    cell::{Cell, RefCell},
+    sync::atomic::{AtomicU32, Ordering},
+};
+
+use embassy_sync::{
+    blocking_mutex::{Mutex as BlockingMutex, raw::CriticalSectionRawMutex},
+    channel::Channel,
+    signal::Signal,
+};
+use embassy_time::Instant;
+use lc76g::FixQuality;
+use octowhere::ui::group::view::{MeshView, Request};
+use octowhere_mesh::packet::Quality;
+
+use super::{Command, Commands, Device, Fix, GpsTime, blank_view};
+
+/// The latest fix and the UTC second it was made in, from `gnss_task`.
+pub static FIX: BlockingMutex<CriticalSectionRawMutex, Cell<Option<Fix>>> =
+    BlockingMutex::new(Cell::new(None));
+/// The RTC's UTC seconds and when they were read, from `sensor_task`, while its oscillator has
+/// not stopped.
+pub static RTC_TIME: BlockingMutex<CriticalSectionRawMutex, Cell<Option<(i64, Instant)>>> =
+    BlockingMutex::new(Cell::new(None));
+/// What the user asks of the mesh.
+pub static COMMANDS: Channel<CriticalSectionRawMutex, Command, 4> = Channel::new();
+/// What the screens show of the mesh, as last published, and a signal that it changed.
+static VIEW: BlockingMutex<CriticalSectionRawMutex, RefCell<Option<Box<MeshView>>>> =
+    BlockingMutex::new(RefCell::new(None));
+pub static VIEW_CHANGED: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+/// Counts the views published, so a reader can tell when there is a new one.
+static VIEWS: AtomicU32 = AtomicU32::new(0);
+
+/// How the protocol grades a fix the GNSS module made.
+#[must_use]
+pub fn quality(fix: FixQuality) -> Quality {
+    match fix {
+        FixQuality::Autonomous => Quality::Autonomous,
+        FixQuality::Differential | FixQuality::Pps | FixQuality::Rtk | FixQuality::FloatRtk => {
+            Quality::Differential
+        }
+        _ => Quality::Estimated,
+    }
+}
+
+/// Passes what the screens asked on to the mesh. Returns false when the queue is full.
+pub fn request(request: Request) -> bool {
+    COMMANDS.try_send(request.into()).is_ok()
+}
+
+/// Copies the mesh as last published into `into`, if it changed after the view counted `seen`,
+/// and returns its count.
+pub fn view_since(seen: u32, into: &mut MeshView) -> Option<u32> {
+    let count = VIEWS.load(Ordering::Acquire);
+    if count == seen {
+        return None;
+    }
+    VIEW.lock(|view| view.borrow().as_deref().map(|view| into.copy_from(view)))?;
+    Some(count)
+}
+
+/// Publishes `view` when it differs from what the screens were last shown. It trades places
+/// with the view it replaces, so it holds an older one after.
+pub fn publish(view: &mut Box<MeshView>) {
+    let changed = VIEW.lock(|current| {
+        let mut current = current.borrow_mut();
+        match &mut *current {
+            Some(current) if **current == **view => return false,
+            Some(current) => core::mem::swap(current, view),
+            None => *current = Some(core::mem::replace(view, blank_view())),
+        }
+        VIEWS.fetch_add(1, Ordering::Release);
+        true
+    });
+    if changed {
+        VIEW_CHANGED.signal(());
+    }
+}
+
+pub struct BoardDevice;
+
+impl Device for BoardDevice {
+    fn fix(&self) -> Option<Fix> {
+        FIX.lock(Cell::get)
+    }
+
+    fn gps_time(&self) -> Option<GpsTime> {
+        crate::GPS_TIME.lock(Cell::get).map(|gps| GpsTime {
+            offset: gps.offset,
+            updated: gps.updated.as_micros() as i64,
+        })
+    }
+
+    fn rtc_utc(&self, now: i64) -> Option<i64> {
+        RTC_TIME
+            .lock(Cell::get)
+            .map(|(seconds, read)| seconds * 1_000_000 + now - read.as_micros() as i64)
+    }
+
+    fn publish(&self, view: &mut Box<MeshView>) {
+        publish(view);
+    }
+}
+
+impl Commands for Channel<CriticalSectionRawMutex, Command, 4> {
+    async fn receive(&self) -> Command {
+        Channel::receive(self).await
+    }
+}

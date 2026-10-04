@@ -1327,7 +1327,7 @@ async fn gnss_task(task: GnssTask) {
                             latitude: position.latitude.get(),
                             longitude: position.longitude.get(),
                             stamp: (fix / 1_000_000) as u32,
-                            quality: position.quality,
+                            quality: mesh::quality(position.quality),
                             hdop_milli: position.hdop.map(|hdop| hdop.get()),
                         }))
                     });
@@ -1619,10 +1619,11 @@ async fn radio_task(task: RadioTask) {
         mesh::BoardRadio::new(lora, dio0, path),
         mesh::BoardTime,
         mesh::BoardRandom,
+        mesh::BoardDevice,
         mesh,
     )
     .await
-    .run()
+    .run(&mesh::COMMANDS)
     .await;
 }
 
