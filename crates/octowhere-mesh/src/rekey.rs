@@ -1030,14 +1030,11 @@ pub struct Switched {
 mod tests {
     use super::*;
     use crate::members::tests::{member, signed};
-    use crate::members::{Name, Slot, fingerprint};
+    use crate::members::{Name, fingerprint};
 
+    /// The test group at generation 3, so that a key following it is generation 4.
     fn group(own: u8, ids: &[(u8, u8)]) -> Group {
-        let mut slots = [None; IDS as usize];
-        for &(id, n) in ids {
-            slots[usize::from(id)] = Some(Slot::Member(member(n, 100)));
-        }
-        Group::restore(Key::new([5; 32]), 3, own, slots).unwrap()
+        crate::members::tests::group_at(3, own, ids)
     }
 
     /// Holds the device `of` as gone from id `id`: a key that names it removes nobody.

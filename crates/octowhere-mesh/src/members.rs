@@ -1028,12 +1028,19 @@ pub(crate) mod tests {
         record
     }
 
-    fn group(own: u8, ids: &[(u8, u8)]) -> Group {
-        let mut members = [None; SLOTS];
+    /// A group under the test key with this device at `own`, and device `n`'s record at each
+    /// `(id, n)`.
+    pub(crate) fn group(own: u8, ids: &[(u8, u8)]) -> Group {
+        group_at(0, own, ids)
+    }
+
+    /// As [`group`], at `generation`.
+    pub(crate) fn group_at(generation: u16, own: u8, ids: &[(u8, u8)]) -> Group {
+        let mut slots = [None; SLOTS];
         for &(id, n) in ids {
-            members[usize::from(id)] = Some(member(n, 100));
+            slots[usize::from(id)] = Some(Slot::Member(member(n, 100)));
         }
-        Group::new(Key::new([5; 32]), own, members).unwrap()
+        Group::restore(Key::new([5; 32]), generation, own, slots).unwrap()
     }
 
     #[test]
