@@ -12,13 +12,14 @@ use embassy_futures::select::{Either, Either3, select, select3};
 use octowhere_mesh::{
     IDS, Zeroable,
     clock::{Clock, SWEEP_US, Taken},
-    members::{GONE_LEN, Gone, Group, Merged, Name, Requests, Slot},
+    compose::{MAX_RECORDS, Sources, compose},
+    members::{Gone, Group, Merged, Name, Requests, Slot},
     messages::{
         self, BODY_MAX, Insert, Message, Pairwise, Sequence, Store, Summaries, TEXT_MAX, To, kind,
     },
     packet::{
         Builder, Entry, HEADER_LEN, Hdop, Header, MAX_PACKET, Plain, Quality, Record, Source,
-        Timebase, positions_len,
+        Timebase,
     },
     pair::{End, Identity, MAX_FRAME, Pairing, Phase, Role},
     rekey::{Kept, Learned, NewKey, Rekey},
@@ -55,8 +56,6 @@ const PREPARE_US: i64 = 30_000;
 /// sender's transmission begins: half how late a root hears the nodes timing from it, on two
 /// boards whose `DIO0` follows the radio (2026-10-01). Polling the flags adds half a poll.
 const ARRIVAL_LATENCY_US: i64 = 1_050;
-/// Positions a packet carries at most: as many as fit beside the neighbours record.
-const MAX_ENTRIES: usize = 24;
 /// How long a pairing waits for the group to be stored before it counts as a failure.
 const STORE_TIMEOUT_US: i64 = 10 * 1_000_000;
 /// A notice is a header alone.
@@ -67,8 +66,6 @@ const PAIR_LISTEN_US: i64 = 250_000;
 /// for the joining device under the group's key. That device waits 30 s for done, sweeps for
 /// three rounds, then sends in its next slot, since it hears nobody: about 3½ minutes in all.
 const FOUNDING_WAIT_US: i64 = 10 * 60 * 1_000_000;
-/// Member records a packet carries at most.
-const MAX_RECORDS: usize = 3;
 /// How long after a failed write a founding's wait tries to store its group again.
 const STORE_RETRY_US: i64 = 10 * 1_000_000;
 /// The messages made here that can wait for a sequence number and a timebase.
@@ -1714,105 +1711,50 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         };
         let mut packet = [0u8; MAX_PACKET];
         let mut builder = Builder::new(&mut packet[SIV_LEN..], &header);
-        let neighbours = self.table.neighbours(round);
-        let _ = builder.neighbours(neighbours);
-        let _ = builder.members_digest(group.digest());
-        if !self.messages.is_empty() {
-            let _ = builder.messages_digest(self.messages.digest());
-        }
-        let requests = self.requests.pending();
-        if requests != 0 {
-            let _ = builder.request(requests);
-        }
-        // Ahead of the positions, so a busy table never crowds them out, but leaving room for
-        // this node's own.
-        let own_room = if self.table.entry(group.own()).is_some() {
-            positions_len(1)
-        } else {
-            0
-        };
-        let summary = self.summary.as_deref().is_some_and(|(summary, _)| {
-            builder.room() >= 2 + summary.len() + own_room && builder.summary(summary).is_ok()
-        });
-        let (mut records, mut unsent) = (0u32, group.unsent());
-        while unsent != 0 && (records.count_ones() as usize) < MAX_RECORDS {
-            let id = unsent.trailing_zeros() as u8;
-            unsent &= !(1 << id);
-            let Some(slot) = group.slot(id).copied() else {
-                continue;
-            };
-            if builder.room() < slot.record_len() + own_room || builder.slot(id, &slot).is_err() {
-                break;
-            }
-            records |= 1 << id;
-        }
-        let mut former = 0u8;
-        for (at, id, gone) in group.former_unsent() {
-            if (records.count_ones() + former.count_ones()) as usize >= MAX_RECORDS
-                || builder.room() < 2 + GONE_LEN + own_room
-                || builder.gone(id, &gone).is_err()
-            {
-                break;
-            }
-            former |= 1 << at;
-        }
-        // Oldest first, ahead of the other members' positions but leaving room for this node's.
-        let mut carried = heapless::Vec::<messages::Name, 8>::new();
-        let mut after = None;
-        while let Some(message) = self.messages.next_unsent(after.as_ref()) {
-            if builder.room() < message.record_len() + own_room
-                || carried.push(message.name()).is_err()
-                || builder.message(message).is_err()
-            {
-                break;
-            }
-            after = Some(*message);
-        }
-        let mut entries = [Entry {
-            id: 0,
-            latitude: 0,
-            longitude: 0,
-            stamp: 0,
-            quality: Quality::Reserved,
-            hdop: Hdop::from_milli(0),
-        }; MAX_ENTRIES];
-        let room = builder.room_for_entries().min(MAX_ENTRIES);
-        let n = self.table.digest(base, &mut entries[..room]);
-        if n > 0 && builder.positions(&entries[..n]).is_err() {
-            warn!("[MESH] positions did not fit");
-        }
+        let carried = compose(
+            &mut builder,
+            round,
+            base,
+            Sources {
+                table: &self.table,
+                group,
+                messages: &self.messages,
+                requests: &self.requests,
+                summary: self
+                    .summary
+                    .as_deref()
+                    .map(|(summary, _)| summary.as_slice()),
+            },
+        );
         let plain_len = builder.finish();
         let len = seal::seal(group.key(), &mut packet, plain_len);
 
         let Some(done) = self.radio.transmit(&packet[..len], Some(send_at)).await else {
             return;
         };
-        self.table.sent(&entries[..n]);
-        self.requests.sent(requests);
-        for name in &carried {
-            self.messages.sent(*name);
-        }
-        if summary && let Some(prepared) = self.summary.take() {
-            self.summaries.sent(prepared.1);
-        }
         if let Some(group) = &mut self.group {
-            for id in (0..IDS).filter(|&id| records & 1 << id != 0) {
-                group.sent(id);
-            }
-            for at in (0..8).filter(|&at| former & 1 << at != 0) {
-                group.former_sent(at);
-            }
+            carried.sent(
+                &mut self.table,
+                &mut self.requests,
+                &mut self.messages,
+                group,
+            );
+        }
+        if carried.summary
+            && let Some(prepared) = self.summary.take()
+        {
+            self.summaries.sent(prepared.1);
         }
         info!(
             "[MESH] sent round={} len={} entries={} records={:#010x} asked={:#010x} neighbours={:#010x} messages={} summary={} done={}",
             round,
             len,
-            n,
-            records,
-            requests,
-            neighbours,
-            carried.len(),
-            summary,
+            carried.positions().len(),
+            carried.records,
+            carried.requests,
+            carried.neighbours,
+            carried.messages().len(),
+            carried.summary,
             done
         );
     }

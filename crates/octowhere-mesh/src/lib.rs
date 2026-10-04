@@ -9,6 +9,7 @@ extern crate alloc;
 
 pub mod bits;
 pub mod clock;
+pub mod compose;
 pub mod identity;
 pub mod members;
 pub mod messages;

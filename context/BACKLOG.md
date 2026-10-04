@@ -202,11 +202,9 @@ until the feature set is complete, because profiling an incomplete firmware pric
   flash header until tests cover them, since they touch the stored format. Done: the review's
   quick wins (`96b6d81`), the radio's fields and methods as `mesh::Radio` (`471e8f7`), and the `unsaved`,
   `unsaved_group` and `rekey_unsaved` flags as `Unsaved`, and the node's own `heard` and
-  `refresh` in place of the view's, which only copies them now. Left:
+  `refresh` in place of the view's, which only copies them now, and `send()`'s packet filling
+  as the mesh crate's tested `compose`. Left:
   - In the node, which has no tests but `unsaved`'s:
-    - Move `send()`'s packet-filling policy into the crate as a tested `compose()`: a summary
-      only with room for the own position, slot and former records sharing `MAX_RECORDS`,
-      messages oldest first, positions last.
     - Move `take()`'s records loop into the crate, returning what it changed. Its rule that a
       packet with no members digest gets no summary answer exists only there.
     - Gather the ten removal fields (`rekey`, `kept`, `catch_up`, `caught_up`,
@@ -241,7 +239,9 @@ until the feature set is complete, because profiling an incomplete firmware pric
   - Say what the code cannot: record type 5 is never to be reused; `IDS` is bound by 5-bit
     fields and `u32` sets; the pairing's frame lengths 40 and 26 are literals though
     `OFFER_LEN` exists; `STORED_MAX` is 22 unlabelled terms; a packet sends at most 8 messages
-    and takes 16; `MAX_RECORDS + 1` is unexplained; `members.rs`'s copy of `set()` leaves out
+    and takes 16; `MAX_RECORDS + 1` is unexplained, and `MAX_RECORDS` itself, 3, cannot bind
+    since records were signed: a member or gone record takes over 100 of a packet's 239 bytes,
+    so no more than two fit; `members.rs`'s copy of `set()` leaves out
     `unsent` without a comment; `MESH_VERSION` is still 1 though the layouts grew through
     shims, while its comment says a later layout can tell itself apart; `pair.rs` has two
     stacked docs, the first stale.
