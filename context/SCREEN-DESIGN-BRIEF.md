@@ -434,7 +434,10 @@ open:
 
 - **What shows.** Every message this device can read: its own, the group's, and those to it,
   for as long as the store holds them. A conversation is the group's, or this device's with one
-  member, by the member's id.
+  member's device. The node tags each message with the other member's device and name as it
+  took the message, so a device paired in at the id a removed member freed starts a
+  conversation of its own and is never shown as the writer of the removed member's messages
+  (owner, 2026-10-04).
 - **How far a message has gone.** QUEUED until a packet of this device's carries it, SENT once
   one has, HEARD RELAYED once another member's packet has, DELIVERED once its destination
   acknowledged it, which only a private message is. A message to someone in reach of its
@@ -464,7 +467,12 @@ open:
   270 px.
 - **Names.** In capitals, in KH Interference Bold and Fraktion Mono. A title too wide at 26 px
   is cut with an ellipsis; the caption under it gives the member's id. The draft has no
-  caption, so a long name there shows only its start.
+  caption, so a long name there shows only its start. A member's current name shows wherever
+  its device is still a member, at any id.
+- **A removed member.** Its conversation keeps the name its device had, its caption reads
+  PRIVATE / REMOVED, and WRITE is unavailable. In the group's conversation its messages' sender
+  reads its name and / REMOVED, in gray. Neither has a render: take it to the next design
+  round.
 
 ## Removal as built
 

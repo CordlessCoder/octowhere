@@ -675,7 +675,7 @@ errata workaround, are in [`docs/hardware-notes.md`](docs/hardware-notes.md).
   49 KB, and the key messages it keeps for catch-up, about 25 KB, are made in place there by
   the node's `zeroed_in`, in the allocator the firmware hands it, from types whose all-zero
   value is valid (`Zeroable`). So are the three copies of what the screens show of the
-  messages, 47,112 bytes each: the node's, the one it publishes into, and the stage's.
+  messages, 53,256 bytes each: the node's, the one it publishes into, and the stage's.
   Never add PSRAM to the global allocator, even as a fallback after the internal regions: a value
   holding an atomic could land there, and atomics in PSRAM break (owner).
 - esp-alloc serves the internal heap's two regions first fit, the 72 KiB one first, and grows a
