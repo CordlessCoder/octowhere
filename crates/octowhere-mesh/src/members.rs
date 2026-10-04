@@ -677,17 +677,25 @@ impl Group {
     }
 
     /// Gives the member that a gone record at `id` names by `fingerprint` its id back, as a
-    /// removal undone. Its record comes back from nodes that still hold it. Returns whether
-    /// there was such a gone record.
-    pub(crate) fn forget_gone(&mut self, id: u8, fingerprint: &[u8; 8]) -> bool {
-        if self
+    /// removal undone, with `record`, the one it had before. Without one its record comes back
+    /// from nodes that still hold it. Returns whether there was such a gone record.
+    pub(crate) fn put_back(
+        &mut self,
+        id: u8,
+        record: Option<Member>,
+        fingerprint: &[u8; 8],
+    ) -> bool {
+        if !self
             .gone(id)
             .is_some_and(|gone| self::fingerprint(&gone.public) == *fingerprint)
         {
-            self.set(id, None);
-            return true;
+            return false;
         }
-        false
+        // Not through `set`: the gone record is undone, not a former member's to keep.
+        self.held.slots[usize::from(id)] = record.map(Slot::Member);
+        self.changed |= 1 << id;
+        self.digest.set(None);
+        true
     }
 
     /// Forgets what the ids `ids`, a set, hold, other than this node's, and every gone record set
@@ -1273,12 +1281,22 @@ pub(crate) mod tests {
     #[test]
     fn an_undone_removal_gives_the_member_its_id_back() {
         let mut g = group(0, &[(0, 1), (1, 2)]);
+        let record = *g.member(1).unwrap();
         g.remove(&fingerprint(&member(2, 0).public), 500);
+        let digest = g.digest();
         assert!(
-            !g.forget_gone(1, &fingerprint(&member(3, 0).public)),
+            !g.put_back(1, Some(record), &fingerprint(&member(3, 0).public)),
             "another device's"
         );
-        assert!(g.forget_gone(1, &fingerprint(&member(2, 0).public)));
+        assert!(g.put_back(1, Some(record), &fingerprint(&member(2, 0).public)));
+        assert_eq!(g.member(1), Some(&record));
+        assert_ne!(g.digest(), digest);
+        assert!(g.former_unsent().next().is_none(), "no former member's");
+
+        // Without the record it had, it comes back from the others.
+        let mut g = group(0, &[(0, 1), (1, 2)]);
+        g.remove(&fingerprint(&member(2, 0).public), 500);
+        assert!(g.put_back(1, None, &fingerprint(&member(2, 0).public)));
         assert!(g.slot(1).is_none());
         assert_eq!(
             g.merge(1, signed(1, 2, 100), 0),

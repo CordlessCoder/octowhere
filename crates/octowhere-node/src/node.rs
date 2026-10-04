@@ -15,13 +15,18 @@ use octowhere_mesh::{
     clock::{Clock, SWEEP_US, Taken},
     compose::{Sources, compose},
     members::{Gone, Group, Name, Requests},
-    messages::{self, BODY_MAX, Message, Pairwise, Sequence, Store, Summaries, TEXT_MAX, To, kind},
+    messages::{
+        self, BODY_MAX, Insert, Message, Pairwise, Sequence, Store, Summaries, TEXT_MAX, To, kind,
+    },
     packet::{
-        Builder, Entry, HEADER_LEN, Hdop, Header, MAX_PACKET, Plain, Quality, Source, Timebase,
+        Builder, Entry, HEADER_LEN, Hdop, Header, MAX_PACKET, Plain, Quality, Record, Source,
+        Timebase,
     },
     pair::{End, Identity, MAX_FRAME, Pairing, Phase, Role},
     rekey::{Kept, Learned, NewKey, Rekey},
-    schedule::{GUARD_US, ROUND_US, Schedule, airtime_us, base_of, is_sweep_round, round_at},
+    schedule::{
+        GUARD_US, ROUND_US, SWEEP_EVERY, Schedule, airtime_us, base_of, is_sweep_round, round_at,
+    },
     seal::{self, Key, SIV_LEN},
     table::Table,
 };
@@ -207,7 +212,13 @@ struct CatchUp {
     id: u8,
     key: Key,
     generation: u16,
+    /// The generation of the key message it is sent.
+    catches_up_with: u16,
 }
+
+/// The members one packet under an old key catches up, each with the generation of the key
+/// message it is sent.
+type Catching = heapless::Vec<(u8, u16), 4>;
 
 /// The message telling a member it was removed, held by its remover until the switch, then
 /// sent under the old key, which only the members that missed the switch and it still hold.
@@ -224,9 +235,6 @@ const NOTICE_SENDS: u8 = 3;
 /// How many times a member waiting for its key message is sent it under an old key: one that
 /// declined the removal never takes it.
 const CATCH_UPS: u8 = 3;
-/// A node that has heard no member on its key for this long is lagging, and takes a key more
-/// than one generation ahead.
-const LAGGING_US: i64 = 7 * ROUND_US;
 /// The most a summary takes of a packet, so that it leaves room for messages.
 const SUMMARY_MAX: usize = 120;
 
@@ -237,10 +245,11 @@ enum Opened {
     Pending {
         sender: u8,
     },
-    /// One the group switched away from, which its sender has not.
+    /// One the group switched away from, which its sender has not: the key, its generation, and
+    /// that of the key message that catches its sender up.
     Old {
         sender: u8,
-        generation: u16,
+        old: (Key, u16, u16),
     },
     Not,
 }
@@ -668,8 +677,6 @@ pub struct Mesh<R, T, G, D, S, A: Allocator> {
     removal_notice: Option<Box<RemovalNotice>>,
     /// The round the last header under an old key went out in.
     beacon_round: i64,
-    /// Members this device removed that a rival key kept, to remove again, as a set.
-    remove_again: u32,
     /// Whether every key message of this device's own removal under way is in the store.
     keys_posted: bool,
     /// The member this device removed at the last switch, to tell, with the old key and its
@@ -755,7 +762,6 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             catch_up: heapless::Vec::new(),
             removal_notice: None,
             beacon_round: i64::MIN,
-            remove_again: 0,
             keys_posted: false,
             notify: None,
             caught_up: [0; IDS as usize],
@@ -1070,13 +1076,9 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             self.post_keys(time).await;
         }
         // A member this device removed again once its record is back.
-        let again = self.remove_again & self.group.as_ref().map_or(0, Group::ids);
+        let again = self.rekey.again() & self.group.as_ref().map_or(0, Group::ids);
         if again != 0 && self.rekey.pending().is_none() {
-            let id = again.trailing_zeros() as u8;
-            self.remove(id).await;
-            if self.rekey.pending().is_some() {
-                self.remove_again &= !(1 << id);
-            }
+            self.remove(again.trailing_zeros() as u8).await;
         }
         self.retry_unread(own);
         self.messages.expire(round_start_s(time), |_| {});
@@ -1183,16 +1185,17 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         }
     }
 
-    /// The old key a packet under one goes out under, with whom it catches up: the key a member
-    /// waiting for its key message is on, or in a sweep round while any member is waited for,
-    /// the newest old key, so that parts of the group on rival keys still hear each other.
-    fn old_packet(&self, round: i64) -> Option<(&Key, u16, heapless::Vec<u8, 4>)> {
+    /// The old key a packet under one goes out under, with whom it catches up and the generation
+    /// of the key message each is sent: the key a member waiting for its key message is on, or
+    /// in a sweep round while any member is waited for, the newest old key, so that parts of the
+    /// group on rival keys still hear each other.
+    fn old_packet(&self, round: i64) -> Option<(&Key, u16, Catching)> {
         if let Some(first) = self.catch_up.first() {
             let ids = self
                 .catch_up
                 .iter()
-                .filter(|up| up.generation == first.generation)
-                .map(|up| up.id)
+                .filter(|up| up.key == first.key)
+                .map(|up| (up.id, up.catches_up_with))
                 .collect();
             return Some((&first.key, first.generation, ids));
         }
@@ -1203,7 +1206,9 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
     }
 
     /// When this node's slot comes next in the order of the old key a packet under one would go
-    /// out under, on the local timer, and its round.
+    /// out under, on the local timer, and its round. That is always in a sweep round, where
+    /// every member listens throughout: one that switched to a rival key listens in no other
+    /// round of the old key's order.
     fn old_slot_at(&self, now: i64, own: u8) -> Option<(i64, i64)> {
         if self.catch_up.is_empty() && !self.rekey.is_waiting() {
             return None;
@@ -1211,10 +1216,15 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         let (time, _) = self.clock.at(now)?;
         let from = time + 2 * PREPARE_US;
         let (key, _, _) = self.old_packet(round_at(from))?;
-        let (round, start) = Schedule::new(key).next_slot(from, own);
-        // A sweep round's header goes in that round only.
-        if self.catch_up.is_empty() && round != round_at(from) {
-            return None;
+        let schedule = Schedule::new(key);
+        let (mut round, mut start) = schedule.next_slot(from, own);
+        if !is_sweep_round(round) {
+            // A sweep round's header goes in that round only.
+            if self.catch_up.is_empty() {
+                return None;
+            }
+            round += SWEEP_EVERY - round.rem_euclid(SWEEP_EVERY);
+            start = schedule.slot_start(round, own);
         }
         Some((start + (now - time), round))
     }
@@ -1238,22 +1248,23 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         };
         let mut packet = [0u8; MAX_PACKET];
         let mut builder = Builder::new(&mut packet[SIV_LEN..], &header);
-        let mut caught = 0u32;
-        for &id in &ids {
+        let (mut caught, mut lost) = (0u32, 0u32);
+        for &(id, catches_up_with) in &ids {
             let message = match &self.removal_notice {
                 Some(notice) if notice.message.to() == To::Member(id) => Some(&notice.message),
-                _ => self.kept.get(id, generation.wrapping_add(1)),
+                _ => self.kept.get(id, catches_up_with),
             };
-            if let Some(message) = message
-                && builder.message(message).is_ok()
-            {
-                caught |= 1 << id;
+            match message {
+                Some(message) if builder.message(message).is_ok() => caught |= 1 << id,
+                Some(_) => {}
+                // Gone since it was queued, as a rival's switch drops the losing key's.
+                None => lost |= 1 << id,
             }
         }
         let plain_len = builder.finish();
         let len = seal::seal(&key, &mut packet, plain_len);
         let sent = self.radio.transmit(&packet[..len], Some(at)).await;
-        self.catch_up.retain(|up| caught & 1 << up.id == 0);
+        self.catch_up.retain(|up| (caught | lost) & 1 << up.id == 0);
         for id in (0..IDS).filter(|&id| caught & 1 << id != 0) {
             let sent = &mut self.caught_up[usize::from(id)];
             *sent = sent.saturating_add(1);
@@ -1461,7 +1472,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             {
                 return Opened::Old {
                     sender: plain.header.sender,
-                    generation: old.generation,
+                    old: (old.key.clone(), old.generation, old.catches_up_with()),
                 };
             }
         }
@@ -1484,8 +1495,9 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                 }
                 return false;
             }
-            Opened::Old { sender, generation } => {
-                self.heard_on_old(sender, generation);
+            Opened::Old { sender, old } => {
+                self.heard_on_old(sender, old);
+                self.take_rivals(&bytes[SIV_LEN..len]);
                 return false;
             }
             Opened::Not => {
@@ -1632,6 +1644,40 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             absorbed.summary,
         );
         arrival.taken == Taken::Adopted || absorbed.renumbered.is_some()
+    }
+
+    /// Takes from a packet under an old key, opened, the key messages of this node's
+    /// generation: rivals of the key it switched to, which reach it no other way once both
+    /// parts of the group have switched. Nothing else in it is taken.
+    fn take_rivals(&mut self, plain: &[u8]) {
+        let (Some(group), Ok(plain), Some((time, _))) = (
+            &self.group,
+            Plain::parse(plain),
+            self.clock.at(self.time.now()),
+        ) else {
+            return;
+        };
+        let (generation, own) = (group.generation(), group.own());
+        for record in plain.records() {
+            let Record::Message(message) = record else {
+                continue;
+            };
+            if !message.is_key() || message.generation() != Some(generation) {
+                continue;
+            }
+            match self.messages.insert(message, round_start_s(time)) {
+                Insert::New => {
+                    self.keep_key(&message);
+                    if self.arrived(&message, own) == Arrival::Later {
+                        self.messages.mark_unread(message.name());
+                    }
+                }
+                Insert::Old if message.to() == To::Member(own) => {
+                    self.arrived(&message, own);
+                }
+                _ => {}
+            }
+        }
     }
 
     /// Sends this node's packet in its slot in `round`, which starts at timebase time `start` and
@@ -1934,7 +1980,6 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         self.refill = None;
         self.catch_up.clear();
         self.removal_notice = None;
-        self.remove_again = 0;
         self.keys_posted = false;
         self.notify = None;
         self.caught_up = [0; IDS as usize];
@@ -2040,11 +2085,8 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             return None;
         };
         let round = round_at(time) as u32;
-        let lagging = !self.heard.iter().enumerate().any(|(id, heard)| {
-            id != usize::from(group.own()) && heard.is_some_and(|at| now - at < LAGGING_US)
-        });
         let (removed, generation) = (new.removed, new.generation);
-        match self.rekey.learned(group, remover, new, round, lagging) {
+        match self.rekey.learned(group, remover, new, round) {
             Learned::Ignored => {
                 info!(
                     "[REKEY] key message from {} for generation {} ignored",
@@ -2060,6 +2102,13 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                 );
                 self.save_rekey();
                 Some(Learned::Pending)
+            }
+            Learned::Later => {
+                debug!(
+                    "[REKEY] key message from {} for generation {} follows a key not held yet",
+                    remover, generation
+                );
+                Some(Learned::Later)
             }
         }
     }
@@ -2088,7 +2137,6 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                 "[REKEY] this device's removal lost; removing {:#010x} again",
                 switched.undone
             );
-            self.remove_again |= switched.undone;
         }
         if switched.remover == group.own()
             && let Some(removed) = switched.removed
@@ -2212,8 +2260,6 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         self.kept.clear();
         self.catch_up.clear();
         self.caught_up = [0; IDS as usize];
-        // A rival this device lost to, made again, would only race the key gone back to.
-        self.remove_again = 0;
         self.save_switch();
         self.sync_schedule();
         self.shown.positions(&self.table);
@@ -2239,6 +2285,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                     id,
                     key,
                     generation,
+                    catches_up_with: generation.wrapping_add(1),
                 });
             }
             Made::Wait => self.notify = Some((id, key, generation)),
@@ -2253,9 +2300,10 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         Some(now + i64::from(pending.switch) * ROUND_US - time)
     }
 
-    /// Takes a packet from `sender` under the old key of generation `generation`: it missed a
-    /// switch, and its key message goes to it.
-    fn heard_on_old(&mut self, sender: u8, generation: u16) {
+    /// Takes a packet from `sender` under the old key `key` of generation `generation`: it
+    /// missed a switch, or took a rival key that lost, and the key message of generation
+    /// `catches_up_with` goes to it.
+    fn heard_on_old(&mut self, sender: u8, (key, generation, catches_up_with): (Key, u16, u16)) {
         if let Some(notice) = &self.removal_notice
             && notice.message.to() == To::Member(sender)
             && notice.generation == generation
@@ -2265,6 +2313,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                     id: sender,
                     key: notice.key.clone(),
                     generation,
+                    catches_up_with,
                 });
             }
             return;
@@ -2280,21 +2329,13 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             );
             return;
         }
-        if self.kept.get(sender, generation.wrapping_add(1)).is_none() {
+        if self.kept.get(sender, catches_up_with).is_none() {
             info!(
                 "[REKEY] {} is on generation {}; no key message is held for it",
                 sender, generation
             );
             return;
         }
-        let Some(key) = self
-            .rekey
-            .old()
-            .find(|old| old.generation == generation)
-            .map(|old| old.key.clone())
-        else {
-            return;
-        };
         if self.catch_up.iter().all(|up| up.id != sender)
             && self
                 .catch_up
@@ -2302,6 +2343,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                     id: sender,
                     key,
                     generation,
+                    catches_up_with,
                 })
                 .is_ok()
         {
@@ -2462,7 +2504,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                         .filter(|new| message.generation() == Some(new.generation))
                     {
                         Some(new) => match self.learned_key(origin, new) {
-                            None => return Arrival::Later,
+                            None | Some(Learned::Later) => return Arrival::Later,
                             Some(Learned::Ignored) => return Arrival::Done,
                             Some(Learned::Pending) => {}
                         },
