@@ -7,6 +7,7 @@
 
 extern crate alloc;
 
+pub mod absorb;
 pub mod bits;
 pub mod clock;
 pub mod compose;

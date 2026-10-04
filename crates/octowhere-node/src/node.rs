@@ -11,21 +11,19 @@ use defmt::{debug, info, warn};
 use embassy_futures::select::{Either, Either3, select, select3};
 use octowhere_mesh::{
     IDS, Zeroable,
+    absorb::{Event, State, When, absorb},
     clock::{Clock, SWEEP_US, Taken},
-    compose::{MAX_RECORDS, Sources, compose},
-    members::{Gone, Group, Merged, Name, Requests, Slot},
-    messages::{
-        self, BODY_MAX, Insert, Message, Pairwise, Sequence, Store, Summaries, TEXT_MAX, To, kind,
-    },
+    compose::{Sources, compose},
+    members::{Gone, Group, Name, Requests},
+    messages::{self, BODY_MAX, Message, Pairwise, Sequence, Store, Summaries, TEXT_MAX, To, kind},
     packet::{
-        Builder, Entry, HEADER_LEN, Hdop, Header, MAX_PACKET, Plain, Quality, Record, Source,
-        Timebase,
+        Builder, Entry, HEADER_LEN, Hdop, Header, MAX_PACKET, Plain, Quality, Source, Timebase,
     },
     pair::{End, Identity, MAX_FRAME, Pairing, Phase, Role},
     rekey::{Kept, Learned, NewKey, Rekey},
     schedule::{GUARD_US, ROUND_US, Schedule, airtime_us, base_of, is_sweep_round, round_at},
     seal::{self, Key, SIV_LEN},
-    table::{Merge, Table},
+    table::Table,
 };
 
 use crate::{
@@ -1546,112 +1544,44 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             .clock
             .at(done)
             .map_or_else(|| round_start_s(slot), |(time, _)| round_start_s(time));
-        let (mut entries, mut news, mut neighbours, mut moved) = (0, 0, 0, false);
-        let mut carried = [None; IDS as usize];
         let own = group.own();
-        let mut rekey_changed = self.rekey.heard(header.sender);
-        let mut late_key = None;
-        let (mut their_messages, mut summary) = (0, None);
-        // A packet has room for about a dozen of the shortest messages.
-        let mut carried_messages = heapless::Vec::<messages::Name, 16>::new();
-        let mut arrivals = heapless::Vec::<messages::Name, 16>::new();
-        let mut heard_records = heapless::Vec::<(u8, Slot), { MAX_RECORDS + 1 }>::new();
-        let (mut theirs, mut asked) = (None, None);
-        for record in plain.records() {
-            match record {
-                Record::Positions(positions) => {
-                    for entry in positions {
-                        entries += 1;
-                        if let Some(stamp) = carried.get_mut(usize::from(entry.id)) {
-                            *stamp = Some(entry.stamp);
-                        }
-                        if matches!(self.table.merge(entry, now), Merge::New | Merge::Newer) {
-                            news += 1;
-                        }
-                    }
-                }
-                Record::Neighbours(set) => neighbours = set,
-                Record::Members(digest) => theirs = Some(digest),
-                Record::Request(ids) => asked = Some(ids),
-                Record::Member(id, member) => {
-                    let _ = heard_records.push((id, Slot::Member(member)));
-                    match group.merge(
-                        id,
-                        member,
-                        now.unwrap_or_else(|| utc_seconds(&self.device, done)),
-                    ) {
-                        Merged::Unchanged => {}
-                        Merged::Changed { vacated } => {
-                            info!("[MESH] member {} is {} now", id, member.name);
-                            self.unsaved.slot(id);
-                            if let Some(vacated) = vacated {
-                                self.unsaved.slot(vacated);
-                                // A member that moved is waited for at its new id, if at all.
-                                rekey_changed |= self.rekey.went(vacated);
-                            }
-                        }
-                        Merged::Renumbered { from, to } => {
-                            warn!(
-                                "[MESH] another device keeps id {}; this one moves to {}",
-                                from, to
-                            );
-                            group.sign_own(&self.me);
-                            self.clock.renumber(to);
-                            self.table.renumber(to);
-                            self.unsaved.group();
-                            moved = true;
-                        }
-                        Merged::Went { at } => self.unsaved.slot(at),
-                    }
-                }
-                Record::Gone(id, gone) => {
-                    let _ = heard_records.push((id, Slot::Gone(gone)));
-                    if let Merged::Went { at } = group.merge_gone(
-                        id,
-                        gone,
-                        now.unwrap_or_else(|| utc_seconds(&self.device, done)),
-                    ) {
-                        info!("[MESH] member {} went", at);
-                        self.unsaved.slot(at);
-                        rekey_changed |= self.rekey.went(at);
-                    }
-                }
-                Record::Message(message) => {
-                    let _ = carried_messages.push(message.name());
-                    match self.messages.insert(message, round_s) {
-                        Insert::New => {
-                            let _ = arrivals.push(message.name());
-                        }
-                        // Catching up a member away for longer than the horizon.
-                        Insert::Old if message.is_key() && message.to() == To::Member(own) => {
-                            late_key = Some(message);
-                        }
-                        _ => {}
-                    }
-                }
-                Record::Messages(digest) => their_messages = digest,
-                Record::Summary(body) => summary = Some(body),
-                Record::Other(..) => {}
+        let absorbed = absorb(
+            plain.records(),
+            header.sender,
+            When {
+                round,
+                now,
+                utc: utc_seconds(&self.device, done),
+                round_s,
+            },
+            State {
+                group,
+                table: &mut self.table,
+                messages: &mut self.messages,
+                requests: &mut self.requests,
+                summaries: &mut self.summaries,
+                rekey: &mut self.rekey,
+                me: &self.me,
+            },
+        );
+        for event in absorbed.events() {
+            match event {
+                Event::Changed(id, name) => info!("[MESH] member {} is {} now", id, name),
+                Event::Renumbered { from, to } => warn!(
+                    "[MESH] another device keeps id {}; this one moves to {}",
+                    from, to
+                ),
+                Event::Went(at) => info!("[MESH] member {} went", at),
             }
         }
-        if self
-            .table
-            .covered_by(header.sender, &carried, neighbours, round)
-        {
-            for (id, slot) in &heard_records {
-                group.covered(*id, slot);
-            }
-            for name in &carried_messages {
-                self.messages.sent(*name);
-            }
+        for id in (0..IDS).filter(|&id| absorbed.changed & 1 << id != 0) {
+            self.unsaved.slot(id);
         }
-        self.requests.heard(group, header.sender, theirs, asked);
-        // A packet with no members digest is no full account of its sender.
-        if theirs.is_some() {
-            self.summaries
-                .heard(&mut self.messages, header.sender, their_messages, summary);
+        if let Some(to) = absorbed.renumbered {
+            self.clock.renumber(to);
+            self.unsaved.group();
         }
-        for name in &arrivals {
+        for name in absorbed.arrivals() {
             let Some(message) = self.messages.get(*name).copied() else {
                 continue;
             };
@@ -1662,10 +1592,10 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                 self.messages.mark_unread(*name);
             }
         }
-        if let Some(message) = late_key {
+        if let Some(message) = absorbed.late_key {
             self.arrived(&message, own);
         }
-        if rekey_changed {
+        if absorbed.rekey_changed {
             if !self.rekey.is_waiting() {
                 info!("[REKEY] every member is on the new key; the old one is dropped");
                 self.kept.clear();
@@ -1685,14 +1615,14 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             len,
             packet.rssi,
             packet.snr,
-            entries,
-            news,
-            neighbours,
-            arrivals.len(),
-            carried_messages.len(),
-            summary.is_some(),
+            absorbed.entries,
+            absorbed.news,
+            absorbed.neighbours,
+            absorbed.arrivals().len(),
+            absorbed.carried,
+            absorbed.summary,
         );
-        arrival.taken == Taken::Adopted || moved
+        arrival.taken == Taken::Adopted || absorbed.renumbered.is_some()
     }
 
     /// Sends this node's packet in its slot in `round`, which starts at timebase time `start` and
