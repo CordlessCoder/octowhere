@@ -16,8 +16,9 @@
 //! node's group, the air's speed and time, and the link matrix: a click on a cell steps the
 //! link from its row's device to its column's through in reach, lossy and out of reach, with
 //! Shift both ways. `[` and `]` run the air slower or faster, up to 120 times the host's clock,
-//! and X resets the device with the keyboard, which starts its node again from what it
-//! stored. Powering a device off stops its node. The nodes' warnings go to the terminal, and
+//! though a finger or a key held keeps it at the host's pace, so that a press or a double tap
+//! keeps its length on a device's clock, which is its node's. X resets the device with the
+//! keyboard, which starts its node again from what it stored. Powering a device off stops its node. The nodes' warnings go to the terminal, and
 //! with `--log` every line they log. One device alone has no air: a scripted mesh answers it,
 //! whose other device pairs with whatever it asks.
 //!
@@ -178,6 +179,11 @@ impl Panel {
             light: 1.0,
             shift: Point::zero(),
         }
+    }
+
+    /// Forgets the finger and its fading mark, as a device's clock starts again from zero.
+    pub fn forget_touch(&mut self) {
+        (self.contact, self.lifted) = (None, None);
     }
 
     pub fn set_masked(&mut self, masked: bool) {
@@ -564,7 +570,7 @@ fn interact(mut window: Window, layout: Layout, options: Options) {
             };
             Device::new(
                 options.masked,
-                Readings::new(air::position(n)),
+                Readings::new(octowhere_sim::air::position(n)),
                 label,
                 air.is_none(),
             )
@@ -584,12 +590,15 @@ fn interact(mut window: Window, layout: Layout, options: Options) {
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
         let wall = start.elapsed().as_micros() as u64 + 1;
+        // A finger or a key held keeps the air at the host's pace, so presses keep their length.
+        let input = window.get_mouse_down(MouseButton::Left)
+            || [Key::K, Key::O, Key::H]
+                .iter()
+                .any(|&key| window.is_key_down(key));
         if let Some(air) = &mut air {
-            air.advance(wall);
+            air.advance(wall, input);
         }
-        let utc_s = air
-            .as_ref()
-            .map_or_else(host_utc, |air| air.sim.utc_us().div_euclid(1_000_000));
+        let utc_s = air.as_ref().map_or_else(host_utc, |air| air.paced.utc_s());
         let shift = window.is_key_down(Key::LeftShift) || window.is_key_down(Key::RightShift);
         for key in window.get_keys_pressed(KeyRepeat::Yes) {
             let digit = [
@@ -603,7 +612,10 @@ fn interact(mut window: Window, layout: Layout, options: Options) {
             .iter()
             .position(|&digit| digit == key);
             match (key, digit) {
-                (_, Some(n)) if n < count => focus = n,
+                (_, Some(n)) if n < count && !input => {
+                    devices[focus].release_controls();
+                    focus = n;
+                }
                 (Key::Tab, _) => {
                     let device = &mut devices[focus];
                     device.stage.show(device.stage.screen().next());
@@ -641,14 +653,14 @@ fn interact(mut window: Window, layout: Layout, options: Options) {
                 }
                 (Key::LeftBracket | Key::RightBracket, _) => {
                     if let Some(air) = &mut air {
-                        air.faster(key == Key::RightBracket);
+                        air.paced.faster(key == Key::RightBracket);
                     }
                 }
                 (Key::X, _) if air.is_some() => {
                     println!("[{}] reset", focus + 1);
                     devices[focus].reset();
                     if let Some(air) = &mut air {
-                        air.sim.restart(focus);
+                        air.paced.sim.restart(focus);
                     }
                 }
                 (key, _) => {
@@ -666,15 +678,18 @@ fn interact(mut window: Window, layout: Layout, options: Options) {
             && let Some(pointer) = pointer
         {
             if let Some((n, _)) = layout.panel_at(pointer) {
+                if n != focus {
+                    devices[focus].release_controls();
+                }
                 touched = Some(n);
                 focus = n;
             } else if let Some(air) = &air {
                 let inside = pointer - Point::new(layout.column_x() as i32, 0);
                 if let Some((from, to)) = column::link_at(inside, count) {
-                    air.cycle_link(from, to);
+                    let reach = air.paced.reach(from, to).next();
+                    air.paced.set_reach(from, to, reach);
                     if shift {
-                        // Both ways end as the click left this one.
-                        air.sim.link(to, from, air.sim.link_of(from, to));
+                        air.paced.set_reach(to, from, reach);
                     }
                 }
             }
@@ -685,7 +700,9 @@ fn interact(mut window: Window, layout: Layout, options: Options) {
         was_down = down;
 
         for (n, device) in devices.iter_mut().enumerate() {
-            let now = air.as_ref().map_or(wall, |air| air.sim.clock(n) as u64 + 1);
+            let now = air
+                .as_ref()
+                .map_or(wall, |air| air.paced.sim.clock(n) as u64 + 1);
             let contact = touched
                 .filter(|&touched| touched == n)
                 .and(pointer)
@@ -703,7 +720,7 @@ fn interact(mut window: Window, layout: Layout, options: Options) {
             };
             if let Some(air) = &air {
                 air.sense(n, &device.readings);
-                if let Some((view, seen)) = air.sim.view_since(n, device.seen) {
+                if let Some((view, seen)) = air.paced.sim.view_since(n, device.seen) {
                     device.seen = seen;
                     device.stage.set_mesh(view);
                 }
@@ -711,11 +728,11 @@ fn interact(mut window: Window, layout: Layout, options: Options) {
             let stepped = device.step(now, utc_s, contact, held);
             if let Some(air) = &mut air {
                 if let Some(request) = stepped.mesh {
-                    air.sim.command(n, request.into());
+                    air.paced.sim.command(n, request.into());
                 }
                 match stepped.powered {
-                    Some(false) => air.sim.power_off(n),
-                    Some(true) => air.sim.restart(n),
+                    Some(false) => air.paced.sim.power_off(n),
+                    Some(true) => air.paced.sim.restart(n),
                     None => {}
                 }
             }

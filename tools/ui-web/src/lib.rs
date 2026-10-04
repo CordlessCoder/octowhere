@@ -16,9 +16,7 @@ use embedded_graphics::{
     pixelcolor::{Rgb888, RgbColor},
     prelude::Point,
 };
-use octowhere_mesh::packet::Quality;
-use octowhere_node::Fix;
-use octowhere_sim::{Config, Link, alone, grouped};
+use octowhere_sim::air::{Paced, Reach, SPEEDS, position};
 use octowhere_ui::{
     board::{LCD_HEIGHT, LCD_WIDTH},
     chrome::{self, Clip, FB},
@@ -52,14 +50,8 @@ const POWER_ON_US: u64 = 512_000;
 const SPIN_STEP: f32 = 0.5;
 /// The most devices the page runs.
 const MOST: usize = 4;
-/// The air's speeds, virtual seconds a second of the page's clock.
-const SPEEDS: [u32; 7] = [1, 2, 5, 10, 30, 60, 120];
 /// The most log lines the air keeps, and that the page is handed at once.
 const LINES_KEPT: usize = 2_000;
-/// How a lossy link loses packets.
-const LOSSY: f64 = 0.5;
-/// Dublin, where the first device stands, in degrees × 10⁷.
-const DUBLIN: (i32, i32) = (533_498_000, -62_603_000);
 
 /// What boot reports at start-up, in ms from power-on, as the desktop simulator's start-up
 /// scene has it.
@@ -180,23 +172,6 @@ struct Readings {
     position: (i32, i32),
 }
 
-/// Where device `n` stands: the first in Dublin and the others spread around it, each further
-/// out, so that their bearings and distances differ.
-fn position(n: usize) -> (i32, i32) {
-    if n == 0 {
-        return DUBLIN;
-    }
-    let metres = 300.0 * n as f64;
-    let bearing = (137.5 * n as f64).to_radians();
-    let latitude = f64::from(DUBLIN.0) / 1e7;
-    let north = metres * bearing.cos() / 111_320.0;
-    let east = metres * bearing.sin() / (111_320.0 * latitude.to_radians().cos());
-    (
-        DUBLIN.0 + (north * 1e7) as i32,
-        DUBLIN.1 + (east * 1e7) as i32,
-    )
-}
-
 impl Readings {
     fn at(position: (i32, i32)) -> Self {
         Self {
@@ -222,17 +197,6 @@ impl Readings {
     fn rtc_readable(&self) -> bool {
         let (_, stopped, readable) = CLOCKS[self.clock];
         readable && !stopped
-    }
-
-    /// The fix the mesh takes, made at UTC second `utc_s`.
-    fn fix(&self, utc_s: i64) -> Option<Fix> {
-        self.fix.then_some(Fix {
-            latitude: self.position.0,
-            longitude: self.position.1,
-            stamp: utc_s as u32,
-            quality: Quality::Autonomous,
-            hdop_milli: Some(900),
-        })
     }
 
     fn compass(&self) -> CompassView {
@@ -445,16 +409,22 @@ impl Device {
         }
     }
 
-    /// Starts the device again from power-on, as a reset does, keeping its readings but the
-    /// zone the settings chose.
-    fn reset(&mut self) {
+    /// Starts the device again, through the start-up when `start_up`, as a reset does, keeping
+    /// its readings but the zone the settings chose.
+    fn reset(&mut self, start_up: bool) {
         let readings = Readings {
             chosen: None,
             ..self.readings
         };
         let seen = self.seen;
-        *self = Self::new(true, readings, self.scripted.is_some());
+        *self = Self::new(start_up, readings, self.scripted.is_some());
         self.seen = seen;
+    }
+
+    /// Lets go of every control without the press it would make.
+    fn release_controls(&mut self) {
+        (self.power_key, self.boot_key) = (Held::default(), Held::default());
+        self.pressed_at = None;
     }
 
     /// Steps the stage at the page's time `page_us`, or at `clock` on the device's node when
@@ -477,7 +447,7 @@ impl Device {
             if page_us - since < POWER_ON_US {
                 return stepped;
             }
-            self.reset();
+            self.reset(true);
             // The power controller took that press, and the firmware never sees it.
             self.power_key = Held(Some((0, true)));
             stepped.powered = Some(true);
@@ -665,50 +635,11 @@ struct Controls {
     cover: bool,
 }
 
-/// The simulated air several devices share, and its pace against the page's clock.
+/// The simulated air several devices share, and the log lines the page has not taken.
 struct Air {
-    sim: octowhere_sim::Sim,
-    /// Which of [`SPEEDS`] virtual time runs at.
-    speed: usize,
-    /// The page's clock when the air last ran, in µs.
-    last: Option<u64>,
+    paced: Paced,
     /// The number of the next log line the page has not taken.
     taken: usize,
-}
-
-impl Air {
-    /// `count` devices in reach of each other, in one group when `in_group`, else each alone,
-    /// with UTC starting at `utc_s`.
-    fn new(count: usize, in_group: bool, utc_s: i64) -> Self {
-        let mut sim = octowhere_sim::Sim::starting_at(1, utc_s);
-        sim.keep_lines(LINES_KEPT);
-        let starts = if in_group {
-            grouped(count as u8, utc_s as u32 - 3_600)
-        } else {
-            (0..count as u8).map(alone).collect()
-        };
-        for start in starts {
-            sim.add(start, Config::default());
-        }
-        sim.link_all(Link::default());
-        Self {
-            sim,
-            speed: 0,
-            last: None,
-            taken: 0,
-        }
-    }
-
-    /// Runs virtual time on to the page's clock `page_us` at the speed set.
-    fn advance(&mut self, page_us: u64) {
-        let last = self.last.replace(page_us).unwrap_or(page_us);
-        let elapsed = page_us.saturating_sub(last) * u64::from(SPEEDS[self.speed]);
-        self.sim.run_to(self.sim.now_us() + elapsed);
-    }
-
-    fn utc_s(&self) -> i64 {
-        self.sim.utc_us().div_euclid(1_000_000)
-    }
 }
 
 /// The devices on the page, and the air between them when there are several.
@@ -787,17 +718,14 @@ pub extern "C" fn start_devices(count: u32, in_group: u32, utc: f64) {
             .collect();
         *world = Some(World {
             devices,
-            air: Some(Air::new(count, in_group != 0, utc as i64)),
+            air: Some(Air {
+                paced: Paced::new(count, in_group != 0, utc as i64, LINES_KEPT),
+                taken: 0,
+            }),
             selected: 0,
             text: String::new(),
         });
     });
-}
-
-/// How many devices run.
-#[unsafe(no_mangle)]
-pub extern "C" fn devices() -> u32 {
-    with_world(|world| world.devices.len() as u32)
 }
 
 /// Chooses the device the pointer, the controls and the exports that read one act on.
@@ -810,9 +738,16 @@ pub extern "C" fn select(n: u32) {
     });
 }
 
+/// Gives device `n` the pointer and the controls. The device left behind lets go of them
+/// without the press they would make.
 #[unsafe(no_mangle)]
-pub extern "C" fn selected() -> u32 {
-    with_world(|world| world.selected as u32)
+pub extern "C" fn focus(n: u32) {
+    with_world(|world| {
+        if (n as usize) < world.devices.len() && n as usize != world.selected {
+            world.devices[world.selected].release_controls();
+            world.selected = n as usize;
+        }
+    });
 }
 
 /// Steps every device at the page's clock, `page_ms`, with the host's UTC time in seconds, and
@@ -824,10 +759,14 @@ pub extern "C" fn selected() -> u32 {
 pub extern "C" fn step(page_ms: f64, utc: f64, x: f64, y: f64, down: u32, controls: u32) -> u32 {
     with_world(|world| {
         let page_us = (page_ms * 1_000.0) as u64;
+        let input = down != 0 || controls != 0;
         if let Some(air) = &mut world.air {
-            air.advance(page_us);
+            air.paced.advance(page_us, input);
         }
-        let utc = world.air.as_ref().map_or(utc as i64, Air::utc_s);
+        let utc = world
+            .air
+            .as_ref()
+            .map_or(utc as i64, |air| air.paced.utc_s());
         let mut changed = 0;
         for (n, device) in world.devices.iter_mut().enumerate() {
             let selected = n == world.selected;
@@ -839,24 +778,26 @@ pub extern "C" fn step(page_ms: f64, utc: f64, x: f64, y: f64, down: u32, contro
                 cover: selected && controls & 4 != 0,
             };
             let clock = world.air.as_ref().map(|air| {
-                air.sim
-                    .set_fix(n, device.readings.fix(utc), device.readings.fix);
-                air.sim
-                    .set_rtc(n, device.readings.rtc_readable().then_some(0));
-                if let Some((view, seen)) = air.sim.view_since(n, device.seen) {
+                let readings = &device.readings;
+                air.paced.sense(
+                    n,
+                    readings.fix.then_some(readings.position),
+                    readings.rtc_readable(),
+                );
+                if let Some((view, seen)) = air.paced.sim.view_since(n, device.seen) {
                     device.seen = seen;
                     device.stage.set_mesh(view);
                 }
-                air.sim.clock(n) as u64
+                air.paced.sim.clock(n) as u64
             });
             let stepped = device.step(page_us, clock, utc, contact, held);
             if let Some(air) = &mut world.air {
                 if let Some(request) = stepped.mesh {
-                    air.sim.command(n, request.into());
+                    air.paced.sim.command(n, request.into());
                 }
                 match stepped.powered {
-                    Some(false) => air.sim.power_off(n),
-                    Some(true) => air.sim.restart(n),
+                    Some(false) => air.paced.sim.power_off(n),
+                    Some(true) => air.paced.sim.restart(n),
                     None => {}
                 }
             }
@@ -866,14 +807,15 @@ pub extern "C" fn step(page_ms: f64, utc: f64, x: f64, y: f64, down: u32, contro
     })
 }
 
-/// Resets the selected device, as its reset button does: it starts up again, and its node
-/// starts from what it stored.
+/// Resets the selected device, as its reset button does: it starts again, through the
+/// start-up when `start_up` is non-zero or on the clock face, and its node starts from what it
+/// stored.
 #[unsafe(no_mangle)]
-pub extern "C" fn reset() {
+pub extern "C" fn reset(start_up: u32) {
     with_world(|world| {
-        world.devices[world.selected].reset();
+        world.devices[world.selected].reset(start_up != 0);
         if let Some(air) = &mut world.air {
-            air.sim.restart(world.selected);
+            air.paced.sim.restart(world.selected);
         }
     });
 }
@@ -882,14 +824,14 @@ pub extern "C" fn reset() {
 /// virtual seconds a second.
 #[unsafe(no_mangle)]
 pub extern "C" fn speed() -> u32 {
-    with_world(|world| world.air.as_ref().map_or(0, |air| air.speed as u32))
+    with_world(|world| world.air.as_ref().map_or(0, |air| air.paced.speed as u32))
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn set_speed(index: u32) {
     with_world(|world| {
         if let Some(air) = &mut world.air {
-            air.speed = (index as usize).min(SPEEDS.len() - 1);
+            air.paced.speed = (index as usize).min(SPEEDS.len() - 1);
         }
     });
 }
@@ -897,41 +839,35 @@ pub extern "C" fn set_speed(index: u32) {
 /// The air's time since it started, in seconds.
 #[unsafe(no_mangle)]
 pub extern "C" fn air_seconds() -> f64 {
-    with_world(|world| world.air.as_ref().map_or(0.0, |air| air.sim.now_s()))
+    with_world(|world| world.air.as_ref().map_or(0.0, |air| air.paced.sim.now_s()))
 }
 
 /// How a packet from device `from` reaches device `to`: 0 not at all, 1 in reach, 2 lossy.
 #[unsafe(no_mangle)]
 pub extern "C" fn link(from: u32, to: u32) -> u32 {
-    with_world(|world| {
-        world
-            .air
-            .as_ref()
-            .and_then(|air| air.sim.link_of(from as usize, to as usize))
-            .map_or(0, |link| if link.loss == 0.0 { 1 } else { 2 })
+    with_world(|world| match world.air.as_ref() {
+        Some(air) => match air.paced.reach(from as usize, to as usize) {
+            Reach::None => 0,
+            Reach::InReach => 1,
+            Reach::Lossy => 2,
+        },
+        None => 0,
     })
 }
 
-/// Sets how a packet from device `from` reaches device `to`, as [`link`] numbers it.
+/// Steps how a packet from device `from` reaches device `to` through in reach, lossy and out
+/// of reach.
 #[unsafe(no_mangle)]
-pub extern "C" fn set_link(from: u32, to: u32, state: u32) {
+pub extern "C" fn cycle_link(from: u32, to: u32) {
     with_world(|world| {
-        let Some(air) = &world.air else {
-            return;
-        };
         let (from, to) = (from as usize, to as usize);
-        if from == to || from.max(to) >= world.devices.len() {
-            return;
+        if let Some(air) = &world.air
+            && from != to
+            && from.max(to) < world.devices.len()
+        {
+            air.paced
+                .set_reach(from, to, air.paced.reach(from, to).next());
         }
-        let link = match state {
-            0 => None,
-            1 => Some(Link::default()),
-            _ => Some(Link {
-                loss: LOSSY,
-                ..Link::default()
-            }),
-        };
-        air.sim.link(from, to, link);
     });
 }
 
@@ -953,7 +889,7 @@ pub extern "C" fn describe() {
             let generation = world
                 .air
                 .as_ref()
-                .and_then(|air| air.sim.key(n))
+                .and_then(|air| air.paced.sim.key(n))
                 .map_or(0, |(_, generation)| generation);
             let members = group.members().count();
             let heard = group
@@ -981,7 +917,7 @@ pub extern "C" fn take_log() {
         let mut text = std::mem::take(&mut world.text);
         text.clear();
         if let Some(air) = &mut world.air {
-            let (lines, next) = air.sim.lines_since(air.taken);
+            let (lines, next) = air.paced.sim.lines_since(air.taken);
             air.taken = next;
             for line in lines {
                 let _ = writeln!(text, "{}\t{}\t{}", line.node + 1, line.level, line.text);

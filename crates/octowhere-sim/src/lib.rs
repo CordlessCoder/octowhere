@@ -8,6 +8,7 @@
 // From Rust 1.100, nightly names the part still unstable `allocator_ext`.
 #![allow(stable_features)]
 
+pub mod air;
 mod logs;
 mod rng;
 mod seams;

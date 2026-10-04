@@ -149,7 +149,7 @@ function choose(n) {
   if (n === selected || n >= units.length) return;
   releaseAll();
   selected = n;
-  wasm.select(n);
+  wasm.focus(n);
   units.forEach((unit, i) => unit.root.classList.toggle("selected", i === n));
   lastStatus = -1;
   sync();
@@ -208,7 +208,7 @@ function makeUnit(n) {
   root.querySelector(".power-on").addEventListener("click", () => {
     if (several) {
       choose(n);
-      wasm.reset();
+      wasm.reset(1);
     } else {
       start(true);
     }
@@ -463,9 +463,7 @@ function buildMatrix(count) {
         cell.dataset.from = String(from);
         cell.dataset.to = String(to);
         cell.addEventListener("click", () => {
-          // In reach, then out of reach, then lossy, then in reach again.
-          const next = [2, 0, 1][wasm.link(from, to)];
-          wasm.set_link(from, to, next);
+          wasm.cycle_link(from, to);
           showMesh();
         });
       }
@@ -511,7 +509,7 @@ function showMesh() {
 }
 
 document.getElementById("reset-device").addEventListener("click", () => {
-  wasm.reset();
+  wasm.reset(1);
   lastStatus = -1;
 });
 
@@ -721,11 +719,12 @@ document.addEventListener("keydown", (event) => {
     p: screenshot,
   };
   if (several) {
-    for (let n = 0; n < units.length; n++) actions[String(n + 1)] = () => choose(n);
+    // A finger stays with the device it went down on.
+    for (let n = 0; n < units.length; n++) actions[String(n + 1)] = () => pointer.down || choose(n);
     actions["["] = () => speedBy(-1);
     actions["]"] = () => speedBy(1);
     actions.x = () => {
-      wasm.reset();
+      wasm.reset(1);
       lastStatus = -1;
     };
   }
@@ -1007,15 +1006,23 @@ async function load() {
   requestAnimationFrame(frame);
 }
 
+// With several devices these reset the selected one, whose node keeps what it stored.
 document.getElementById("replay").addEventListener("click", () => {
   if (several) {
-    wasm.reset();
+    wasm.reset(1);
     lastStatus = -1;
   } else {
     start(true);
   }
 });
-document.getElementById("skip").addEventListener("click", () => startDevices(units.length, false));
+document.getElementById("skip").addEventListener("click", () => {
+  if (several) {
+    wasm.reset(0);
+    lastStatus = -1;
+  } else {
+    start(false);
+  }
+});
 
 layoutUnits(1);
 // The page's fonts change how the hints wrap once they arrive.

@@ -160,8 +160,8 @@ until the feature set is complete, because profiling an incomplete firmware pric
   The other host crates build on stable,
   which lacks it until 1.100.0, by mid-November 2026. The owner accepts nightly on the host
   (2026-10-03), so this need not wait: the UI crate's lines in "Build and test" in `AGENTS.md`
-  would move from `+stable` to `+nightly`, and with them `tools/ui-sim` and `tools/ui-web`,
-  which build it. The candidates are the identity's title, 36,660 bytes, and the group
+  would move from `+stable` to `+nightly`; `tools/ui-sim` and `tools/ui-web`, which build it,
+  are on nightly already, for the simulator. The candidates are the identity's title, 36,660 bytes, and the group
   screens' two 8,848-byte lists. Both are read on every frame that draws them, so measure
   each frame from PSRAM on the board before moving it; the title's identity frames already
   come close to their 33 ms.

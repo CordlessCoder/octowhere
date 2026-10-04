@@ -180,6 +180,14 @@ impl World {
         self.links.borrow().get(&(from, to)).copied()
     }
 
+    /// Ends `node`'s transmission in flight, unheard, as a node powered off mid-packet would.
+    pub fn silence(&self, node: usize) {
+        let now = self.now();
+        self.air
+            .borrow_mut()
+            .retain(|sent| sent.sender != node || sent.end <= now);
+    }
+
     /// Starts `node`'s transmission of `bytes` now, and returns when it ends.
     pub fn send(&self, node: usize, bytes: &[u8]) -> Micros {
         let now = self.now();

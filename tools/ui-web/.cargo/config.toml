@@ -1,3 +1,4 @@
-# Overrides the repository's firmware target, so a plain `cargo build` here builds the module.
+# Overrides the repository's firmware target for tools reading this directory's configuration.
+# Build with build.sh: nightly started inside the repository builds `core` for the board too.
 [build]
 target = "wasm32-unknown-unknown"

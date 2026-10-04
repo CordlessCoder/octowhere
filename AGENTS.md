@@ -43,9 +43,11 @@ initialization or peripheral mappings.
   Scenarios are its tests (`tests/scenarios.rs`), which read each node's log lines;
   `OCTOWHERE_SIM_LOG=1` prints them as they come. `tests/screens.rs` drives devices through
   their screens instead, each stage on `octowhere-ui`'s script driver linked to its node
-  (`script::MeshLink`). It also runs open-ended for the simulators: at a UTC the host gives,
-  to a virtual time the caller paces, with a bounded log, links read and changed live, and
-  nodes powered off and on. Needs nightly, as the node does.
+  (`script::MeshLink`). The simulators run it open-ended through its `air`: from the host's
+  UTC, paced by the host's clock at up to 120 times, but at the host's pace while a finger or
+  key is down and 0.6 s after, so that presses keep their length on a device's clock; with a
+  bounded log, links changed live, and nodes powered off and on. Needs nightly, as the node
+  does.
 - `crates/octowhere-ui/` owns screen state, drawing and touch handling. It has no board dependency,
   so it also builds for the host. `src/ui/` there owns dirty tracking, geometry,
   gestures and paging, the clock and compass screens with

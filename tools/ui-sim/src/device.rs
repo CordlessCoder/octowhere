@@ -74,9 +74,6 @@ pub struct Readings {
     pub position: (i32, i32),
 }
 
-/// Dublin, where a lone device stands, in degrees × 10⁷.
-pub const DUBLIN: (i32, i32) = (533_498_000, -62_603_000);
-
 /// The supplies B steps through: whether a battery is fitted, whether USB is in, and whether
 /// the battery charges.
 const SUPPLIES: [(bool, bool, bool); 3] = [
@@ -358,11 +355,19 @@ impl Device {
             .map(|&(report, at)| (report, at * 1_000))
             .collect();
         // The clock may start again from zero.
+        self.panel.forget_touch();
         self.booted = None;
         (self.next_motion, self.next_sensors) = (0, 0);
         (self.power_key, self.boot_key) = (Held::default(), Held::default());
         (self.pressed_at, self.power_on_since) = (None, None);
         (self.powered_off, self.redraw) = (false, true);
+    }
+
+    /// Lets go of every control without the press it would make, as giving the keyboard to
+    /// another device does.
+    pub fn release_controls(&mut self) {
+        (self.power_key, self.boot_key) = (Held::default(), Held::default());
+        self.pressed_at = None;
     }
 
     /// Steps the stage at `now` on the device's clock, with UTC at `utc_s`, a finger at
@@ -453,6 +458,7 @@ impl Device {
         if update.power_off {
             println!("{}powered off; hold K 512 ms to power on", self.label);
             self.powered_off = true;
+            self.panel.forget_touch();
             stepped.powered = Some(false);
         }
         self.samples_fast = update.samples_fast;

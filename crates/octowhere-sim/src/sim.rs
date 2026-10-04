@@ -31,7 +31,7 @@ use crate::{
     world::{Link, Micros, Mode, Node, Radio, World},
 };
 
-/// UTC at the start of every simulation: 2026-09-21.
+/// UTC at the start of a simulation unless it is started at another: 2026-09-21.
 pub const UTC0_S: i64 = 1_790_000_000;
 
 /// How a node starts.
@@ -191,8 +191,10 @@ impl Sim {
         self.tasks[node] = Task::off();
     }
 
-    /// Clears what `node` holds outside its store, and returns it, from now on its clock's boot.
+    /// Clears what `node` holds outside its store and takes its packet off the air, restarts its
+    /// clock from now, and returns it.
     fn stop(&self, node: usize) -> RefMut<'_, Node> {
+        self.world.silence(node);
         let mut nodes = self.world.nodes.borrow_mut();
         let state = &mut nodes[node];
         state.boot = self.world.now();

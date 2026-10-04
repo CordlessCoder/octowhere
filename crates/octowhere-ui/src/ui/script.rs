@@ -45,7 +45,7 @@ pub struct Driver<'a> {
     hand: Option<fn(Motion, Micros) -> Motion>,
     /// A simulated mesh, which takes the stage's requests and publishes to it every step.
     pub mesh: Option<Sim>,
-    /// A node to step the stage against instead.
+    /// A node to step the stage against, as well as or in place of the scripted mesh.
     pub link: Option<Box<dyn MeshLink + 'a>>,
 }
 

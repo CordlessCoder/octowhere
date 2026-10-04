@@ -12,11 +12,9 @@ use embedded_graphics::{
     text::{Baseline, Text},
 };
 
-use crate::{
-    HEIGHT, OFF_PANEL,
-    air::{Air, SPEEDS},
-    device::Device,
-};
+use octowhere_sim::air::{Reach, SPEEDS};
+
+use crate::{HEIGHT, OFF_PANEL, air::Air, device::Device};
 
 pub const WIDTH: usize = 300;
 const MARGIN: i32 = 14;
@@ -119,11 +117,11 @@ pub fn draw(pixels: &mut [u32], air: &Air, devices: &[Device], focus: usize) {
     };
     let canvas = &mut canvas;
     let count = devices.len();
-    let utc = air.sim.utc_us().div_euclid(1_000_000);
-    let elapsed = (air.sim.now_us() / 1_000_000) as i64;
+    let utc = air.paced.sim.utc_us().div_euclid(1_000_000);
+    let elapsed = (air.paced.sim.now_us() / 1_000_000) as i64;
     write(
         canvas,
-        &format!("AIR x{}  {}", SPEEDS[air.speed], hms(elapsed)),
+        &format!("AIR x{}  {}", SPEEDS[air.paced.speed], hms(elapsed)),
         Point::new(MARGIN, MARGIN),
         TEXT,
     );
@@ -146,7 +144,7 @@ pub fn draw(pixels: &mut [u32], air: &Air, devices: &[Device], focus: usize) {
         let state = if device.powered_off {
             "powered off".to_string()
         } else {
-            match (&view.group, air.sim.key(n)) {
+            match (&view.group, air.paced.sim.key(n)) {
                 (Some(group), stored) => {
                     let members = group.members().count();
                     let heard = group
@@ -203,30 +201,30 @@ pub fn draw(pixels: &mut [u32], air: &Air, devices: &[Device], focus: usize) {
             fill(canvas, at, size, Rgb888::new(0x30, 0x34, 0x3a));
             let inner = Size::new(size.width - 2, size.height - 2);
             fill(canvas, at + Point::new(1, 1), inner, Rgb888::BLACK);
-            match air.sim.link_of(from, to) {
-                Some(link) if link.loss == 0.0 => fill(
+            match air.paced.reach(from, to) {
+                Reach::InReach => fill(
                     canvas,
                     at + Point::new(3, 3),
                     Size::new(inner.width - 4, inner.height - 4),
                     TEXT,
                 ),
-                Some(_) => fill(
+                Reach::Lossy => fill(
                     canvas,
                     at + Point::new(3, 3),
                     Size::new((inner.width - 4) / 2, inner.height - 4),
                     TEXT,
                 ),
-                None => {}
+                Reach::None => {}
             }
         }
     }
     let help = [
         "click a link: in reach, lossy, none",
-        "click a panel to touch it and give",
-        "it the keyboard; 1-9 also do",
-        "[ ] speed   X reset   Tab next face",
+        "1-6 keyboard  [ ] speed  X reset",
     ];
-    let bottom = HEIGHT as i32 - MARGIN - help.len() as i32 * LINE;
+    // At the foot, or under the matrix where six devices leave no room.
+    let below = origin.y + count as i32 * CELL + LINE / 2;
+    let bottom = (HEIGHT as i32 - MARGIN - help.len() as i32 * LINE).max(below);
     for (line, text) in help.iter().enumerate() {
         write(
             canvas,
