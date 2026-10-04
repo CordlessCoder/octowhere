@@ -18,13 +18,14 @@ until the feature set is complete, because profiling an incomplete firmware pric
     `board-scripts/check.sh` on a build at or after the move. It was blocked on 2026-10-04 by
     the boards overloading each other's receivers up close (every packet one way failed its
     CRC at −6 dBm). The node keeps its async code; there was no state-machine rewrite.
-  - Step 2, the air: a discrete-event loop on virtual time. A packet occupies its channel for
-    its airtime (`schedule::airtime_us`); a node hears it only if it listened on that channel
-    throughout and nothing overlapped it there, unless the stronger signal wins by a margin; a
-    node never hears while it sends. A link matrix gives each pair's delivery, loss chance, RSSI,
-    SNR and delay, and can change mid-run (full = broadcast; sparse = relays, splits, rejoins).
-    Each node's clock has its own offset and drift. Faults: deafen, drop a frame, fail a store,
-    restart with what was stored. Seeded random sources, so a run repeats.
+  - Step 2, the air, is built (2026-10-04): `crates/octowhere-sim` runs the nodes on virtual
+    time with an executor that jumps to the next timer. A packet occupies its channel for its
+    airtime (`schedule::airtime_us`); a node hears it only if it was receiving on that channel
+    throughout, by a link, and nothing overlapping it there arrived within 6 dB of it; a node
+    never hears while it sends. The links (loss, RSSI, SNR, how late the end is seen) can change
+    mid-run. Each node's clock drifts by its own amount from its own boot; its store applies
+    the firmware's group writes, can fail them, and restarts the node from what it holds. Every
+    random source is seeded. Not yet: a node's own fix moving, and positions to check against.
   - Step 3, headless scenarios as Rust tests, like `ui::script`: pairing, the two missed
     switches (`docs/logs/lora/catch-up-2026-10-03/`; must fail before `d6b9389`), a removal
     declined after its switch, a restart mid-removal.

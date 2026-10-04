@@ -1,0 +1,12 @@
+[package]
+name = "octowhere-sim"
+version = "0.1.0"
+edition = "2024"
+description = "Several octowhere mesh nodes on the host, on virtual time, with a simulated air between them"
+
+[workspace]
+
+[dependencies]
+log = "0.4.34"
+octowhere-mesh = { path = "../octowhere-mesh" }
+octowhere-node = { path = "../octowhere-node", features = ["run", "log", "phantom"] }

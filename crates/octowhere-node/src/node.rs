@@ -73,7 +73,7 @@ const LEAVE_REPEATS: u8 = 2;
 /// How long a device that left tries to tell the others: its next slots, a round apart.
 const LEAVE_WAIT_US: i64 = 3 * ROUND_US;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct Fix {
     /// Degrees × 10⁷.
     pub latitude: i32,
@@ -571,7 +571,7 @@ pub trait Random {
 
 /// UTC on the local clock: UTC in microseconds is local time less `offset`, as fixes last
 /// refined it at local time `updated`.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct GpsTime {
     pub offset: i64,
     pub updated: i64,

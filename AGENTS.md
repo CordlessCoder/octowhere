@@ -36,6 +36,12 @@ initialization or peripheral mappings.
   `run` feature, which needs nightly for the allocator its large stores are made in; without
   it the crate holds the view and the writes alone, on stable. It logs through defmt on the
   board and `log` on the host (`fmt`). `src/mesh.rs` and its modules give it the board's seams.
+- `crates/octowhere-sim/` runs several nodes on the host, each `octowhere-node`'s node
+  unchanged, on virtual time: a simulated air between their radios by a link matrix, with
+  collisions and half-duplex radios; clocks with their own drift; stores that can fail a write
+  and restart a node from what they hold; and seeded random sources, so that a run repeats.
+  Scenarios are its tests (`tests/scenarios.rs`), which read each node's log lines;
+  `OCTOWHERE_SIM_LOG=1` prints them as they come. Needs nightly, as the node does.
 - `crates/octowhere-ui/` owns screen state, drawing and touch handling. It has no board dependency,
   so it also builds for the host. `src/ui/` there owns dirty tracking, geometry,
   gestures and paging, the clock and compass screens with
@@ -149,6 +155,7 @@ cargo +stable fmt --all --check
 cargo +stable fmt --all --manifest-path host-tests/Cargo.toml --check
 cargo +stable fmt --all --manifest-path tools/ui-sim/Cargo.toml --check
 cargo +stable fmt --all --manifest-path tools/ui-web/Cargo.toml --check
+cargo +stable fmt --all --manifest-path crates/octowhere-sim/Cargo.toml --check
 cargo build --release --offline
 cargo clippy --release --offline -- -D warnings
 cargo +stable test --manifest-path host-tests/Cargo.toml \
@@ -171,6 +178,9 @@ env -C /tmp cargo +nightly test --manifest-path $PWD/crates/octowhere-node/Cargo
   --locked --features phantom
 env -C /tmp cargo +nightly clippy --manifest-path $PWD/crates/octowhere-node/Cargo.toml \
   --locked --all-targets --features phantom,log -- -D warnings
+env -C /tmp cargo +nightly test --manifest-path $PWD/crates/octowhere-sim/Cargo.toml --locked
+env -C /tmp cargo +nightly clippy --manifest-path $PWD/crates/octowhere-sim/Cargo.toml \
+  --locked --all-targets -- -D warnings
 cargo +stable test --manifest-path crates/octowhere-mesh/Cargo.toml \
   --target x86_64-unknown-linux-gnu --locked
 cargo +stable clippy --manifest-path crates/octowhere-mesh/Cargo.toml \
@@ -192,12 +202,12 @@ cargo +stable clippy --release --manifest-path tools/ui-web/Cargo.toml \
   --target wasm32-unknown-unknown --locked -- -D warnings
 ```
 
-The node's nightly lines start in `/tmp` because the root's `.cargo/config.toml` builds `core`
+The node's and the simulator's nightly lines start in `/tmp` because the root's `.cargo/config.toml` builds `core`
 and `alloc` from source for the board, and nightly applies that to any build started inside
 the repository, which then fails on a second `core`.
 
 `--all` takes `cargo fmt` into the local path crates, so the root's line covers every crate
-under `crates/`; `host-tests`, `tools/ui-sim` and `tools/ui-web` are outside the firmware's
+under `crates/` but `octowhere-sim`, which the firmware does not build; `host-tests`, `tools/ui-sim` and `tools/ui-web` are outside the firmware's
 graph and need their own. Drop `--check` to apply it.
 
 The firmware's clippy run does not reach `crates/octowhere-ui`, because a path dependency is not
