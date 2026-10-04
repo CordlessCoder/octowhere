@@ -2382,6 +2382,23 @@ fn a_short_press_wakes_a_dimming_or_darkening_screen() {
 }
 
 #[test]
+fn the_timeout_closes_the_drawer_as_the_screen_rests() {
+    for always_on in [true, false] {
+        let mut driver = resting_on(Screen::Clock, Timeout::Seconds15, always_on);
+        driver.swipe(Point::new(233, 430), Point::new(233, 120), 250_000);
+        driver.settle();
+        assert!(driver.stage.drawer().is_some());
+        wait_until(&mut driver, 22_000_000, |rest| {
+            matches!(rest, Rest::AlwaysOn | Rest::Off)
+        });
+        assert!(
+            driver.stage.drawer().is_none(),
+            "always-on {always_on}: the drawer stays over the resting screen"
+        );
+    }
+}
+
+#[test]
 fn a_short_press_cancels_the_confirmation_and_rests() {
     let mut driver = resting_on(Screen::Clock, Timeout::Seconds15, false);
     driver.key(Key::Long);

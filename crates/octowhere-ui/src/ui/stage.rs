@@ -1590,9 +1590,7 @@ impl Stage {
 
     /// Rests the screen at once, on the always-on face or off, without the timeout's dim.
     fn sleep(&mut self, update: &mut Update) {
-        self.route = None;
-        self.close_drawer();
-        self.toast = None;
+        self.clear_for_rest();
         self.fade = None;
         self.level = self.peripherals.brightness;
         if self.peripherals.always_on.is_on() {
@@ -1604,6 +1602,14 @@ impl Stage {
             update.brightness = Some(0);
             update.display_on = Some(false);
         }
+    }
+
+    /// Takes away what would show over the always-on face or wake to the panel again, as the
+    /// screen comes to rest by the key or by the timeout.
+    fn clear_for_rest(&mut self) {
+        self.route = None;
+        self.close_drawer();
+        self.toast = None;
     }
 
     /// Steps the power-off confirmation, which takes every touch while it shows and holds the
@@ -1740,6 +1746,7 @@ impl Stage {
             }
             Rest::Dimmed { since } if now.saturating_sub(since) >= rest::DIM_HOLD => {
                 if self.peripherals.always_on.is_on() {
+                    self.clear_for_rest();
                     self.rest = Rest::AlwaysOn;
                     self.drawn_always_on = None;
                     self.fade = None;
@@ -1751,6 +1758,7 @@ impl Stage {
                 }
             }
             Rest::Darkening { since } if now.saturating_sub(since) >= rest::OFF_FADE => {
+                self.clear_for_rest();
                 self.rest = Rest::Off;
                 self.fade = None;
                 update.brightness = Some(0);
