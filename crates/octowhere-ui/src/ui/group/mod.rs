@@ -459,6 +459,8 @@ impl Flow {
             _ => None,
         };
         let tapped = |area: Rectangle| tap.is_some_and(|point| area.contains(point));
+        // The removal screens' controls, from the drawer's parts, take its touch height.
+        let pressed = |area: Rectangle| tap.is_some_and(|point| parts::pressed(area, point));
         let own = mesh.group.as_ref().map(|group| group.own);
         let next = match &mut self.screen {
             Screen::Hub => {
@@ -583,7 +585,7 @@ impl Flow {
                         None
                     }
                 } else if let Some(removal) = pending_removal_of(mesh, id) {
-                    if tapped(FOOTER) {
+                    if pressed(FOOTER) {
                         return Exit::Request(removal.key);
                     }
                     tapped(TOP_HIT).then_some(Screen::Members(Scroll::default()))
@@ -610,7 +612,7 @@ impl Flow {
                     *request = Some(Request::Remove { id, device });
                     *asked = Some(mesh.answered);
                     None
-                } else if tapped(TOP_HIT) || tapped(FOOTER) {
+                } else if tapped(TOP_HIT) || pressed(FOOTER) {
                     Some(Screen::Member {
                         id,
                         from: From::Members,
@@ -620,19 +622,19 @@ impl Flow {
                 }
             }
             Screen::Removing { .. } => {
-                (tapped(TOP_HIT) || tapped(FOOTER)).then_some(Screen::Members(Scroll::default()))
+                (tapped(TOP_HIT) || pressed(FOOTER)).then_some(Screen::Members(Scroll::default()))
             }
             Screen::RemoveUnavailable { id, why } => {
                 let underway = why == &NotRemoved::Mesh(Unremovable::Underway);
                 match mesh.removals.current {
-                    Some(removal) if underway && tapped(FOOTER) => {
+                    Some(removal) if underway && pressed(FOOTER) => {
                         return Exit::Request(removal.key);
                     }
                     _ if tapped(TOP_HIT) => Some(Screen::Member {
                         id: *id,
                         from: From::Members,
                     }),
-                    _ => tapped(FOOTER).then_some(Screen::Members(Scroll::default())),
+                    _ => pressed(FOOTER).then_some(Screen::Members(Scroll::default())),
                 }
             }
             Screen::Leave { from } => {

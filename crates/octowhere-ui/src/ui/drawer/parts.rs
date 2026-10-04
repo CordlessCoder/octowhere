@@ -29,6 +29,8 @@ const MARKERS: [Rectangle; 2] = [rect(224, 82, 230, 85), rect(236, 82, 242, 85)]
 pub const FOOTER: Rectangle = rect(145, 410, 321, 442);
 pub const FOOTER_HIGH: Rectangle = rect(145, 375, 321, 407);
 pub const PAIR: [Rectangle; 2] = [rect(93, 375, 227, 407), rect(239, 375, 373, 407)];
+/// The least height a tap presses a control over.
+const TOUCH_HEIGHT: u32 = 40;
 /// Where a button's reason for being unavailable sits, under [`FOOTER_HIGH`] or [`PAIR`].
 const REASON_TOP: i32 = 419;
 /// Prose's reading column, size and line pitch.
@@ -43,6 +45,17 @@ const FIGURE_PITCH: i32 = 27;
 /// The scroll arc on the right rim, its radius and its span in tenths of a degree.
 const SCROLL_RADIUS: u16 = 225 * 4;
 const SCROLL_SPAN: i16 = 410;
+
+/// Whether a tap at `point` presses the control drawn at `area`, which takes taps over at
+/// least [`TOUCH_HEIGHT`] about its middle.
+#[must_use]
+pub fn pressed(area: Rectangle, point: Point) -> bool {
+    let grow = TOUCH_HEIGHT.saturating_sub(area.size.height) as i32;
+    let top = area.top_left.y - grow / 2;
+    let bottom = area.top_left.y + area.size.height as i32 + grow - grow / 2;
+    (area.top_left.x..area.top_left.x + area.size.width as i32).contains(&point.x)
+        && (top..bottom).contains(&point.y)
+}
 
 /// Text whose ink starts at column `x`, sitting on the baseline a capital's top at `top` gives.
 #[must_use]
@@ -308,5 +321,24 @@ impl Symbol {
                 width: 4,
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_control_takes_taps_over_forty_pixels() {
+        // FOOTER is drawn from 410 to 442.
+        assert!(pressed(FOOTER, Point::new(233, 406)));
+        assert!(pressed(FOOTER, Point::new(233, 445)));
+        assert!(!pressed(FOOTER, Point::new(233, 405)));
+        assert!(!pressed(FOOTER, Point::new(233, 446)));
+        assert!(!pressed(FOOTER, Point::new(144, 420)));
+        // A control taller than that takes taps where it is drawn.
+        let tall = rect(82, 135, 384, 229);
+        assert!(!pressed(tall, Point::new(233, 134)));
+        assert!(pressed(tall, Point::new(233, 228)));
     }
 }

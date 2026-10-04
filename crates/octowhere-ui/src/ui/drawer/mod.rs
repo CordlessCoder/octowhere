@@ -382,7 +382,7 @@ impl Drawer {
                 }
                 match self.root() {
                     Root::Events => {
-                        if FOOTER.contains(point) {
+                        if parts::pressed(FOOTER, point) {
                             self.child = Some(Child::Manage);
                         } else if let Some(id) = self.row_at(point, events) {
                             events.read(id);
@@ -390,7 +390,7 @@ impl Drawer {
                         }
                     }
                     Root::Messages => {
-                        if FOOTER.contains(point) && mail.group.is_some() {
+                        if parts::pressed(FOOTER, point) && mail.group.is_some() {
                             self.open_child(Child::Recipients);
                         } else if let Some(thread) =
                             messages::inbox_row_at(point, self.scroll[1].offset, mail)
@@ -539,7 +539,7 @@ impl Drawer {
                 } else if CLEAR_READ.contains(point) && events.can_clear_read() {
                     events.clear_read();
                     self.child = None;
-                } else if FOOTER.contains(point) {
+                } else if parts::pressed(FOOTER, point) {
                     self.child = None;
                 }
             }
@@ -553,7 +553,7 @@ impl Drawer {
                         let own = mail.group.map_or(0, |group| group.own);
                         let act = removals::buttons(&removal, own, now)
                             .into_iter()
-                            .find(|(area, _)| area.contains(point));
+                            .find(|(area, _)| parts::pressed(*area, point));
                         match act.map(|(_, act)| act) {
                             Some(Act::Details) => self.open_child(Child::Details(id)),
                             Some(Act::Decline) => {
@@ -564,18 +564,18 @@ impl Drawer {
                         }
                     }
                     Kind::Removed { .. } => {
-                        if PAIR[0].contains(point) {
+                        if parts::pressed(PAIR[0], point) {
                             self.child = None;
-                        } else if PAIR[1].contains(point) {
+                        } else if parts::pressed(PAIR[1], point) {
                             return Exit::Leave;
                         }
                     }
                     _ => {
                         let (members, dismiss) = rows::detail_buttons(event);
-                        if members.is_some_and(|area| area.contains(point)) {
+                        if members.is_some_and(|area| parts::pressed(area, point)) {
                             return Exit::Members;
                         }
-                        if dismiss.is_some_and(|area| area.contains(point))
+                        if dismiss.is_some_and(|area| parts::pressed(area, point))
                             && events.dismiss(id).is_ok()
                         {
                             self.child = None;
@@ -584,7 +584,7 @@ impl Drawer {
                 }
             }
             Child::Rivals { ids, selected } => {
-                if FOOTER.contains(point) {
+                if parts::pressed(FOOTER, point) {
                     self.open_child(Child::Event(ids[selected]));
                 } else if let Some(row) = removals::rival_at(point.y) {
                     self.child = Some(Child::Rivals { ids, selected: row });
@@ -592,12 +592,12 @@ impl Drawer {
             }
             Child::Details(_) | Child::Decline(_) => {}
             Child::Thread(thread) => {
-                if FOOTER.contains(point) && mail.writable(thread) {
+                if parts::pressed(FOOTER, point) && mail.writable(thread) {
                     self.write(thread);
                 }
             }
             Child::Recipients => {
-                if FOOTER.contains(point) {
+                if parts::pressed(FOOTER, point) {
                     self.child = None;
                 } else if let Some(thread) = messages::picker_row_at(point, self.child_scroll, mail)
                 {
@@ -605,9 +605,9 @@ impl Drawer {
                 }
             }
             Child::Review => {
-                if PAIR[0].contains(point) {
+                if parts::pressed(PAIR[0], point) {
                     self.open_child(Child::Draft);
-                } else if PAIR[1].contains(point)
+                } else if parts::pressed(PAIR[1], point)
                     && let (Some(text), Some(draft)) = (self.reviewing, &self.draft)
                     && mail.writable(draft.to)
                 {
@@ -648,7 +648,7 @@ impl Drawer {
             return Exit::Keep { key: removal.key };
         }
         if let GestureEvent::Tap(point) = *event
-            && (TOP_HIT.contains(point) || FOOTER.contains(point))
+            && (TOP_HIT.contains(point) || parts::pressed(FOOTER, point))
         {
             self.open_child(Child::Event(id));
         }
