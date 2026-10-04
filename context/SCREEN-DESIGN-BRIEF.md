@@ -110,7 +110,7 @@ the panel. Touch targets are no smaller than about 10 mm.
 
 | Layer | Screens |
 | --- | --- |
-| Pager | Clock face, compass. A ring of two that wraps |
+| Pager | Clock face, compass, member face. A ring of three that wraps |
 | Sheet | Settings panel, over whichever face it was opened from |
 | Second level, under the panel | Zone picker (two steps), brightness and timeout editors, device page, replay chooser, clear-settings confirm |
 | Before the pager | Start-up: the self-test, then the identity and the logo card, or the fault screen |
@@ -163,7 +163,7 @@ the panel. Touch targets are no smaller than about 10 mm.
 Captures drawn by the firmware's own code come from `crates/octowhere-ui/examples/render.rs`,
 which also lays a frame of each state out in `screen-atlas.png`, kept in
 `context/screen-captures/`, by section like the design's screen family board.
-It draws the faces' stills and `panel-rest`, `settings-always-on`, `panel-end`,
+It draws the faces' stills, the member face's states (`members-*`), and `panel-rest`, `settings-always-on`, `panel-end`,
 `panel-scrolling`, `panel-pulling`, `panel-device`, `panel-device-end`, `settings-brightness`,
 `settings-timeout`, `settings-clear`, `picker-offset`,
 `picker-zone`, `power-off`, `power-off-sliding` and `power-off-confirmed`, and the start-up's `startup-selftest-*`, `startup-frame-*` and `startup-fault-*`;
@@ -420,6 +420,53 @@ every text's ink. Where the build chose what the hand-off left open:
   unread, over the faces, the panel's screens and the always-on face, and not in the drawer.
 - **Halftone.** The firmware's scatter keeps its hollow and solid marks, where the renders draw
   4 px solid marks only.
+
+## Member face as built
+
+The 2026-10-04 hand-off's spatial member face is `crates/octowhere-ui/src/ui/members.rs`, the
+third face in the pager's ring, after the compass. It follows the hand-off's geometry, measured
+on its targets (`examples/render/members.rs` renders them, named after the targets). Where the
+build chose what the hand-off left open:
+
+- **True heading.** The compass's magnetic heading plus the declination where the device last
+  had a fix, in the clock's year, from the World Magnetic Model 2025 (`declination` in
+  `octowhere-motion`). It counts only while the compass is calibrated, not held near upright
+  and not disturbed, and the clock is trusted. Otherwise the face is NORTH UP / NO HEADING. The
+  model holds from 2025 to 2030 and gives nothing within 0.1° of a pole; after 2030 the face
+  stays north up until the model is updated. The heading moves in whole degrees and holds until
+  the reading is 0.75° from it, so a device at rest does not flicker between two.
+- **Own position.** The current fix's. Without one the face shows NO OWN FIX, with the
+  selected member's last coordinates and their age, and no nodes or distances. It never stands
+  an old position of its own in.
+- **Members' positions.** Each member's newest, until the protocol's table would drop it,
+  4,095 s (68 min) after it was observed. One received while this device had no UTC shows its
+  age as `--`, and UNKNOWN in the middle.
+- **Freshness glyph.** The solid square under 5 minutes, the hourglass after: the hand-off's
+  proposal, taken as it stands.
+- **Selection.** The freshest position first, then whichever member was chosen while it has a
+  position. A tap within 160 px of the centre, inside the rim labels, or on the coordinates'
+  box, selects the next member by id. Nodes are not touch targets.
+- **Crowding.** Members whose rim labels would come within 6 px of each other share one node at
+  their bearings' mean, labelled with the member it shows and how many more it holds:
+  `05 +2 / 23S`. It shows the selected member if it holds it, and otherwise the freshest. The
+  neighbours that overlap most merge first. Selection steps through every member, so each can
+  be shown on its own with its exact bearing in the middle. A shared node stands at the mean,
+  not at any one member's bearing. The hand-off left 32 members open, and there is no render of
+  this.
+- **Distance.** Whole metres below a kilometre, kilometres to a tenth below 100 km and whole
+  kilometres beyond, the figure shrinking from 39 px to fit 100 px. The name shrinks from 25 px
+  to 14 px to fit the left column, and is cut short past that.
+- **Direct contact.** NEVER, in `GRAY`, for a member this device has not heard itself.
+- **Without a group.** The no-positions layout, with NO GROUP and VIEW GROUP, which opens the
+  group screen. VIEW MEMBERS and VIEW GROUP open their screens over the panel, as the drawer's
+  VIEW MEMBERS does.
+- **N.** `LIME` in both orientations, where true north lies on screen.
+- **Motion.** Sampled every 20 ms while the face shows, as for the compass. Turning the device
+  counts as use for the timeout.
+- **Cost.** A heading change turns the grid and every node, so each degree of turn redraws the
+  whole face. A still face redraws only the ages that change. On a board, a still ring stepped
+  and drew in about 2 ms; the full redraw while turning has not been measured
+  (`docs/logs/display/members-2026-10-04/`).
 
 ## The compass's states and changes, as built
 
@@ -729,7 +776,9 @@ velocity. It sees a second contact but no gesture uses one.
 | A face | A drag at least as sideways as vertical | Turns the page |
 | A face | A downward drag, with the downward movement at least twice the sideways movement | Opens the panel over the face |
 | A face | An upward drag, with the upward movement at least twice the sideways movement | Opens the Events drawer over the face |
-| A face | Any other drag (under two to one either way); any tap | Nothing |
+| A face | Any other drag (under two to one either way); a tap but on the member face | Nothing |
+| Member face | A tap within 160 px of the centre, or on the coordinates' box | Selects the next member with a position |
+| Member face | A tap on VIEW MEMBERS or VIEW GROUP | Opens the member list or the group screen over the panel |
 | Toast | A tap | Opens its event's detail in the drawer |
 | Drawer root | A drag more sideways than vertical | Moves between Events and Messages, as the panel's sheet does |
 | Drawer root | A vertical drag in the list | Scrolls it, a pixel at a time; a downward pull with the list at its top closes the drawer |
@@ -779,25 +828,26 @@ plumbing it is firmware work. There are three grades.
      pitch and roll in whole degrees, and a `disturbed` flag.
    - Battery: presence, percentage and voltage. Power: charging, and whether USB is present.
      Until the power controller first answers, the battery reads as unknown (`--`).
-   - GNSS: fix, satellites in use and in view, and the last fix's position.
+   - GNSS: fix, satellites in use and in view, HDOP, and the last fix's position.
+   - The local magnetic declination where the device last had a fix, from the World Magnetic
+     Model 2025, for a true heading.
    - The display brightness, and the firmware version (`0.1.0`, the crate's version string).
    - Touch contacts and the cover report.
    - From the mesh: this device's name and hardware address, and whether the radio answered
      at boot; the stored group's members with their ids, names, addresses and join times, when
-     each was last heard directly and when its newest position was observed; how the last
+     each was last heard directly and where and when its newest position was observed; how the last
      leave or rename went; and the pairing under way, with its role, phase, deadline, the
      devices found, the other device's address and its name once sent, the code, and the
      group's size and this device's id once the pairing holds them.
 2. **Known to the firmware, not passed to the screens:** GNSS time to the millisecond, fix
    quality, and when the clock was last set from GNSS. Also the compass calibration's internals.
-   From the mesh: the members' positions themselves, the timebase, and the packets' signal;
+   From the mesh: the timebase, and the packets' signal;
    messages, with whether each was acknowledged; and removals: who asked to remove whom, when
    the group switches, and the day left to decline one.
 3. **Does not exist:** raise to wake, or any wake but a double tap or the power key (the
    IMU's wake-on-motion and the BOOT key are unused); a 12-hour clock (ruled out by the clock
    spec); units, languages, sounds or vibration; Wi-Fi or Bluetooth; alarms, timers, step
-   counting and notifications; and the local magnetic declination, which showing a bearing
-   from true north on the magnetic compass needs.
+   counting; and an uncertainty for a position: HDOP alone does not give one.
 
 ## Settings
 
@@ -976,15 +1026,20 @@ Colours come only from these tokens. Each is a swatch from the reference board e
 
 | Token | Hex | Role |
 | --- | --- | --- |
-| `LIME` | `#C0FE04` | The identity and its card |
+| `LIME` | `#C0FE04` | The identity and its card; on the member face, orientation and the selected member |
 | `RED` | `#F24723` | Faults only |
 | `ORANGE` | `#F1710D` | Attention: calibrating, interference, a stopped clock, the clear confirm; the compass's `N` |
 | `PURPLE` | `#5500E4` | The identity's scatter |
 | `BLUE` | `#409DE4` | A live, valid reading's status icon |
-| `VIOLET` | `#B32BE5` | The active choice in D3 settings screens |
+| `VIOLET` | `#B32BE5` | The active choice in D3 settings screens; on the member face, the age of direct contact |
 | `GRAY` | `#888E98` | Frames, rules, minor marks, captions, secondary text, a mode in force, an unconfirmed value |
 | `WHITE` | `#D2D3D6` | Primary text, major marks, neutral bands and slabs, field rules |
 | `BLACK` | `#000000` | The field; knockout text and symbols on saturated fills |
+
+The 2026-10-04 hand-off adds four values that are not on the board and carry no status:
+`TRACK` (`#30343A`) for rules, scroll and progress tracks, `DISABLED` (`#444952`) for a control
+that cannot be used yet, and the member face's grid, `GRID_LINE` (`#0C1521`) and `GRID_MARK`
+(`#4B628B`).
 
 A new colour is allowed if it comes from the reference board. Its unused swatches:
 

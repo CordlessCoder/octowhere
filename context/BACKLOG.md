@@ -55,8 +55,20 @@ until the feature set is complete, because profiling an incomplete firmware pric
     wake a resting screen, the unread arc, and the GNSS module's health from its task
     (`SCREEN-DESIGN-BRIEF.md`, "Events as built"; on a board in
     `docs/logs/display/events-2026-10-04/`).
-  - The spatial member face: a third face, positions in the view, a true heading (a magnetic
-    declination model) or NORTH UP, and a path for 32 members.
+  - The spatial member face, done (2026-10-04): the third face, the
+    members' coordinates in the view, a true heading from WMM2025 or NORTH UP, and crowded
+    nodes merged (`SCREEN-DESIGN-BRIEF.md`, "Member face as built"; on a board in
+    `docs/logs/display/members-2026-10-04/`, with `fix-inject` standing in for fixes). Open:
+    - Turning the face redraws it whole each degree. Measure that draw on a board with a
+      calibrated compass, or a synthetic heading on a `bench/` branch, before judging it.
+    - Its step adds stack: `members::build` takes 4,576 bytes on the frame loop's path,
+      `Stage::advance` grew 768 bytes and the radio task's poll 768 (the coordinates in the
+      view). Rerun `bench/stack-watermark` once messages and removal are built, which add
+      more.
+    - The merged nodes for crowded rings, the 5-minute freshness glyph and tap-to-select are
+      engineering choices without a render. Take them to the next design round.
+    - WMM2025 holds until 2030.0; after that the face stays north up until the model's
+      successor is built in.
   - Messages: the store's messages, their transport evidence and unread state in the view, the
     inbox, threads, recipient picker, a 160-character draft on the full keyboard, review and
     send, and arrival toasts. The Messages root shows NO MESSAGES until then.

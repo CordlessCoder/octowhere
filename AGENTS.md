@@ -19,8 +19,9 @@ initialization or peripheral mappings.
   I2C and build and test on the host; the firmware reaches them as `octowhere::peripherals`,
   and keeps their bring-up and the shared bus. The IMU comes from `ph-qmi8658` rather than a
   local module.
-- `crates/octowhere-motion/` owns compass calibration, sensor fusion, and IMU unit conversion.
-  It has no board or renderer dependency and builds for the host.
+- `crates/octowhere-motion/` owns compass calibration, sensor fusion, IMU unit conversion, and
+  the magnetic declination from the World Magnetic Model 2025 (`declination`), which holds
+  until 2030. It has no board or renderer dependency and builds for the host.
 - `crates/octowhere-mesh/` owns the location mesh in `context/LORA-PROTOCOL.md`: the slot
   schedule, the packet's header and records, sealing them with AES-SIV, the table of positions,
   the timebase, the group and its members (`members`), pairing (`pair`), the exchange
@@ -64,7 +65,9 @@ initialization or peripheral mappings.
   and refreshes), each one entry through its life, `drawer`, the Events and Messages drawer an
   upward drag opens, its details, the toasts that tell of an event and the unread arc, drawn
   from lists as the group screens are and from the shared parts of the 2026-10-04 hand-off's
-  consistency rules (`parts`), `stroke`, antialiased paths and arcs, `stage`, which holds the screen state and turns touch
+  consistency rules (`parts`), `members`, the member face: the members' bearings round a ring
+  turned to the true heading over a grid that keeps to true north, `stroke`, antialiased paths,
+  arcs and polygons, `stage`, which holds the screen state and turns touch
   and readings into redraws and settings to store, and `script`, which steps a stage on a
   simulated clock for tests and scenes. `src/chrome.rs` is the font and draw-target layer, and
   `src/framebuffer.rs` holds the pixels. The firmware re-exports its `chrome`, `framebuffer`,
@@ -428,7 +431,8 @@ Core 1 owns the display SPI/DMA path.
   fix, which the frame loop passes to the stage for its events.
 - `motion_task`, on `BUS_EXECUTOR`, owns the IMU and magnetometer, the compass calibration and
   the sensor fusion. It samples every 250 ms, or every 20 ms while the frame loop sets
-  `COMPASS_ACTIVE`, and publishes a `MotionSnapshot` through `MOTION_STATE`.
+  `COMPASS_ACTIVE` while the compass or the member face shows, and publishes a
+  `MotionSnapshot` through `MOTION_STATE`.
 - `touch_task`, on `BUS_EXECUTOR`, owns the touch controller. It reads it on each falling edge
   of the controller's INT, every 10 ms while a finger is down, or when the frame loop asks, and
   queues each read in `TOUCH_READS` without waiting for it to be taken. A newer contact replaces
@@ -503,7 +507,8 @@ poisons the thread and a later `get()` panics.
 - Damage is `chrome::Dirty`, spans of columns per pair of rows at the panel's 2 × 2 write grain
   (`ui/dirty.rs`). `Stage::changed` holds what a step changed: on a settled face, the old and
   new places of each part that changed; on the settled panel, the cells that changed or the
-  scrolling grid; on a group screen, the items of its list that differ from the last step's;
+  scrolling grid; on a group screen, the drawer and the settled member face, the items of its
+  list that differ from the last step's;
   elsewhere, the whole panel.
 - Each framebuffer repaints the previous step's damage and its own, since it last held the frame
   before that, drawing through `chrome::Clip`. The flush sends only the step's own damage, since
@@ -689,6 +694,10 @@ All default off. None belongs in normal firmware behavior.
   refresh, send, remove and keep. Its `deaf` makes a pairing or the mesh drop what it hears for
   a while, to lose a frame or a switch on purpose, and its `phantom` enrols a member no device
   stands behind, so that two boards can try a removal with a member left to tell.
+- `fix-inject` lets `tools/fix-inject.py` stand a position in for a GNSS fix over the USB JTAG,
+  stamped with the RTC's time, for the screens alone or for the mesh too. The mesh then takes
+  GPS time from the RTC, so only one board of a group may be given it; the others take their
+  timebase from it.
 - `touch-inject` lets `tools/touch-inject.py` tap, swipe and cover the screen and press the
   power key over the USB JTAG, and read the framebuffer drawn last back to a PNG, for driving
   the screens on a board nobody holds. A read takes about 11 s and interrupts the board.
@@ -716,7 +725,8 @@ character instead. A character outside the list draws as the font's missing glyp
 
 ## Design language
 
-The firmware has two faces, the clock and the compass, and the settings panel over them, and all
+The firmware has three faces, the clock, the compass and the members, with the settings panel
+and the Events drawer over them, and all
 follow the approved design in `context/design/`, listed above. Change how any of them looks or
 moves only against it or a new design round. A new screen starts
 from a design round rather than from a sketch in code.
@@ -731,7 +741,8 @@ screens. Read it before changing how anything looks. These rules constrain the c
 - Colour tokens are a single source of truth. They live in
   [`crates/octowhere-ui/src/chrome.rs`](crates/octowhere-ui/src/chrome.rs) as
   `LIME`, `RED`, `ORANGE`, `PURPLE`, `BLUE`, `VIOLET`, `GRAY`, `WHITE`, `BLACK`. Every one is a value from the
-  reference board except `BLACK`, which stays pure for panel contrast. Define a new colour there,
+  reference board except `BLACK`, which stays pure for panel contrast, and the 2026-10-04
+  hand-off's structural `TRACK`, `DISABLED`, `GRID_LINE` and `GRID_MARK`. Define a new colour there,
   not at the call site, and take its value from
   [`context/palette-reference.md`](context/palette-reference.md) rather than inventing one.
 - `RED` means a fault. Do not spend it on a data series, an idle state or a prompt.
@@ -746,8 +757,8 @@ screens. Read it before changing how anything looks. These rules constrain the c
   the capability first, or leave the control out.
 
 `crates/octowhere-ui/src/ui/screens.rs` holds the ring of screens and draws a frame of them.
-Each screen's drawing and damage live in its own module, `clock_screen.rs` and
-`compass_screen.rs`.
+Each face's drawing and damage live in its own module, `clock_screen.rs`, `compass_screen.rs`
+and `members.rs`; the member face draws from a list, as the group screens do.
 
 ## Dependencies and conventions
 
