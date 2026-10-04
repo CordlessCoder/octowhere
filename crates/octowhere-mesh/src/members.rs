@@ -691,7 +691,9 @@ impl Group {
         {
             return false;
         }
-        // Not through `set`: the gone record is undone, not a former member's to keep.
+        // Not through `set`: the gone record is undone, not a former member's to keep. Nor is it
+        // sent: every node that took the losing key puts the record back as it switches, and the
+        // others never removed it.
         self.held.slots[usize::from(id)] = record.map(Slot::Member);
         self.changed |= 1 << id;
         self.digest.set(None);

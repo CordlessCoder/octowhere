@@ -713,37 +713,37 @@ impl Rekey {
     }
 }
 
-/// The most bytes [`Rekey::encode`] writes.
-pub const STORED_MAX: usize = 1
-    + 1
-    + 4
-    + KEY_LEN
-    + 1
-    + OLD_KEYS * (32 + 2 + 4)
-    + 1
-    + DECLINED * 8
-    + 4
-    + 1
-    + 2
-    + 1
-    + 8
-    + 1
-    + 32
-    + 2
-    + 2
-    + 4
-    + 4
-    + 4
-    + 1
-    + 1
-    + 1
-    + OLD_KEYS * 3
-    + 1
-    + 1
-    + 8
-    + 1
-    + RECORD_MAX_LEN
-    + 4;
+/// The most bytes [`Rekey::encode`] writes, in its order.
+pub const STORED_MAX: usize = 1 // whether a removal is under way
+    + 1 // its remover
+    + 4 // its switch round
+    + KEY_LEN // its new key
+    + 1 // how many old keys
+    + OLD_KEYS * (32 + 2 + 4) // each: key, generation, the members it waits for
+    + 1 // how many keys declined
+    + DECLINED * 8 // each one's fingerprint
+    + 4 // this device's removal: whether, generation, id
+    + 1 // whether a switch is recorded
+    + 2 // its generation
+    + 1 // the member it removed
+    + 8 // that member's fingerprint
+    + 1 // whether a key is kept to decline it
+    + 32 // that key
+    + 2 // its generation
+    + 2 // the new key's generation
+    + 4 // the round it switched
+    + 4 // the last round it can be declined in
+    + 4 // the ids whose slots changed since
+    + 1 // the member removed
+    + 1 // whether another member made it
+    + 1 // how many generations' removers
+    + OLD_KEYS * 3 // each: generation, remover
+    + 1 // which old keys a rival won over
+    + 1 // whether the key the group's key followed is known
+    + 8 // its fingerprint
+    + 1 // the length of the removed member's record
+    + RECORD_MAX_LEN // that record
+    + 4; // the members to remove again
 
 impl Rekey {
     /// Writes what a restart has to keep: the removal under way, the old keys with the members

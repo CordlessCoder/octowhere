@@ -65,7 +65,9 @@ const KEY_NAME: &[u8] = b"name";
 /// The end of the block of message sequence numbers reserved last, little-endian: every number
 /// below it may have been used.
 const KEY_SEQUENCE: &[u8] = b"sequence";
-/// The first byte of each mesh value, so a later layout can tell this one apart.
+/// The first byte of each mesh value. It has stayed 1 as the layouts grew, since each grew by
+/// fields added at the end, which the readers take as missing where an older value stops. A
+/// layout that cannot be read that way needs a new version.
 const MESH_VERSION: u8 = 1;
 const MODE_AUTOMATIC: u8 = 0;
 const MODE_MANUAL: u8 = 1;

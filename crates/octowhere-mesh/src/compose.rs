@@ -11,11 +11,13 @@ use crate::{
     table::Table,
 };
 
-/// Member and gone records a packet carries at most, together.
+/// Member and gone records a packet carries at most, together. Each is signed and over 100
+/// bytes, so a packet's room stops it at two first.
 pub const MAX_RECORDS: usize = 3;
 /// Positions a packet carries at most: as many as fit beside the neighbours record.
 pub const MAX_ENTRIES: usize = 24;
-/// Messages a packet carries at most.
+/// Messages a packet carries at most. A packet heard is taken with up to 16
+/// (`absorb::MESSAGES`), more than any sends.
 pub const MAX_MESSAGES: usize = 8;
 
 /// What a node holds that its packet can carry.

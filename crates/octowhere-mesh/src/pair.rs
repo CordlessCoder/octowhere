@@ -74,9 +74,14 @@ mod body {
 }
 
 const SESSION_LEN: usize = 8;
+/// Version, kind, the joining device's key and hardware address.
+const ANNOUNCE_LEN: usize = 2 + 32 + MAC_LEN;
 /// Version, kind, the joining and adding devices' keys, the commitment, the adding device's
 /// hardware address.
 const OFFER_LEN: usize = 2 + 32 + 32 + 32 + MAC_LEN;
+/// Version, kind, session and nonce: the joining device's nonce, and the adding device's reveal
+/// of its own.
+const NONCE_FRAME_LEN: usize = 2 + SESSION_LEN + NONCE_LEN;
 /// Version, kind and session.
 const SEALED_HEADER: usize = 2 + SESSION_LEN;
 const PART_HEADER: usize = 3;
@@ -552,7 +557,7 @@ impl Pairing {
                 out[1] = kind::ANNOUNCE;
                 out[2..34].copy_from_slice(&self.public);
                 out[34..40].copy_from_slice(&self.me.mac);
-                Some(40)
+                Some(ANNOUNCE_LEN)
             }
             (Role::Add, Phase::Connecting) => {
                 let peer = self.peer?;
@@ -567,13 +572,13 @@ impl Pairing {
                 out[1] = kind::NONCE;
                 out[2..10].copy_from_slice(&self.session);
                 out[10..26].copy_from_slice(&self.nonce);
-                Some(26)
+                Some(NONCE_FRAME_LEN)
             }
             (Role::Add, Phase::Compare { .. } | Phase::Waiting { .. }) => {
                 out[1] = kind::REVEAL;
                 out[2..10].copy_from_slice(&self.session);
                 out[10..26].copy_from_slice(&self.nonce);
-                Some(26)
+                Some(NONCE_FRAME_LEN)
             }
             (Role::Join, Phase::Waiting { .. }) => {
                 let name = self.me.name;
@@ -636,10 +641,16 @@ impl Pairing {
             return;
         }
         match (self.role, frame[1]) {
-            (Role::Add, kind::ANNOUNCE) if frame.len() == 40 => self.announced(frame, now),
+            (Role::Add, kind::ANNOUNCE) if frame.len() == ANNOUNCE_LEN => {
+                self.announced(frame, now)
+            }
             (Role::Join, kind::OFFER) if frame.len() == OFFER_LEN => self.offered(frame, now),
-            (Role::Add, kind::NONCE) if frame.len() == 26 => self.nonce_heard(frame, now),
-            (Role::Join, kind::REVEAL) if frame.len() == 26 => self.revealed(frame, now),
+            (Role::Add, kind::NONCE) if frame.len() == NONCE_FRAME_LEN => {
+                self.nonce_heard(frame, now)
+            }
+            (Role::Join, kind::REVEAL) if frame.len() == NONCE_FRAME_LEN => {
+                self.revealed(frame, now)
+            }
             (_, kind::SEALED) => self.sealed(frame, now),
             _ => {}
         }

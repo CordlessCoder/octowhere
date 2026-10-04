@@ -673,8 +673,6 @@ pub struct Mesh<R, T, G, D, S, A: Allocator> {
     sequence: Sequence,
     outbox: Box<heapless::Deque<Outgoing, OUTBOX>>,
     removals: Removals<A>,
-    /// Private messages to this device it could not act on yet: its sender's record or a
-    /// timebase was missing.
     /// The numbers of the writes queued without waiting, whose results are yet to be checked.
     writes: heapless::Vec<u32, 8>,
     /// A summary made before the slot it goes in, with the origin the next one starts from.
@@ -1756,9 +1754,6 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         arrival.taken == Taken::Adopted || absorbed.renumbered.is_some()
     }
 
-    /// Takes from a packet under an old key, opened, the key messages of this node's
-    /// generation: rivals of the key it switched to, which reach it no other way once both
-    /// parts of the group have switched. Nothing else in it is taken.
     /// Moves to the clock of a packet under the key to switch to, if it outranks this node's. A
     /// node that restarted with no UTC finds the group's clock in no other packet once the
     /// others have switched. Returns whether it moved.
@@ -1780,6 +1775,9 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         arrival.taken == Taken::Adopted
     }
 
+    /// Takes from a packet under an old key, opened, the key messages of this node's
+    /// generation: rivals of the key it switched to, which reach it no other way once both
+    /// parts of the group have switched. Nothing else in it is taken.
     fn take_rivals(&mut self, plain: &[u8]) {
         let (Some(group), Ok(plain), Some((time, _))) = (
             &self.group,
