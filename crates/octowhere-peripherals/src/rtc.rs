@@ -60,7 +60,8 @@ impl DateTime {
 
     #[must_use]
     pub fn is_valid(&self) -> bool {
-        self.seconds < 60
+        self.year < 100
+            && self.seconds < 60
             && self.minutes < 60
             && self.hours < 24
             && self.weekday < 7
@@ -210,7 +211,58 @@ fn dec_to_bcd(dec: u8) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    use super::{CTRL1_12_24, CTRL1_STOP, DateTime, bcd_to_dec_checked, days_in_month};
+    use core::convert::Infallible;
+
+    use embedded_hal_async::i2c::{ErrorType, Operation};
+
+    use super::{
+        CTRL1_12_24, CTRL1_STOP, DateTime, I2c, Pcf85063aRtc, RtcError, bcd_to_dec_checked,
+        days_in_month,
+    };
+
+    /// Answers every read with the seven time registers from the seconds on.
+    struct Registers([u8; 7]);
+
+    impl ErrorType for Registers {
+        type Error = Infallible;
+    }
+
+    impl I2c for Registers {
+        async fn transaction(
+            &mut self,
+            _address: u8,
+            operations: &mut [Operation<'_>],
+        ) -> Result<(), Self::Error> {
+            for operation in operations {
+                if let Operation::Read(read) = operation {
+                    read.copy_from_slice(&self.0[..read.len()]);
+                }
+            }
+            Ok(())
+        }
+    }
+
+    fn read_time(registers: [u8; 7]) -> Result<DateTime, RtcError<Infallible>> {
+        let mut rtc = Pcf85063aRtc::new(Registers(registers));
+        let mut context = core::task::Context::from_waker(core::task::Waker::noop());
+        match core::pin::pin!(rtc.get_time()).poll(&mut context) {
+            core::task::Poll::Ready(result) => result,
+            core::task::Poll::Pending => unreachable!("the fake bus never waits"),
+        }
+    }
+
+    #[test]
+    fn a_year_register_that_is_not_bcd_fails_the_read() {
+        let noon = [0x00, 0x00, 0x12, 0x01, 0x03, 0x01];
+        let read = |year| {
+            let mut registers = [0; 7];
+            registers[..6].copy_from_slice(&noon);
+            registers[6] = year;
+            read_time(registers)
+        };
+        assert!(read(0x26).is_ok_and(|time| time.year == 26));
+        assert!(matches!(read(0xAB), Err(RtcError::InvalidDateTime)));
+    }
 
     #[test]
     fn init_clears_stop_and_selects_24_hour_mode() {
