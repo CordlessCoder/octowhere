@@ -179,6 +179,18 @@ fn a_restart_during_a_removal_still_switches() {
 
 /// A device in no group joins one of two through pairing, and the member that did not pair
 /// learns of it over the mesh.
+/// Nodes in reach of each other are all on the new key at once, which drops every catch-up but
+/// the notice to the device removed, sent in a sweep round under the old key.
+#[test]
+fn the_device_removed_is_told() {
+    let mut sim = group(3, 31);
+    sim.command(0, Command::Remove(2));
+    let told = sim.run_while_not(60 * 60, |sim| {
+        sim.count(2, "0 removed this device from the group") == 1
+    });
+    assert!(told, "after {} s", sim.now_s());
+}
+
 #[test]
 fn a_device_joins_through_pairing() {
     let mut sim = pair(9);

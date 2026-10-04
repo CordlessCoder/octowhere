@@ -1631,7 +1631,13 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             if !self.rekey.is_waiting() {
                 info!("[REKEY] every member is on the new key; the old one is dropped");
                 self.kept.clear();
-                self.catch_up.clear();
+                // The member removed is no member, so nobody waits for it; it is still told.
+                let told = self
+                    .removal_notice
+                    .as_ref()
+                    .map(|notice| notice.message.to());
+                self.catch_up
+                    .retain(|up| told == Some(To::Member(up.id)));
             }
             self.save_rekey();
         }
