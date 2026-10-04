@@ -408,8 +408,8 @@ impl Events {
     /// Follows the group's removals as member `own`'s device knows them, `None` in no group.
     /// Each request has an event by its new key: another member's is told of when it comes and
     /// when this device switches to it, and a rival whenever one is learned. This device's own
-    /// begins read. Being removed is an event of its own. Returns an event the user should be
-    /// told of.
+    /// begins read, as does one first seen switched, which a restart brought back. Being
+    /// removed is an event of its own. Returns an event the user should be told of.
     pub fn removals(
         &mut self,
         removals: &RemovalsView,
@@ -425,8 +425,9 @@ impl Events {
                 .map(|event| (event.id, event.kind))
             {
                 None => {
-                    if let Some(id) = self.add(Kind::Removal(removal), theirs, now)
-                        && theirs
+                    let news = theirs && !matches!(removal.stage, RemovalStage::Switched { .. });
+                    if let Some(id) = self.add(Kind::Removal(removal), news, now)
+                        && news
                     {
                         told = Some(id);
                     }
@@ -762,6 +763,20 @@ mod tests {
             None
         );
         assert_eq!(events.dismiss(id), Ok(()));
+    }
+
+    #[test]
+    fn a_switch_restored_after_a_restart_is_not_news() {
+        let mut events = Events::default();
+        let switched = RemovalStage::Switched {
+            at: 1_000,
+            decline: Decline::Until(2_000),
+        };
+        let views = shown(Some(removal(1, 2, switched)), None);
+        assert_eq!(events.removals(&views, Some(0), 10), None);
+        let event = events.ordered().next().unwrap();
+        assert!(!event.unread);
+        assert_eq!(event.protected(), Some(Protected::Declinable));
     }
 
     #[test]
