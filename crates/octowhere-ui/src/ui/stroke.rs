@@ -127,8 +127,16 @@ pub fn draw_arc<D: CoverageTarget<Color = Color>>(
         f32::from(to).to_radians() / 10.0,
     );
     let middle = (from + to) / 2.0;
+    let (sin_middle, cos_middle) = libm::sincosf(middle);
     let (cx, cy) = (center.x as f32, center.y as f32);
     let (inner, outer) = ((radius - half - 1.0).max(0.0), radius + half + 1.0);
+    // A pixel this far within the span is covered whole along it, and needs no angle.
+    let within = (to - from) / 2.0 - 1.0 / inner.max(1.0);
+    let cos_within = if within > 0.0 && within < core::f32::consts::PI {
+        libm::cosf(within)
+    } else {
+        f32::INFINITY
+    };
     // Each row crosses the ring in at most two runs, left and right of the centre.
     let spans = |y: f32| {
         let dy = y - cy;
@@ -145,10 +153,13 @@ pub fn draw_arc<D: CoverageTarget<Color = Color>>(
     };
     fill_rows(bounds, color, target, spans, |x, y| {
         let (dx, dy) = (x - cx, y - cy);
-        let distance = libm::hypotf(dx, dy);
+        let distance = distance(dx, dy);
         let radial = (half + 0.5 - (distance - radius).abs()).clamp(0.0, 1.0);
         if radial <= 0.0 {
             return 0.0;
+        }
+        if dx * cos_middle + dy * sin_middle >= distance * cos_within {
+            return radial;
         }
         // The angle from the arc's middle, so that the arc may cross the right without a seam.
         let mut angle = libm::atan2f(dy, dx) - middle;
@@ -260,7 +271,12 @@ fn to_segment(p: (f32, f32), a: (f32, f32), b: (f32, f32)) -> f32 {
     } else {
         (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / length).clamp(0.0, 1.0)
     };
-    libm::hypotf(p.0 - (a.0 + t * dx), p.1 - (a.1 + t * dy))
+    distance(p.0 - (a.0 + t * dx), p.1 - (a.1 + t * dy))
+}
+
+/// The length of `(x, y)`. libm's `hypotf` works in `f64`, which this core emulates.
+fn distance(x: f32, y: f32) -> f32 {
+    libm::sqrtf(x * x + y * y)
 }
 
 #[cfg(test)]

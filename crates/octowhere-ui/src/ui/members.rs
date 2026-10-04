@@ -932,18 +932,19 @@ fn on_circle(degrees: f32, radius: f32) -> Point {
     )
 }
 
-fn outline(list: &mut List, rect: Rectangle) {
-    let (x0, y0) = (rect.top_left.x * 4 + 2, rect.top_left.y * 4 + 2);
-    let (x1, y1) = (
-        x0 + (rect.size.width as i32 - 1) * 4,
-        y0 + (rect.size.height as i32 - 1) * 4,
-    );
-    let [x0, y0, x1, y1] = [x0, y0, x1, y1].map(|v| v as i16);
-    list.path(
-        &[(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)],
-        4,
-        chrome::GRAY,
-    );
+/// A one-pixel outline round `area` that leaves the grid inside showing: its four sides as
+/// fills, where a path would measure every pixel inside.
+fn outline(list: &mut List, area: Rectangle) {
+    let (x0, y0) = (area.top_left.x, area.top_left.y);
+    let (x1, y1) = (x0 + area.size.width as i32, y0 + area.size.height as i32);
+    for side in [
+        rect(x0, y0, x1, y0 + 1),
+        rect(x0, y1 - 1, x1, y1),
+        rect(x0, y0 + 1, x0 + 1, y1 - 1),
+        rect(x1 - 1, y0 + 1, x1, y1 - 1),
+    ] {
+        list.fill(side, chrome::GRAY);
+    }
 }
 
 fn line(text: &str) -> Line {
