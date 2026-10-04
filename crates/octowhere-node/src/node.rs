@@ -207,6 +207,37 @@ enum Opened {
     Not,
 }
 
+/// What a step sends next.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Next {
+    /// A notice, at local time `at`.
+    Notice { at: i64 },
+    /// A packet under an old key, at local time `at`, in `round` of that key's order.
+    Old { at: i64, round: i64 },
+    /// This node's own packet, in its slot.
+    Own,
+}
+
+impl Next {
+    /// What goes out next, with this node's own slot at local time `send_at`: a notice due at
+    /// local time `notice`, or else a packet under an old key due at the local time and round
+    /// `old`, if it ends before the own slot with time to prepare for that; or else the own
+    /// packet.
+    fn choose(send_at: i64, notice: Option<i64>, old: Option<(i64, i64)>) -> Self {
+        if let Some(at) = notice
+            && at + airtime_us(NOTICE_LEN) + PREPARE_US < send_at
+        {
+            return Self::Notice { at };
+        }
+        if let Some((at, round)) = old
+            && at + airtime_us(MAX_PACKET) + PREPARE_US < send_at
+        {
+            return Self::Old { at, round };
+        }
+        Self::Own
+    }
+}
+
 /// The timebase second the round holding timebase time `time` starts at.
 fn round_start_s(time: i64) -> u32 {
     (round_at(time) * (ROUND_US / 1_000_000)) as u32
@@ -1155,7 +1186,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             // What the screens show of removals is timed on it.
             self.publish();
         }
-        let Some((time, _)) = self.clock.at(now) else {
+        let Some((time, timebase)) = self.clock.at(now) else {
             let end = self.clock.sweep_ends(now).unwrap_or(now + ROUND_US);
             self.listen(end).await;
             return;
@@ -1202,30 +1233,28 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             return;
         };
         let send_at = start + (now - time);
-        if let Some(at) = self.notice_at(now, own)
-            && at + airtime_us(NOTICE_LEN) + PREPARE_US < send_at
-        {
-            self.notice = None;
-            if self.listen(at - PREPARE_US).await {
-                self.after = i64::MIN;
-            } else {
-                self.send_notice(own, timebase, at).await;
+        match Next::choose(
+            send_at,
+            self.notice_at(now, own),
+            self.old_slot_at(now, own),
+        ) {
+            Next::Notice { at } => {
+                self.notice = None;
+                if !self.listen(at - PREPARE_US).await {
+                    self.send_notice(own, timebase, at).await;
+                }
+                return;
             }
-            return;
-        }
-        if let Some((at, old_round)) = self.old_slot_at(now, own)
-            && at + airtime_us(MAX_PACKET) + PREPARE_US < send_at
-        {
-            if self.listen(at - PREPARE_US).await {
-                self.after = i64::MIN;
-            } else {
-                self.send_old(own, timebase, at, old_round).await;
+            Next::Old { at, round } => {
+                if !self.listen(at - PREPARE_US).await {
+                    self.send_old(own, timebase, at, round).await;
+                }
+                return;
             }
-            return;
+            Next::Own => {}
         }
         self.prepare_summary();
         if self.listen(send_at - PREPARE_US).await {
-            self.after = i64::MIN;
             return;
         }
         self.after = start + 1;
@@ -1320,8 +1349,8 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
 
     /// Sends a packet under an old key at local time `at`, in this node's slot in that key's
     /// order: a header, and the key message of each member waiting for one on that key.
-    async fn send_old(&mut self, own: u8, timebase: Option<Timebase>, at: i64, round: i64) {
-        let (Some(timebase), Some((time, _))) = (timebase, self.clock.at(at)) else {
+    async fn send_old(&mut self, own: u8, timebase: Timebase, at: i64, round: i64) {
+        let Some((time, _)) = self.clock.at(at) else {
             return;
         };
         let Some((key, generation, ids)) = self.removals.old_packet(round) else {
@@ -1373,11 +1402,9 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
 
     /// Sends a notice at local time `at`, when a member on a lower timebase listens for this
     /// node, which makes it sweep and so hear this node's own packets.
-    async fn send_notice(&mut self, own: u8, timebase: Option<Timebase>, at: i64) {
+    async fn send_notice(&mut self, own: u8, timebase: Timebase, at: i64) {
         let mut packet = [0u8; NOTICE_LEN];
-        let (Some(timebase), Some(group), Some((time, _))) =
-            (timebase, &self.group, self.clock.at(at))
-        else {
+        let (Some(group), Some((time, _))) = (&self.group, self.clock.at(at)) else {
             return;
         };
         let header = Header {
@@ -1415,17 +1442,17 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
 
     /// Listens until local time `end`: throughout in a sweep or without a timebase, and otherwise
     /// in a window round the slot of each other member and of each id heard lately.
-    /// Returns whether a packet moved the node to another timebase or another id, which moves
-    /// every slot.
+    /// Returns whether a switch, or a packet that moved the node to another timebase or another
+    /// id, moved every slot; the next own slot is then looked for afresh.
     async fn listen(&mut self, end: i64) -> bool {
         loop {
             let now = self.time.now();
             if self.update_refresh(now) {
                 self.publish();
             }
-            // A switch moves every slot.
             if self.switch_at(now).is_some_and(|at| at <= now) {
                 self.switch_key();
+                self.after = i64::MIN;
                 return true;
             }
             if now >= end {
@@ -1493,6 +1520,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             while self.radio.wait_received(close).await {
                 if self.receive().await {
                     self.radio.standby().await;
+                    self.after = i64::MIN;
                     return true;
                 }
             }
@@ -1781,8 +1809,8 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
 
     /// Sends this node's packet in its slot in `round`, which starts at timebase time `start` and
     /// local time `send_at`.
-    async fn send(&mut self, round: i64, start: i64, timebase: Option<Timebase>, send_at: i64) {
-        let (Some(timebase), Some(group)) = (timebase, &mut self.group) else {
+    async fn send(&mut self, round: i64, start: i64, timebase: Timebase, send_at: i64) {
+        let Some(group) = &mut self.group else {
             return;
         };
         let base = base_of(start);
@@ -3045,5 +3073,49 @@ pub async fn offline(
             }
             command => warn!("[MESH] no radio for {:?}", command),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SEND_AT: i64 = 10_000_000;
+
+    /// The latest local time a packet of `len` bytes can go out and still leave the own slot
+    /// its preparation.
+    fn last_start(len: usize) -> i64 {
+        SEND_AT - PREPARE_US - airtime_us(len) - 1
+    }
+
+    #[test]
+    fn a_notice_that_fits_goes_ahead_of_an_old_key_packet() {
+        let at = last_start(NOTICE_LEN);
+        assert_eq!(
+            Next::choose(SEND_AT, Some(at), Some((0, 7))),
+            Next::Notice { at }
+        );
+    }
+
+    #[test]
+    fn an_old_key_packet_goes_when_the_notice_does_not_fit() {
+        let at = last_start(MAX_PACKET);
+        assert_eq!(
+            Next::choose(SEND_AT, Some(last_start(NOTICE_LEN) + 1), Some((at, 7))),
+            Next::Old { at, round: 7 }
+        );
+    }
+
+    #[test]
+    fn the_own_packet_goes_when_nothing_ends_in_time() {
+        assert_eq!(Next::choose(SEND_AT, None, None), Next::Own);
+        assert_eq!(
+            Next::choose(
+                SEND_AT,
+                Some(last_start(NOTICE_LEN) + 1),
+                Some((last_start(MAX_PACKET) + 1, 7))
+            ),
+            Next::Own
+        );
     }
 }
