@@ -1,26 +1,30 @@
 //! The node's logging: through defmt on the board, through `log` on the host, or nowhere. A
 //! format string has to read the same to both, so it keeps to `{}` and `{:?}`, with `#`, zero
-//! padding and `x` as hints, and byte slices go through [`Mac`] and [`Ascii`].
+//! padding and `x` as hints, and byte slices go through [`Mac`] and [`Ascii`]. With `defmt` the
+//! node calls defmt's own macros, since defmt logs the line its macro is invoked from; these
+//! stand in for them on the host.
 
+#[cfg(not(feature = "defmt"))]
 macro_rules! log_at {
     ($level:ident, $($arg:tt)*) => {{
-        #[cfg(feature = "defmt")]
-        ::defmt::$level!($($arg)*);
-        #[cfg(all(feature = "log", not(feature = "defmt")))]
+        #[cfg(feature = "log")]
         ::log::$level!($($arg)*);
-        #[cfg(not(any(feature = "defmt", feature = "log")))]
+        #[cfg(not(feature = "log"))]
         let _ = ::core::format_args!($($arg)*);
     }};
 }
 
+#[cfg(not(feature = "defmt"))]
 macro_rules! debug {
     ($($arg:tt)*) => { log_at!(debug, $($arg)*) };
 }
 
+#[cfg(not(feature = "defmt"))]
 macro_rules! info {
     ($($arg:tt)*) => { log_at!(info, $($arg)*) };
 }
 
+#[cfg(not(feature = "defmt"))]
 macro_rules! warn {
     ($($arg:tt)*) => { log_at!(warn, $($arg)*) };
 }

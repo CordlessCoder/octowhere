@@ -6,6 +6,8 @@
 use alloc::boxed::Box;
 use core::alloc::Allocator;
 
+#[cfg(feature = "defmt")]
+use defmt::{debug, info, warn};
 use embassy_futures::select::{Either, Either3, select, select3};
 use octowhere_mesh::{
     IDS, Zeroable,
