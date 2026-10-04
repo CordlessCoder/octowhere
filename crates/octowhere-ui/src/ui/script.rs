@@ -8,7 +8,10 @@ use embedded_graphics::prelude::Point;
 
 use super::{
     gesture::Micros,
-    group::sim::Sim,
+    group::{
+        sim::Sim,
+        view::{MeshView, Request},
+    },
     screens::{PeripheralState, Screen},
     stage::{Input, Key, Motion, Sensors, Stage, Touch, TouchGesture, Update},
     startup::{Outcome, Part, Report},
@@ -20,6 +23,14 @@ pub const FRAME: Micros = 16_667;
 const SENSOR_PERIOD: Micros = 1_000_000;
 
 type Observer<'a> = Box<dyn FnMut(&Stage, Micros) + 'a>;
+
+/// A mesh node outside the driver, as a multi-device simulation runs one: the stage takes the
+/// views it publishes, and it takes the stage's requests. The driver's clock is the node's.
+pub trait MeshLink {
+    /// The view the node published since the last call, once it has run to `now`.
+    fn view(&mut self, now: Micros) -> Option<MeshView>;
+    fn request(&mut self, request: Request, now: Micros);
+}
 
 pub struct Driver<'a> {
     pub stage: Stage,
@@ -34,6 +45,8 @@ pub struct Driver<'a> {
     hand: Option<fn(Motion, Micros) -> Motion>,
     /// A simulated mesh, which takes the stage's requests and publishes to it every step.
     pub mesh: Option<Sim>,
+    /// A node to step the stage against instead.
+    pub link: Option<Box<dyn MeshLink + 'a>>,
 }
 
 impl<'a> Driver<'a> {
@@ -47,6 +60,7 @@ impl<'a> Driver<'a> {
             motion: None,
             hand: None,
             mesh: None,
+            link: None,
         }
     }
 
@@ -121,9 +135,15 @@ impl<'a> Driver<'a> {
         {
             self.stage.set_mesh(mesh.view().clone());
         }
+        if let Some(view) = self.link.as_mut().and_then(|link| link.view(self.now)) {
+            self.stage.set_mesh(view);
+        }
         let update = self.stage.step(input);
         if let (Some(mesh), Some(request)) = (&mut self.mesh, update.mesh) {
             mesh.request(request, self.now);
+        }
+        if let (Some(link), Some(request)) = (&mut self.link, update.mesh) {
+            link.request(request, self.now);
         }
         if let Some(observer) = &mut self.observer {
             observer(&self.stage, self.now);
