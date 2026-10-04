@@ -264,7 +264,8 @@ until the feature set is complete, because profiling an incomplete firmware pric
     2026-10-04), which no member can grind but which the lowest ids win every time; the
     removal screens let each user decline the rival they do not want (the protocol's "Open").
 - Simplify the node (`octowhere-node`'s `node.rs`, moved from `src/mesh.rs`) and the mesh crate's surface, from the 2026-10-03 code-quality review
-  of `337717f`, in the order the owner agreed on 2026-10-04: the radio and the save flags first,
+  of `337717f`. What is left is planned step by step in `MESH-CLEANUP-PLAN.md` (2026-10-04):
+  follow that, and strike lines here as its steps land. The order the owner agreed on 2026-10-04: the radio and the save flags first,
   as they shrink the simulator's seams, then the seams (the entry above), then `send()` and
   `take()` into the crate before the simulator's scenarios. Leave the slot encoding and the
   flash header until tests cover them, since they touch the stored format. Done: the review's
@@ -273,8 +274,8 @@ until the feature set is complete, because profiling an incomplete firmware pric
   `refresh` in place of the view's, which only copies them now, and `send()`'s packet filling
   and `take()`'s records loop as the mesh crate's tested `compose` and `absorb`. Left:
   - In the node, which has no tests but `unsaved`'s:
-    - Gather the nine removal fields (`rekey`, `kept`, `catch_up`, `caught_up`,
-      `removal_notice`, `notify`, `keys_posted`, `beacon_round`, `refill`) into one type with
+    - Gather the ten removal fields (`rekey`, `kept`, `catch_up`, `caught_up`,
+      `removal_notice`, `notify`, `keys_posted`, `beacon_round`, `refill`, `on_key`) into one type with
       named resets; `forget_messages`, `switch_key`, `keep` and `take` reset
       overlapping subsets of them today.
     - Split `step()`'s choice of what goes out next into a plain function returning an enum;

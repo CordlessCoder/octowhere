@@ -150,6 +150,9 @@ initialization or peripheral mappings.
   without a display, and what is settled. Read it before using the board.
 - [`context/HARDWARE-VERIFICATION.md`](context/HARDWARE-VERIFICATION.md) lists open hardware
   questions from static review. They are questions, not confirmed defects.
+- [`context/MESH-CLEANUP-PLAN.md`](context/MESH-CLEANUP-PLAN.md) is the plan, step by step,
+  for what the 2026-10-03 code-quality review of the mesh and node left open, with the base
+  commit, the gates and the baseline each step is checked against. Follow it in order.
 - [`context/IMPLEMENTATION.md`](context/IMPLEMENTATION.md) is a finished multi-agent brief kept as
   a record. Its partition is historical.
 - [`context/LORA-PROTOCOL.md`](context/LORA-PROTOCOL.md) is the agreed design for the location
@@ -279,8 +282,9 @@ Weigh that cost before adding one.
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 1,837,792 bytes, 11.73% of the 15,663,104-byte app partition that
-`partitions.csv` gives it (the inject features' build at `58ea45c`; 1,835,136 without them). `b06d686` alone added
+The image is currently 1,848,064 bytes, 11.80% of the 15,663,104-byte app partition that
+`partitions.csv` gives it (the plain build at `03cc818`; at `58ea45c` it was 1,835,136, and
+1,837,792 with the inject features). `b06d686` alone added
 36.8 KB to it while its functions grew by about 1 KB, so most of that is likely padding the
 image crossed into. Measure with `espflash save-image --chip esp32s3 --flash-size 16mb
 --partition-table partitions.csv <elf> <out>`; without those two options it assumes 4 MB of flash
@@ -661,7 +665,9 @@ errata workaround, are in [`docs/hardware-notes.md`](docs/hardware-notes.md).
   `Group::restore` 6,000, Ed25519's `verify` 5,392 and `Group::clone` 5,136. The watermark
   figures predate signing; remeasure before relying on them. With the member face, messages
   and removals (2026-10-04) the radio task's poll takes 14,576 bytes and `Stage::advance`
-  3,200, and core 0's stack is 107,068 bytes.
+  3,200, and core 0's stack is 107,068 bytes; after that day's security fixes (`03cc818`) the
+  radio task's poll takes 15,824. `context/MESH-CLEANUP-PLAN.md` has the command that lists
+  the largest frames.
   Each function's frame is the `entry a1, N` that opens it in `xtensa-esp-elf-objdump -d`, in
   hex once it is large. The dump names code with no symbol of its own after the symbol before
   it, so a large frame can carry an unlikely name.
