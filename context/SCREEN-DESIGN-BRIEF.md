@@ -384,6 +384,43 @@ framebuffers through a pairing, a rename and a cover are in
 `docs/logs/lora/pairing-screens-2026-10-02/`. Typing on the 39 px keys with a finger is
 accurate and responsive (owner, 2026-10-02). Nobody has judged legibility on the panel yet.
 
+## Events as built
+
+The 2026-10-04 hand-off's Events drawer is `crates/octowhere-ui/src/ui/drawer/`, over the
+events in `ui/events.rs`. An upward drag on a face opens it and a pull down from the top of its
+list closes it. Its list, details, management page, toasts and unread arc follow the hand-off's
+geometry, measured on its targets (`examples/render/events.rs` renders them, named after the
+targets). The Messages root beside it shows NO MESSAGES until messages have their screens. The
+backdrop is the settings panel's halftone, breathing on the 10 s cycle and kept 2 px clear of
+every text's ink. Where the build chose what the hand-off left open:
+
+- **Capacity.** 16 events in RAM, lost at a restart. A new event takes the place of the oldest
+  settled one, a read one first; an event still going on is never dropped.
+- **One event each.** A GNSS incident runs from the module stopping to its answering again, a
+  refresh from its start to its result. The user is told of a new incident, its escalation to
+  a fault, the module answering again and a refresh's end: each marks the event unread, moves
+  it to the top, and shows a toast. The second and third resets update the incident quietly. A
+  refresh started on this device begins read. A refresh a pairing stops shows REFRESH STOPPED,
+  which has no render.
+- **Order.** Running operations first, then the latest told-of change first.
+- **GNSS.** The GNSS task's own recovery drives it: RECOVERING when it finds the module stuck (8
+  failed reads, or 10 s without NMEA) and resets it, at most once a minute; GNSS FAULT once
+  three resets have each been followed by the module being found stuck again; RESPONDING when
+  NMEA returns, fix or not. LAST RESPONSE and LAST FIX are the task's own times. A debugger
+  halting the core for 10 s looks the same to the task, and starts an incident.
+- **Toasts.** One at a time, 5 s untouched. A newer one replaces it and keeps the rest the first
+  woke the screen from, to return to. One that comes while a finger is down waits for the lift.
+  None shows during the start-up, the power-off, or while the drawer is open, whose list shows
+  the event. Any touch off the toast ends it and keeps the screen awake; a tap on it opens its
+  event's detail. The compact toast shows while the name's keyboard shows. The 600 ms typing
+  pause the hand-off proposed is not built. The toast's inside is black, where the render lets
+  the face's halftone show through.
+- **Read.** Opening a detail reads its event; a toast timing out reads nothing. MARK ALL READ
+  reads events alone, while there are no messages. The unread arc shows while any event is
+  unread, over the faces, the panel's screens and the always-on face, and not in the drawer.
+- **Halftone.** The firmware's scatter keeps its hollow and solid marks, where the renders draw
+  4 px solid marks only.
+
 ## The compass's states and changes, as built
 
 The compass's original specification was removed once it was built, so this section is the
@@ -691,7 +728,13 @@ velocity. It sees a second contact but no gesture uses one.
 | --- | --- | --- |
 | A face | A drag at least as sideways as vertical | Turns the page |
 | A face | A downward drag, with the downward movement at least twice the sideways movement | Opens the panel over the face |
-| A face | Any other drag (mostly downward but under two to one, or mostly upward); any tap | Nothing |
+| A face | An upward drag, with the upward movement at least twice the sideways movement | Opens the Events drawer over the face |
+| A face | Any other drag (under two to one either way); any tap | Nothing |
+| Toast | A tap | Opens its event's detail in the drawer |
+| Drawer root | A drag more sideways than vertical | Moves between Events and Messages, as the panel's sheet does |
+| Drawer root | A vertical drag in the list | Scrolls it, a pixel at a time; a downward pull with the list at its top closes the drawer |
+| Drawer root | A tap on the chevron, a row, OPTIONS | Closes the drawer, opens the event, opens the management page |
+| Drawer child | A tap on the back arrow or a button | Goes back, or acts |
 | Panel | A tap on a row of the visible page | Opens it |
 | Panel | A drag at least as sideways as vertical | Moves between the two pages, then snaps |
 | Panel | An upward drag | Closes the panel |

@@ -60,7 +60,11 @@ initialization or peripheral mappings.
   face the screen rests on, `power_off`, the power key's confirmation, `group`, the group,
   name and pairing screens, drawn from a list of what each shows (`layout`), with the mesh's
   published state and the requests they make of it in `view`, from `octowhere-node`, and a
-  simulated mesh for the host in `sim`, `stage`, which holds the screen state and turns touch
+  simulated mesh for the host in `sim`, `events`, what happened at run time (GNSS incidents
+  and refreshes), each one entry through its life, `drawer`, the Events and Messages drawer an
+  upward drag opens, its details, the toasts that tell of an event and the unread arc, drawn
+  from lists as the group screens are and from the shared parts of the 2026-10-04 hand-off's
+  consistency rules (`parts`), `stroke`, antialiased paths and arcs, `stage`, which holds the screen state and turns touch
   and readings into redraws and settings to store, and `script`, which steps a stage on a
   simulated clock for tests and scenes. `src/chrome.rs` is the font and draw-target layer, and
   `src/framebuffer.rs` holds the pixels. The firmware re-exports its `chrome`, `framebuffer`,
@@ -419,7 +423,9 @@ Core 1 owns the display SPI/DMA path.
   frame loop sets `POWER_OFF`, once the panel is off, it saves the module's navigation data and
   sets `GNSS_PARKED`. After 8 failed reads in a row, or 10 s of reads with nothing in them, it
   resets the module through the I/O expander, at most once a minute, configures it again and
-  sends it the RTC's time.
+  sends it the RTC's time. It reports through `GNSS_HEALTH` whether it is resetting the module,
+  how many resets have failed since it last answered, and when it last answered and gave a
+  fix, which the frame loop passes to the stage for its events.
 - `motion_task`, on `BUS_EXECUTOR`, owns the IMU and magnetometer, the compass calibration and
   the sensor fusion. It samples every 250 ms, or every 20 ms while the frame loop sets
   `COMPASS_ACTIVE`, and publishes a `MotionSnapshot` through `MOTION_STATE`.

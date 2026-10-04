@@ -47,28 +47,25 @@ until the feature set is complete, because profiling an incomplete firmware pric
     871,785 B to 1,381,084 B (gzip 518 KB, brotli 389 KB): the nodes and their crypto.
   - Board tests stay for RF (CRC overload up close), the radio's DIO0 quirk, I2C bus contention
     and slot latency, interrupt timing, flash stalls, and the GNSS module sticking.
-- Build the design agent's next round once its hand-off comes back. The owner handed it off on
-  2026-10-03 with every open item at once, to scope with the design agent. The brief is
-  `design/handoffs/MESH-FEATURES-ROUND-BRIEF-2026-10-03.md` (local, like the design files), sent
-  in `context/design-captures-2026-10-03-3.7z` (local) with what it cites, the stills and the
-  web simulator at `07ad32d`. The items:
-  - Where the other members are, the device's purpose, which no screen shows: each member's
-    bearing and distance from this device, and how old its position is. Positions reach the
-    firmware but not the screens (`SCREEN-DESIGN-BRIEF.md`, "Data a screen can show", grade 2),
-    so plumbing them is firmware work.
-  - Messages: writing up to 160 printable ASCII characters (the name keyboard takes 16),
-    reading a conversation with the group or one member, sent and delivered, and how a new
-    message makes itself known, since nothing notifies today (`LORA-PROTOCOL.md`, "Messages").
-  - Removing a member: choosing one (MEMBER DETAIL shows the removal as unavailable today), the
-    wait to the switch (about 8 minutes for 8 members, 27 for 32), every other device's prompt
-    naming who asked to remove whom with a decline before the switch, the day-long decline
-    after it, and the removed device's notice of who removed it ("Removing a member").
-  - GNSS failing while running: the self-test's fault is the only GNSS fault designed (entry
-    "Show GNSS as faulted" below).
-  - Where outlined text belongs, which the owner named; the primitive is built and unused.
-  - What the BOOT key does: it is wired and does nothing.
-  Not the design agent's: the rule that settles rival removals, now the lower remover's id
-  (owner, 2026-10-04; `LORA-PROTOCOL.md`, "Two at once").
+- Build the design agent's 2026-10-04 hand-off, which the owner approved:
+  `octowhere-mesh-runtime-handoff-2026-10-04/` (local, like the design files; start at its
+  `IMPLEMENTATION-HANDOFF.md`). It answers the round the owner handed off on 2026-10-03
+  (`design/handoffs/MESH-FEATURES-ROUND-BRIEF-2026-10-03.md`), in its section 7's order:
+  - Events, done (`66dc772`): the drawer, its details and management, dismissal, toasts that
+    wake a resting screen, the unread arc, and the GNSS module's health from its task
+    (`SCREEN-DESIGN-BRIEF.md`, "Events as built"; on a board in
+    `docs/logs/display/events-2026-10-04/`).
+  - The spatial member face: a third face, positions in the view, a true heading (a magnetic
+    declination model) or NORTH UP, and a path for 32 members.
+  - Messages: the store's messages, their transport evidence and unread state in the view, the
+    inbox, threads, recipient picker, a 160-character draft on the full keyboard, review and
+    send, and arrival toasts. The Messages root shows NO MESSAGES until then.
+  - Removing a member: request snapshots, deadlines, eligibility and rivals in the view, and the
+    confirmation, pending, prompt, decline and notice screens.
+  - The consistency rules across the new screens, and their cost on a board.
+  BOOT and outlined text stay deferred (the hand-off). Not the design agent's: the rule that
+  settles rival removals, now the lower remover's id (owner, 2026-10-04; `LORA-PROTOCOL.md`,
+  "Two at once").
 - Build the 2026-09-26 design, [`design/`](design/README.md), which the owner approved in full
   (`design/DECISIONS.md`). One piece at a time, each compared against the hand-off's renders
   (`tools/design-compare.py`), reviewed by the owner in `ui-sim`, and measured on the board
