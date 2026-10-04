@@ -71,6 +71,20 @@ impl Stored {
         }
     }
 
+    /// The stored group's key and generation.
+    pub fn key(&self) -> Option<(Key, u16)> {
+        self.group
+            .as_ref()
+            .map(|(key, generation, _)| (key.clone(), *generation))
+    }
+
+    /// The ids whose stored slots hold a member, as a set.
+    pub fn members(&self) -> u32 {
+        (0..IDS)
+            .filter(|&id| matches!(self.slots[usize::from(id)], Some(Slot::Member(_))))
+            .fold(0, |set, id| set | 1 << id)
+    }
+
     /// What a node starts with after a restart.
     pub fn start(&self) -> Start {
         Start {

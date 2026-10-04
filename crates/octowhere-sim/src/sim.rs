@@ -294,6 +294,16 @@ impl Sim {
             .count()
     }
 
+    /// The key and generation of the group `node` stored.
+    pub fn key(&self, node: usize) -> Option<(Key, u16)> {
+        self.world.nodes.borrow()[node].stored.key()
+    }
+
+    /// The ids `node` stored members at, as a set.
+    pub fn members(&self, node: usize) -> u32 {
+        self.world.nodes.borrow()[node].stored.members()
+    }
+
     /// What `node` shows its screens.
     pub fn view(&self, node: usize) -> Option<MeshView> {
         self.world.nodes.borrow()[node].view.as_deref().cloned()
