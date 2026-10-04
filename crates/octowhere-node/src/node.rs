@@ -1532,13 +1532,11 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
     /// The ids whose slots the node listens to outside a sweep in `round`: the group's other
     /// members, and any other id heard in the rounds a neighbour counts for. A member the group
     /// does not know of yet is found by a sweep.
-    fn listened(&self, round: i64) -> u32 {
+    fn listened(&self, round: i64) -> Ids {
         let Some(group) = &self.group else {
-            return 0;
+            return Ids::EMPTY;
         };
-        (group.ids() | self.table.neighbours(round))
-            .without(group.own())
-            .bits()
+        (group.ids() | self.table.neighbours(round)).without(group.own())
     }
 
     /// Takes the packet `DIO0` reported. Returns whether it moved the node to its timebase, or
@@ -1705,7 +1703,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                 Event::Went(at) => info!("[MESH] member {} went", at),
             }
         }
-        for id in (0..IDS).filter(|&id| absorbed.changed & 1 << id != 0) {
+        for id in absorbed.changed.iter() {
             self.unsaved.slot(id);
         }
         if let Some(to) = absorbed.renumbered {
@@ -1747,7 +1745,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             packet.snr,
             absorbed.entries,
             absorbed.news,
-            absorbed.neighbours,
+            absorbed.neighbours.bits(),
             absorbed.arrivals().len(),
             absorbed.carried,
             absorbed.summary,
@@ -1876,9 +1874,9 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             round,
             len,
             carried.positions().len(),
-            carried.records,
-            carried.requests,
-            carried.neighbours,
+            carried.records.bits(),
+            carried.requests.bits(),
+            carried.neighbours.bits(),
             carried.messages().len(),
             carried.summary,
             done

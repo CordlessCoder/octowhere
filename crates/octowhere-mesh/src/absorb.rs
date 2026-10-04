@@ -1,9 +1,8 @@
 //! What a node takes from a packet of its group: the positions, member and gone records, and
 //! messages it carries, and what its digests, requests and summary ask of this node.
 
-use crate::Ids;
 use crate::{
-    IDS,
+    IDS, Ids,
     identity::Identity,
     members::{Group, Merged, Name, Requests, Slot},
     messages::{self, Insert, Message, Store, Summaries, To},
@@ -57,10 +56,10 @@ pub struct Absorbed {
     /// Positions it carried, and how many of them were news.
     pub entries: usize,
     pub news: usize,
-    /// The ids its sender reports hearing, as a set.
-    pub neighbours: u32,
-    /// The ids whose slots changed, to store, as a set.
-    pub changed: u32,
+    /// The ids its sender reports hearing.
+    pub neighbours: Ids,
+    /// The ids whose slots changed, to store.
+    pub changed: Ids,
     /// This node's new id, when another device keeps the old one.
     pub renumbered: Option<u8>,
     /// Whether the removal state changed.
@@ -116,8 +115,8 @@ pub fn absorb<'p>(
     let mut absorbed = Absorbed {
         entries: 0,
         news: 0,
-        neighbours: 0,
-        changed: 0,
+        neighbours: Ids::EMPTY,
+        changed: Ids::EMPTY,
         renumbered: None,
         rekey_changed: false,
         late_key: None,
@@ -151,18 +150,18 @@ pub fn absorb<'p>(
                     }
                 }
             }
-            Record::Neighbours(set) => absorbed.neighbours = set,
+            Record::Neighbours(set) => absorbed.neighbours = Ids::from_bits(set),
             Record::Members(digest) => theirs = Some(digest),
-            Record::Request(ids) => asked = Some(ids),
+            Record::Request(ids) => asked = Some(Ids::from_bits(ids)),
             Record::Member(id, member) => {
                 push(&mut heard_records, (id, Slot::Member(member)));
                 match group.merge(id, member, when.now.unwrap_or(when.utc)) {
                     Merged::Unchanged => {}
                     Merged::Changed { vacated } => {
                         event(&mut absorbed, Event::Changed(id, member.name));
-                        absorbed.changed |= 1 << id;
+                        absorbed.changed.insert(id);
                         if let Some(vacated) = vacated {
-                            absorbed.changed |= 1 << vacated;
+                            absorbed.changed.insert(vacated);
                             // A member that moved is waited for at its new id, if at all.
                             absorbed.rekey_changed |= rekey.went(vacated);
                         }
@@ -174,7 +173,7 @@ pub fn absorb<'p>(
                         table.renumber(to);
                         absorbed.renumbered = Some(to);
                     }
-                    Merged::Went { at } => absorbed.changed |= 1 << at,
+                    Merged::Went { at } => absorbed.changed.insert(at),
                 }
             }
             Record::Gone(id, gone) => {
@@ -183,7 +182,7 @@ pub fn absorb<'p>(
                     group.merge_gone(id, gone, when.now.unwrap_or(when.utc))
                 {
                     event(&mut absorbed, Event::Went(at));
-                    absorbed.changed |= 1 << at;
+                    absorbed.changed.insert(at);
                     absorbed.rekey_changed |= rekey.went(at);
                 }
             }
@@ -222,12 +221,7 @@ pub fn absorb<'p>(
             Record::Other(..) => {}
         }
     }
-    if table.covered_by(
-        sender,
-        &stamps,
-        Ids::from_bits(absorbed.neighbours),
-        when.round,
-    ) {
+    if table.covered_by(sender, &stamps, absorbed.neighbours, when.round) {
         for (id, slot) in heard_records.iter().flatten() {
             group.covered(*id, slot);
         }
@@ -235,7 +229,7 @@ pub fn absorb<'p>(
             messages.sent(name);
         }
     }
-    requests.heard(group, sender, theirs, asked.map(Ids::from_bits));
+    requests.heard(group, sender, theirs, asked);
     // A packet with no members digest is no full account of its sender.
     if theirs.is_some() {
         summaries.heard(messages, sender, their_messages, summary);
@@ -346,7 +340,7 @@ mod tests {
         record.name = Name::new(b"Roger Saved").unwrap();
         record.sign(1, &key(2));
         let absorbed = node.absorb(|builder| builder.member(1, &record).unwrap());
-        assert_eq!(absorbed.changed, 1 << 1);
+        assert_eq!(absorbed.changed, Ids::of(1));
         assert_eq!(
             absorbed.events().collect::<std::vec::Vec<_>>(),
             [Event::Changed(1, record.name)]

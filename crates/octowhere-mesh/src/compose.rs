@@ -3,8 +3,8 @@
 //! and the positions last. Room is kept for the node's own position throughout, so that a busy
 //! packet never crowds it out.
 
-use crate::Ids;
 use crate::{
+    Ids,
     members::{GONE_LEN, Group, Requests},
     messages::{Name, Store},
     packet::{Builder, Entry, Hdop, Quality, positions_len},
@@ -36,11 +36,11 @@ pub struct Sources<'a> {
 
 /// What a packet carried, to count as sent once it has gone.
 pub struct Carried {
-    pub neighbours: u32,
-    /// The ids asked for, as a set.
-    pub requests: u32,
-    /// The ids whose slots went, as a set.
-    pub records: u32,
+    pub neighbours: Ids,
+    /// The ids asked for.
+    pub requests: Ids,
+    /// The ids whose slots went.
+    pub records: Ids,
     /// The places of the former members' gone records that went, as a set.
     pub former: u8,
     pub summary: bool,
@@ -74,11 +74,11 @@ impl Carried {
         group: &mut Group,
     ) {
         table.sent(self.positions());
-        requests.sent(Ids::from_bits(self.requests));
+        requests.sent(self.requests);
         for &name in self.messages() {
             store.sent(name);
         }
-        for id in (0..32).filter(|&id| self.records & 1 << id != 0) {
+        for id in self.records.iter() {
             group.sent(id);
         }
         for at in (0..8).filter(|&at| self.former & 1 << at != 0) {
@@ -99,9 +99,9 @@ pub fn compose(builder: &mut Builder, round: i64, base: u32, from: Sources) -> C
         on_key,
     } = from;
     let mut carried = Carried {
-        neighbours: table.neighbours(round).bits(),
-        requests: requests.pending().bits(),
-        records: 0,
+        neighbours: table.neighbours(round),
+        requests: requests.pending(),
+        records: Ids::EMPTY,
         former: 0,
         summary: false,
         on_key: false,
@@ -117,13 +117,13 @@ pub fn compose(builder: &mut Builder, round: i64, base: u32, from: Sources) -> C
         messages: [(0, 0); MAX_MESSAGES],
         carried: 0,
     };
-    let _ = builder.neighbours(carried.neighbours);
+    let _ = builder.neighbours(carried.neighbours.bits());
     let _ = builder.members_digest(group.digest());
     if !messages.is_empty() {
         let _ = builder.messages_digest(messages.digest());
     }
-    if carried.requests != 0 {
-        let _ = builder.request(carried.requests);
+    if !carried.requests.is_empty() {
+        let _ = builder.request(carried.requests.bits());
     }
     carried.on_key = on_key.is_some_and(|on_key| builder.on_key(on_key).is_ok());
     let own_room = if table.entry(group.own()).is_some() {
@@ -135,7 +135,7 @@ pub fn compose(builder: &mut Builder, round: i64, base: u32, from: Sources) -> C
         builder.room() >= 2 + summary.len() + own_room && builder.summary(summary).is_ok()
     });
     for id in group.unsent_in_turn() {
-        if carried.records.count_ones() as usize >= MAX_RECORDS {
+        if carried.records.count() as usize >= MAX_RECORDS {
             break;
         }
         let Some(slot) = group.slot(id).copied() else {
@@ -144,10 +144,10 @@ pub fn compose(builder: &mut Builder, round: i64, base: u32, from: Sources) -> C
         if builder.room() < slot.record_len() + own_room || builder.slot(id, &slot).is_err() {
             break;
         }
-        carried.records |= 1 << id;
+        carried.records.insert(id);
     }
     for (at, id, gone) in group.former_unsent() {
-        if (carried.records.count_ones() + carried.former.count_ones()) as usize >= MAX_RECORDS
+        if (carried.records.count() + carried.former.count_ones()) as usize >= MAX_RECORDS
             || builder.room() < 2 + GONE_LEN + own_room
             || builder.gone(id, &gone).is_err()
         {
@@ -321,7 +321,11 @@ mod tests {
                 "positions",
             ]
         );
-        assert_eq!(carried.records, 1, "the lowest id waiting, this node's own");
+        assert_eq!(
+            carried.records,
+            Ids::of(0),
+            "the lowest id waiting, this node's own"
+        );
         assert_eq!(carried.positions().len(), 3);
         assert!(carried.summary);
     }
@@ -388,7 +392,7 @@ mod tests {
     fn records_asked_for_again_keep_no_other_waiting() {
         let (mut table, mut group, mut store) = (table(&[]), group(3), store(0));
         let mut requests = Requests::default();
-        let mut went = 0;
+        let mut went = Ids::EMPTY;
         for _ in 0..3 {
             let (carried, _) = compose_kinds(Sources {
                 table: &table,
@@ -404,7 +408,8 @@ mod tests {
             group.ask(Ids::from_bits(0b011));
         }
         assert_eq!(
-            went, 0b111,
+            went.bits(),
+            0b111,
             "every record waiting went within three packets"
         );
     }
@@ -423,7 +428,7 @@ mod tests {
         });
         let unsent = group.unsent();
         carried.sent(&mut table, &mut requests, &mut store, &mut group);
-        assert_eq!(group.unsent().bits(), unsent.bits() & !carried.records);
+        assert_eq!(group.unsent(), unsent & !carried.records);
         assert!(store.next_unsent(None).is_none());
         let (again, _) = compose_kinds(Sources {
             table: &table,
@@ -433,7 +438,7 @@ mod tests {
             summary: None,
             on_key: None,
         });
-        assert_eq!(again.records & carried.records, 0);
+        assert!((again.records & carried.records).is_empty());
         assert!(again.messages().is_empty());
     }
 }

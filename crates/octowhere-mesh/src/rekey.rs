@@ -5,13 +5,12 @@
 use bytemuck::Zeroable;
 use sha2::{Digest, Sha256};
 
-use crate::IDS;
-use crate::Ids;
 use crate::identity::{Identity, SIGNATURE_LEN, verify};
 use crate::members::{Group, Member, PUBLIC_LEN, RECORD_MAX_LEN, fingerprint};
 use crate::messages::{Message, To, kind};
 use crate::schedule::ROUND_S;
 use crate::seal::Key;
+use crate::{IDS, Ids};
 
 /// A key message's plaintext: its kind, the key, its generation, the switch round, the id and
 /// fingerprint of the member removed, and the fingerprint of the key it follows.

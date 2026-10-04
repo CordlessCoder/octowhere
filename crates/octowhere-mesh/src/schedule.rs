@@ -11,7 +11,7 @@ use aes::{
 use hkdf::Hkdf;
 use sha2::Sha256;
 
-use crate::{IDS, seal::Key};
+use crate::{IDS, Ids, seal::Key};
 
 /// A round: every id's slot once.
 pub const ROUND_US: i64 = 45_000_000;
@@ -148,14 +148,13 @@ impl Schedule {
         }
     }
 
-    /// The id and start of the first slot starting at or after `t` of an id in the set `ids`,
-    /// or `None` for an empty set.
+    /// The id and start of the first slot starting at or after `t` of an id in `ids`, or `None`
+    /// for an empty set.
     #[must_use]
-    pub fn next_slot_in(&self, t: i64, ids: u32) -> Option<(u8, i64)> {
+    pub fn next_slot_in(&self, t: i64, ids: Ids) -> Option<(u8, i64)> {
         let round = round_at(t);
         [round, round + 1].into_iter().find_map(|round| {
-            (0..IDS)
-                .filter(|&id| ids & 1 << id != 0)
+            ids.iter()
                 .map(|id| (id, self.slot_start(round, id)))
                 .filter(|&(_, start)| start >= t)
                 .min_by_key(|&(_, start)| start)
@@ -242,18 +241,18 @@ mod tests {
     #[test]
     fn the_next_slot_in_a_set_is_the_soonest_of_its_ids() {
         let schedule = schedule(7);
-        let ids = 1 << 3 | 1 << 9 | 1 << 20;
+        let ids = Ids::of(3).with(9).with(20);
         let t = 100 * ROUND_US + ROUND_US / 2;
         let (id, start) = schedule.next_slot_in(t, ids).unwrap();
-        assert!(start >= t && ids & 1 << id != 0);
+        assert!(start >= t && ids.contains(id));
         // No id in the set has a slot between `t` and the one found.
         for other in [3, 9, 20] {
             let (_, next) = schedule.next_slot(t, other);
             assert!(next >= start, "{other}");
         }
-        assert_eq!(schedule.next_slot_in(t, 0), None);
+        assert_eq!(schedule.next_slot_in(t, Ids::EMPTY), None);
         let (_, only) = schedule.next_slot(t, 5);
-        assert_eq!(schedule.next_slot_in(t, 1 << 5), Some((5, only)));
+        assert_eq!(schedule.next_slot_in(t, Ids::of(5)), Some((5, only)));
     }
 
     #[test]
