@@ -5,7 +5,7 @@
 use embedded_graphics::{prelude::Point, primitives::Rectangle};
 
 use super::super::{
-    group::layout::{Align, Arc, Face, List, Text, Vertical, rect},
+    group::layout::{Align, Arc, Face, Line, List, Text, Vertical, format, rect},
     text::style,
 };
 use crate::chrome::{self, Color, FontdueRenderer};
@@ -57,6 +57,27 @@ pub fn text(content: &str, x: i32, top: i32, face: Face, size: u8, color: Color)
 #[must_use]
 pub fn centred(content: &str, x: i32, top: i32, face: Face, size: u8, color: Color) -> Text {
     text(content, x, top, face, size, color).align(Align::Centre)
+}
+
+/// `content` in `style`, cut short with an ellipsis where its ink runs past `width`.
+#[must_use]
+pub fn fitted(style: &FontdueRenderer<'static, Color>, content: &str, width: f32) -> Line {
+    let mut line = format(format_args!("{content}"));
+    if line.len() == content.len() && style.advance(&line) <= width {
+        return line;
+    }
+    while !line.is_empty() {
+        line.pop();
+        let trimmed = line.trim_end();
+        if trimmed.len() + 3 <= line.capacity()
+            && style.advance(trimmed) + style.advance("...") <= width
+        {
+            let mut cut = format(format_args!("{trimmed}"));
+            _ = cut.push_str("...");
+            return cut;
+        }
+    }
+    line
 }
 
 /// The screen's title: Shapiro at 32 px, smaller as far as 26 px where its ink is too wide.

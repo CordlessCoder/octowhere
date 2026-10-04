@@ -21,7 +21,9 @@ use crate::chrome::{
     INTERFERENCE_BOLD, OnBackground, SHAPIRO, Window,
 };
 
-pub type Line = String<40>;
+/// The most characters a list's text holds.
+pub const LINE: usize = 48;
+pub type Line = String<LINE>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Face {

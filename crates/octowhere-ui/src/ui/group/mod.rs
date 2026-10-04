@@ -1569,11 +1569,24 @@ fn remove_confirm(
     parts::back(list);
     parts::title(list, "REMOVE", font);
     parts::meta(list, "GROUP CHANGE");
-    removals::target(list, &member.name, &removals::device_caption(id, device));
+    removals::target(
+        list,
+        &member.name,
+        &removals::device_caption(id, device),
+        font,
+    );
     let reads = format(format_args!(
         "{} can still read the group",
         member.name.as_str()
     ));
+    let reads = if crate::ui::text::style(font, chrome::WHITE, 17, Face::Sans.index())
+        .advance(&reads)
+        <= 290.0
+    {
+        reads
+    } else {
+        format(format_args!("The member can still read the group"))
+    };
     for (i, line) in [
         "A group change will be scheduled.",
         &reads,
@@ -1610,6 +1623,7 @@ fn remove_unavailable(
             list,
             &member.name,
             &removals::device_caption(id, &member.device),
+            font,
         );
     }
     list.text(parts::centred(
@@ -1676,6 +1690,7 @@ fn pending_member(
         list,
         &member.name,
         &removals::upper(&format(format_args!("{seen} / {contact}"))),
+        font,
     );
     list.text(parts::centred(
         "REMOVAL PENDING",

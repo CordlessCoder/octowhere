@@ -22,6 +22,7 @@ use crate::{
             view::{Decline, Name, RemovalStage, RemovalView},
         },
         slide::{Slide, Track},
+        text::style,
     },
 };
 
@@ -49,6 +50,41 @@ pub struct Show<'a> {
     pub own: u8,
     pub now: Micros,
     pub font: &'a FontdueRenderer<'static, Color>,
+}
+
+/// How wide a sentence may run, centred and down the reading column.
+const CENTRED: f32 = 320.0;
+const COLUMN: f32 = 290.0;
+
+impl Show<'_> {
+    /// `with`, a sentence naming a member, where it fits `width` in Sans at `size`, and
+    /// `without`, which names nobody, where a long name runs it wider.
+    fn naming(&self, with: Line, without: &str, size: u8, width: f32) -> Line {
+        if measure(self.font, Face::Sans, size, &with) <= width {
+            with
+        } else {
+            format(format_args!("{without}"))
+        }
+    }
+}
+
+fn measure(font: &FontdueRenderer<'static, Color>, face: Face, size: u8, text: &str) -> f32 {
+    style(font, chrome::WHITE, u32::from(size), face.index()).advance(text)
+}
+
+/// `text` at `size` in `face`, cut short with an ellipsis where it runs past `width`.
+fn fitted(
+    font: &FontdueRenderer<'static, Color>,
+    text: &str,
+    face: Face,
+    size: u8,
+    width: f32,
+) -> Line {
+    parts::fitted(
+        &style(font, chrome::WHITE, u32::from(size), face.index()),
+        text,
+        width,
+    )
 }
 
 /// `text` in capitals, as the faces without lower case set it.
@@ -249,16 +285,16 @@ fn lines(list: &mut List, lines: &[&str], top: i32, size: u8) {
     }
 }
 
-/// The member removed, large and orange, and under it `under`.
-pub fn target(list: &mut List, name: &Name, under: &str) {
-    centred(
-        list,
-        &upper(name.as_str()),
-        132,
-        Face::Kh,
-        35,
-        chrome::ORANGE,
-    );
+/// The member removed, large and orange, and under it `under`. A long name takes a smaller
+/// size before it is cut short.
+pub fn target(list: &mut List, name: &Name, under: &str, font: &FontdueRenderer<'static, Color>) {
+    let name = upper(name.as_str());
+    let (size, name) = if measure(font, Face::Kh, 35, &name) <= CENTRED {
+        (35, name)
+    } else {
+        (28, fitted(font, &name, Face::Kh, 28, CENTRED))
+    };
+    centred(list, &name, 132, Face::Kh, size, chrome::ORANGE);
     centred(list, under, 178, Face::Mono, 11, chrome::GRAY);
 }
 
@@ -304,6 +340,7 @@ pub fn detail(list: &mut List, removal: &RemovalView, show: &Show) {
                 list,
                 &removal.removed_name,
                 &device_caption(removal.removed, &removal.device),
+                show.font,
             );
             centred(list, "SWITCH IN", 208, Face::Mono, 11, chrome::GRAY);
             match switch {
@@ -325,7 +362,12 @@ pub fn detail(list: &mut List, removal: &RemovalView, show: &Show) {
             }
             centred(
                 list,
-                &format(format_args!("{removed} remains in the group until then.")),
+                &show.naming(
+                    format(format_args!("{removed} remains in the group until then.")),
+                    "The member remains in the group until then.",
+                    16,
+                    CENTRED,
+                ),
                 287,
                 Face::Sans,
                 16,
@@ -356,6 +398,7 @@ pub fn detail(list: &mut List, removal: &RemovalView, show: &Show) {
                 list,
                 &removal.removed_name,
                 &requested_by(removal, show.own),
+                show.font,
             );
             let scheduled = match switch {
                 Some(at) => format(format_args!(
@@ -373,7 +416,12 @@ pub fn detail(list: &mut List, removal: &RemovalView, show: &Show) {
             );
             centred(
                 list,
-                &format(format_args!("{removed} is still a member until then.")),
+                &show.naming(
+                    format(format_args!("{removed} is still a member until then.")),
+                    "Still a member until the switch.",
+                    15,
+                    CENTRED,
+                ),
                 323,
                 Face::Sans,
                 15,
@@ -396,10 +444,16 @@ pub fn detail(list: &mut List, removal: &RemovalView, show: &Show) {
                 list,
                 &removal.removed_name,
                 &requested_by(removal, show.own),
+                show.font,
             );
             centred(
                 list,
-                &format(format_args!("{removed} was removed from this group.")),
+                &show.naming(
+                    format(format_args!("{removed} was removed from this group.")),
+                    "The member was removed from this group.",
+                    17,
+                    CENTRED,
+                ),
                 214,
                 Face::Sans,
                 17,
@@ -451,10 +505,16 @@ pub fn detail(list: &mut List, removal: &RemovalView, show: &Show) {
                 list,
                 &removal.removed_name,
                 &requested_by(removal, show.own),
+                show.font,
             );
             centred(
                 list,
-                &format(format_args!("This device kept {removed}.")),
+                &show.naming(
+                    format(format_args!("This device kept {removed}.")),
+                    "This device kept the member.",
+                    17,
+                    CENTRED,
+                ),
                 214,
                 Face::Sans,
                 17,
@@ -479,6 +539,7 @@ pub fn detail(list: &mut List, removal: &RemovalView, show: &Show) {
                 list,
                 &removal.removed_name,
                 &requested_by(removal, show.own),
+                show.font,
             );
             centred(
                 list,
@@ -511,6 +572,7 @@ pub fn details(list: &mut List, removal: &RemovalView, show: &Show) {
         list,
         &removal.removed_name,
         &requested_by(removal, show.own),
+        show.font,
     );
     parts::prose(
         list,
@@ -549,19 +611,22 @@ pub fn details(list: &mut List, removal: &RemovalView, show: &Show) {
 pub fn confirm(list: &mut List, removal: &RemovalView, slide: &Slide, show: &Show) {
     parts::back(list);
     parts::title(list, "DECLINE", show.font);
-    parts::meta(
-        list,
-        &format(format_args!(
-            "{} / REQUESTED BY {} [{:02}]",
-            upper(removal.removed_name.as_str()),
-            upper(removal.remover_name.as_str()),
-            removal.remover
-        )),
-    );
-    let keep = format(format_args!(
-        "This device will keep {}.",
-        removal.removed_name.as_str()
+    let meta = format(format_args!(
+        "{} / REQUESTED BY {} [{:02}]",
+        upper(removal.removed_name.as_str()),
+        upper(removal.remover_name.as_str()),
+        removal.remover
     ));
+    parts::meta(list, &fitted(show.font, &meta, Face::Mono, 12, CENTRED));
+    let keep = show.naming(
+        format(format_args!(
+            "This device will keep {}.",
+            removal.removed_name.as_str()
+        )),
+        "This device will keep the member.",
+        16,
+        COLUMN,
+    );
     let (heading, prose): (&str, [&str; 4]) = match removal.stage {
         RemovalStage::Switched { .. } => (
             "RETURN TO THE OLD GROUP",
@@ -619,12 +684,13 @@ pub fn rivals(list: &mut List, requests: [&RemovalView; 2], selected: usize, sho
             "CURRENT WINNER"
         };
         list.text(parts::text(state, 88, top, Face::Mono, 11, chrome::GRAY));
+        let title = format(format_args!(
+            "REMOVE {} [{:02}]",
+            upper(removal.removed_name.as_str()),
+            removal.removed
+        ));
         list.text(parts::text(
-            &format(format_args!(
-                "REMOVE {} [{:02}]",
-                upper(removal.removed_name.as_str()),
-                removal.removed
-            )),
+            &fitted(show.font, &title, Face::Kh, 23, COLUMN),
             88,
             top + 25,
             Face::Kh,
@@ -667,10 +733,15 @@ pub fn removed(list: &mut List, by: u8, name: &Name, show: &Show) {
     parts::meta(list, "GROUP CHANGE");
     list.outline(rect(215, 130, 251, 166), chrome::ORANGE);
     list.fill(rect(223, 147, 243, 150), chrome::ORANGE);
-    let by = format(format_args!(
-        "You were removed by {} [{by:02}].",
-        name.as_str()
-    ));
+    let by = show.naming(
+        format(format_args!(
+            "You were removed by {} [{by:02}].",
+            name.as_str()
+        )),
+        &format(format_args!("You were removed by member [{by:02}].")),
+        17,
+        COLUMN,
+    );
     lines(
         list,
         &[

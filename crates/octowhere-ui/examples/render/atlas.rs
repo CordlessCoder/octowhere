@@ -269,6 +269,13 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
             ("removal-08-pending-member", "MEMBER / PENDING"),
             ("removal-unavailable-underway", "REMOVE / UNDER WAY"),
             ("removal-unavailable-unsaved", "REMOVE / NOT STORED"),
+            ("removal-long-toast", "LONG NAMES / TOAST"),
+            ("removal-long-request", "LONG NAMES / REQUEST"),
+            ("removal-long-decline", "LONG NAMES / DECLINE"),
+            ("removal-long-rivals", "LONG NAMES / RIVALS"),
+            ("removal-long-events", "LONG NAMES / EVENTS"),
+            ("removal-long-removed", "LONG NAMES / REMOVED"),
+            ("removal-long-confirm", "LONG NAMES / REMOVE"),
         ],
     ),
 ];

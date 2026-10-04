@@ -72,7 +72,7 @@ pub fn baseline_for_ink_middle(style: &FontdueRenderer<'static, Color>, text: &s
 pub const LINES: usize = 32;
 pub const WRAPPED: usize = 256;
 /// The most characters a line takes, as many as a list's text holds.
-const MOST: usize = 40;
+const MOST: usize = crate::ui::group::layout::LINE;
 
 /// Breaks `text`, printable ASCII, into lines no wider than `width` in `style`, at spaces where
 /// it can and inside a word too long for a line. Each line is a range of `text`, without the

@@ -18,6 +18,7 @@ use crate::{
             layout::{Align, Face, Line, List, format, rect},
             view::{RefreshPhase, RefreshView, Thread},
         },
+        text,
     },
 };
 
@@ -232,6 +233,19 @@ fn refresh_look(refresh: &RefreshView, now: Micros) -> Look {
     }
 }
 
+/// How wide a row's title and lines may run, from their column to the rule's end.
+const ROW_WIDTH: f32 = 252.0;
+
+/// `content` at `size` in `face`, cut short with an ellipsis where it runs past `width`, as a
+/// long name can make it.
+fn fit(context: &Context, content: &str, face: Face, size: u8, width: f32) -> Line {
+    parts::fitted(
+        &text::style(context.font, chrome::WHITE, u32::from(size), face.index()),
+        content,
+        width,
+    )
+}
+
 /// An age in two digits of its largest unit: `11S`, `05M`, `01H`, `02D`.
 #[must_use]
 pub fn age(elapsed: Micros) -> Line {
@@ -426,11 +440,12 @@ pub fn row(list: &mut List, event: &Event, top: i32, height: i32, context: &Cont
         list.fill(scaled.rect(rect(70, top + 33, 76, top + 39)), chrome::WHITE);
     }
     square(list, &scaled, (82, top + 24), 24, look.symbol, look.color);
-    scaled.text(list, &look.title, (118, top + 25), Face::Kh, 23, look.color);
+    let title = fit(context, &look.title, Face::Kh, 23, ROW_WIDTH);
+    scaled.text(list, &title, (118, top + 25), Face::Kh, 23, look.color);
     for (i, line) in look.lines.iter().enumerate() {
         scaled.text(
             list,
-            line,
+            &fit(context, line, Face::Sans, 16, ROW_WIDTH),
             (118, top + 62 + 23 * i as i32),
             Face::Sans,
             16,
@@ -490,7 +505,8 @@ pub fn toast(list: &mut List, event: &Event, context: &Context, compact: bool) {
     if compact {
         list.boxed(TOAST_COMPACT, look.color, chrome::BLACK);
         square(list, &flat, (151, 31), 18, look.symbol, look.color);
-        list.text(parts::text(&look.title, 180, 32, Face::Kh, 16, look.color));
+        let title = fit(context, &look.title, Face::Kh, 16, 138.0);
+        list.text(parts::text(&title, 180, 32, Face::Kh, 16, look.color));
         list.text(parts::text(
             look.hint,
             180,
@@ -523,9 +539,10 @@ pub fn toast(list: &mut List, event: &Event, context: &Context, compact: bool) {
     ));
     list.text(parts::text(&time, 354, 323, Face::Mono, 10, chrome::GRAY).align(Align::Right));
     square(list, &flat, (112, 343), 22, look.symbol, look.color);
-    list.text(parts::text(&look.title, 146, 345, Face::Kh, 21, look.color));
+    let title = fit(context, &look.title, Face::Kh, 21, 212.0);
+    list.text(parts::text(&title, 146, 345, Face::Kh, 21, look.color));
     list.text(parts::text(
-        &look.toast,
+        &fit(context, &look.toast, Face::Sans, 14, 244.0),
         112,
         376,
         Face::Sans,

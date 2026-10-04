@@ -151,31 +151,15 @@ pub fn conversations(mail: &Mail) -> Vec<Conversation, CONVERSATIONS> {
     list
 }
 
-/// `content` in `style`, cut short with an ellipsis where its ink runs past `width`.
-fn fitted(style: &FontdueRenderer<'static, Color>, content: &str, width: f32) -> Line {
-    let mut line = format(format_args!("{content}"));
-    if line.len() == content.len() && style.advance(&line) <= width {
-        return line;
-    }
-    while !line.is_empty() {
-        line.pop();
-        let trimmed = line.trim_end();
-        if trimmed.len() + 3 <= line.capacity()
-            && style.advance(trimmed) + style.advance("...") <= width
-        {
-            let mut cut = format(format_args!("{trimmed}"));
-            _ = cut.push_str("...");
-            return cut;
-        }
-    }
-    line
-}
-
 /// A screen's title, cut short where even its smallest size runs too wide; the caption under
 /// it names the conversation in full by its id.
 fn title(list: &mut List, content: &str, font: &FontdueRenderer<'static, Color>) {
     let smallest = style(font, chrome::WHITE, 26, Face::Title.index());
-    parts::title(list, &fitted(&smallest, content, TITLE_WIDTH as f32), font);
+    parts::title(
+        list,
+        &parts::fitted(&smallest, content, TITLE_WIDTH as f32),
+        font,
+    );
 }
 
 /// The Messages root: every conversation with messages, newest first, and NEW MESSAGE.
@@ -276,7 +260,7 @@ fn inbox_row(list: &mut List, conversation: &Conversation, top: i32, mail: &Mail
         let ink = if unread { chrome::WHITE } else { chrome::GRAY };
         scaled.text(
             list,
-            &fitted(&preview_style, &preview, PREVIEW_WIDTH),
+            &parts::fitted(&preview_style, &preview, PREVIEW_WIDTH),
             (94, top + 55),
             Face::Sans,
             15,
@@ -555,7 +539,7 @@ pub fn draft_title(thread: Thread, mail: &Mail) -> Line {
     let mut title = format(format_args!("TO {}", mail.name(thread)));
     let widest = style(mail.font, chrome::WHITE, 26, Face::Title.index());
     if widest.advance(&title) > TITLE_WIDTH as f32 {
-        title = fitted(&widest, &title, TITLE_WIDTH as f32);
+        title = parts::fitted(&widest, &title, TITLE_WIDTH as f32);
     }
     title
 }
@@ -649,7 +633,7 @@ mod tests {
             chrome::FONTS,
         );
         let preview = style(&font, chrome::WHITE, 15, Face::Sans.index());
-        let cut = fitted(
+        let cut = parts::fitted(
             &preview,
             "Take the north path. I will wait at the turn.",
             PREVIEW_WIDTH,

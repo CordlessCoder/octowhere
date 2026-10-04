@@ -28,6 +28,11 @@ const LEFT_OF_EIGHT: u64 = 402 * SECOND;
 
 /// The clock face, in the fixture's group.
 fn start() -> Driver<'static> {
+    start_named(["Ridge", "Cove", "Moss"])
+}
+
+/// The clock face, in a group whose other members have `names`.
+fn start_named(names: [&str; 3]) -> Driver<'static> {
     let mut driver = Driver::on(Screen::Clock);
     driver.stage = Stage::new(PeripheralState {
         firmware: "0.1.0",
@@ -39,7 +44,7 @@ fn start() -> Driver<'static> {
     driver.wait(600_000);
     let now = driver.now();
     let mut group = sim::group(4, now);
-    for (id, name) in [(1, "Ridge"), (2, "Cove"), (3, "Moss")] {
+    for (id, name) in [1, 2, 3].into_iter().zip(names) {
         if let Some(member) = &mut group.members[id] {
             member.name = Name::new(name.as_bytes()).expect("a fixture name");
         }
@@ -237,5 +242,39 @@ pub fn frames() -> Vec<(String, Box<FB>)> {
     failed.swipe(HANDLE, HANDLE + Point::new(236, 0), 400_000);
     failed.wait(300_000);
     snap(&mut frames, "removal-unavailable-unsaved", &failed);
+
+    // The longest names a member can have.
+    let long = || start_named(["Ridge_Walker07!?", "ABCDEFGHIJKLMNOP", "camp stove mk II"]);
+    let mut request = long();
+    let now = request.now();
+    sim(&mut request).request_removal(2, 1, LEFT_OF_EIGHT, now);
+    request.wait(200_000);
+    snap(&mut frames, "removal-long-toast", &request);
+    tap(&mut request, TOAST);
+    snap(&mut frames, "removal-long-request", &request);
+    tap(&mut request, RIGHT);
+    snap(&mut frames, "removal-long-decline", &request);
+    let mut rivals = long();
+    let now = rivals.now();
+    sim(&mut rivals).request_removal(2, 1, LEFT_OF_EIGHT, now);
+    rivals.wait(6 * SECOND);
+    let now = rivals.now();
+    sim(&mut rivals).losing_rival(3, 2, now);
+    rivals.wait(200_000);
+    tap(&mut rivals, TOAST);
+    snap(&mut frames, "removal-long-rivals", &rivals);
+    tap(&mut rivals, Point::new(233, 25));
+    rivals.wait(SECOND);
+    snap(&mut frames, "removal-long-events", &rivals);
+    let mut removed = long();
+    let now = removed.now();
+    sim(&mut removed).removed_by(2, now);
+    removed.wait(200_000);
+    tap(&mut removed, TOAST);
+    snap(&mut frames, "removal-long-removed", &removed);
+    let mut own = long();
+    ridge(&mut own);
+    tap(&mut own, Point::new(233, 353));
+    snap(&mut frames, "removal-long-confirm", &own);
     frames
 }
