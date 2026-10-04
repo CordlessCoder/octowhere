@@ -2505,15 +2505,16 @@ fn learned_line(learned: u32) -> layout::Line {
 /// once it ended.
 fn refresh(list: &mut List, session: u32, mesh: &MeshView, now: Micros) {
     let shown = mesh.refresh.filter(|refresh| refresh.session == session);
-    let (refresh, until) = match shown {
-        // Asked for, and not yet taken up: all its time is still to come.
-        None => (None, now as At + REFRESH_US),
+    let listening = match shown {
+        // Asked for, and not yet taken up.
+        None => None,
         Some(refresh) => match refresh.phase {
-            RefreshPhase::Listening { until } => (Some(refresh), until),
+            RefreshPhase::Listening { until } => Some((refresh, until)),
             _ => return refresh_result(list, &refresh, now),
         },
     };
-    let (heard, learned) = refresh.map_or((0, 0), |refresh| (refresh.heard, refresh.learned));
+    let (heard, learned) =
+        listening.map_or((0, 0), |(refresh, _)| (refresh.heard, refresh.learned));
     head(
         list,
         "GROUP",
@@ -2531,10 +2532,10 @@ fn refresh(list: &mut List, session: u32, mesh: &MeshView, now: Micros) {
         15,
         chrome::WHITE,
     );
-    let left = if refresh.is_some() {
-        time_left(until, now, list)
-    } else {
-        time_left(until, until as Micros, list)
+    let left = match listening {
+        Some((_, until)) => time_left(until, now, list),
+        // All its time is still to come.
+        None => format(format_args!("{}", words::countdown(REFRESH_US, 0).0)),
     };
     list.fill(LEFT_SLAB, chrome::WHITE);
     list.text(

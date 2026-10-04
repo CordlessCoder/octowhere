@@ -479,6 +479,29 @@ fn a_refresh_runs_in_the_background_and_shows_its_result_once() {
 }
 
 #[test]
+fn a_refresh_shows_its_whole_time_until_the_mesh_takes_it_up() {
+    let mut driver = awake_hub(Some(8));
+    tap(&mut driver, MEMBERS.0, MEMBERS.1);
+    tap(&mut driver, STRIP.0, STRIP.1);
+    let left: Rc<RefCell<Vec<String>>> = Rc::default();
+    let watching = Rc::clone(&left);
+    driver.observe(move |stage, _| {
+        if stage.group_text().any(|line| line == "LISTENING") {
+            watching.borrow_mut().extend(
+                stage
+                    .group_text()
+                    .filter(|line| line.contains(':'))
+                    .map(String::from),
+            );
+        }
+    });
+    tap(&mut driver, ACTION.0, ACTION.1);
+    let left = left.borrow();
+    assert!(!left.is_empty());
+    assert!(left.iter().all(|left| left == "02:15"), "{left:?}");
+}
+
+#[test]
 fn back_on_members_does_not_reach_the_refresh_strip() {
     let mut driver = hub(Some(8));
     tap(&mut driver, MEMBERS.0, MEMBERS.1);
