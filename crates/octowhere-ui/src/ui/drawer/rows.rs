@@ -7,6 +7,7 @@ use embedded_graphics::primitives::Rectangle;
 use super::{
     Context,
     parts::{self, FOOTER, FOOTER_HIGH, PAIR, Symbol},
+    removals,
 };
 use crate::{
     chrome::{self, Color},
@@ -117,6 +118,8 @@ pub fn look(event: &Event, context: &Context) -> Look {
             rail: None,
         },
         Kind::Refresh(refresh) => refresh_look(&refresh, context.now),
+        Kind::Removal(removal) => removals::look(&removal, context.own(), context.now),
+        Kind::Removed { by, name, .. } => removals::removed_look(by, &name),
         Kind::Messages {
             thread,
             unread,
@@ -581,23 +584,26 @@ fn message_toast(list: &mut List, look: &Look) {
     ));
 }
 
-/// Where an event's detail puts VIEW MEMBERS, if it has it, and DISMISS.
+/// Where an event's detail puts VIEW MEMBERS, if it has it, and DISMISS. A removal's detail
+/// places its own.
 #[must_use]
-pub fn detail_buttons(event: &Event) -> (Option<Rectangle>, Rectangle) {
+pub fn detail_buttons(event: &Event) -> (Option<Rectangle>, Option<Rectangle>) {
     match event.kind {
-        Kind::Refresh(_) => (Some(PAIR[0]), PAIR[1]),
-        Kind::Gnss(_) if event.protected().is_some() => (None, FOOTER_HIGH),
-        Kind::Gnss(_) | Kind::Messages { .. } => (None, FOOTER),
+        Kind::Refresh(_) => (Some(PAIR[0]), Some(PAIR[1])),
+        Kind::Gnss(_) if event.protected().is_some() => (None, Some(FOOTER_HIGH)),
+        Kind::Gnss(_) | Kind::Messages { .. } => (None, Some(FOOTER)),
+        Kind::Removal(_) | Kind::Removed { .. } => (None, None),
     }
 }
 
 /// An event's detail: what it is, what the device knows of it now, and DISMISS, which waits for
-/// it to settle.
+/// it to settle. A removal's shows the request as it stands instead.
 pub fn detail(list: &mut List, event: &Event, context: &Context) {
-    let look = look(event, context);
-    let now = context.now;
-    parts::back(list);
     let (category, state) = match event.kind {
+        Kind::Removal(removal) => return removals::detail(list, &removal, &context.show()),
+        Kind::Removed { by, name, .. } => {
+            return removals::removed(list, by, &name, &context.show());
+        }
         Kind::Gnss(Gnss::Recovering { .. }) => ("GNSS", "EVENT / RECOVERING"),
         Kind::Gnss(Gnss::Fault { .. }) => ("GNSS", "EVENT / ACTIVE"),
         Kind::Gnss(Gnss::Responding) => ("GNSS", "EVENT / RESOLVED"),
@@ -611,6 +617,9 @@ pub fn detail(list: &mut List, event: &Event, context: &Context) {
         ),
         Kind::Messages { .. } => ("MESSAGES", "EVENT / NEW"),
     };
+    let look = look(event, context);
+    let now = context.now;
+    parts::back(list);
     parts::title(list, category, context.font);
     parts::meta(list, state);
     list.text(parts::centred(
@@ -695,6 +704,8 @@ pub fn detail(list: &mut List, event: &Event, context: &Context) {
             parts::prose(list, &[&look.lines[0], &look.lines[1]], 199);
             parts::button(list, FOOTER, "DISMISS", true);
         }
+        // Drawn by their own screens above.
+        Kind::Removal(_) | Kind::Removed { .. } => {}
         Kind::Refresh(refresh) => {
             let heard = refresh.heard.count_ones();
             let learned = refresh.learned.count_ones();

@@ -8,7 +8,10 @@ use heapless::Vec;
 
 use super::{
     gesture::Micros,
-    group::view::{MessagesView, RefreshPhase, RefreshView, Thread},
+    group::view::{
+        Decline, MessagesView, Name, RefreshPhase, RefreshView, RemovalStage, RemovalView,
+        RemovalsView, Thread,
+    },
     screens::GnssHealth,
 };
 
@@ -33,6 +36,14 @@ pub enum Kind {
         newest: u32,
         from: u8,
     },
+    /// A removal, by its new key, as last seen.
+    Removal(RemovalView),
+    /// Another member removed this device: who, and when this device was told.
+    Removed {
+        by: u8,
+        name: Name,
+        at: i64,
+    },
 }
 
 /// Where a GNSS incident is.
@@ -53,6 +64,8 @@ pub enum Protected {
     Unresolved,
     /// An operation is still running.
     Unfinished,
+    /// A removal this device switched to can still be declined.
+    Declinable,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -71,7 +84,19 @@ impl Event {
         match self.kind {
             Kind::Gnss(Gnss::Recovering { .. } | Gnss::Fault { .. }) => Some(Protected::Unresolved),
             Kind::Refresh(refresh) if refresh.is_listening() => Some(Protected::Unfinished),
-            Kind::Gnss(Gnss::Responding) | Kind::Refresh(_) | Kind::Messages { .. } => None,
+            Kind::Removal(removal) => match removal.stage {
+                RemovalStage::Pending { .. } => Some(Protected::Unfinished),
+                // The mesh says when its day has passed.
+                RemovalStage::Switched {
+                    decline: Decline::Until(_),
+                    ..
+                } => Some(Protected::Declinable),
+                _ => None,
+            },
+            Kind::Gnss(Gnss::Responding)
+            | Kind::Refresh(_)
+            | Kind::Messages { .. }
+            | Kind::Removed { .. } => None,
         }
     }
 
@@ -99,6 +124,8 @@ pub struct Events {
     incident: Option<Id>,
     /// The latest refresh an event was made for, so that it is not made again.
     refresh_session: u32,
+    /// The events of two removals that compete, the winner first, while the mesh shows both.
+    rivals: Option<[Id; 2]>,
     /// Counts every change, so that a screen can tell when to look again.
     version: u32,
 }
@@ -377,6 +404,115 @@ impl Events {
     }
 }
 
+impl Events {
+    /// Follows the group's removals as member `own`'s device knows them, `None` in no group.
+    /// Each request has an event by its new key: another member's is told of when it comes and
+    /// when this device switches to it, and a rival whenever one is learned. This device's own
+    /// begins read. Being removed is an event of its own. Returns an event the user should be
+    /// told of.
+    pub fn removals(
+        &mut self,
+        removals: &RemovalsView,
+        own: Option<u8>,
+        now: Micros,
+    ) -> Option<Id> {
+        let mut told = None;
+        let shown = [removals.current, removals.rival];
+        for removal in shown.into_iter().flatten() {
+            let theirs = Some(removal.remover) != own;
+            match self
+                .removal(removal.key)
+                .map(|event| (event.id, event.kind))
+            {
+                None => {
+                    if let Some(id) = self.add(Kind::Removal(removal), theirs, now)
+                        && theirs
+                    {
+                        told = Some(id);
+                    }
+                }
+                Some((id, was)) => {
+                    let switched = matches!(removal.stage, RemovalStage::Switched { .. })
+                        && !matches!(
+                            was,
+                            Kind::Removal(RemovalView {
+                                stage: RemovalStage::Switched { .. },
+                                ..
+                            })
+                        );
+                    told = self
+                        .change(id, Kind::Removal(removal), theirs && switched, now)
+                        .or(told);
+                }
+            }
+        }
+        self.settle_removals(&shown, own.is_some());
+        let ids = shown.map(|removal| Some(self.removal(removal?.key)?.id));
+        self.rivals = match ids {
+            [Some(winner), Some(rival)] => Some([winner, rival]),
+            _ => None,
+        };
+        if let Some((by, name, at)) = removals.removed_by {
+            let known = self
+                .list
+                .iter()
+                .any(|event| matches!(event.kind, Kind::Removed { at: held, .. } if held == at));
+            if !known {
+                told = self.add(Kind::Removed { by, name, at }, true, now).or(told);
+            }
+        }
+        told
+    }
+
+    /// Settles the removals the mesh no longer shows. One not yet switched to is moot. One
+    /// switched to can no longer be declined: a later removal replaced it, or with no group
+    /// there is nothing to go back to.
+    fn settle_removals(&mut self, shown: &[Option<RemovalView>; 2], grouped: bool) {
+        let gone = |key: [u8; 8]| !shown.iter().flatten().any(|removal| removal.key == key);
+        let before = self.list.len();
+        self.list.retain(|event| match event.kind {
+            Kind::Removal(removal) if gone(removal.key) => match removal.stage {
+                RemovalStage::Pending { .. } => false,
+                RemovalStage::Switched {
+                    decline: Decline::Until(_),
+                    ..
+                } => grouped,
+                _ => true,
+            },
+            _ => true,
+        });
+        let mut changed = self.list.len() != before;
+        for event in &mut self.list {
+            if let Kind::Removal(removal) = &mut event.kind
+                && gone(removal.key)
+                && let RemovalStage::Switched { decline, .. } = &mut removal.stage
+                && matches!(decline, Decline::Until(_))
+            {
+                *decline = Decline::Later;
+                changed = true;
+            }
+        }
+        if changed {
+            self.version += 1;
+        }
+    }
+
+    /// The event of the removal with the new key `key`.
+    #[must_use]
+    pub fn removal(&self, key: [u8; 8]) -> Option<&Event> {
+        self.list
+            .iter()
+            .find(|event| matches!(event.kind, Kind::Removal(held) if held.key == key))
+    }
+
+    /// The two competing removals' events, the winner first, if `id` is one of them, and which.
+    #[must_use]
+    pub fn rivals_of(&self, id: Id) -> Option<([Id; 2], usize)> {
+        let ids = self.rivals?;
+        Some((ids, ids.iter().position(|&held| held == id)?))
+    }
+}
+
 /// How long a refresh has run, out of its whole time, on the stage's clock.
 #[must_use]
 pub fn elapsed(refresh: &RefreshView, now: Micros) -> Option<(Micros, Micros)> {
@@ -558,6 +694,134 @@ mod tests {
         }
         assert_eq!(events.len(), CAPACITY);
         assert!(events.get(fault).is_some(), "the fault is still going on");
+    }
+
+    fn removal(key: u8, remover: u8, stage: RemovalStage) -> RemovalView {
+        RemovalView {
+            key: [key; 8],
+            remover,
+            remover_name: Name::from_mac(&[0, 0, 0, 0, 0, remover]),
+            removed: 3,
+            removed_name: Name::from_mac(&[0, 0, 0, 0, 0, 3]),
+            device: [3; 8],
+            stage,
+        }
+    }
+
+    const PENDING: RemovalStage = RemovalStage::Pending {
+        since: 0,
+        switch: Some(1_000),
+    };
+
+    fn shown(current: Option<RemovalView>, rival: Option<RemovalView>) -> RemovalsView {
+        RemovalsView {
+            current,
+            rival,
+            removed_by: None,
+        }
+    }
+
+    #[test]
+    fn anothers_request_is_told_and_this_devices_own_is_not() {
+        let mut events = Events::default();
+        let theirs = shown(Some(removal(1, 2, PENDING)), None);
+        let id = events.removals(&theirs, Some(0), 10).expect("told");
+        assert!(events.get(id).unwrap().unread);
+        assert!(events.get(id).unwrap().ongoing());
+        // Nothing new: told once.
+        assert_eq!(events.removals(&theirs, Some(0), 20), None);
+        let mut events = Events::default();
+        let own = shown(Some(removal(1, 0, PENDING)), None);
+        assert_eq!(events.removals(&own, Some(0), 10), None);
+        assert!(!events.ordered().next().unwrap().unread);
+    }
+
+    #[test]
+    fn its_switch_is_told_and_its_day_to_decline_protects_it() {
+        let mut events = Events::default();
+        let id = events
+            .removals(&shown(Some(removal(1, 2, PENDING)), None), Some(0), 10)
+            .unwrap();
+        events.read(id);
+        let switched = RemovalStage::Switched {
+            at: 1_000,
+            decline: Decline::Until(2_000),
+        };
+        let told = events.removals(&shown(Some(removal(1, 2, switched)), None), Some(0), 1_000);
+        assert_eq!(told, Some(id));
+        assert_eq!(
+            events.get(id).unwrap().protected(),
+            Some(Protected::Declinable)
+        );
+        let expired = RemovalStage::Switched {
+            at: 1_000,
+            decline: Decline::Expired,
+        };
+        assert_eq!(
+            events.removals(&shown(Some(removal(1, 2, expired)), None), Some(0), 3_000),
+            None
+        );
+        assert_eq!(events.dismiss(id), Ok(()));
+    }
+
+    #[test]
+    fn a_removal_the_mesh_stops_showing_settles() {
+        let switched = RemovalStage::Switched {
+            at: 1_000,
+            decline: Decline::Until(2_000),
+        };
+        let mut events = Events::default();
+        events.removals(&shown(Some(removal(1, 2, switched)), None), Some(0), 10);
+        // A later removal replaces it: it can no longer be declined, and stays listed.
+        events.removals(&shown(Some(removal(2, 3, PENDING)), None), Some(0), 20);
+        let first = events.removal([1; 8]).unwrap();
+        assert!(matches!(
+            first.kind,
+            Kind::Removal(RemovalView {
+                stage: RemovalStage::Switched {
+                    decline: Decline::Later,
+                    ..
+                },
+                ..
+            })
+        ));
+        assert_eq!(first.protected(), None);
+        // Out of the group, the request under way is moot and goes.
+        events.removals(&RemovalsView::default(), None, 30);
+        assert!(events.removal([2; 8]).is_none());
+        assert!(events.removal([1; 8]).is_some());
+    }
+
+    #[test]
+    fn two_competing_removals_are_paired_winner_first() {
+        let mut events = Events::default();
+        events.removals(&shown(Some(removal(1, 2, PENDING)), None), Some(0), 10);
+        let views = shown(
+            Some(removal(2, 3, PENDING)),
+            Some(removal(1, 2, RemovalStage::Lost)),
+        );
+        let told = events.removals(&views, Some(0), 20).unwrap();
+        let lost = events.removal([1; 8]).unwrap().id;
+        assert_eq!(events.rivals_of(told), Some(([told, lost], 0)));
+        assert_eq!(events.rivals_of(lost), Some(([told, lost], 1)));
+        events.removals(&shown(Some(removal(2, 3, PENDING)), None), Some(0), 30);
+        assert_eq!(events.rivals_of(told), None);
+    }
+
+    #[test]
+    fn being_removed_is_told_once() {
+        let mut events = Events::default();
+        let views = RemovalsView {
+            removed_by: Some((2, Name::from_mac(&[0, 0, 0, 0, 0, 2]), 50)),
+            ..RemovalsView::default()
+        };
+        let id = events.removals(&views, Some(0), 60).unwrap();
+        assert!(matches!(
+            events.get(id).unwrap().kind,
+            Kind::Removed { by: 2, .. }
+        ));
+        assert_eq!(events.removals(&views, Some(0), 70), None);
+        assert_eq!(events.len(), 1);
     }
 
     #[test]

@@ -663,6 +663,9 @@ impl Device {
                 (Some(Child::Recipients), _) => 16,
                 (Some(Child::Draft), _) => 17,
                 (Some(Child::Review), _) => 18,
+                (Some(Child::Details(_)), _) => 19,
+                (Some(Child::Decline(_)), _) => 20,
+                (Some(Child::Rivals { .. }), _) => 21,
                 (None, Root::Events) => 11,
                 (None, Root::Messages) => 12,
             }

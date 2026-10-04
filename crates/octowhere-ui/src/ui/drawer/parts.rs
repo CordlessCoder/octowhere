@@ -131,11 +131,24 @@ pub fn button(list: &mut List, area: Rectangle, label: &str, enabled: bool) {
 /// A button that writes or sends, outlined and labelled in `LIME`, or dimmed while it cannot be
 /// used.
 pub fn action(list: &mut List, area: Rectangle, label: &str, enabled: bool) {
-    let color = if enabled {
-        chrome::LIME
-    } else {
-        chrome::DISABLED
-    };
+    coloured(
+        list,
+        area,
+        label,
+        if enabled {
+            chrome::LIME
+        } else {
+            chrome::DISABLED
+        },
+    );
+}
+
+/// A button that changes the group, outlined and labelled in `ORANGE`.
+pub fn consequential(list: &mut List, area: Rectangle, label: &str) {
+    coloured(list, area, label, chrome::ORANGE);
+}
+
+fn coloured(list: &mut List, area: Rectangle, label: &str, color: Color) {
     list.outline(area, color);
     let middle = area.center();
     list.text(
@@ -224,6 +237,8 @@ pub enum Symbol {
     Done,
     /// An envelope: a message.
     Envelope,
+    /// A bar: a member removed.
+    Remove,
 }
 
 /// A symbol in a 24 px square: filled boxes and paths, in quarter pixels from its corner, and
@@ -257,6 +272,11 @@ impl Symbol {
                 boxes: &[],
                 paths: &[&[(26, 50), (40, 64), (70, 32)]],
                 width: 8,
+            },
+            Symbol::Remove => Parts {
+                boxes: &[[21, 45, 75, 53]],
+                paths: &[],
+                width: 4,
             },
             Symbol::Envelope => Parts {
                 boxes: &[],

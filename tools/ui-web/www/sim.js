@@ -400,7 +400,7 @@ function showReadings() {
 const VIEW_NAMES = [
   null, "SETTINGS", "BRIGHTNESS", "DEVICE", "CLEAR", "TIME ZONE", "REPLAY", "TIMEOUT", "ALWAYS ON",
   "POWER OFF", "GROUP", "EVENTS", "MESSAGES", "EVENT", "MANAGE HISTORY", "CONVERSATION",
-  "SEND TO", "DRAFT", "REVIEW",
+  "SEND TO", "DRAFT", "REVIEW", "REQUEST DETAILS", "DECLINE", "TWO REQUESTS",
 ];
 const RESTS = ["AWAKE", "DIMMING", "ALWAYS ON", "DARK"];
 const FACES = ["CLOCK", "COMPASS", "MEMBERS"];
@@ -842,12 +842,15 @@ const VIEWS = [
   "Group and name. The other device is simulated: after START it appears, shows the same code and confirms it.",
   "Events. Tap one for its detail, swipe left for messages, or drag down from the top to close.",
   "Messages. Tap a conversation, or NEW MESSAGE to write one. Swipe right for events.",
-  "An event. DISMISS removes it once it has settled; the arrow at the top goes back.",
+  "An event. DISMISS removes it once it has settled, and a removal's request offers DECLINE; the arrow at the top goes back.",
   "Manage history. Mark every event read, or clear the read ones that have settled.",
   "A conversation, newest first. A message counts read once it has shown whole for a second. WRITE answers.",
   "Send to. Choose the group or one member.",
   "A draft. Type with the keys on the screen, then REVIEW. CANCEL keeps it for later.",
   "Review. Read it through, then SEND, or EDIT to go back to it.",
+  "A removal's request in full: the device it removes and the key that names it.",
+  "Declining a removal. Slide the handle into the target to keep the member on this device, or tap CANCEL.",
+  "Two removals that compete. Tap one to select it, then VIEW REQUEST.",
 ];
 const GROUP_SEVERAL =
   "Group and name. The other devices run real nodes: ADD on one and JOIN on another, then confirm the same code on both.";

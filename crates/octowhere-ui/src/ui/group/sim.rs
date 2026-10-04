@@ -5,9 +5,9 @@
 use heapless::Vec;
 
 use super::view::{
-    Answer, At, Carriage, Done, End, GroupView, IDS, Mac, MemberView, MeshView, MessageView,
-    MessagesView, Name, PairingView, Phase, Position, Reason, RecoveryPhase, RecoveryView,
-    RefreshPhase, RefreshView, Request, Role,
+    Answer, At, Carriage, Decline, Done, End, GroupView, IDS, Mac, MemberView, MeshView,
+    MessageView, MessagesView, Name, PairingView, Phase, Position, Reason, RecoveryPhase,
+    RecoveryView, RefreshPhase, RefreshView, RemovalStage, RemovalView, Request, Role, Unremovable,
 };
 use crate::ui::gesture::Micros;
 
@@ -79,6 +79,8 @@ pub struct Sim {
     /// What happens to a message next, and when: it goes further, or its destination replies.
     carried: Vec<(Micros, u32, Carried), 16>,
     messages_changed: bool,
+    /// The member the last switch removed, to put back if it is declined.
+    removed: Option<(u8, MemberView)>,
 }
 
 /// A message as [`Sim::arrive`] adds it: from `from` to `to`, sent `ago` before now.
@@ -106,6 +108,10 @@ const SENT_AFTER: Micros = 2 * SECOND;
 const RELAYED_AFTER: Micros = 6 * SECOND;
 const DELIVERED_AFTER: Micros = 10 * SECOND;
 const ANSWERED_AFTER: Micros = 20 * SECOND;
+/// How long after a removal starts its switch comes, as for a group of eight, and how long after
+/// the switch it can be declined.
+pub const SWITCH_AFTER: Micros = 8 * 60 * SECOND;
+pub const DECLINE_FOR: Micros = 86_400 * SECOND;
 
 pub const PEER_MAC: Mac = [0x48, 0xa1, 0xb2, 0xc3, 0x8c, 0x91];
 pub const OWN_MAC: Mac = [0x48, 0xa1, 0xb2, 0xc3, 0x7a, 0x2f];
@@ -224,7 +230,104 @@ impl Sim {
             next_message: 1,
             carried: Vec::new(),
             messages_changed: true,
+            removed: None,
         }
+    }
+
+    /// The removal of member `removed` that member `remover` asks for at `now`, with its switch
+    /// `switch_in` later, as the mesh shows it.
+    fn removal(&self, remover: u8, removed: u8, switch_in: Micros, now: Micros) -> RemovalView {
+        let member = |id: u8| {
+            self.view
+                .group
+                .as_ref()
+                .and_then(|group| group.member(id))
+                .copied()
+        };
+        let name =
+            |id: u8| member(id).map_or_else(|| Name::from_mac(&[0, 0, 0, 0, 0, id]), |m| m.name);
+        let mut key = [0x4b; 8];
+        key[0] = remover;
+        key[1] = removed;
+        key[2..].copy_from_slice(&now.to_be_bytes()[2..]);
+        RemovalView {
+            key,
+            remover,
+            remover_name: name(remover),
+            removed,
+            removed_name: name(removed),
+            device: member(removed).map_or([0; 8], |member| member.device),
+            stage: RemovalStage::Pending {
+                since: now as At,
+                switch: Some((now + switch_in) as At),
+            },
+        }
+    }
+
+    /// Member `remover` asks to remove member `removed`, its switch `switch_in` from `now`.
+    /// Another request under way becomes its rival and loses.
+    pub fn request_removal(&mut self, remover: u8, removed: u8, switch_in: Micros, now: Micros) {
+        let removal = self.removal(remover, removed, switch_in, now);
+        if let Some(mut lost) = self
+            .view
+            .removals
+            .current
+            .filter(|current| matches!(current.stage, RemovalStage::Pending { .. }))
+        {
+            lost.stage = RemovalStage::Lost;
+            self.view.removals.rival = Some(lost);
+        }
+        self.view.removals.current = Some(removal);
+        self.changed = true;
+    }
+
+    /// A rival of the removal under way that lost to it: member `remover` asked to remove
+    /// member `removed`.
+    pub fn losing_rival(&mut self, remover: u8, removed: u8, now: Micros) {
+        let mut rival = self.removal(remover, removed, 0, now);
+        rival.stage = RemovalStage::Lost;
+        self.view.removals.rival = Some(rival);
+        self.changed = true;
+    }
+
+    /// Member `by` removed this device, and its notice arrives at `now`.
+    pub fn removed_by(&mut self, by: u8, now: Micros) {
+        let name = self
+            .view
+            .group
+            .as_ref()
+            .and_then(|group| group.member(by))
+            .map_or_else(
+                || Name::from_mac(&[0, 0, 0, 0, 0, by]),
+                |member| member.name,
+            );
+        self.view.removals.removed_by = Some((by, name, now as At));
+        self.changed = true;
+    }
+
+    /// Switches to the removal under way at `now`: its member goes, and another member's can be
+    /// declined for a day.
+    fn switch(&mut self, now: Micros) {
+        let own = self.view.group.as_ref().map_or(0, |group| group.own);
+        let Some(current) = &mut self.view.removals.current else {
+            return;
+        };
+        let decline = if current.remover == own {
+            Decline::Own
+        } else {
+            Decline::Until((now + DECLINE_FOR) as At)
+        };
+        current.stage = RemovalStage::Switched {
+            at: now as At,
+            decline,
+        };
+        let removed = current.removed;
+        if let Some(group) = &mut self.view.group
+            && let Some(member) = group.members[usize::from(removed)].take()
+        {
+            self.removed = Some((removed, member));
+        }
+        self.changed = true;
     }
 
     #[must_use]
@@ -451,6 +554,7 @@ impl Sim {
                     self.view.group = None;
                     self.view.refresh = None;
                     self.view.recovery = None;
+                    self.view.removals = Default::default();
                     self.next = None;
                 }
                 self.answer(Answer::Left(ok));
@@ -502,6 +606,57 @@ impl Sim {
                 if let Some(message) = self.messages.get_mut(id) {
                     message.unread = false;
                     self.messages_changed = true;
+                }
+            }
+            Request::Remove { id, device } => {
+                let own = self.view.group.as_ref().map_or(0, |group| group.own);
+                let member = self
+                    .view
+                    .group
+                    .as_ref()
+                    .and_then(|group| group.member(id))
+                    .filter(|member| id != own && member.device == device);
+                let underway =
+                    self.view.removals.current.is_some_and(|current| {
+                        matches!(current.stage, RemovalStage::Pending { .. })
+                    });
+                let started = if member.is_none() {
+                    Err(Unremovable::Changed)
+                } else if underway {
+                    Err(Unremovable::Underway)
+                } else if self.store_fails {
+                    Err(Unremovable::Unsaved)
+                } else {
+                    Ok(())
+                };
+                if started.is_ok() {
+                    self.view.removals.current = Some(self.removal(own, id, SWITCH_AFTER, now));
+                }
+                self.answer(Answer::Removing(started));
+            }
+            Request::Keep { key } => {
+                let own = self.view.group.as_ref().map_or(0, |group| group.own);
+                if let Some(current) = &mut self.view.removals.current
+                    && current.key == key
+                    && current.remover != own
+                {
+                    match current.stage {
+                        RemovalStage::Pending { .. } => {
+                            current.stage = RemovalStage::Declined { at: now as At };
+                        }
+                        RemovalStage::Switched {
+                            decline: Decline::Until(until),
+                            ..
+                        } if now as At <= until => {
+                            current.stage = RemovalStage::Declined { at: now as At };
+                            if let (Some((id, member)), Some(group)) =
+                                (self.removed.take(), &mut self.view.group)
+                            {
+                                group.members[usize::from(id)] = Some(member);
+                            }
+                        }
+                        _ => {}
+                    }
                 }
             }
             Request::Rename(name) => {
@@ -563,6 +718,26 @@ impl Sim {
             if end == End::Unconfirmed && self.view.group.is_none() {
                 self.wait_for_joiner(now);
             }
+        }
+        match self.view.removals.current.map(|current| current.stage) {
+            Some(RemovalStage::Pending {
+                switch: Some(switch),
+                ..
+            }) if now as At >= switch => self.switch(now),
+            Some(RemovalStage::Switched {
+                at,
+                decline: Decline::Until(until),
+            }) if now as At > until => {
+                if let Some(current) = &mut self.view.removals.current {
+                    current.stage = RemovalStage::Switched {
+                        at,
+                        decline: Decline::Expired,
+                    };
+                }
+                self.removed = None;
+                self.changed = true;
+            }
+            _ => {}
         }
         while let Some((at, next)) = self.next
             && now >= at

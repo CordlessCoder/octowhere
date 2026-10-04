@@ -5,6 +5,7 @@
 
 pub mod messages;
 pub mod parts;
+pub mod removals;
 mod rows;
 
 pub use messages::Mail;
@@ -13,17 +14,21 @@ pub use rows::{TOAST, TOAST_COMPACT, age, age_due, toast};
 use embedded_graphics::{prelude::Point, primitives::Rectangle};
 use heapless::Vec;
 
-use self::parts::{FOOTER, PAIR, TOP_HIT};
+use self::{
+    parts::{FOOTER, PAIR, TOP_HIT},
+    removals::Act,
+};
 use super::{
     ease::Ease,
-    events::{self, Events, Id},
+    events::{self, Events, Id, Kind},
     gesture::{Drag, GestureEvent, Micros},
     group::{
         keyboard::{Keyboard, Outcome},
         layout::{Arc, Backdrop, Face, List, format, rect},
-        view::{MeshView, MessagesView, Text, Thread},
+        view::{MeshView, MessagesView, RemovalStage, RemovalView, Text, Thread},
     },
     screens::Gnss,
+    slide::Slide,
 };
 use crate::{
     board,
@@ -65,6 +70,39 @@ pub enum Child {
     Draft,
     /// The draft, read through before it is sent.
     Review,
+    /// A removal's request in full, by its event.
+    Details(Id),
+    /// Declining a removal.
+    Decline(Declining),
+    /// Two removals that compete, by their events, the winner first, and the one selected.
+    Rivals { ids: [Id; 2], selected: usize },
+}
+
+/// Declining a removal, by its event: the slide, and whether the removal had switched when the
+/// confirmation was last shown, which sets what it says declining costs.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Declining {
+    pub id: Id,
+    slide: Slide,
+    switched: bool,
+}
+
+impl Declining {
+    fn new(id: Id, removal: &RemovalView) -> Self {
+        Self {
+            id,
+            slide: Slide::default(),
+            switched: switched(removal),
+        }
+    }
+
+    /// Follows `removal` as it is now. One that switched under the confirmation costs more to
+    /// decline, so the slide starts again with that said.
+    fn follow(&mut self, removal: &RemovalView) {
+        if self.switched != switched(removal) {
+            *self = Self::new(self.id, removal);
+        }
+    }
 }
 
 /// A message being written, and to whom. It outlives the drawer, until it is sent.
@@ -89,6 +127,12 @@ pub enum Exit {
         to: Thread,
         text: Text,
     },
+    /// A decline confirmed: of the removal with this new key.
+    Keep {
+        key: [u8; 8],
+    },
+    /// LEAVE GROUP: the group's own confirmation of leaving.
+    Leave,
 }
 
 /// What a drag in progress moves.
@@ -141,6 +185,21 @@ pub struct Context<'a> {
 }
 
 impl Context<'_> {
+    /// This device's id in its group.
+    #[must_use]
+    pub fn own(&self) -> u8 {
+        self.mesh.group.as_ref().map_or(0, |group| group.own)
+    }
+
+    #[must_use]
+    pub fn show(&self) -> removals::Show<'_> {
+        removals::Show {
+            own: self.own(),
+            now: self.now,
+            font: self.font,
+        }
+    }
+
     #[must_use]
     pub fn mail(&self) -> Mail<'_> {
         Mail {
@@ -195,14 +254,17 @@ impl Drawer {
         }
     }
 
-    /// Open on what an event shows, as tapping its toast does: its detail, or for messages
-    /// their conversation, on the Messages root.
+    /// Open on what an event shows, as tapping its toast does: its detail, for messages their
+    /// conversation, on the Messages root, and for one of two competing removals both.
     #[must_use]
     pub fn at_event(id: Id, events: &Events) -> Self {
         match events.get(id).map(|event| event.kind) {
-            Some(events::Kind::Messages { thread, .. }) => Self::at_thread(thread),
+            Some(Kind::Messages { thread, .. }) => Self::at_thread(thread),
             _ => Self {
-                child: Some(Child::Event(id)),
+                child: Some(match events.rivals_of(id) {
+                    Some((ids, selected)) => Child::Rivals { ids, selected },
+                    None => Child::Event(id),
+                }),
                 ..Self::new()
             },
         }
@@ -270,7 +332,10 @@ impl Drawer {
         now: Micros,
     ) -> Exit {
         match self.child {
-            Some(child) => self.handle_child(child, event, events, mail),
+            Some(Child::Decline(declining)) => {
+                self.handle_decline(declining, event, events, mail, now)
+            }
+            Some(child) => self.handle_child(child, event, events, mail, now),
             None => self.handle_root(event, events, mail, now),
         }
     }
@@ -420,6 +485,7 @@ impl Drawer {
         event: &GestureEvent,
         events: &mut Events,
         mail: &Mail,
+        now: Micros,
     ) -> Exit {
         if child == Child::Draft {
             return self.handle_draft(event, mail);
@@ -460,6 +526,7 @@ impl Drawer {
         if TOP_HIT.contains(point) {
             match child {
                 Child::Review => self.open_child(Child::Draft),
+                Child::Details(id) => self.open_child(Child::Event(id)),
                 _ => self.child = None,
             }
             return Exit::Stay;
@@ -481,14 +548,49 @@ impl Drawer {
                     self.child = None;
                     return Exit::Stay;
                 };
-                let (members, dismiss) = rows::detail_buttons(event);
-                if members.is_some_and(|area| area.contains(point)) {
-                    return Exit::Members;
-                }
-                if dismiss.contains(point) && events.dismiss(id).is_ok() {
-                    self.child = None;
+                match event.kind {
+                    Kind::Removal(removal) => {
+                        let own = mail.group.map_or(0, |group| group.own);
+                        let act = removals::buttons(&removal, own, now)
+                            .into_iter()
+                            .find(|(area, _)| area.contains(point));
+                        match act.map(|(_, act)| act) {
+                            Some(Act::Details) => self.open_child(Child::Details(id)),
+                            Some(Act::Decline) => {
+                                self.open_child(Child::Decline(Declining::new(id, &removal)));
+                            }
+                            Some(Act::ViewGroup) => return Exit::Members,
+                            None => {}
+                        }
+                    }
+                    Kind::Removed { .. } => {
+                        if PAIR[0].contains(point) {
+                            self.child = None;
+                        } else if PAIR[1].contains(point) {
+                            return Exit::Leave;
+                        }
+                    }
+                    _ => {
+                        let (members, dismiss) = rows::detail_buttons(event);
+                        if members.is_some_and(|area| area.contains(point)) {
+                            return Exit::Members;
+                        }
+                        if dismiss.is_some_and(|area| area.contains(point))
+                            && events.dismiss(id).is_ok()
+                        {
+                            self.child = None;
+                        }
+                    }
                 }
             }
+            Child::Rivals { ids, selected } => {
+                if FOOTER.contains(point) {
+                    self.open_child(Child::Event(ids[selected]));
+                } else if let Some(row) = removals::rival_at(point.y) {
+                    self.child = Some(Child::Rivals { ids, selected: row });
+                }
+            }
+            Child::Details(_) | Child::Decline(_) => {}
             Child::Thread(thread) => {
                 if FOOTER.contains(point) && mail.writable(thread) {
                     self.write(thread);
@@ -518,6 +620,37 @@ impl Drawer {
                 }
             }
             Child::Draft => {}
+        }
+        Exit::Stay
+    }
+
+    /// The decline's slide, revalidated against the removal as it is now, so that a slide begun
+    /// before the switch cannot finish one after it.
+    fn handle_decline(
+        &mut self,
+        mut declining: Declining,
+        event: &GestureEvent,
+        events: &Events,
+        mail: &Mail,
+        now: Micros,
+    ) -> Exit {
+        let id = declining.id;
+        let own = mail.group.map_or(0, |group| group.own);
+        let Some(removal) = self::declining(events, id, own, now) else {
+            self.open_child(Child::Event(id));
+            return Exit::Stay;
+        };
+        declining.follow(&removal);
+        let confirmed = declining.slide.handle(event, now, &removals::SLIDE);
+        self.child = Some(Child::Decline(declining));
+        if confirmed {
+            self.open_child(Child::Event(id));
+            return Exit::Keep { key: removal.key };
+        }
+        if let GestureEvent::Tap(point) = *event
+            && (TOP_HIT.contains(point) || FOOTER.contains(point))
+        {
+            self.open_child(Child::Event(id));
         }
         Exit::Stay
     }
@@ -578,10 +711,26 @@ impl Drawer {
                 self.settle = None;
             }
         }
-        if let Some(Child::Event(id)) = self.child
-            && events.get(id).is_none()
-        {
-            self.child = None;
+        let own = mail.group.map_or(0, |group| group.own);
+        let mut slides = false;
+        match self.child {
+            Some(Child::Event(id) | Child::Details(id)) if events.get(id).is_none() => {
+                self.child = None;
+            }
+            Some(Child::Rivals { ids, .. }) if ids.iter().any(|&id| events.get(id).is_none()) => {
+                self.child = None;
+            }
+            Some(Child::Decline(mut declining)) => {
+                match self::declining(events, declining.id, own, now) {
+                    Some(removal) => {
+                        declining.follow(&removal);
+                        slides = declining.slide.step(now);
+                        self.child = Some(Child::Decline(declining));
+                    }
+                    None => self.open_child(Child::Event(declining.id)),
+                }
+            }
+            _ => {}
         }
         // The row at the top of the list keeps its place as rows above it come and go.
         let rows = rows(events);
@@ -598,7 +747,7 @@ impl Drawer {
             .iter()
             .find(|&&(_, top, height)| top + height > scroll.offset)
             .map(|&(id, top, _)| (id, top - scroll.offset));
-        self.settle.is_some()
+        self.settle.is_some() || slides
     }
 
     /// The unread message of the conversation showing whose row has shown whole for long
@@ -642,6 +791,21 @@ impl Drawer {
                 }
             }
             Some(Child::Manage) => manage(list, context),
+            Some(Child::Details(id)) => {
+                if let Some(removal) = removal(context.events, id) {
+                    removals::details(list, &removal, &context.show());
+                }
+            }
+            Some(Child::Decline(declining)) => {
+                if let Some(removal) = removal(context.events, declining.id) {
+                    removals::confirm(list, &removal, &declining.slide, &context.show());
+                }
+            }
+            Some(Child::Rivals { ids, selected }) => {
+                if let [Some(winner), Some(rival)] = ids.map(|id| removal(context.events, id)) {
+                    removals::rivals(list, [&winner, &rival], selected, &context.show());
+                }
+            }
             Some(Child::Thread(thread)) => {
                 messages::conversation(list, thread, self.child_scroll, &mail, context.now);
             }
@@ -712,6 +876,23 @@ impl Drawer {
         }
         parts::button(list, FOOTER, "OPTIONS", true);
     }
+}
+
+/// The removal event `id` is of.
+fn removal(events: &Events, id: Id) -> Option<RemovalView> {
+    match events.get(id)?.kind {
+        Kind::Removal(removal) => Some(removal),
+        _ => None,
+    }
+}
+
+/// The removal of event `id`, while member `own`'s device can decline it.
+fn declining(events: &Events, id: Id, own: u8, now: Micros) -> Option<RemovalView> {
+    removal(events, id).filter(|removal| removals::declinable(removal, own, now))
+}
+
+fn switched(removal: &RemovalView) -> bool {
+    matches!(removal.stage, RemovalStage::Switched { .. })
 }
 
 /// The arc across the bottom of the faces while anything is unread.

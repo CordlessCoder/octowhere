@@ -20,6 +20,8 @@ mod group;
 mod members;
 #[path = "render/messages.rs"]
 mod messages;
+#[path = "render/removals.rs"]
+mod removals;
 
 use std::{collections::HashMap, fs::File, io::BufWriter, path::PathBuf};
 
@@ -268,6 +270,7 @@ fn main() {
         .into_iter()
         .chain(members::frames())
         .chain(messages::frames())
+        .chain(removals::frames())
     {
         let path = out.join(format!("{name}.png"));
         write_png(&fb, &path);

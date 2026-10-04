@@ -246,6 +246,31 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
             ("messages-review-long", "MESSAGES / LONG REVIEW"),
         ],
     ),
+    (
+        "REMOVAL AND REKEY",
+        &[
+            ("removal-member-detail", "MEMBER / REMOVE"),
+            ("removal-01-confirm-remove", "REMOVE / CONFIRM"),
+            ("removal-slide-released", "REMOVE / SLIDE SHORT"),
+            ("removal-02-removal-ongoing", "REMOVING / OWN"),
+            ("removal-own-switched", "REMOVING / SWITCHED"),
+            ("removal-03-incoming-request", "REQUEST / PENDING"),
+            ("removal-details", "REQUEST / DETAILS"),
+            ("removal-09-confirm-decline-pending", "DECLINE / BEFORE"),
+            ("removal-declined", "REQUEST / DECLINED"),
+            ("removal-toast-request", "TOAST / REQUEST"),
+            ("removal-04-after-switch", "REQUEST / SWITCHED"),
+            ("removal-05-confirm-return", "DECLINE / AFTER"),
+            ("removal-10-decline-expired", "REQUEST / EXPIRED"),
+            ("removal-06-rival-requests", "TWO REQUESTS"),
+            ("removal-drawer-events", "EVENTS / REMOVALS"),
+            ("removal-toast-removed", "TOAST / REMOVED"),
+            ("removal-07-this-device-removed", "REMOVED"),
+            ("removal-08-pending-member", "MEMBER / PENDING"),
+            ("removal-unavailable-underway", "REMOVE / UNDER WAY"),
+            ("removal-unavailable-unsaved", "REMOVE / NOT STORED"),
+        ],
+    ),
 ];
 
 const COLUMNS: usize = 7;

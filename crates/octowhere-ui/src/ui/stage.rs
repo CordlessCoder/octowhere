@@ -783,6 +783,18 @@ impl Stage {
         })
     }
 
+    /// The text the drawer showed at the last step, for tests and tools to read.
+    pub fn drawer_text(&self) -> impl Iterator<Item = &str> {
+        let items = self
+            .drawer_list
+            .as_ref()
+            .map_or(&[][..], |list| list.items());
+        items.iter().filter_map(|item| match &item.shape {
+            group::layout::Shape::Text(text) => Some(text.text.as_str()),
+            _ => None,
+        })
+    }
+
     /// The text the member face showed at the last step, its rim labels among it, for tests
     /// and tools to read.
     pub fn members_text(&self) -> impl Iterator<Item = &str> {
@@ -944,6 +956,13 @@ impl Stage {
         {
             self.announce(id, now, &mut update);
         }
+        if let Some(id) = self.events.removals(
+            &self.mesh.removals,
+            self.mesh.group.as_ref().map(|group| group.own),
+            now,
+        ) {
+            self.announce(id, now, &mut update);
+        }
 
         // A finger that has gone quiet stands in for the lift report the controller never sent.
         let touch = touch.or_else(|| {
@@ -1006,9 +1025,7 @@ impl Stage {
         if let Some((Page::Group(flow), _)) = &mut self.page {
             let (exit, moving) = flow.step(&self.mesh, now, &mut effects.mesh);
             self.fading |= moving;
-            if exit == group::Exit::Panel {
-                self.page = None;
-            }
+            self.group_exit(exit, now);
         }
 
         if let Some(touch) = touch
@@ -1302,23 +1319,49 @@ impl Stage {
                     self.drawer_sheet.grab(&mirrored(drag));
                 }
             }
-            drawer::Exit::Members => {
-                self.close_drawer();
-                if let Some((mut page, _)) = self.page.take() {
-                    if let Page::Group(flow) = &mut page {
-                        flow.interrupt(&self.mesh, &mut effects.mesh);
-                    }
-                    page.discard(effects);
-                }
-                self.sheet.set(true);
-                self.page = Some((Page::Group(Flow::members()), now));
-            }
+            drawer::Exit::Members => self.open_group(Flow::members(), now, effects),
+            drawer::Exit::Leave => self.open_group(Flow::leave(), now, effects),
             drawer::Exit::Send { to, text } => {
                 let to = match to {
                     Thread::Group => None,
                     Thread::Member(id) => Some(id),
                 };
                 effects.mesh = Some(Request::Send { to, text });
+            }
+            drawer::Exit::Keep { key } => effects.mesh = Some(Request::Keep { key }),
+        }
+    }
+
+    /// Closes the drawer and opens the group screens over the faces at `flow`.
+    fn open_group(&mut self, flow: Flow, now: Micros, effects: &mut Effects) {
+        self.close_drawer();
+        if let Some((mut page, _)) = self.page.take() {
+            if let Page::Group(flow) = &mut page {
+                flow.interrupt(&self.mesh, &mut effects.mesh);
+            }
+            page.discard(effects);
+        }
+        self.sheet.set(true);
+        self.page = Some((Page::Group(flow), now));
+    }
+
+    /// Follows where the group screens go: back to the panel, or to a removal's request in the
+    /// drawer.
+    fn group_exit(&mut self, exit: group::Exit, now: Micros) {
+        match exit {
+            group::Exit::Stay => {}
+            group::Exit::Panel => self.page = None,
+            group::Exit::Request(key) => {
+                let Some(id) = self.events.removal(key).map(|event| event.id) else {
+                    return;
+                };
+                self.events.read(id);
+                self.page = None;
+                self.sheet.set(false);
+                let mut drawer = Drawer::at_event(id, &self.events);
+                drawer.keep_draft(self.kept_draft.take());
+                self.drawer = Some(drawer);
+                self.drawer_sheet.go(true, now);
             }
         }
     }
@@ -2108,9 +2151,7 @@ impl Stage {
                 &self.renderer,
                 &mut effects.mesh,
             );
-            if exit == group::Exit::Panel {
-                self.page = None;
-            }
+            self.group_exit(exit, now);
             return;
         }
         if let Some((page, _)) = &mut self.page {
