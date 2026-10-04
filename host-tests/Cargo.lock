@@ -699,6 +699,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "octowhere-node"
+version = "0.1.0"
+dependencies = [
+ "heapless",
+ "octowhere-mesh",
+]
+
+[[package]]
 name = "octowhere-tz"
 version = "0.1.0"
 
@@ -716,6 +724,7 @@ dependencies = [
  "libm",
  "octowhere-mesh",
  "octowhere-motion",
+ "octowhere-node",
  "octowhere-tz",
 ]
 

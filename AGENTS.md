@@ -28,6 +28,10 @@ initialization or peripheral mappings.
   a member by moving the group to a new key (`rekey`), and a device's Ed25519 identity, with
   its X25519 key derived from it, which signs its records (`identity`). It has no radio or
   board dependency and builds for the host. `src/mesh.rs` runs it on the radio.
+- `crates/octowhere-node/` owns what a node of the mesh shows the screens and takes from
+  them (`view`), and the changes to its state it stores (`GroupWrite`). It builds for the host,
+  and is where `src/mesh.rs`'s node is moving, behind the seams it now runs on, for the
+  simulator of several boards (`context/BACKLOG.md`).
 - `crates/octowhere-ui/` owns screen state, drawing and touch handling. It has no board dependency,
   so it also builds for the host. `src/ui/` there owns dirty tracking, geometry,
   gestures and paging, the clock and compass screens with
@@ -39,12 +43,13 @@ initialization or peripheral mappings.
   shift's positions against burn-in and the column split the flush shares, `always_on`, the
   face the screen rests on, `power_off`, the power key's confirmation, `group`, the group,
   name and pairing screens, drawn from a list of what each shows (`layout`), with the mesh's
-  published state and the requests they make of it in `view`, and a simulated mesh for the
-  host in `sim`, `stage`, which holds the screen state and turns touch and readings into redraws and settings to store, and `script`, which steps a stage on a simulated clock for
-  tests and scenes. `src/chrome.rs` is the font and draw-target layer, and `src/framebuffer.rs`
-  holds the pixels. The firmware re-exports
-  its `chrome`, `framebuffer`, `motion` and `ui` modules. The UI keeps re-exporting the motion
-  modules under `ui::` for existing screen and test paths.
+  published state and the requests they make of it in `view`, from `octowhere-node`, and a
+  simulated mesh for the host in `sim`, `stage`, which holds the screen state and turns touch
+  and readings into redraws and settings to store, and `script`, which steps a stage on a
+  simulated clock for tests and scenes. `src/chrome.rs` is the font and draw-target layer, and
+  `src/framebuffer.rs` holds the pixels. The firmware re-exports its `chrome`, `framebuffer`,
+  `motion` and `ui` modules. The UI keeps re-exporting the motion modules under `ui::` for
+  existing screen and test paths.
 - `src/main.rs` holds both cores, the bring-up of the parts behind the self-test, the sensor
   and motion tasks, and the frame loop, which feeds the stage and flushes what it draws.
 - `src/board.rs` holds display geometry, the TCA9554 line indices, and the I2C addresses that
@@ -153,6 +158,10 @@ cargo +stable clippy --manifest-path crates/octowhere-ui/Cargo.toml \
 cargo +stable test --manifest-path crates/octowhere-motion/Cargo.toml \
   --target x86_64-unknown-linux-gnu --locked
 cargo +stable clippy --manifest-path crates/octowhere-motion/Cargo.toml \
+  --target x86_64-unknown-linux-gnu --locked --all-targets -- -D warnings
+cargo +stable test --manifest-path crates/octowhere-node/Cargo.toml \
+  --target x86_64-unknown-linux-gnu --locked
+cargo +stable clippy --manifest-path crates/octowhere-node/Cargo.toml \
   --target x86_64-unknown-linux-gnu --locked --all-targets -- -D warnings
 cargo +stable test --manifest-path crates/octowhere-mesh/Cargo.toml \
   --target x86_64-unknown-linux-gnu --locked
@@ -710,7 +719,8 @@ pin, and the firmware reaches them as `octowhere::fontdue`. `tca9554` is forked 
 atomic register masks with a mutex-guarded cache and a `RawMutex` type parameter, and is a patch
 in the root manifest. Dropping either will not compile.
 
-`octowhere-ui`, `octowhere-tz`, `octowhere-motion`, `octowhere-mesh`, `octowhere-peripherals`,
+`octowhere-ui`, `octowhere-tz`, `octowhere-motion`, `octowhere-mesh`, `octowhere-node`,
+`octowhere-peripherals`,
 `lc76g`, `sx127x-lora` and `sx127x-common` are local path crates. `octowhere-tz` lives in
 `crates/tz`, and the firmware reaches it as `octowhere::tz`.
 `crates/sx127x-lora` publishes the package name `sx127xlora`, so the manifest key and the directory

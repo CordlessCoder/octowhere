@@ -8,7 +8,7 @@
 pub mod keyboard;
 pub mod layout;
 pub mod sim;
-pub mod view;
+pub use octowhere_node::view;
 pub mod words;
 
 use embedded_graphics::{prelude::Point, primitives::Rectangle};
