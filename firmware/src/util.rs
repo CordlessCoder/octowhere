@@ -223,12 +223,82 @@ unsafe impl<T: Send> Sync for Swap<T> {}
 unsafe impl<T: Send> Send for SwapThread<'_, T> {}
 unsafe impl<T: Send> Sync for SwapThread<'_, T> {}
 
+/// A touch read, as the queue to the frame loop weighs it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TouchKind {
+    /// Fingers down.
+    Contact,
+    /// A lift, a cover or a gesture: a report the frame loop has to see.
+    Kept,
+    /// No report since the last read, or a failed read.
+    Stale,
+}
+
+/// Where a touch read goes in the queue to the frame loop.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Place {
+    Push,
+    /// In place of the newest read.
+    Replace,
+    Drop,
+}
+
+/// Where a read of kind `read` goes, `back` being the newest read the frame loop has not taken
+/// and `full` whether the queue is full. A newer report replaces a contact or a stale read, and
+/// a stale read never displaces a report. A lift, cover or gesture stays, and the next report
+/// queues behind it, or is dropped when there is no room: the frame loop is that far behind,
+/// and the read it keeps already ends the touch.
+#[must_use]
+pub fn place_touch(read: TouchKind, back: Option<TouchKind>, full: bool) -> Place {
+    match (read, back) {
+        (_, None) => Place::Push,
+        (TouchKind::Stale, Some(TouchKind::Contact | TouchKind::Kept)) => Place::Drop,
+        (_, Some(TouchKind::Contact | TouchKind::Stale)) => Place::Replace,
+        (_, Some(TouchKind::Kept)) if full => Place::Drop,
+        (_, Some(TouchKind::Kept)) => Place::Push,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use core::{cell::Cell, pin::Pin, task::Context};
 
     fn assert_send_sync<T: Send + Sync>() {}
+
+    /// The touch queue, two reads deep as the firmware's, after `reads` in turn.
+    fn queued(reads: &[TouchKind]) -> heapless::Vec<TouchKind, 2> {
+        let mut queue = heapless::Vec::new();
+        for &read in reads {
+            match place_touch(read, queue.last().copied(), queue.is_full()) {
+                Place::Push => queue.push(read).unwrap(),
+                Place::Replace => *queue.last_mut().unwrap() = read,
+                Place::Drop => {}
+            }
+        }
+        queue
+    }
+
+    #[test]
+    fn a_full_touch_queue_keeps_its_lifts_and_covers() {
+        use TouchKind::{Contact, Kept};
+        assert_eq!(queued(&[Kept, Kept, Contact]), [Kept, Kept]);
+        // A tap and then a touch, while the frame loop takes nothing.
+        assert_eq!(
+            queued(&[Contact, Kept, Contact, Kept, Contact]),
+            [Kept, Kept]
+        );
+    }
+
+    #[test]
+    fn newer_reports_replace_contacts_and_stale_reads_never_displace_reports() {
+        use TouchKind::{Contact, Kept, Stale};
+        assert_eq!(queued(&[Contact, Contact, Contact]), [Contact]);
+        assert_eq!(queued(&[Contact, Kept]), [Kept]);
+        assert_eq!(queued(&[Kept, Contact, Contact]), [Kept, Contact]);
+        assert_eq!(queued(&[Contact, Stale]), [Contact]);
+        assert_eq!(queued(&[Stale, Stale, Contact]), [Contact]);
+    }
 
     #[test]
     fn swap_accepts_send_values_that_are_not_sync() {

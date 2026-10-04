@@ -78,7 +78,7 @@ use octowhere::{
         },
         startup::{self, Outcome, Part, Report},
     },
-    util::{Swap, SwapThread},
+    util::{Place, Swap, SwapThread, TouchKind, place_touch},
 };
 use static_cell::StaticCell;
 use sx127xlora::{
@@ -317,38 +317,33 @@ static TOUCH_READY: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 type TouchRead = Result<TouchData, ()>;
 
-/// A contact, a lift or a cover, rather than a stale or failed read.
-fn is_report(read: &TouchRead) -> bool {
-    matches!(
-        read,
-        Ok(TouchData::Points(_)
+fn touch_kind(read: &TouchRead) -> TouchKind {
+    match read {
+        Ok(TouchData::Points(points)) if !points.is_empty() => TouchKind::Contact,
+        Ok(
+            TouchData::Points(_)
             | TouchData::Lifted(_)
             | TouchData::Gesture(_)
-            | TouchData::CoverGesture)
-    )
+            | TouchData::CoverGesture,
+        ) => TouchKind::Kept,
+        Ok(TouchData::Stale) | Err(()) => TouchKind::Stale,
+    }
 }
 
-fn is_contact(read: &TouchRead) -> bool {
-    matches!(read, Ok(TouchData::Points(points)) if !points.is_empty())
-}
-
-/// Queues a read for the frame loop without waiting for it to be taken. A newer contact
-/// replaces one the frame loop has not taken, and a stale or failed read never displaces a
-/// report. A lift or a cover stays, and the next report queues behind it.
+/// Queues a read for the frame loop without waiting for it to be taken, as [`place_touch`]
+/// places it.
 fn put_touch_read(read: TouchRead) {
     TOUCH_READS.lock(|reads| {
         let mut reads = reads.borrow_mut();
-        let replace = match reads.back() {
-            None => false,
-            Some(back) if !is_report(&read) && is_report(back) => return,
-            Some(back) => {
-                !is_report(&read) || is_contact(back) || !is_report(back) || reads.is_full()
+        let back = reads.back().map(touch_kind);
+        match place_touch(touch_kind(&read), back, reads.is_full()) {
+            Place::Push => _ = reads.push_back(read),
+            Place::Replace => {
+                if let Some(back) = reads.back_mut() {
+                    *back = read;
+                }
             }
-        };
-        if replace && let Some(back) = reads.back_mut() {
-            *back = read;
-        } else {
-            _ = reads.push_back(read);
+            Place::Drop => {}
         }
     });
     TOUCH_READY.signal(());
