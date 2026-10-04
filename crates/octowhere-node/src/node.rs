@@ -185,6 +185,15 @@ fn zeroed_in<T: Zeroable, A: Allocator>(alloc: A) -> Box<T, A> {
     unsafe { Box::new_zeroed_in(alloc).assume_init() }
 }
 
+/// What became of a message new to this node.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Arrival {
+    /// Acted on, or there was nothing to act on.
+    Done,
+    /// Not yet: the sender's record or a timebase was missing, so it is tried again later.
+    Later,
+}
+
 /// What [`Mesh::make`] made of a message.
 enum Made {
     /// Its sequence number's block is not stored yet.
@@ -1588,7 +1597,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             if message.is_key() {
                 self.keep_key(&message);
             }
-            if !self.arrived(&message, own) {
+            if self.arrived(&message, own) == Arrival::Later {
                 self.messages.mark_unread(*name);
             }
         }
@@ -2021,8 +2030,8 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
     }
 
     /// Takes a key message from `remover`. Returns `None` when it cannot be acted on yet, with
-    /// no timebase, or else whether it is a removal to show.
-    fn learned_key(&mut self, remover: u8, new: NewKey) -> Option<bool> {
+    /// no timebase.
+    fn learned_key(&mut self, remover: u8, new: NewKey) -> Option<Learned> {
         let now = self.time.now();
         let (Some(group), Some((time, _))) = (&self.group, self.clock.at(now)) else {
             return None;
@@ -2038,7 +2047,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                     "[REKEY] key message from {} for generation {} ignored",
                     remover, generation
                 );
-                Some(false)
+                Some(Learned::Ignored)
             }
             Learned::Pending => {
                 let switch = self.rekey.pending().map_or(0, |pending| pending.switch);
@@ -2047,7 +2056,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                     remover, removed, generation, switch, round
                 );
                 self.save_rekey();
-                Some(true)
+                Some(Learned::Pending)
             }
         }
     }
@@ -2402,7 +2411,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
 
     /// Takes a message new to this node: shows one for it, opens a private one, and
     /// acknowledges what it opens. `own` is this node's id.
-    fn arrived(&mut self, message: &Message, own: u8) -> bool {
+    fn arrived(&mut self, message: &Message, own: u8) -> Arrival {
         let origin = message.origin();
         match message.to() {
             To::Group if origin != own => {
@@ -2412,7 +2421,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                     }
                     _ => info!("[MSG] from {} to all, kind unknown", origin),
                 }
-                true
+                Arrival::Done
             }
             To::Member(dest) if dest == own && origin != own => {
                 let Some(public) = self
@@ -2425,15 +2434,15 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                         "[MSG] a private message from id {}, whose record is not here yet",
                         origin
                     );
-                    return false;
+                    return Arrival::Later;
                 };
                 let Some(key) = self.pairwise.key(&self.me, origin, &public) else {
-                    return true;
+                    return Arrival::Done;
                 };
                 let mut out = [0; BODY_MAX];
                 let Ok(plain) = message.open(key, &mut out) else {
                     warn!("[MSG] a private message from {} did not open", origin);
-                    return true;
+                    return Arrival::Done;
                 };
                 match plain.split_first() {
                     Some((&kind::TEXT, text)) => {
@@ -2442,7 +2451,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                     Some((&kind::ACK, seq)) => {
                         let seq = seq.try_into().map(u32::from_be_bytes).unwrap_or(0);
                         info!("[MSG] {}/{} delivered to {}", own, seq, origin);
-                        return true;
+                        return Arrival::Done;
                     }
                     // Only a removal shown is acknowledged: a key ignored, as one declined is,
                     // would otherwise answer every catch-up.
@@ -2450,13 +2459,13 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                         .filter(|new| message.generation() == Some(new.generation))
                     {
                         Some(new) => match self.learned_key(origin, new) {
-                            None => return false,
-                            Some(false) => return true,
-                            Some(true) => {}
+                            None => return Arrival::Later,
+                            Some(Learned::Ignored) => return Arrival::Done,
+                            Some(Learned::Pending) => {}
                         },
                         None => {
                             warn!("[REKEY] a key message from {} is malformed", origin);
-                            return true;
+                            return Arrival::Done;
                         }
                     },
                     Some((&kind::REMOVED, _)) => {
@@ -2465,7 +2474,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                     Some((&kind, _)) => {
                         warn!("[MSG] from {}, kind {} unknown", origin, kind);
                     }
-                    None => return true,
+                    None => return Arrival::Done,
                 }
                 let mut ack = [kind::ACK, 0, 0, 0, 0];
                 ack[1..].copy_from_slice(&message.seq().to_be_bytes());
@@ -2480,9 +2489,9 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                         message.seq()
                     );
                 }
-                true
+                Arrival::Done
             }
-            _ => true,
+            _ => Arrival::Done,
         }
     }
 
@@ -2492,7 +2501,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         while let Some((at, message)) = self.messages.unread_from(from) {
             let message = *message;
             from = at + 1;
-            if self.arrived(&message, own) {
+            if self.arrived(&message, own) == Arrival::Done {
                 self.messages.read(message.name());
             }
         }

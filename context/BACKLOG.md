@@ -214,7 +214,6 @@ until the feature set is complete, because profiling an incomplete firmware pric
     - Split `step()`'s choice of what goes out next into a plain function returning an enum;
       make `listen` reset `after` itself rather than its three callers; `send`, `send_old` and
       `send_notice` take a `Timebase`, not an `Option` whose `None` cannot happen.
-    - Give `arrived()` and `learned_key()` enums for their results.
   - Duplication in the crate and `settings.rs`:
     - One slot encoding: `Builder::slot`, the pairing's `welcome` and `read_welcome`, and
       `settings`' `write_member` and `read_slot` each have their own, and the decoders tell a
