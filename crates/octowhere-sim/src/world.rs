@@ -9,7 +9,10 @@ use std::{
 };
 
 use octowhere_mesh::schedule::airtime_us;
-use octowhere_node::{Command, Fix, RECEIVED_MAX, Received, view::MeshView};
+use octowhere_node::{
+    Command, Fix, RECEIVED_MAX, Received,
+    view::{MeshView, MessagesView},
+};
 
 use crate::{logs::Lines, rng::SplitMix, store::Stored};
 
@@ -72,6 +75,9 @@ pub struct Node {
     pub rtc_error_us: Option<i64>,
     pub view: Option<Box<MeshView>>,
     pub views: u32,
+    /// The messages it shows its screens, and how many times it has shown them.
+    pub messages: Box<MessagesView>,
+    pub message_views: u32,
     pub stored: Stored,
     pub fail_writes: bool,
     pub commands: VecDeque<Command>,

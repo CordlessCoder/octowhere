@@ -11,7 +11,7 @@ use std::{
 
 use octowhere_node::{
     Command, Commands, Device, Fix, GpsTime, GroupStore, GroupWrite, Radio, Random, Received, Time,
-    view::MeshView,
+    view::{MeshView, MessagesView},
 };
 
 use crate::{
@@ -211,6 +211,14 @@ impl Device for SimDevice {
             node.view = Some(view.clone());
             node.views += 1;
         }
+    }
+
+    fn publish_messages(&self, messages: &MessagesView) -> bool {
+        let mut nodes = self.world.nodes.borrow_mut();
+        let node = &mut nodes[self.node];
+        node.messages.copy_from(messages);
+        node.message_views += 1;
+        true
     }
 }
 

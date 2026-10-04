@@ -34,10 +34,11 @@ use octowhere_mesh::{
 use crate::{
     GroupWrite,
     fmt::{Ascii, Mac},
+    inbox::Inbox,
     unsaved::{Due, Unsaved},
     view::{
-        Answer, GroupView, MemberView, MeshView, PairingView, Position, RecoveryPhase,
-        RecoveryView, RefreshPhase, RefreshView, Refused, Request,
+        Answer, GroupView, MemberView, MeshView, MessagesView, PairingView, Position,
+        RecoveryPhase, RecoveryView, RefreshPhase, RefreshView, Refused, Request, Text,
     },
 };
 
@@ -116,6 +117,8 @@ pub enum Command {
         to: Option<u8>,
         text: Text,
     },
+    /// Counts the message this device numbered so as read.
+    Read(u32),
     /// Removes the member with this id from the group.
     Remove(u8),
     /// Declines the removal of the member with this id that another member asked for, before
@@ -126,46 +129,14 @@ pub enum Command {
     Phantom,
 }
 
-/// A message's text: 1 to [`TEXT_MAX`] printable ASCII characters.
-#[derive(Clone, Copy, Debug)]
-pub struct Text {
-    len: u8,
-    bytes: [u8; TEXT_MAX],
-}
-
-impl Text {
-    #[must_use]
-    pub fn new(text: &[u8]) -> Option<Self> {
-        if !messages::is_text(text) {
-            return None;
-        }
-        let mut bytes = [0; TEXT_MAX];
-        bytes[..text.len()].copy_from_slice(text);
-        Some(Self {
-            len: text.len() as u8,
-            bytes,
-        })
-    }
-
-    #[must_use]
-    pub fn as_bytes(&self) -> &[u8] {
-        &self.bytes[..usize::from(self.len)]
-    }
-}
-
-#[cfg(feature = "defmt")]
-impl defmt::Format for Text {
-    fn format(&self, f: defmt::Formatter) {
-        defmt::write!(f, "{=[u8]:a}", self.as_bytes());
-    }
-}
-
 /// A message made here, waiting for a sequence number and a timebase: its kind and contents.
 #[derive(Clone, Copy)]
 struct Outgoing {
     to: To,
     /// A key message's generation: it goes out signed, with its generation in the clear.
     generation: Option<u16>,
+    /// The number the screens know a text by, 0 for anything else.
+    shown: u32,
     len: u8,
     plain: [u8; BODY_MAX],
 }
@@ -177,6 +148,7 @@ impl Outgoing {
         Self {
             to,
             generation,
+            shown: 0,
             len: plain.len() as u8,
             plain: bytes,
         }
@@ -272,6 +244,8 @@ impl From<Request> for Command {
             Request::Leave => Self::Leave,
             Request::Rename(name) => Self::Rename(name),
             Request::Refresh => Self::Refresh,
+            Request::Send { to, text } => Self::Send { to, text },
+            Request::Read(id) => Self::Read(id),
         }
     }
 }
@@ -599,6 +573,9 @@ pub trait Device {
     fn rtc_utc(&self, now: i64) -> Option<i64>;
     /// Shows the screens `view`, if it changed. It may trade places with an older view.
     fn publish(&self, view: &mut Box<MeshView>);
+    /// Shows the screens `messages`. Returns false when they cannot take them now, to be offered
+    /// again later.
+    fn publish_messages(&self, messages: &MessagesView) -> bool;
 }
 
 /// Where a node's commands come from.
@@ -666,6 +643,8 @@ pub struct Mesh<R, T, G, D, S, A: Allocator> {
     notice: Option<i64>,
     /// Every message the node holds.
     messages: Box<Store, A>,
+    /// The messages the screens are shown.
+    inbox: Inbox<A>,
     summaries: Summaries,
     pairwise: Box<Pairwise>,
     sequence: Sequence,
@@ -756,6 +735,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             view: blank_view(),
             notice: None,
             messages: zeroed_in(alloc.clone()),
+            inbox: Inbox::new(zeroed_in(alloc.clone())),
             summaries: Summaries::default(),
             pairwise: Box::default(),
             sequence: Sequence::new(start.sequence),
@@ -813,6 +793,22 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             utc_now(&self.device, now),
         );
         self.device.publish(&mut self.view);
+        self.show_messages();
+    }
+
+    /// Shows the screens the messages, if they changed since they were last shown.
+    fn show_messages(&mut self) {
+        if self.inbox.changed() && self.device.publish_messages(self.inbox.view()) {
+            self.inbox.shown();
+        }
+    }
+
+    /// Local time at timebase second `stamp`, or now without a timebase.
+    fn local_at(&self, stamp: u32) -> i64 {
+        let now = self.time.now();
+        self.clock
+            .at(now)
+            .map_or(now, |(time, _)| now - (time - i64::from(stamp) * 1_000_000))
     }
 
     pub async fn run(mut self, commands: &impl Commands) -> ! {
@@ -931,6 +927,10 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             }
             Command::Refresh => self.start_refresh(),
             Command::Send { to, text } => self.queue_text(to, text),
+            Command::Read(id) => {
+                self.inbox.read(id);
+                self.show_messages();
+            }
             Command::Remove(id) => self.remove(id).await,
             #[cfg(feature = "phantom")]
             Command::Phantom => {
@@ -1084,7 +1084,10 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             self.remove(again.trailing_zeros() as u8).await;
         }
         self.retry_unread(own);
+        self.inbox.started(round_start_s(time));
         self.messages.expire(round_start_s(time), |_| {});
+        self.inbox.prune(&self.messages);
+        self.show_messages();
         if !self.outbox.is_empty() {
             self.post_outbox(time).await;
         }
@@ -1588,6 +1591,11 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                 me: &self.me,
             },
         );
+        for &name in absorbed.carried_names() {
+            if name.0 == own && header.sender != own {
+                self.inbox.relayed(name);
+            }
+        }
         for event in absorbed.events() {
             match event {
                 Event::Changed(id, name) => info!("[MESH] member {} is {} now", id, name),
@@ -1727,6 +1735,13 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                 &mut self.messages,
                 group,
             );
+            let own = group.own();
+            for &name in carried.messages() {
+                if name.0 == own {
+                    self.inbox.sent(name);
+                }
+            }
+            self.show_messages();
         }
         if carried.summary
             && let Some(prepared) = self.summary.take()
@@ -1976,6 +1991,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
     /// Forgets the messages and removals of a group this device no longer belongs to.
     fn forget_messages(&mut self) {
         *self.messages = Store::zeroed();
+        self.inbox.clear();
         self.summaries = Summaries::default();
         self.outbox.clear();
         self.rekey.clear();
@@ -2251,6 +2267,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         };
         let positions = self.table.forget_others();
         let messages = self.messages.forget_since(reverted.since);
+        self.inbox.prune(&self.messages);
         info!(
             "[REKEY] declined after the switch: back on generation {}, forgot records {:#010x}, {} positions and {} messages",
             group.generation(),
@@ -2374,12 +2391,22 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         let mut plain = [0; 1 + TEXT_MAX];
         plain[0] = kind::TEXT;
         plain[1..1 + text.as_bytes().len()].copy_from_slice(text.as_bytes());
-        let outgoing = Outgoing::new(to, None, &plain[..1 + text.as_bytes().len()]);
-        if self.outbox.push_back(outgoing).is_err() {
+        let mut outgoing = Outgoing::new(to, None, &plain[..1 + text.as_bytes().len()]);
+        if self.outbox.is_full() {
             warn!("[MSG] the outbox is full");
             return;
         }
+        let destination = match to {
+            To::Group => None,
+            To::Member(id) => Some(id),
+        };
+        let own = group.own();
+        outgoing.shown = self
+            .inbox
+            .queue(own, destination, text.as_bytes(), self.time.now());
+        _ = self.outbox.push_back(outgoing);
         info!("[MSG] queued to {:?}: {}", to, Ascii(text.as_bytes()));
+        self.show_messages();
     }
 
     /// Posts each message waiting in the outbox, in order, until one has to wait.
@@ -2448,9 +2475,17 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
     async fn post(&mut self, outgoing: &Outgoing, time: i64) -> bool {
         let message = match self.make(outgoing, time).await {
             Made::Wait => return false,
-            Made::Dropped => return true,
+            Made::Dropped => {
+                if outgoing.shown != 0 {
+                    self.inbox.dropped(outgoing.shown);
+                }
+                return true;
+            }
             Made::Message(message) => message,
         };
+        if outgoing.shown != 0 {
+            self.inbox.posted(outgoing.shown, message.seq());
+        }
         self.kept.keep(&message, Some(message.origin()));
         let inserted = self.messages.insert(message, round_start_s(time));
         info!("[MSG] posted {} {:?}", message, inserted);
@@ -2462,12 +2497,18 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
     fn arrived(&mut self, message: &Message, own: u8) -> Arrival {
         let origin = message.origin();
         match message.to() {
-            To::Group if origin != own => {
+            To::Group => {
                 match message.body().split_first() {
                     Some((&kind::TEXT, text)) => {
-                        info!("[MSG] from {} to all: {}", origin, Ascii(text));
+                        if origin != own {
+                            info!("[MSG] from {} to all: {}", origin, Ascii(text));
+                        }
+                        let at = self.local_at(message.stamp());
+                        self.inbox
+                            .arrived(message.name(), own, None, message.stamp(), at, text);
                     }
-                    _ => info!("[MSG] from {} to all, kind unknown", origin),
+                    _ if origin != own => info!("[MSG] from {} to all, kind unknown", origin),
+                    _ => {}
                 }
                 Arrival::Done
             }
@@ -2495,10 +2536,20 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                 match plain.split_first() {
                     Some((&kind::TEXT, text)) => {
                         info!("[MSG] from {} to this device: {}", origin, Ascii(text));
+                        let at = self.local_at(message.stamp());
+                        self.inbox.arrived(
+                            message.name(),
+                            own,
+                            Some(own),
+                            message.stamp(),
+                            at,
+                            text,
+                        );
                     }
                     Some((&kind::ACK, seq)) => {
                         let seq = seq.try_into().map(u32::from_be_bytes).unwrap_or(0);
                         info!("[MSG] {}/{} delivered to {}", own, seq, origin);
+                        self.inbox.delivered(own, origin, seq);
                         return Arrival::Done;
                     }
                     // Only a removal shown is acknowledged: a key ignored, as one declined is,
@@ -2536,6 +2587,29 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                         origin,
                         message.seq()
                     );
+                }
+                Arrival::Done
+            }
+            // This device's own private message, back from another member after a restart.
+            To::Member(dest) if origin == own => {
+                let Some(public) = self.group.as_ref().and_then(|group| {
+                    group
+                        .member(dest)
+                        .map(|member| member.public)
+                        .or_else(|| group.gone(dest).map(|gone| gone.public))
+                }) else {
+                    return Arrival::Done;
+                };
+                let Some(key) = self.pairwise.key(&self.me, dest, &public) else {
+                    return Arrival::Done;
+                };
+                let mut out = [0; BODY_MAX];
+                if let Ok(plain) = message.open(key, &mut out)
+                    && let Some((&kind::TEXT, text)) = plain.split_first()
+                {
+                    let at = self.local_at(message.stamp());
+                    self.inbox
+                        .arrived(message.name(), own, Some(dest), message.stamp(), at, text);
                 }
                 Arrival::Done
             }

@@ -14,7 +14,7 @@ use embassy_sync::{
 };
 use embassy_time::Instant;
 use lc76g::FixQuality;
-use octowhere::ui::group::view::{MeshView, Request};
+use octowhere::ui::group::view::{MeshView, MessagesView, Request};
 use octowhere_mesh::packet::Quality;
 use octowhere_node::{Command, Commands, Device, Fix, GpsTime, GroupStore, GroupWrite, blank_view};
 
@@ -33,6 +33,19 @@ static VIEW: BlockingMutex<CriticalSectionRawMutex, RefCell<Option<Box<MeshView>
 pub static VIEW_CHANGED: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 /// Counts the views published, so a reader can tell when there is a new one.
 static VIEWS: AtomicU32 = AtomicU32::new(0);
+/// The messages the screens are shown, as last published, in memory [`lend_messages`] gave,
+/// and how many times they have been.
+static MESSAGES: BlockingMutex<
+    CriticalSectionRawMutex,
+    RefCell<Option<&'static mut MessagesView>>,
+> = BlockingMutex::new(RefCell::new(None));
+static MESSAGE_VIEWS: AtomicU32 = AtomicU32::new(0);
+
+/// Gives the messages the screens are shown somewhere to be kept: PSRAM, since they are tens of
+/// kilobytes. Until then the mesh's messages are not shown.
+pub fn lend_messages(buffer: &'static mut MessagesView) {
+    MESSAGES.lock(|held| *held.borrow_mut() = Some(buffer));
+}
 
 /// How the protocol grades a fix the GNSS module made.
 #[must_use]
@@ -102,6 +115,21 @@ impl Device for BoardDevice {
 
     fn publish(&self, view: &mut Box<MeshView>) {
         publish(view);
+    }
+
+    fn publish_messages(&self, messages: &MessagesView) -> bool {
+        let shown = MESSAGES.lock(|held| match &mut *held.borrow_mut() {
+            Some(held) => {
+                held.copy_from(messages);
+                true
+            }
+            None => false,
+        });
+        if shown {
+            MESSAGE_VIEWS.fetch_add(1, Ordering::Release);
+            VIEW_CHANGED.signal(());
+        }
+        shown
     }
 }
 

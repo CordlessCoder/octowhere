@@ -18,6 +18,8 @@ extern crate alloc;
 #[macro_use]
 mod fmt;
 #[cfg(feature = "run")]
+mod inbox;
+#[cfg(feature = "run")]
 mod node;
 #[cfg(feature = "run")]
 mod unsaved;
@@ -27,6 +29,6 @@ mod write;
 #[cfg(feature = "run")]
 pub use node::{
     Command, Commands, Device, Fix, GpsTime, GroupStore, Mesh, RECEIVED_MAX, Radio, Random,
-    Received, Start, Text, Time, blank_view, offline, publish_start,
+    Received, Start, Time, blank_view, offline, publish_start,
 };
 pub use write::GroupWrite;

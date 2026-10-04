@@ -373,6 +373,12 @@ enum ZoneChoice {
 }
 pub static PSRAM_HEAP: esp_alloc::EspHeap = esp_alloc::EspHeap::empty();
 
+/// A view of messages made in place in PSRAM, kept while the firmware runs: tens of kilobytes.
+fn psram_messages() -> &'static mut octowhere::ui::group::view::MessagesView {
+    // SAFETY: `Zeroable` promises that all zeroes is a valid view.
+    Box::leak(unsafe { Box::new_zeroed_in(&PSRAM_HEAP).assume_init() })
+}
+
 #[cfg(feature = "gnss-full-power")]
 const GNSS_LOW_POWER_MODE: LowPowerMode = LowPowerMode::Disabled;
 #[cfg(not(feature = "gnss-full-power"))]
@@ -2019,6 +2025,7 @@ async fn async_main(spawner: Spawner) {
         ..PeripheralState::default()
     });
     stage.use_raster(raster);
+    mesh::lend_messages(psram_messages());
     let parts = Parts {
         i2c: peripherals.I2C0,
         scl: peripherals.GPIO14,

@@ -21,7 +21,10 @@ use octowhere_mesh::{
     pair::Identity,
     seal::Key,
 };
-use octowhere_node::{Command, Fix, Mesh, Start, view::MeshView};
+use octowhere_node::{
+    Command, Fix, Mesh, Start,
+    view::{MeshView, MessagesView},
+};
 
 use crate::{
     logs::{self, Line},
@@ -123,6 +126,8 @@ impl Sim {
             rtc_error_us: config.rtc_error_us,
             view: None,
             views: 0,
+            messages: MessagesView::boxed(),
+            message_views: 0,
             stored: Stored::new(&start),
             fail_writes: false,
             commands: VecDeque::new(),
@@ -379,6 +384,25 @@ impl Sim {
     /// What `node` shows its screens.
     pub fn view(&self, node: usize) -> Option<MeshView> {
         self.world.nodes.borrow()[node].view.as_deref().cloned()
+    }
+
+    /// The messages `node` last showed its screens.
+    pub fn messages(&self, node: usize) -> Box<MessagesView> {
+        let mut messages = MessagesView::boxed();
+        messages.copy_from(&self.world.nodes.borrow()[node].messages);
+        messages
+    }
+
+    /// Copies the messages `node` shows its screens into `into`, if it published them after the
+    /// time it counted `seen`, and returns that count.
+    pub fn messages_since(&self, node: usize, seen: u32, into: &mut MessagesView) -> Option<u32> {
+        let nodes = self.world.nodes.borrow();
+        let state = &nodes[node];
+        if state.message_views == seen {
+            return None;
+        }
+        into.copy_from(&state.messages);
+        Some(state.message_views)
     }
 
     /// What `node` shows its screens, if it published a view after the one it counted `seen`,

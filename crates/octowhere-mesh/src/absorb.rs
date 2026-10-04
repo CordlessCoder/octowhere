@@ -70,6 +70,7 @@ pub struct Absorbed {
     pub summary: bool,
     /// Messages it carried.
     pub carried: usize,
+    carried_names: [messages::Name; MESSAGES],
     events: [Option<Event>; RECORDS],
     arrivals: [messages::Name; MESSAGES],
     arrived: usize,
@@ -85,6 +86,12 @@ impl Absorbed {
     #[must_use]
     pub fn arrivals(&self) -> &[messages::Name] {
         &self.arrivals[..self.arrived]
+    }
+
+    /// Every message it carried, new to this node or not.
+    #[must_use]
+    pub fn carried_names(&self) -> &[messages::Name] {
+        &self.carried_names[..self.carried]
     }
 }
 
@@ -115,6 +122,7 @@ pub fn absorb<'p>(
         late_key: None,
         summary: false,
         carried: 0,
+        carried_names: [(0, 0); MESSAGES],
         events: [None; RECORDS],
         arrivals: [(0, 0); MESSAGES],
         arrived: 0,
@@ -128,7 +136,6 @@ pub fn absorb<'p>(
     };
     let mut stamps = [None; IDS as usize];
     let mut heard_records = [None; RECORDS];
-    let mut carried_messages = [(0, 0); MESSAGES];
     let (mut theirs, mut asked, mut their_messages, mut summary) = (None, None, 0, None);
     for record in records {
         match record {
@@ -180,7 +187,7 @@ pub fn absorb<'p>(
                 }
             }
             Record::Message(message) => {
-                if let Some(slot) = carried_messages.get_mut(absorbed.carried) {
+                if let Some(slot) = absorbed.carried_names.get_mut(absorbed.carried) {
                     *slot = message.name();
                     absorbed.carried += 1;
                 }
@@ -207,7 +214,7 @@ pub fn absorb<'p>(
         for (id, slot) in heard_records.iter().flatten() {
             group.covered(*id, slot);
         }
-        for &name in &carried_messages[..absorbed.carried] {
+        for &name in absorbed.carried_names() {
             messages.sent(name);
         }
     }
