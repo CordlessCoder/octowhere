@@ -9,7 +9,7 @@ use octowhere_ui::ui::{
     clock::{ClockState, ZoneMode, ZoneState},
     compass::CompassView,
     group::{sim::Sim as Scripted, view::Request},
-    screens::{Battery, Gnss, PeripheralState},
+    screens::{Battery, Gnss, GnssHealth, PeripheralState},
     stage::{Input, Key as PowerKey, Motion, Sensors, Stage, Store, Touch, TouchGesture, Update},
     startup::Report,
 };
@@ -72,7 +72,13 @@ pub struct Readings {
     /// Whether GNSS has a fix, and where, in degrees × 10⁷.
     pub fix: bool,
     pub position: (i32, i32),
+    /// Which of [`RECEIVER`] the GNSS task reports of the receiver.
+    receiver: usize,
 }
+
+/// The receiver's health N steps through: answering, being reset after it stopped (with the
+/// failed resets so far), and faulted after three.
+const RECEIVER: [Option<u8>; 5] = [None, Some(0), Some(1), Some(2), Some(3)];
 
 /// The supplies B steps through: whether a battery is fitted, whether USB is in, and whether
 /// the battery charges.
@@ -140,6 +146,7 @@ impl Readings {
             level: 87,
             fix: true,
             position,
+            receiver: 0,
         }
     }
 
@@ -191,6 +198,7 @@ impl Readings {
             Key::Minus => self.level = self.level.saturating_sub(tilt as u8),
             Key::Equal => self.level = (self.level + tilt as u8).min(100),
             Key::G => self.fix = !self.fix,
+            Key::N => self.receiver = (self.receiver + 1) % RECEIVER.len(),
             Key::R => self.clock = (self.clock + 1) % CLOCKS.len(),
             _ => return false,
         }
@@ -198,8 +206,15 @@ impl Readings {
     }
 
     /// What the sensor task reports, which the stage takes once a second.
-    fn reported(&self) -> (usize, usize, usize, u8, bool) {
-        (self.zone, self.clock, self.supply, self.level, self.fix)
+    fn reported(&self) -> (usize, usize, usize, u8, bool, usize) {
+        (
+            self.zone,
+            self.clock,
+            self.supply,
+            self.level,
+            self.fix,
+            self.receiver,
+        )
     }
 
     fn zone_state(&self) -> ZoneState {
@@ -230,8 +245,9 @@ impl Readings {
         readable && !stopped
     }
 
-    /// UTC at `utc_s`, in the clock state R selects, and the rest of the readings.
-    fn sensors(&self, utc_s: i64) -> Sensors {
+    /// UTC at `utc_s`, in the clock state R selects, and the rest of the readings, with the
+    /// receiver last answering at `answered` on the device's clock.
+    fn sensors(&self, utc_s: i64, answered: Option<u64>) -> Sensors {
         let (gnss, stopped, readable) = CLOCKS[self.clock];
         Sensors {
             clock: ClockState {
@@ -246,6 +262,12 @@ impl Readings {
                 in_use: if self.fix { 9 } else { 0 },
                 in_view: 14,
                 position: self.fix.then_some(self.position),
+                health: GnssHealth {
+                    recovering: RECEIVER[self.receiver].is_some(),
+                    failed_resets: RECEIVER[self.receiver].unwrap_or(0),
+                    last_response: answered,
+                    last_fix: answered.filter(|_| self.fix),
+                },
             },
         }
     }
@@ -297,6 +319,8 @@ pub struct Device {
     booted: Option<u64>,
     /// The title's account of the last draw.
     pub drawn: Option<String>,
+    /// When the receiver last answered, on the device's clock.
+    answered: Option<u64>,
 }
 
 fn peripherals() -> PeripheralState {
@@ -329,6 +353,7 @@ impl Device {
             reports: Vec::new(),
             booted: None,
             drawn: None,
+            answered: None,
         }
     }
 
@@ -356,7 +381,7 @@ impl Device {
             .collect();
         // The clock may start again from zero.
         self.panel.forget_touch();
-        self.booted = None;
+        (self.booted, self.answered) = (None, None);
         (self.next_motion, self.next_sensors) = (0, 0);
         (self.power_key, self.boot_key) = (Held::default(), Held::default());
         (self.pressed_at, self.power_on_since) = (None, None);
@@ -450,7 +475,12 @@ impl Device {
             motion: motion_due.then(|| Motion {
                 compass: self.readings.compass(),
             }),
-            sensors: sensors_due.then(|| self.readings.sensors(utc_s)),
+            sensors: sensors_due.then(|| {
+                if self.readings.receiver == 0 {
+                    self.answered = Some(now);
+                }
+                self.readings.sensors(utc_s, self.answered)
+            }),
             boot,
             key: self.power_key.press(held.power, now),
             boot_key: self.boot_key.press(held.boot, now),

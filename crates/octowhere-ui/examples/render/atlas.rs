@@ -187,6 +187,33 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
             ("founder-not-stored", "FOUNDER / NOT STORED"),
         ],
     ),
+    (
+        "EVENTS",
+        &[
+            ("events-drawer-new", "EVENTS / NEW"),
+            ("events-drawer-history", "EVENTS / SCROLLED"),
+            ("events-detail-fault", "GNSS / FAULT"),
+            ("events-drawer-manage", "MANAGE HISTORY"),
+            ("events-drawer-read", "EVENTS / READ"),
+            ("events-drawer-active-after-clear", "EVENTS / CLEARED"),
+            ("events-drawer-responding", "EVENTS / RESPONDING"),
+            ("events-detail-responding", "GNSS / RESPONDING"),
+            ("events-drawer-recovering", "EVENTS / RECOVERING"),
+            ("events-drawer-refresh-ongoing", "EVENTS / REFRESHING"),
+            ("events-detail-refresh-ongoing", "REFRESH / ONGOING"),
+            ("events-detail-refresh", "REFRESH / ENDED"),
+            ("events-drawer-empty", "EVENTS / EMPTY"),
+            ("messages-empty", "MESSAGES / EMPTY"),
+            ("events-drawer-no-devices", "EVENTS / NO DEVICES"),
+            ("events-toast-quiet-refresh-clock", "TOAST / NO DEVICES"),
+            ("events-toast-fault-clock", "TOAST / FAULT"),
+            ("events-clock-unread", "CLOCK / UNREAD"),
+            ("events-toast-recovering-clock", "TOAST / RECOVERING"),
+            ("events-toast-refresh-clock", "TOAST / REFRESH"),
+            ("events-toast-woke", "TOAST / WOKE"),
+            ("events-aod-unread", "ALWAYS ON / UNREAD"),
+        ],
+    ),
 ];
 
 const COLUMNS: usize = 7;

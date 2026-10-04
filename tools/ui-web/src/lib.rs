@@ -23,10 +23,11 @@ use octowhere_ui::{
     ui::{
         clock::{ClockState, ZoneMode, ZoneState},
         compass::CompassView,
+        drawer::{Child, Root},
         group::sim::Sim as Mesh,
         group::view::Request,
         rest::Rest,
-        screens::{Battery, Gnss, PeripheralState, Screen},
+        screens::{Battery, Gnss, GnssHealth, PeripheralState, Screen},
         second::Page,
         shift,
         stage::{Input, Key, Motion, Sensors, Stage, Store, Touch, TouchGesture},
@@ -130,10 +131,11 @@ enum Reading {
     Fix,
     Spinning,
     Level,
+    Receiver,
 }
 
 impl Reading {
-    const ALL: [Self; 13] = [
+    const ALL: [Self; 14] = [
         Self::Heading,
         Self::Pitch,
         Self::Roll,
@@ -147,6 +149,7 @@ impl Reading {
         Self::Fix,
         Self::Spinning,
         Self::Level,
+        Self::Receiver,
     ];
 }
 
@@ -170,6 +173,9 @@ struct Readings {
     spinning: bool,
     /// Where GNSS places the device, in degrees × 10⁷.
     position: (i32, i32),
+    /// The GNSS receiver: answering (0), being reset after it stopped with 0 to 2 resets failed
+    /// (1 to 3), or faulted after three (4).
+    receiver: u8,
 }
 
 impl Readings {
@@ -190,6 +196,7 @@ impl Readings {
             fix: true,
             spinning: false,
             position,
+            receiver: 0,
         }
     }
 
@@ -227,7 +234,9 @@ impl Readings {
         })
     }
 
-    fn sensors(&self, utc: i64) -> Sensors {
+    /// The sensor task's snapshot at UTC second `utc`, the receiver having last answered at
+    /// `answered` on the device's clock.
+    fn sensors(&self, utc: i64, answered: Option<u64>) -> Sensors {
         let (gnss, stopped, readable) = CLOCKS[self.clock];
         Sensors {
             clock: ClockState {
@@ -242,6 +251,12 @@ impl Readings {
                 in_use: if self.fix { 9 } else { 0 },
                 in_view: 14,
                 position: self.fix.then_some(self.position),
+                health: GnssHealth {
+                    recovering: self.receiver > 0,
+                    failed_resets: self.receiver.saturating_sub(1),
+                    last_response: answered,
+                    last_fix: answered.filter(|_| self.fix),
+                },
             },
         }
     }
@@ -273,6 +288,7 @@ impl Readings {
             Reading::Fix => f64::from(u8::from(self.fix)),
             Reading::Spinning => f64::from(u8::from(self.spinning)),
             Reading::Level => f64::from(self.level),
+            Reading::Receiver => f64::from(self.receiver),
         }
     }
 
@@ -295,6 +311,7 @@ impl Readings {
             Reading::Fix => self.fix = value != 0.0,
             Reading::Spinning => self.spinning = value != 0.0,
             Reading::Level => self.level = value.clamp(0.0, 100.0) as u8,
+            Reading::Receiver => self.receiver = value.clamp(0.0, 4.0) as u8,
         }
     }
 }
@@ -366,6 +383,8 @@ struct Device {
     scripted: Option<Mesh>,
     /// How many views the device's node had published when its stage last took one.
     seen: u32,
+    /// When the GNSS receiver last answered, on the device's clock.
+    answered: Option<u64>,
 }
 
 impl Device {
@@ -406,6 +425,7 @@ impl Device {
             power_on_since: None,
             scripted: scripted.then(|| Mesh::new(None)),
             seen: 0,
+            answered: None,
         }
     }
 
@@ -515,7 +535,12 @@ impl Device {
             motion: motion_due.then(|| Motion {
                 compass: self.readings.compass(),
             }),
-            sensors: sensors_due.then(|| self.readings.sensors(utc)),
+            sensors: sensors_due.then(|| {
+                if self.readings.receiver == 0 {
+                    self.answered = Some(now);
+                }
+                self.readings.sensors(utc, self.answered)
+            }),
             boot,
             key: self.power_key.press(held.power, now),
             boot_key: self.boot_key.press(held.boot, now),
@@ -605,6 +630,13 @@ impl Device {
         };
         let view = if self.stage.power_off().is_some() {
             9
+        } else if let Some(drawer) = self.stage.drawer() {
+            match (drawer.child(), drawer.root()) {
+                (Some(Child::Event(_)), _) => 13,
+                (Some(Child::Manage), _) => 14,
+                (None, Root::Events) => 11,
+                (None, Root::Messages) => 12,
+            }
         } else if let Some(page) = self.stage.page() {
             match page {
                 Page::Brightness(_) => 2,
@@ -1031,7 +1063,12 @@ pub extern "C" fn set(reading: u32, value: f64) {
         };
         device.readings.set(reading, value);
         match reading {
-            Reading::Zone | Reading::Clock | Reading::Supply | Reading::Level | Reading::Fix => {
+            Reading::Zone
+            | Reading::Clock
+            | Reading::Supply
+            | Reading::Level
+            | Reading::Fix
+            | Reading::Receiver => {
                 device.sensors_changed = true;
             }
             _ => device.readings_changed = true,

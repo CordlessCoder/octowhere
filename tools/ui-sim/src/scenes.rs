@@ -204,6 +204,7 @@ fn dublin() -> Sensors {
             in_use: 9,
             in_view: 14,
             position: Some((533_498_000, -62_603_000)),
+            ..Gnss::default()
         },
     }
 }

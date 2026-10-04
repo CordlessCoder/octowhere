@@ -7,7 +7,7 @@
 
 const READING = {
   heading: 0, pitch: 1, roll: 2, calibration: 3, disturbed: 4, live: 5, upright: 6,
-  zone: 7, clock: 8, supply: 9, fix: 10, spinning: 11, level: 12,
+  zone: 7, clock: 8, supply: 9, fix: 10, spinning: 11, level: 12, receiver: 13,
 };
 // The power controller's long press, and how long PWR is held to power the board on.
 const LONG_MS = 1000;
@@ -399,7 +399,7 @@ function showReadings() {
 // What shows and how it rests, by the status's bits, for the state strip.
 const VIEW_NAMES = [
   null, "SETTINGS", "BRIGHTNESS", "DEVICE", "CLEAR", "TIME ZONE", "REPLAY", "TIMEOUT", "ALWAYS ON",
-  "POWER OFF", "GROUP",
+  "POWER OFF", "GROUP", "EVENTS", "MESSAGES", "EVENT", "MANAGE HISTORY",
 ];
 const RESTS = ["AWAKE", "DIMMING", "ALWAYS ON", "DARK"];
 
@@ -702,6 +702,7 @@ document.addEventListener("keydown", (event) => {
     r: () => cycle("clock", [0, 1, 2, 3]),
     z: () => cycle("zone", [0, 1, 2, 3]),
     g: () => toggle("fix"),
+    n: () => cycle("receiver", [0, 1, 2, 3, 4]),
     b: () => cycle("supply", [0, 1, 2]),
     "-": () => nudge("level", -step),
     _: () => nudge("level", -step),
@@ -819,7 +820,7 @@ const HINTS = {
   alwaysOn: "Resting on the always-on face. Double-tap the screen to wake it.",
   dark: "The screen is off. Double-tap it to wake it.",
   powered: "Powered off. Hold PWR for half a second to power it on.",
-  clock: "The clock. Swipe sideways for the compass, or drag down from the top for settings.",
+  clock: "The clock. Swipe sideways for the compass, drag down from the top for settings, or up for events.",
   compass: "The compass. Turn it with the heading control, or swipe back to the clock.",
 };
 
@@ -836,6 +837,10 @@ const VIEWS = [
   "Always on. Drag to choose the face's level, or OFF to let the screen go dark, then tap.",
   "Power off. Slide the handle into the target to power off, or tap CANCEL. It cancels after 10 s.",
   "Group and name. The other device is simulated: after START it appears, shows the same code and confirms it.",
+  "Events. Tap one for its detail, swipe left for messages, or drag down from the top to close.",
+  "Messages. Their screens are still to come. Swipe right for events.",
+  "An event. DISMISS removes it once it has settled; the arrow at the top goes back.",
+  "Manage history. Mark every event read, or clear the read ones that have settled.",
 ];
 const GROUP_SEVERAL =
   "Group and name. The other devices run real nodes: ADD on one and JOIN on another, then confirm the same code on both.";

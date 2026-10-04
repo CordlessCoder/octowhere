@@ -12,6 +12,8 @@
 
 #[path = "render/atlas.rs"]
 mod atlas;
+#[path = "render/events.rs"]
+mod events;
 #[path = "render/group.rs"]
 mod group;
 
@@ -258,6 +260,12 @@ fn main() {
     for (name, stage) in frames {
         let mut fb = FB::boxed();
         stage.draw(&mut *fb);
+        let path = out.join(format!("{name}.png"));
+        write_png(&fb, &path);
+        println!("{}", path.display());
+        drawn.insert(name, fb);
+    }
+    for (name, fb) in events::frames() {
         let path = out.join(format!("{name}.png"));
         write_png(&fb, &path);
         println!("{}", path.display());
@@ -647,6 +655,7 @@ fn sensors() -> Sensors {
             in_use: 9,
             in_view: 14,
             position: Some((533_498_000, -62_603_000)),
+            ..Gnss::default()
         },
     }
 }

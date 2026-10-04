@@ -419,6 +419,20 @@ impl Flow {
         }
     }
 
+    /// Whether the name's keyboard shows, which a toast keeps clear of.
+    #[must_use]
+    pub fn typing(&self) -> bool {
+        matches!(self.screen, Screen::Name { .. })
+    }
+
+    /// The group's members, as an event's VIEW MEMBERS opens them.
+    #[must_use]
+    pub fn members() -> Self {
+        Self {
+            screen: Screen::Members(Scroll::default()),
+        }
+    }
+
     /// The keyboard for this device's name, as the panel's NAME opens it.
     #[must_use]
     pub fn name(mesh: &MeshView) -> Self {

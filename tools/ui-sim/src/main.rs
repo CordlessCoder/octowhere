@@ -53,7 +53,10 @@
 //!   and Kolkata. R: the clock, through set from GNSS, running unconfirmed, stopped and
 //!   unreadable.
 //! - B: the supply, through USB and charging, battery only, and USB with no battery. - / =:
-//!   the battery's level down / up 5 %, 1 % with Shift. G: GNSS fix or none.
+//!   the battery's level down / up 5 %, 1 % with Shift. G: GNSS fix or none. N: the GNSS
+//!   receiver through answering, being reset once, twice and three times after it stopped, and
+//!   faulted, as the GNSS task reports it.
+//! - Drag up from a face for the Events drawer, as on the device.
 //! - Hold H: a hand covering the screen, which goes to the clock face.
 //! - K: the power key. Released within a second it is a short press; held a second, a long one.
 //!   Once powered off, held 512 ms it powers the board on, through the start-up. O: the BOOT

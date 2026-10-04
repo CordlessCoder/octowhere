@@ -502,6 +502,39 @@ pub fn draw_scatter<D: CoverageTarget<Color = Color>>(
     SCATTER.draw_clear_of(&scatter_looks(accents), &SCREEN_CLEAR, target)
 }
 
+/// The scatter breathing at `breath`, clear of `clear`, as the 2026-10-04 screens draw it
+/// behind their text.
+pub fn draw_breathing_scatter<D: CoverageTarget<Color = Color>>(
+    breath: u8,
+    clear: &[Rectangle],
+    target: &mut D,
+) -> Result<(), D::Error> {
+    let accents = Accents {
+        breath,
+        ..Accents::FULL
+    };
+    SCATTER.draw_clear_of(&scatter_looks(&accents), clear, target)
+}
+
+/// Marks the breathing scatter's marks that differ between two breaths and clearings.
+pub fn breathing_scatter_damage(
+    before: (u8, &[Rectangle]),
+    after: (u8, &[Rectangle]),
+    damage: &mut chrome::Dirty,
+) {
+    let looks = |breath| {
+        scatter_looks(&Accents {
+            breath,
+            ..Accents::FULL
+        })
+    };
+    SCATTER.changed_between(
+        (&looks(before.0), before.1),
+        (&looks(after.0), after.1),
+        damage,
+    );
+}
+
 /// Marks the scatter's marks that differ between `before` and `after`.
 pub fn scatter_damage(before: &Accents, after: &Accents, damage: &mut chrome::Dirty) {
     SCATTER.changed_between(

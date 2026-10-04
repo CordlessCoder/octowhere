@@ -5,7 +5,7 @@
 use core::fmt::Write as _;
 
 use embedded_graphics::{
-    prelude::{Point, Size},
+    prelude::{Point, Size, Transform},
     primitives::Rectangle,
 };
 use heapless::{String, Vec};
@@ -13,7 +13,7 @@ use heapless::{String, Vec};
 use super::super::{
     gesture::Micros,
     icon::Glyph,
-    panel,
+    panel, stroke,
     text::{self, style},
 };
 use crate::chrome::{
@@ -53,6 +53,8 @@ pub enum Align {
     Left,
     /// Ink centred on `x`.
     Centre,
+    /// Ink ends on `x`.
+    Right,
     /// The pen starts on `x`, so that a caret can be placed between characters.
     Pen,
 }
@@ -131,6 +133,7 @@ impl Text {
         let x = match self.align {
             Align::Left => text::pen_x_for_ink_left(style, &self.text, x),
             Align::Centre => text::pen_x_for_ink_centre(style, &self.text, x as f32),
+            Align::Right => text::pen_x_for_ink_right(style, &self.text, x),
             Align::Pen => x,
         };
         let baseline = match self.vertical {
@@ -150,7 +153,46 @@ pub enum Shape {
     Boxed(Rectangle, Color, Color),
     /// The status glyph in its frame, in a colour.
     Glyph(Glyph, Color),
+    Path(Path),
+    Arc(Arc),
 }
+
+/// Straight segments through `points`, in quarter pixels, `width` quarter pixels wide.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Path {
+    pub points: Vec<(i16, i16), 6>,
+    pub width: u8,
+    pub color: Color,
+}
+
+/// An arc about `center`, `radius` quarter pixels to the middle of its `width`, over `span`
+/// tenths of a degree clockwise from the right.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Arc {
+    pub center: Point,
+    pub radius: u16,
+    pub width: u8,
+    pub span: (i16, i16),
+    pub color: Color,
+}
+
+/// What a list draws under its items.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Backdrop {
+    /// The settings panel's scatter, clear of the screen's middle.
+    #[default]
+    Panel,
+    /// The same scatter breathing at a level, clear of every text's ink by 2 px, as the
+    /// 2026-10-04 screens have it.
+    Breathing(u8),
+    /// Nothing: the items lie over whatever was drawn before them.
+    None,
+}
+
+/// How far the breathing scatter keeps from a text's ink.
+const INK_CLEAR: u32 = 2;
+/// The most texts a breathing scatter keeps clear of.
+const CLEARS: usize = 48;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Item {
@@ -170,6 +212,7 @@ const ITEMS: usize = 100;
 pub struct List {
     items: Vec<Item, ITEMS>,
     clip: Option<Rectangle>,
+    backdrop: Backdrop,
     /// When the screen next changes on its own: a countdown or an age reaching its next value.
     due: Option<Micros>,
 }
@@ -184,6 +227,21 @@ impl List {
         self.items.clear();
         self.clip = None;
         self.due = None;
+        self.backdrop = Backdrop::Panel;
+    }
+
+    pub fn set_backdrop(&mut self, backdrop: Backdrop) {
+        self.backdrop = backdrop;
+    }
+
+    /// The boxes the breathing scatter keeps clear of: every text's ink, grown by 2 px.
+    fn clears(&self, font: &FontdueRenderer<'static, Color>) -> Vec<Rectangle, CLEARS> {
+        self.items
+            .iter()
+            .filter(|item| matches!(item.shape, Shape::Text(_)))
+            .map(|item| bounds(item, font).offset(INK_CLEAR as i32))
+            .take(CLEARS)
+            .collect()
     }
 
     #[must_use]
@@ -231,6 +289,19 @@ impl List {
         self.push(Shape::Glyph(glyph, color));
     }
 
+    /// Straight segments through `points`, in quarter pixels, `width` quarter pixels wide.
+    pub fn path(&mut self, points: &[(i16, i16)], width: u8, color: Color) {
+        self.push(Shape::Path(Path {
+            points: points.iter().copied().take(6).collect(),
+            width,
+            color,
+        }));
+    }
+
+    pub fn arc(&mut self, arc: Arc) {
+        self.push(Shape::Arc(arc));
+    }
+
     /// Text whose ink is centred on column `x` and starts on row `top`, over black.
     pub fn centred(&mut self, text: &str, x: i32, top: i32, face: Face, size: u8, color: Color) {
         self.push(Shape::Text(Text::new(text, face, size, color).at(x, top)));
@@ -249,12 +320,39 @@ impl List {
         self.push(Shape::Text(text));
     }
 
+    /// Moves every item from the `start`th on, and its clip, `dx` pixels across, as a page that
+    /// slides sideways.
+    pub fn shift_from(&mut self, start: usize, dx: i32) {
+        if dx == 0 {
+            return;
+        }
+        let quarter = (dx * 4) as i16;
+        for item in self.items.iter_mut().skip(start) {
+            item.clip = item.clip.map(|clip| clip.translate(Point::new(dx, 0)));
+            match &mut item.shape {
+                Shape::Text(text) => text.x += dx as i16,
+                Shape::Fill(rect, _) | Shape::Boxed(rect, ..) => {
+                    *rect = rect.translate(Point::new(dx, 0));
+                }
+                Shape::Glyph(..) => {}
+                Shape::Path(path) => path.points.iter_mut().for_each(|(x, _)| *x += quarter),
+                Shape::Arc(arc) => arc.center.x += dx,
+            }
+        }
+    }
+
     pub fn draw<D: CoverageTarget<Color = Color>>(
         &self,
         font: &FontdueRenderer<'static, Color>,
         target: &mut D,
     ) -> Result<(), D::Error> {
-        panel::draw_scatter(&panel::Accents::FULL, target)?;
+        match self.backdrop {
+            Backdrop::Panel => panel::draw_scatter(&panel::Accents::FULL, target)?,
+            Backdrop::Breathing(breath) => {
+                panel::draw_breathing_scatter(breath, &self.clears(font), target)?;
+            }
+            Backdrop::None => {}
+        }
         for item in &self.items {
             match item.clip {
                 Some(clip) => draw_shape(
@@ -276,6 +374,16 @@ impl List {
         font: &FontdueRenderer<'static, Color>,
         damage: &mut Dirty,
     ) {
+        match (before.backdrop, self.backdrop) {
+            (Backdrop::Panel, Backdrop::Panel) | (Backdrop::None, Backdrop::None) => {}
+            (Backdrop::Breathing(was), Backdrop::Breathing(is)) => {
+                let (old, new) = (before.clears(font), self.clears(font));
+                if (was, &old) != (is, &new) {
+                    panel::breathing_scatter_damage((was, &old), (is, &new), damage);
+                }
+            }
+            _ => damage.make_full(),
+        }
         for item in &before.items {
             if !self.items.contains(item) {
                 damage.add(bounds(item, font));
@@ -317,6 +425,10 @@ fn bounds(item: &Item, font: &FontdueRenderer<'static, Color>) -> Rectangle {
         }
         Shape::Fill(rect, _) | Shape::Boxed(rect, ..) => *rect,
         Shape::Glyph(..) => GLYPH,
+        Shape::Path(path) => {
+            stroke::path_bounds(&path.points, path.width).unwrap_or(Rectangle::zero())
+        }
+        Shape::Arc(arc) => stroke::arc_bounds(arc.center, arc.radius, arc.width, arc.span),
     };
     match item.clip {
         Some(clip) => area.intersection(&clip),
@@ -349,6 +461,16 @@ fn draw_shape<D: CoverageTarget<Color = Color>>(
                     target.fill_solid(&module, *color)?;
                 }
             }
+            Ok(())
+        }
+        Shape::Path(path) => {
+            stroke::draw_path(&path.points, path.width, path.color, target);
+            Ok(())
+        }
+        Shape::Arc(arc) => {
+            stroke::draw_arc(
+                arc.center, arc.radius, arc.width, arc.span, arc.color, target,
+            );
             Ok(())
         }
     }

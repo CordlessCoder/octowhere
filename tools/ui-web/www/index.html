@@ -190,6 +190,16 @@
         </select>
       </label>
       <label class="check"><input type="checkbox" data-reading="10" checked><span>GNSS has a fix</span></label>
+      <div class="segmented" role="radiogroup" aria-labelledby="receiver-name" data-reading="13">
+        <span class="name" id="receiver-name">GNSS receiver</span>
+        <div class="rail">
+          <button type="button" data-value="0" title="The receiver answers the GNSS task">Answering</button>
+          <button type="button" data-value="1" title="It stopped answering, and the first reset is under way">Reset 1</button>
+          <button type="button" data-value="2" title="One reset failed, and the second is under way">Reset 2</button>
+          <button type="button" data-value="3" title="Two resets failed, and the third is under way">Reset 3</button>
+          <button type="button" data-value="4" title="Three resets failed: a fault, though the resets go on">Faulted</button>
+        </div>
+      </div>
     </section>
 
     <section class="module" aria-labelledby="power-title">
@@ -253,6 +263,7 @@
       <dl>
         <dt>Swipe sideways</dt><dd>Between the clock and the compass</dd>
         <dt>Drag down</dt><dd>From the top for settings; drag up to close them</dd>
+        <dt>Drag up</dt><dd>From a face for events; swipe sideways there for messages</dd>
         <dt>Tap</dt><dd>A setting, to open it</dd>
         <dt>Double-tap</dt><dd>A resting screen, to wake it</dd>
         <dt>Click a device</dt><dd>With several, gives it the controls</dd>
@@ -269,6 +280,7 @@
         <dt>R</dt><dd>Clock</dd>
         <dt>Z</dt><dd>Time zone</dd>
         <dt>G</dt><dd>GNSS fix</dd>
+        <dt>N</dt><dd>GNSS receiver answering, being reset, or faulted</dd>
         <dt>B</dt><dd>Supply</dd>
         <dt>- =</dt><dd>Battery level, 5 % a press, 1 % with Shift</dd>
         <dt>K</dt><dd>Hold for PWR</dd>

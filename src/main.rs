@@ -70,7 +70,7 @@ use octowhere::{
     tz::{self, DATABASE},
     ui::{
         clock::{ClockState, ZoneId, ZoneMode, ZoneState},
-        screens::{Battery, DEFAULT_BRIGHTNESS, Gnss, PeripheralState},
+        screens::{Battery, DEFAULT_BRIGHTNESS, Gnss, GnssHealth, PeripheralState},
         second::choice_label,
         stage::{
             Input as StageInput, Key as StageKey, Motion, Sensors, Stage, Store as Choice, Touch,
@@ -225,6 +225,14 @@ static POWER_OFF: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 static GNSS_PARKED: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 /// The receiver's state after each burst of NMEA, from `gnss_task` for `sensor_task`.
 static GNSS_STATE: Signal<CriticalSectionRawMutex, GnssState> = Signal::new();
+/// Whether the GNSS module answers, from `gnss_task`, for the screens' events.
+static GNSS_HEALTH: BlockingMutex<CriticalSectionRawMutex, Cell<GnssHealth>> =
+    BlockingMutex::new(Cell::new(GnssHealth {
+        recovering: false,
+        failed_resets: 0,
+        last_response: None,
+        last_fix: None,
+    }));
 /// The local timer minus UTC, from `gnss_task`: see [`gps_utc`].
 static GPS_TIME: BlockingMutex<CriticalSectionRawMutex, Cell<Option<GpsTime>>> =
     BlockingMutex::new(Cell::new(None));
@@ -1199,6 +1207,14 @@ async fn gnss_task(task: GnssTask) {
                 park_gnss(&mut gnss, navigation_saved.is_some()).await;
             }
             if failures >= GNSS_STUCK_FAILURES || last_data.elapsed() >= GNSS_STUCK_SILENCE {
+                // Every reset since it last answered has failed by now.
+                GNSS_HEALTH.lock(|health| {
+                    health.set(GnssHealth {
+                        recovering: true,
+                        failed_resets: resets.min(u32::from(u8::MAX)) as u8,
+                        ..health.get()
+                    });
+                });
                 if let Some(at) = last_reset
                     && let Either::Second(()) =
                         select(Timer::at(at + GNSS_RESET_INTERVAL), POWER_OFF.wait()).await
@@ -1238,6 +1254,14 @@ async fn gnss_task(task: GnssTask) {
                 Ok(available) => {
                     last_data = Instant::now();
                     resets = 0;
+                    GNSS_HEALTH.lock(|health| {
+                        health.set(GnssHealth {
+                            recovering: false,
+                            failed_resets: 0,
+                            last_response: Some(last_data.as_micros()),
+                            ..health.get()
+                        });
+                    });
                     break (emptied.then(Instant::now), available);
                 }
                 Err(error) => {
@@ -1314,6 +1338,12 @@ async fn gnss_task(task: GnssTask) {
             {
                 let fix = unix_micros(utc);
                 if let Some(position) = state.fix {
+                    GNSS_HEALTH.lock(|health| {
+                        health.set(GnssHealth {
+                            last_fix: Some(Instant::now().as_micros()),
+                            ..health.get()
+                        });
+                    });
                     mesh::FIX.lock(|latest| {
                         latest.set(Some(mesh::Fix {
                             latitude: position.latitude.get(),
@@ -2642,6 +2672,7 @@ async fn frame_loop(
                             in_use: signal.satellites_used.get(),
                             in_view: signal.satellites_in_view.get(),
                             position: state.position,
+                            health: GNSS_HEALTH.lock(Cell::get),
                         },
                     }
                 }),

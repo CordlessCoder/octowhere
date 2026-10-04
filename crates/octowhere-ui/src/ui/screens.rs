@@ -65,6 +65,21 @@ pub struct Gnss {
     pub in_view: u8,
     /// The last fix's latitude and longitude, in 1e-7 degrees.
     pub position: Option<(i32, i32)>,
+    pub health: GnssHealth,
+}
+
+/// Whether the GNSS receiver answers, as the task that reads it finds: it resets a receiver that
+/// stops answering, at most once a minute, until it answers again.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct GnssHealth {
+    /// The receiver stopped answering, and the task is resetting it.
+    pub recovering: bool,
+    /// Resets since it last answered that did not bring it back.
+    pub failed_resets: u8,
+    /// When it last answered, and when it last gave a fix, on the stage's clock.
+    pub last_response: Option<u64>,
+    pub last_fix: Option<u64>,
 }
 
 /// The readings the screens show.

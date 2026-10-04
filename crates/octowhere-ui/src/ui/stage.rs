@@ -11,11 +11,13 @@ use super::{
     clock_screen,
     compass::CompassView,
     compass_screen::{self, Accents, DialFootprint, Mode},
+    drawer::{self, Drawer},
     ease::Ease,
+    events::{self, Events},
     gesture::{Drag, GestureEvent, GestureTracker, Micros, SILENT_LIFT},
     group::{
         self, Flow,
-        layout::List,
+        layout::{Backdrop, List},
         view::{MeshView, Request},
     },
     identity,
@@ -189,6 +191,9 @@ const PANEL_HINT_REVEAL: Micros = 160_000;
 /// A release faster than this, in pixels per second, scrolls the grid on in its direction.
 const SNAP_FLICK: f32 = 600.0;
 
+/// How long a toast shows while nothing touches the screen.
+const TOAST_FOR: Micros = 5_000_000;
+
 /// How long without a cover report before another cover is a new hand. The controller does not
 /// always report the hand lifting, and a held hand repeats its report up to about 180 ms apart.
 /// Covering again after lifting took about 350 ms.
@@ -237,7 +242,28 @@ enum Route {
     Pager,
     Sheet,
     Grid,
+    /// The drawer's travel up over the faces.
+    Drawer,
     Nowhere,
+}
+
+/// A toast telling of an event, and when it showed. A toast that woke the screen keeps how it
+/// rested, to rest that way again when it times out untouched.
+#[derive(Clone, Copy, Debug)]
+struct Toast {
+    event: events::Id,
+    since: Micros,
+    woke: Option<power_off::Prior>,
+}
+
+/// The same drag seen upside down, so that the drawer's travel up is the panel's travel down.
+fn mirrored(drag: &Drag) -> Drag {
+    let flip = |point: Point| Point::new(point.x, board::LCD_HEIGHT as i32 - point.y);
+    Drag {
+        start: flip(drag.start),
+        current: flip(drag.current),
+        velocity: (drag.velocity.0, -drag.velocity.1),
+    }
 }
 
 /// The grid's sideways scroll, in pixels, and its motion.
@@ -288,6 +314,9 @@ enum Drawn {
     Page(Page, second::Accents, PeripheralState),
     /// The group screens' drawing, which is compared item by item.
     Group(alloc::boxed::Box<List>),
+    /// The drawer's, open and at rest, which compares the drawer's lists of this step and the
+    /// last.
+    Drawer,
 }
 
 pub struct Stage {
@@ -388,6 +417,22 @@ pub struct Stage {
     shift: Shift,
     minute: Micros,
     settled_page: usize,
+    /// What happened at run time, which the drawer lists and the unread arc tells of.
+    events: Events,
+    /// The drawer an upward drag on a face opens, and its travel up over them.
+    drawer: Option<Drawer>,
+    drawer_sheet: Sheet,
+    /// What the drawer drew at the last step, while it shows.
+    drawer_list: Option<alloc::boxed::Box<List>>,
+    /// A list to build the drawer into next. Lists are kilobytes, so they are swapped rather than
+    /// copied.
+    drawer_spare: Option<alloc::boxed::Box<List>>,
+    toast: Option<Toast>,
+    /// An event to tell of once the finger that was down when it came lifts.
+    held_toast: Option<events::Id>,
+    /// What lies over the screen after the last step: the toast, and whether the unread arc.
+    overlay: Option<(alloc::boxed::Box<List>, bool)>,
+    overlay_spare: Option<alloc::boxed::Box<List>>,
 }
 
 impl Stage {
@@ -463,8 +508,35 @@ impl Stage {
             shift: Shift::default(),
             minute: 0,
             settled_page: 0,
+            events: Events::default(),
+            drawer: None,
+            drawer_sheet: Sheet::new(board::LCD_HEIGHT as i32),
+            drawer_list: None,
+            drawer_spare: None,
+            toast: None,
+            held_toast: None,
+            overlay: None,
+            overlay_spare: None,
             peripherals,
         }
+    }
+
+    /// What happened at run time.
+    #[must_use]
+    pub fn events(&self) -> &Events {
+        &self.events
+    }
+
+    /// The drawer, while it shows or moves.
+    #[must_use]
+    pub fn drawer(&self) -> Option<&Drawer> {
+        self.drawer.as_ref()
+    }
+
+    /// The event a toast tells of, while one shows.
+    #[must_use]
+    pub fn toast(&self) -> Option<events::Id> {
+        self.toast.map(|toast| toast.event)
     }
 
     /// How far the picture is moved on the panel against burn-in. The display moves it; touch
@@ -547,6 +619,9 @@ impl Stage {
         let silent_lift = self.raw_touch[0].map(|_| self.touched_at + SILENT_LIFT);
         let page = self.page.as_ref().and_then(|(page, _)| page.next_change());
         let group = self.page.as_ref().and(self.group_due);
+        let toast = self.toast.map(|toast| toast.since + TOAST_FOR);
+        let drawer = self.drawer_list.as_ref().and_then(|list| list.due());
+        let overlay = self.overlay.as_ref().and_then(|(list, _)| list.due());
         [
             self.startup_due,
             rest,
@@ -555,6 +630,9 @@ impl Stage {
             silent_lift,
             page,
             group,
+            toast,
+            drawer,
+            overlay,
         ]
         .into_iter()
         .flatten()
@@ -710,6 +788,8 @@ impl Stage {
     pub fn is_changing(&self) -> bool {
         self.pager.is_moving()
             || self.sheet.is_moving()
+            || self.drawer_sheet.is_moving()
+            || self.drawer.as_ref().is_some_and(Drawer::is_moving)
             || self.grid.snap.is_some()
             || self.fading
             || self.fade.is_some()
@@ -761,6 +841,12 @@ impl Stage {
             self.charge.read(sensors.battery, now);
             self.peripherals.gnss = sensors.gnss;
             full |= self.screen == Screen::Clock;
+            if let Some(id) = self.events.gnss(&sensors.gnss.health, now) {
+                self.announce(id, now, &mut update);
+            }
+        }
+        if let Some(id) = self.events.refresh(self.mesh.refresh.as_ref(), now) {
+            self.announce(id, now, &mut update);
         }
 
         // A finger that has gone quiet stands in for the lift report the controller never sent.
@@ -809,10 +895,18 @@ impl Stage {
             self.sheet.offset(),
             self.grid.scroll,
             self.page.is_some(),
+            self.drawer_sheet.offset(),
         );
         let event = self.gesture(touch, now);
         let mut effects = Effects::default();
-        self.route_event(&event, now, &mut effects, &mut update);
+        self.step_toast(&event, now, &mut update);
+        if self.toast_tapped(&event, now) {
+            // The tap opened the drawer at its event, and does nothing else.
+        } else if self.drawer.is_some() {
+            self.route_drawer(&event, now, &mut effects);
+        } else {
+            self.route_event(&event, now, &mut effects, &mut update);
+        }
         if let Some((Page::Group(flow), _)) = &mut self.page {
             let (exit, moving) = flow.step(&self.mesh, now, &mut effects.mesh);
             self.fading |= moving;
@@ -829,6 +923,14 @@ impl Stage {
         self.apply(effects, &mut update);
 
         self.pager.step(now);
+        self.drawer_sheet.step(now);
+        if let Some(drawer) = &mut self.drawer {
+            drawer.step(&self.events, now);
+            if self.drawer_sheet.is_closed() {
+                self.drawer = None;
+                self.drawer_list = None;
+            }
+        }
         let (was_open, was_closed) = (self.sheet.is_open(), self.sheet.is_closed());
         self.sheet.step(now);
         self.grid.step(now);
@@ -896,9 +998,11 @@ impl Stage {
             self.sheet.offset(),
             self.grid.scroll,
             self.page.is_some(),
+            self.drawer_sheet.offset(),
         );
         let grid_only = current.2 != previous.2
-            && (current.0, current.1, current.3) == (previous.0, previous.1, previous.3);
+            && (current.0, current.1, current.3, current.4)
+                == (previous.0, previous.1, previous.3, previous.4);
         full |= current != previous && !grid_only;
         let group_list = match &self.page {
             Some((Page::Group(flow), _)) => {
@@ -915,11 +1019,14 @@ impl Stage {
             _ => None,
         };
         self.group_due = group_list.as_ref().and_then(|list| list.due());
-        self.track_damage(full, group_list);
+        let drawer_before = self.build_drawer(now);
+        self.track_damage(full, group_list, drawer_before);
+        self.track_overlay(now);
 
         let moved = current != previous
             || self.pager.is_moving()
             || self.sheet.is_moving()
+            || self.drawer_sheet.is_moving()
             || self.grid.snap.is_some();
         let cover = touch == Some(Touch::Cover);
         // A pairing holds the screen awake until it ends.
@@ -935,6 +1042,235 @@ impl Stage {
             self.fade_to(rest::dim_level(self.level), rest::DIM_FADE, now);
         }
         update
+    }
+
+    /// Tells the user of event `id`: a toast over whatever shows, which wakes a resting screen.
+    /// A finger already down keeps the screen as it is until it lifts. Nothing shows during the
+    /// start-up or the power-off, or over the drawer, whose list shows the event itself.
+    fn announce(&mut self, id: events::Id, now: Micros, update: &mut Update) {
+        if self.startup.is_some() || self.power_off.is_some() || self.drawer.is_some() {
+            return;
+        }
+        if self.raw_touch[0].is_some() || self.gesture.in_contact() {
+            self.held_toast = Some(id);
+            return;
+        }
+        let woke = (self.rest != Rest::Awake).then_some(power_off::Prior {
+            rest: self.rest,
+            level: self.shown_level,
+            at: now,
+        });
+        // A toast already up keeps the rest it woke the screen from.
+        let woke = self.toast.and_then(|toast| toast.woke).or(woke);
+        self.wake_for_toast(now, update);
+        self.toast = Some(Toast {
+            event: id,
+            since: now,
+            woke,
+        });
+    }
+
+    /// Brings a resting screen up to its level for a toast, over whatever it showed.
+    fn wake_for_toast(&mut self, now: Micros, update: &mut Update) {
+        match self.rest {
+            Rest::Awake => return,
+            Rest::Dimmed { .. } | Rest::Darkening { .. } => {}
+            Rest::AlwaysOn | Rest::Off => {
+                if self.rest == Rest::Off {
+                    update.display_on = Some(true);
+                }
+                self.drawn_always_on = None;
+                self.changed.make_full();
+            }
+        }
+        self.rest = Rest::Awake;
+        self.restart(now);
+        self.level = self.peripherals.brightness;
+        self.fade_to(self.level, rest::WAKE_FADE, now);
+    }
+
+    /// Shows a toast held for a finger once it lifts, and ends one that has shown long enough,
+    /// resting the screen again as it was. Any touch ends it, keeping the screen awake.
+    fn step_toast(&mut self, event: &GestureEvent, now: Micros, update: &mut Update) {
+        if !self.in_contact()
+            && let Some(id) = self.held_toast.take()
+        {
+            self.announce(id, now, update);
+        }
+        let Some(toast) = self.toast else {
+            return;
+        };
+        if matches!(event, GestureEvent::Down(_)) {
+            if !matches!(event, GestureEvent::Down(point) if self.toast_area().contains(*point)) {
+                self.toast = None;
+            }
+            return;
+        }
+        if now >= toast.since + TOAST_FOR {
+            self.toast = None;
+            if let Some(prior) = toast.woke {
+                self.rest_again(prior, now, update);
+                self.step_always_on(now);
+            }
+        }
+    }
+
+    /// Where the toast shows: lower on the faces, or compact at the top while a keyboard shows.
+    fn toast_area(&self) -> embedded_graphics::primitives::Rectangle {
+        if self.typing() {
+            drawer::TOAST_COMPACT
+        } else {
+            drawer::TOAST
+        }
+    }
+
+    fn typing(&self) -> bool {
+        matches!(&self.page, Some((Page::Group(flow), _)) if flow.typing())
+    }
+
+    /// Opens the drawer at the toast's event when a tap lands on the toast.
+    fn toast_tapped(&mut self, event: &GestureEvent, now: Micros) -> bool {
+        let (Some(toast), GestureEvent::Tap(point)) = (self.toast, event) else {
+            return false;
+        };
+        if !self.toast_area().contains(*point) {
+            return false;
+        }
+        self.toast = None;
+        self.events.read(toast.event);
+        self.drawer = Some(Drawer::at_event(toast.event));
+        self.drawer_sheet.go(true, now);
+        true
+    }
+
+    /// Sends a gesture to the drawer, or to its travel while a drag moves it.
+    fn route_drawer(&mut self, event: &GestureEvent, now: Micros, effects: &mut Effects) {
+        if self.route == Some(Route::Drawer) {
+            match *event {
+                GestureEvent::DragMove(drag) => self.drawer_sheet.drag(&mirrored(&drag)),
+                GestureEvent::DragEnd(drag) => {
+                    self.route = None;
+                    self.drawer_sheet.release(&mirrored(&drag), now);
+                }
+                _ => {}
+            }
+            return;
+        }
+        if !self.drawer_sheet.is_open() {
+            if matches!(event, GestureEvent::Down(_)) {
+                self.drawer_sheet.finish();
+            }
+            return;
+        }
+        let Some(drawer) = &mut self.drawer else {
+            return;
+        };
+        match drawer.handle(event, &mut self.events, now) {
+            drawer::Exit::Stay => {}
+            drawer::Exit::Close => self.drawer_sheet.go(false, now),
+            drawer::Exit::Pull => {
+                if let GestureEvent::DragStart(drag) = event {
+                    self.route = Some(Route::Drawer);
+                    self.drawer_sheet.grab(&mirrored(drag));
+                }
+            }
+            drawer::Exit::Members => {
+                self.close_drawer();
+                if let Some((mut page, _)) = self.page.take() {
+                    if let Page::Group(flow) = &mut page {
+                        flow.interrupt(&self.mesh, &mut effects.mesh);
+                    }
+                    page.discard(effects);
+                }
+                self.sheet.set(true);
+                self.page = Some((Page::Group(Flow::members()), now));
+            }
+        }
+    }
+
+    /// Shuts the drawer at once.
+    fn close_drawer(&mut self) {
+        if self.drawer.take().is_some() {
+            self.drawer_list = None;
+            self.drawer_sheet.set(false);
+            self.changed.make_full();
+        }
+    }
+
+    /// Builds what the drawer shows this step, while it shows or moves, and returns what it
+    /// showed the step before.
+    fn build_drawer(&mut self, now: Micros) -> Option<alloc::boxed::Box<List>> {
+        let Some(drawer) = &self.drawer else {
+            return self.drawer_list.take();
+        };
+        let mut list = self.drawer_spare.take().unwrap_or_else(new_list);
+        list.clear();
+        drawer.view(
+            &mut list,
+            &drawer::Context {
+                events: &self.events,
+                gnss: &self.peripherals.gnss,
+                mesh: &self.mesh,
+                now,
+                breath: self.breath,
+                font: &self.renderer,
+            },
+        );
+        self.breathing |= self.rest == Rest::Awake;
+        self.drawer_list.replace(list)
+    }
+
+    /// Works out what lies over the screen this step, the toast and the unread arc, and damages
+    /// where that changed.
+    fn track_overlay(&mut self, now: Micros) {
+        let covered = self.startup.is_some()
+            || self.power_off.is_some()
+            || (self.drawer_sheet.is_open() && self.drawer.is_some());
+        let (before, arc_before) = match self.overlay.take() {
+            Some((list, arc)) => (Some(list), arc),
+            None => (None, false),
+        };
+        let mut list = self.overlay_spare.take().unwrap_or_else(new_list);
+        list.clear();
+        list.set_backdrop(Backdrop::None);
+        let arc = !covered && self.events.unread() > 0;
+        if !covered
+            && let Some(toast) = self.toast
+            && let Some(event) = self.events.get(toast.event)
+        {
+            drawer::toast(
+                &mut list,
+                event,
+                &drawer::Context {
+                    events: &self.events,
+                    gnss: &self.peripherals.gnss,
+                    mesh: &self.mesh,
+                    now,
+                    breath: self.breath,
+                    font: &self.renderer,
+                },
+                self.typing(),
+            );
+        }
+        if arc_before != arc {
+            self.changed.add(crate::ui::stroke::arc_bounds(
+                drawer::UNREAD_ARC.center,
+                drawer::UNREAD_ARC.radius,
+                drawer::UNREAD_ARC.width,
+                drawer::UNREAD_ARC.span,
+            ));
+        }
+        let toast_changed = match &before {
+            Some(before) => **before != *list,
+            None => !list.items().is_empty(),
+        };
+        if toast_changed {
+            // A toast that comes, goes or changes uncovers whatever lies under it.
+            self.changed.add(drawer::TOAST);
+            self.changed.add(drawer::TOAST_COMPACT);
+        }
+        self.overlay = Some((list, arc));
+        self.overlay_spare = before;
     }
 
     /// Whether `touch` is a hand newly covering the screen, rather than one still held there.
@@ -1020,6 +1356,8 @@ impl Stage {
     /// Rests the screen at once, on the always-on face or off, without the timeout's dim.
     fn sleep(&mut self, update: &mut Update) {
         self.route = None;
+        self.close_drawer();
+        self.toast = None;
         self.fade = None;
         self.level = self.peripherals.brightness;
         if self.peripherals.always_on.is_on() {
@@ -1409,14 +1747,30 @@ impl Stage {
     }
 
     /// Works out what the step changed, from what each settled screen showed before. A group
-    /// screen passes the list it draws this step.
-    fn track_damage(&mut self, full: bool, group_list: Option<alloc::boxed::Box<List>>) {
+    /// screen passes the list it draws this step, and the drawer the list it drew the step
+    /// before.
+    fn track_damage(
+        &mut self,
+        full: bool,
+        group_list: Option<alloc::boxed::Box<List>>,
+        drawer_before: Option<alloc::boxed::Box<List>>,
+    ) {
         let view = self.pager.view();
         let faces_settled = self.page.is_none()
             && self.sheet.is_closed()
+            && self.drawer.is_none()
             && view.offset == 0
             && view.neighbour.is_none();
-        let drawn = if faces_settled && self.screen == Screen::Compass {
+        let drawer_open = self.drawer_sheet.is_open()
+            && self
+                .drawer
+                .as_ref()
+                .is_some_and(|drawer| !drawer.is_moving());
+        let drawn = if drawer_open && self.drawer_list.is_some() {
+            Some(Drawn::Drawer)
+        } else if self.drawer.is_some() {
+            None
+        } else if faces_settled && self.screen == Screen::Compass {
             Some(Drawn::Compass(self.peripherals.compass, self.accents))
         } else if faces_settled && self.screen == Screen::Clock {
             Some(Drawn::Clock((
@@ -1461,6 +1815,14 @@ impl Stage {
                 after.damage(&before, &self.renderer, &mut self.changed);
                 self.spare_list = Some(before);
             }
+            (Some(Drawn::Drawer), Some(Drawn::Drawer)) => {
+                match (&drawer_before, &self.drawer_list) {
+                    (Some(before), Some(after)) => {
+                        after.damage(before, &self.renderer, &mut self.changed);
+                    }
+                    _ => self.changed.make_full(),
+                }
+            }
             (
                 Some(Drawn::Page(page, accents, state)),
                 Some(Drawn::Page(now, now_accents, now_state)),
@@ -1476,10 +1838,11 @@ impl Stage {
                 }
             }
             (_, Some(_)) => self.changed.make_full(),
-            (_, None) if full => self.changed.make_full(),
+            (_, None) if full || self.drawer.is_some() => self.changed.make_full(),
             (_, None) => {}
         }
         self.drawn = drawn;
+        self.drawer_spare = drawer_before;
     }
 
     /// The open panel's damage: the grid while it scrolls, a cell whose reading changed, or
@@ -1571,6 +1934,10 @@ impl Stage {
                 self.route = Some(route);
                 match route {
                     Route::Pager => self.pager.handle(event, now),
+                    Route::Drawer => {
+                        self.drawer = Some(Drawer::new());
+                        self.drawer_sheet.grab(&mirrored(&drag));
+                    }
                     Route::Sheet => self.sheet.grab(&drag),
                     Route::Grid => {
                         self.grid.grabbed = Some(self.grid.scroll);
@@ -1583,6 +1950,7 @@ impl Stage {
             GestureEvent::DragMove(drag) => match self.route {
                 Some(Route::Pager) => self.pager.handle(event, now),
                 Some(Route::Sheet) => self.sheet.drag(&drag),
+                Some(Route::Drawer) => self.drawer_sheet.drag(&mirrored(&drag)),
                 Some(Route::Grid) => {
                     if let Some(from) = self.grid.grabbed {
                         self.grid.scroll = (from - drag.offset().x).clamp(0, panel::MAX_SCROLL);
@@ -1593,6 +1961,7 @@ impl Stage {
             GestureEvent::DragEnd(drag) => match self.route.take() {
                 Some(Route::Pager) => self.pager.handle(event, now),
                 Some(Route::Sheet) => self.sheet.release(&drag, now),
+                Some(Route::Drawer) => self.drawer_sheet.release(&mirrored(&drag), now),
                 Some(Route::Grid) => self.release_grid(&drag, now),
                 _ => {}
             },
@@ -1608,9 +1977,12 @@ impl Stage {
     fn route_for(&self, drag: &Drag) -> Route {
         let offset = drag.offset();
         if self.sheet.is_closed() {
-            // Mostly downward opens the panel; anything else is the pager's.
+            // Mostly downward opens the panel, mostly upward the drawer; anything else is the
+            // pager's.
             if offset.y > 0 && offset.y >= 2 * offset.x.abs() {
                 Route::Sheet
+            } else if offset.y < 0 && -offset.y >= 2 * offset.x.abs() {
+                Route::Drawer
             } else {
                 Route::Pager
             }
@@ -1722,6 +2094,7 @@ impl Stage {
 
     /// Returns to the clock face from anywhere, discarding any edit in progress.
     fn go_home(&mut self, now: Micros, effects: &mut Effects) {
+        self.close_drawer();
         if let Some((mut page, _)) = self.page.take() {
             if let Page::Group(flow) = &mut page {
                 flow.interrupt(&self.mesh, &mut effects.mesh);
@@ -2063,6 +2436,55 @@ impl Stage {
                 .expect("drawing the power-off confirmation failed");
             return;
         }
+        if self.drawer.is_some()
+            && self.drawer_sheet.is_open()
+            && let Some(list) = &self.drawer_list
+        {
+            screens::clear(target).expect("clearing the panel failed");
+            list.draw(&self.renderer, target)
+                .expect("drawing the drawer failed");
+            return;
+        }
+        self.draw_under(target);
+        if let (Some(_), Some(list)) = (&self.drawer, &self.drawer_list) {
+            // The drawer's surface, part way up over what it covers.
+            let height = board::LCD_HEIGHT as i32;
+            let top = height - self.drawer_sheet.offset();
+            let surface = embedded_graphics::primitives::Rectangle::new(
+                Point::new(0, top),
+                embedded_graphics::prelude::Size::new(
+                    u32::from(board::LCD_WIDTH),
+                    (height - top) as u32,
+                ),
+            );
+            target
+                .fill_solid(&surface, chrome::BLACK)
+                .expect("clearing under the drawer failed");
+            list.draw(
+                &self.renderer,
+                &mut chrome::Window::new(&mut *target, Point::new(0, top), surface),
+            )
+            .expect("drawing the drawer failed");
+        }
+        if let Some((list, arc)) = &self.overlay {
+            list.draw(&self.renderer, target)
+                .expect("drawing the toast failed");
+            if *arc {
+                let arc = drawer::UNREAD_ARC;
+                crate::ui::stroke::draw_arc(
+                    arc.center, arc.radius, arc.width, arc.span, arc.color, target,
+                );
+            }
+        }
+    }
+
+    /// Draws what the drawer and the toast lie over: the always-on face, a screen the panel
+    /// opened, or the faces and the panel.
+    fn draw_under<D>(&self, target: &mut D)
+    where
+        D: CoverageTarget<Color = Color>,
+        D::Error: core::fmt::Debug,
+    {
         if let (Rest::AlwaysOn, Some(view)) = (self.rest, &self.drawn_always_on) {
             always_on::draw(view, &self.renderer, target)
                 .expect("drawing the always-on face failed");

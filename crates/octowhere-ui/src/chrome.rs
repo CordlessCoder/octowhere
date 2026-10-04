@@ -962,6 +962,10 @@ pub const COMPASS_NOISE: [(u8, u8, u8); 6] = [
     (25, 66, 140),
     (37, 88, 170),
 ];
+/// The 2026-10-04 screens' structural rules, scroll tracks and progress tracks, and their
+/// controls that cannot be used yet: no status meaning (2026-10-04 hand-off).
+pub const TRACK: Color = color_from_hex("#30343a");
+pub const DISABLED: Color = color_from_hex("#444952");
 /// The settings halftone's purples, darkest first: sparse marks take the dark ones and dense
 /// marks the bright (2026-09-30 update).
 pub const HALFTONE: [Color; 3] = [
