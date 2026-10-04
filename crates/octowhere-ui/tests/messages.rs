@@ -13,7 +13,7 @@ use octowhere_ui::{
         group::{
             keyboard::{Mode, taps},
             sim::{self, Arrival, Sim},
-            view::{Carriage, MessagesView, Thread},
+            view::{Carriage, MessagesView, Name, Thread},
         },
         rest::Timeout,
         screens::{PeripheralState, Screen},
@@ -269,4 +269,59 @@ fn the_messages_damage_redraws_what_changed() {
     driver.wait(12 * SECOND);
     tap(&mut driver, 233, 26);
     driver.wait(SECOND);
+}
+
+/// Member 1 wrote to this device and to the group, was removed, and a new device paired in at
+/// the id it freed, as the lowest free id goes to the next device paired. The messages stay in
+/// the store for a day, and the screens name each sender by the member now at its id, so they
+/// show the newcomer as having written them, and a reply in that private conversation goes to
+/// the newcomer.
+#[test]
+#[ignore = "messages name their sender by member id"]
+fn a_removed_members_messages_are_not_shown_as_a_newcomers() {
+    let mut driver = start(false);
+    let now = driver.now();
+    let own = own(&driver);
+    if let Some(mesh) = &mut driver.mesh {
+        for to in [Some(own), None] {
+            mesh.arrive(
+                Arrival {
+                    from: 1,
+                    to,
+                    text: "Meet at the gate.",
+                    ago: 20 * 60 * SECOND,
+                    carriage: Carriage::Received,
+                    unread: false,
+                },
+                now,
+            );
+        }
+        if let Some(group) = &mut mesh.view_mut().group
+            && let Some(member) = &mut group.members[1]
+        {
+            member.name = Name::new(b"Newcomer").unwrap();
+            member.device = [0xAB; 8];
+            member.joined = Some(now as i64);
+        }
+    }
+    driver.wait(100_000);
+    open_messages(&mut driver);
+    let mut shown = Vec::new();
+    for row in [170, 265] {
+        tap(&mut driver, 233, row);
+        let texts: Vec<String> = driver.stage.drawer_text().map(str::to_owned).collect();
+        assert!(
+            texts.iter().any(|text| text.contains("gate")),
+            "{:?} shows the message: {texts:?}",
+            child(&driver)
+        );
+        shown.push((child(&driver), texts));
+        tap(&mut driver, 233, 26);
+    }
+    assert!(
+        shown
+            .iter()
+            .all(|(_, texts)| !texts.iter().any(|text| text.contains("NEWCOMER"))),
+        "{shown:#?}"
+    );
 }
