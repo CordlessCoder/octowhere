@@ -158,6 +158,10 @@ initialization or peripheral mappings.
 - [`context/MESH-CLEANUP-PLAN.md`](context/MESH-CLEANUP-PLAN.md) is the plan, step by step,
   for what the 2026-10-03 code-quality review of the mesh and node left open, with the base
   commit, the gates and the baseline each step is checked against. Follow it in order.
+- [`context/POWER-INVESTIGATION.md`](context/POWER-INVESTIGATION.md) holds what the device's
+  power was found to depend on (2026-10-04), from datasheets and sources, none of it measured:
+  the parts' draw, esp-rtos's light sleep and what it would break, and contention against slots
+  for the mesh, with the plan to measure them. Read it before changing sleep or medium access.
 - [`context/IMPLEMENTATION.md`](context/IMPLEMENTATION.md) is a finished multi-agent brief kept as
   a record. Its partition is historical.
 - [`context/LORA-PROTOCOL.md`](context/LORA-PROTOCOL.md) is the agreed design for the location

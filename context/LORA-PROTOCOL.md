@@ -986,6 +986,9 @@ protocol does not need this.
   behind the simulator and the next design round (owner, 2026-10-03).
 - A shorter floor once CAD is measured (see "CAD is required at this size").
 - Measuring GNSS time sync (see "Time sync").
+- Contention in place of slots (owner, 2026-10-04), for message latency and to drop the slot
+  timing. It waits on measuring what the rest of the device draws
+  ([`POWER-INVESTIGATION.md`](POWER-INVESTIGATION.md)).
 
 ## Deferred
 

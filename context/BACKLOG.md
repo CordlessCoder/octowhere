@@ -244,6 +244,10 @@ until the feature set is complete, because profiling an incomplete firmware pric
   Then step 5, CAD, which needs the slot timing it depends on measured first ("Time sync"
   there) and both boards with a GPS fix at once, which will not be possible for a while; its
   power budget is two days on about 1,000 mAh (owner, 2026-10-03; its "Open"). Then step 7.
+- Measure what the device draws once the owner's PPK2 is to hand (owner, 2026-10-04). It settles
+  whether the mesh keeps its slots or moves to contention for message latency, and whether the
+  firmware light-sleeps with the screen dark. The findings, the esp-hal wake-lock gap the owner
+  will PR, and the plan are in [`POWER-INVESTIGATION.md`](POWER-INVESTIGATION.md).
 - Close what the 2026-10-03 security review of the mesh left open. It found seven defects,
   confirmed by host tests, and the fixes since are in the history from `0999a8a` to `6750e8d`.
   The three left after those were staged in `crates/octowhere-sim/tests/security.rs`, each
