@@ -151,11 +151,11 @@ fn a_rename_reaches_the_group() {
 }
 
 /// Node 0's RTC lost its time. Its first sweep hears nobody, so it starts its clock from its
-/// boot, near 1970, and its id, the lowest, outranks the others' roots: they move to its clock.
-/// From then on every node judges records by 1970, and a rename that node 2's RTC stamped in
-/// 2026 is refused as more than an hour ahead, by node 1 as well, whose own RTC holds the time.
+/// boot, near 1970. Its id is the lowest, but a clock started from UTC outranks one started from
+/// a boot, so node 0 moves to the others' clock rather than they to its, and every node judges
+/// node 2's rename by UTC. (They once moved to node 0's, and refused the rename as an hour
+/// ahead.)
 #[test]
-#[ignore = "a clock started without RTC time takes the group to 1970"]
 fn a_rename_reaches_a_group_whose_lowest_id_lost_its_rtc_time() {
     rename_with_node_0s_rtc(true);
 }
@@ -186,11 +186,11 @@ fn a_removal_switches_across_a_restart_out_of_reach() {
     removal_across_node_0s_restart(true);
 }
 
-/// As above, but node 0's battery ran flat and its RTC lost the time. It restarts its clock
-/// near 1970, and the switch round it stored, counted in 2026, never comes. Node 1 switches,
-/// sends node 0 its key message three times under the old key, and then stops: they stay apart.
+/// As above, but node 0's battery ran flat and its RTC lost the time. It restarts its clock from
+/// its boot, near 1970, where the switch round it stored, counted in 2026, never comes. Node 1
+/// has switched, so node 0 hears it only under the key to switch to, and takes its clock from
+/// that, which outranks its own; its switch then comes at once.
 #[test]
-#[ignore = "a clock started without RTC time never reaches a stored switch round"]
 fn a_removal_switches_across_a_restart_that_lost_the_rtc_time() {
     removal_across_node_0s_restart(false);
 }

@@ -37,20 +37,41 @@ pub mod record {
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Source {
     Gps,
-    /// A clock the node with this id started, with no fix anywhere upstream.
+    /// A clock the node with this id started from its RTC's UTC, with no fix anywhere upstream.
     Node(u8),
+    /// A clock the node with this id started from its boot, holding neither UTC nor a fix.
+    Boot(u8),
 }
 
 impl Source {
-    /// Whether nodes on `other` should move to this one: GPS ranks above any node's clock, and a
-    /// lower root above a higher one.
+    /// Whether nodes on `other` should move to this one: GPS ranks above any node's clock, one
+    /// started from UTC above one started from a boot, and of two alike the lower root.
     #[must_use]
     pub fn outranks(self, other: Self) -> bool {
-        match (self, other) {
-            (Self::Gps, Self::Node(_)) => true,
-            (Self::Node(root), Self::Node(theirs)) => root < theirs,
-            (_, Self::Gps) => false,
+        self.rank() < other.rank()
+    }
+
+    fn rank(self) -> (u8, u8) {
+        match self {
+            Self::Gps => (0, 0),
+            Self::Node(root) => (1, root),
+            Self::Boot(root) => (2, root),
         }
+    }
+
+    /// The id of the node that started the clock, unless it is GPS.
+    #[must_use]
+    pub fn root(self) -> Option<u8> {
+        match self {
+            Self::Gps => None,
+            Self::Node(root) | Self::Boot(root) => Some(root),
+        }
+    }
+
+    /// Whether its time is UTC, as well as its root's RTC kept it.
+    #[must_use]
+    pub fn is_utc(self) -> bool {
+        !matches!(self, Self::Boot(_))
     }
 }
 
@@ -94,8 +115,9 @@ impl Header {
     fn encode(&self, out: &mut [u8; HEADER_LEN]) {
         let (source, root) = match self.timebase.source {
             Source::Gps => (0, 0),
-            Source::Node(root) => (1, root),
+            Source::Node(root) | Source::Boot(root) => (1, root),
         };
+        let boot = matches!(self.timebase.source, Source::Boot(_));
         let mut writer = BitWriter::new(out);
         for (value, bits) in [
             (u64::from(VERSION), 4),
@@ -103,7 +125,7 @@ impl Header {
             (source, 1),
             (u64::from(root), 5),
             (u64::from(self.timebase.hops), 5),
-            (u64::from(self.notice), 4),
+            (u64::from(self.notice) | u64::from(boot) << 1, 4),
             (u64::from(self.base), 32),
             (u64::from(self.phase), 8),
         ] {
@@ -133,6 +155,8 @@ impl Header {
             timebase: Timebase {
                 source: if source == 0 {
                     Source::Gps
+                } else if flags & 2 != 0 {
+                    Source::Boot(root)
                 } else {
                     Source::Node(root)
                 },
@@ -725,6 +749,38 @@ mod tests {
             plain.records().next(),
             Some(Record::Gone(30, read)) if read == gone
         ));
+    }
+
+    #[test]
+    fn a_boot_clock_survives_the_header_beside_a_notice() {
+        let header = Header {
+            timebase: Timebase {
+                source: Source::Boot(3),
+                hops: 2,
+            },
+            notice: true,
+            ..header()
+        };
+        let mut bytes = [0; HEADER_LEN];
+        header.encode(&mut bytes);
+        assert_eq!(Header::decode(&bytes), Ok(header));
+    }
+
+    #[test]
+    fn clocks_rank_gps_then_utc_then_boot_and_lower_roots_first() {
+        let order = [
+            Source::Gps,
+            Source::Node(0),
+            Source::Node(5),
+            Source::Boot(0),
+            Source::Boot(5),
+        ];
+        for (i, higher) in order.iter().enumerate() {
+            for lower in &order[i + 1..] {
+                assert!(higher.outranks(*lower), "{higher:?} over {lower:?}");
+                assert!(!lower.outranks(*higher), "{lower:?} under {higher:?}");
+            }
+        }
     }
 
     #[test]

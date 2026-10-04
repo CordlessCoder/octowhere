@@ -223,7 +223,7 @@ enum Opened {
     Current,
     /// The one the group is about to switch to, which its sender already has.
     Pending {
-        sender: u8,
+        header: Header,
     },
     /// One the group switched away from, which its sender has not: the key, its generation, and
     /// that of the key message that catches its sender up.
@@ -800,15 +800,11 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
     fn publish(&mut self) {
         self.show_pending();
         let now = self.time.now();
+        let utc = self.utc(now);
         self.shown.heard = self.heard;
         self.shown.refresh = self.refresh;
-        self.shown.fill(
-            &mut self.view,
-            &self.me,
-            self.group.as_ref(),
-            now,
-            utc_now(&self.device, now),
-        );
+        self.shown
+            .fill(&mut self.view, &self.me, self.group.as_ref(), now, utc);
         self.device.publish(&mut self.view);
         self.show_messages();
     }
@@ -1011,7 +1007,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                 let now = self.time.now();
                 let (left, group) = leave(&mut self.group, &self.store).await;
                 if let Some(group) = group {
-                    let gone = group.leaving(utc_seconds(&self.device, now), &self.me);
+                    let gone = group.leaving(self.utc_seconds(now), &self.me);
                     self.leaving = Some(Box::new(Leaving {
                         group,
                         gone,
@@ -1031,18 +1027,12 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                 self.shown.answer(Answer::Left(left));
             }
             Command::Rename(name) => {
+                let utc = self.utc_seconds(self.time.now());
                 let group = match &mut self.founding {
                     Some(founding) => Some(&mut founding.group),
                     None => self.group.as_mut(),
                 };
-                let saved = rename(
-                    &mut self.me,
-                    group,
-                    name,
-                    utc_seconds(&self.device, self.time.now()),
-                    &self.store,
-                )
-                .await;
+                let saved = rename(&mut self.me, group, name, utc, &self.store).await;
                 info!("[MESH] renamed {} saved={}", name, saved);
                 if saved && let Some(group) = &self.group {
                     self.unsaved.slot(group.own());
@@ -1090,7 +1080,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             }
             #[cfg(feature = "phantom")]
             Command::Phantom => {
-                let now = utc_seconds(&self.device, self.time.now());
+                let now = self.utc_seconds(self.time.now());
                 if let (Some(group), Some(seed), Some(mac)) = (
                     &mut self.group,
                     self.random.bytes::<32>(),
@@ -1634,7 +1624,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             && let Ok(plain) = Plain::parse(plain)
         {
             return Opened::Pending {
-                sender: plain.header.sender,
+                header: plain.header,
             };
         }
         for old in self.rekey.old() {
@@ -1657,14 +1647,14 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         let mut bytes = packet.payload;
         match self.open(&mut bytes[..len]) {
             Opened::Current => {}
-            // Nothing in it is taken: this node sends under the old key, which the member being
-            // removed reads, and its slot order and clock are still the old key's.
-            Opened::Pending { sender } => {
-                info!("[REKEY] heard {} on the key to switch to", sender);
-                if let Some(heard) = self.heard.get_mut(usize::from(sender)) {
+            // Nothing else in it is taken: this node sends under the old key, which the member
+            // being removed reads, and its slot order and clock are still the old key's.
+            Opened::Pending { header } => {
+                info!("[REKEY] heard {} on the key to switch to", header.sender);
+                if let Some(heard) = self.heard.get_mut(usize::from(header.sender)) {
                     *heard = Some(done);
                 }
-                return false;
+                return self.adopt_pending(&header, len, done);
             }
             Opened::Old { sender, old } => {
                 self.heard_on_old(sender, old);
@@ -1676,6 +1666,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                 return false;
             }
         }
+        let utc = self.utc_seconds(done);
         let Some(group) = &mut self.group else {
             return false;
         };
@@ -1727,9 +1718,11 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         }
         let round = round_at(slot);
         self.table.heard(header.sender, round);
+        // A clock started from a boot is no UTC to judge a record's time by.
         let now = self
             .clock
             .at(done)
+            .filter(|(_, timebase)| timebase.source.is_utc())
             .map(|(time, _)| (time / 1_000_000) as u32);
         // Messages are judged by this node's clock: the header's own time is the sender's word.
         let round_s = self
@@ -1743,7 +1736,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             When {
                 round,
                 now,
-                utc: utc_seconds(&self.device, done),
+                utc,
                 round_s,
             },
             State {
@@ -1830,6 +1823,27 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
     /// Takes from a packet under an old key, opened, the key messages of this node's
     /// generation: rivals of the key it switched to, which reach it no other way once both
     /// parts of the group have switched. Nothing else in it is taken.
+    /// Moves to the clock of a packet under the key to switch to, if it outranks this node's. A
+    /// node that restarted with no UTC finds the group's clock in no other packet once the
+    /// others have switched. Returns whether it moved.
+    fn adopt_pending(&mut self, header: &Header, len: usize, done: i64) -> bool {
+        let ours = self.clock.at(done).map(|(_, timebase)| timebase.source);
+        if ours.is_some_and(|ours| !header.timebase.source.outranks(ours)) {
+            return false;
+        }
+        let Some(pending) = self.rekey.pending() else {
+            return false;
+        };
+        let slot = Schedule::new(&pending.new.key).named_slot(header.base, header.sender);
+        let start = done - airtime_us(len) - ARRIVAL_LATENCY_US - self.radio.seen_late_us();
+        let arrival = self.clock.arrival(header, slot, start, done);
+        info!(
+            "[REKEY] clock from the key to switch to: {:?} late_us={:?}",
+            arrival.taken, arrival.late_us
+        );
+        arrival.taken == Taken::Adopted
+    }
+
     fn take_rivals(&mut self, plain: &[u8]) {
         let (Some(group), Ok(plain), Some((time, _))) = (
             &self.group,
@@ -1960,7 +1974,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         let mut pairing = match role {
             Role::Join => Pairing::join(&self.me, nonce, now),
             Role::Add => {
-                let utc = utc_seconds(&self.device, now);
+                let utc = self.utc_seconds(now);
                 let group = self
                     .group
                     .clone()
@@ -1993,6 +2007,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             let view = pairing_view(session, &pairing);
             if self.shown.pairing.as_ref() != Some(&view) {
                 self.shown.pairing = Some(view);
+                let utc = self.utc(now);
                 // A pairing that is done has stored its group, which the screens show at once.
                 let group = match phase {
                     Phase::Done(_) => pairing.group(),
@@ -2000,13 +2015,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                 };
                 self.shown.heard = self.heard;
                 self.shown.refresh = self.refresh;
-                self.shown.fill(
-                    &mut self.view,
-                    &self.me,
-                    group,
-                    now,
-                    utc_now(&self.device, now),
-                );
+                self.shown.fill(&mut self.view, &self.me, group, now, utc);
                 self.device.publish(&mut self.view);
             }
             if pairing.is_over(now) {
@@ -2538,6 +2547,24 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
     /// Takes a packet from `sender` under the old key `key` of generation `generation`: it
     /// missed a switch, or took a rival key that lost, and the key message of generation
     /// `catches_up_with` goes to it.
+    /// UTC seconds at local time `now`, from GNSS or the RTC, or else from a timebase its root
+    /// started from UTC.
+    fn utc(&self, now: i64) -> Option<i64> {
+        utc_now(&self.device, now).or_else(|| {
+            let (time, timebase) = self.clock.at(now)?;
+            timebase
+                .source
+                .is_utc()
+                .then_some(time.div_euclid(1_000_000))
+        })
+    }
+
+    /// As [`utc`](Self::utc), or 0 without UTC.
+    fn utc_seconds(&self, now: i64) -> u32 {
+        self.utc(now)
+            .map_or(0, |utc| utc.clamp(0, i64::from(u32::MAX)) as u32)
+    }
+
     fn heard_on_old(&mut self, sender: u8, (key, generation, catches_up_with): (Key, u16, u16)) {
         if let Some(notice) = &self.removal_notice
             && notice.message.to() == To::Member(sender)
@@ -3055,6 +3082,10 @@ fn log_timebase(timebase: Option<Timebase>, sweeping: bool) {
             source: Source::Node(root),
             hops,
         }) => info!("[MESH] timebase root={} hops={}", root, hops),
+        Some(Timebase {
+            source: Source::Boot(root),
+            hops,
+        }) => info!("[MESH] timebase root={} from its boot hops={}", root, hops),
     }
 }
 

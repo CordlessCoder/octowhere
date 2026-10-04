@@ -217,12 +217,16 @@ A node needs a timebase to place slots: GPS time from its own fix, or another no
 when that node's packets arrive. The owner chose this over running slots on the RTC, whose whole
 seconds two nodes can disagree on (2026-10-01). Every header names the sender's timebase:
 
-- **Source.** GPS, or a node's own clock.
+- **Source.** GPS, a node's clock started from its RTC's UTC, or a node's clock started from
+  its boot, by a node whose RTC held no time.
 - **Root.** For a node's clock, the id of the node that started it.
 - **Hops.** How many receptions the sender is from the root: 0 for a node timing from its own fix,
   and for a root.
 
-GPS ranks above any node's clock, and between node clocks the lower root id ranks higher.
+GPS ranks above any node's clock, a clock started from UTC above one started from a boot, and of
+two clocks alike the lower root id ranks higher (owner, 2026-10-04). A clock started from a boot
+counts its seconds from 1970, so ranked by its root alone it took a whole group there, and every
+node, those whose RTCs held the time too, refused records stamped in 2026 as an hour ahead.
 
 - **Taking a timebase.** A node that hears a packet from a timebase ranked above its own adopts
   it: it sets its clock from the packet's arrival, and takes the sender's root and its hops plus
@@ -253,7 +257,10 @@ GPS ranks above any node's clock, and between node clocks the lower root id rank
   falls on each of the floor's three rounds in turn. A fix ends a node's first sweep at once. A
   node keeps transmitting in its own slots during a sweep.
 - **Starting one.** A node that hears nobody in its first sweep starts its own timebase from its
-  RTC's time, as its root. Groups started this way merge as their sweeps find each other, to the
+  RTC's time, as its root, or from its boot if its RTC holds no time. A node whose clock was
+  started from its boot takes UTC from a timebase started from UTC, for its own records' and
+  messages' stamps; the RTC is GNSS's alone to set (owner, 2026-10-04). Without one it stamps
+  its records 0, which lose every merge. Groups started this way merge as their sweeps find each other, to the
   lowest root. A node that gets a fix moves to GPS time, and the nodes timing from it find it again
   at their next sweep.
 - **Refreshing.** REFRESH DEVICES on the screens starts the same three-round sweep at once
@@ -271,6 +278,11 @@ GPS ranks above any node's clock, and between node clocks the lower root id rank
   (`docs/logs/lora/sweeps-and-notices-2026-10-03/`).
 - **Ageing.** A node's own GPS time counts as GPS while a fix has refined it within 30 minutes.
   After that the node ranks as its own root, so a node with a live fix takes the group over.
+
+A node that restarted with no UTC while a removal was pending hears a group that has switched
+only under the key it is to switch to. It takes nothing else from such a packet, but moves to its
+clock if it outranks its own: without that it stayed on its boot clock, where the switch round it
+stored never came.
 
 A node's clock is UTC only as well as its root's RTC was. Its own entries need a fix, so they are
 always stamped in GPS time; it relays another's entry only when the entry's stamp fits the 12-bit
@@ -375,7 +387,7 @@ Header, 8 bytes, encrypted:
 | timebase source: 0 GPS, 1 a node's clock | 1 |
 | timebase root, for a node's clock | 5 |
 | hops from the timebase's root | 5 |
-| flags: bit 0 a notice, the rest reserved | 4 |
+| flags: bit 0 a notice, bit 1 a node's clock started from its boot, the rest reserved | 4 |
 | base timestamp, timebase seconds | 32 |
 | slot phase, reserved for CAD | 8 |
 
@@ -652,11 +664,11 @@ What absolute timestamps do introduce is an unbounded top end. An entry stamped 
 wins every merge permanently, and a node with a bad clock causes that by accident, not just an
 attacker. So:
 
-- Reject entries and messages more than an hour ahead of local time. The gate is the PCF85063A
-  oscillator-stop flag, already read in
-  [`crates/octowhere-peripherals/src/rtc.rs`](../crates/octowhere-peripherals/src/rtc.rs) and
-  exposed as `oscillator_stopped()`. A node with OS set skips the check and re-evaluates on its
-  first fix.
+- Reject entries and messages more than an hour ahead of local time. A node on a clock started
+  from a boot skips the check, since its clock is not UTC. The RTC's oscillator-stop flag
+  (`oscillator_stopped()` in
+  [`crates/octowhere-peripherals/src/rtc.rs`](../crates/octowhere-peripherals/src/rtc.rs)) is
+  what makes the firmware report no RTC time, and so start such a clock.
 - Drop entries past the retention horizon. Old positions are not worth relaying.
 
 An hour of margin passes a node whose RTC has free-run for a year. The margin only has to exceed

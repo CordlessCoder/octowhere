@@ -62,10 +62,13 @@ impl Clock {
     /// Moves the node to id `own`. A clock it was the root of stays its own.
     pub fn renumber(&mut self, own: u8) {
         if let Some((_, timebase)) = &mut self.clock
-            && timebase.source == Source::Node(self.own)
+            && timebase.source.root() == Some(self.own)
             && timebase.hops == 0
         {
-            timebase.source = Source::Node(own);
+            timebase.source = match timebase.source {
+                Source::Boot(_) => Source::Boot(own),
+                _ => Source::Node(own),
+            };
         }
         self.own = own;
     }
@@ -81,9 +84,14 @@ impl Clock {
             .map(|(offset, _)| offset)
     }
 
-    fn root(&self) -> Timebase {
+    /// The node's own clock, started from UTC when `utc`, else from its boot.
+    fn root(&self, utc: bool) -> Timebase {
         Timebase {
-            source: Source::Node(self.own),
+            source: if utc {
+                Source::Node(self.own)
+            } else {
+                Source::Boot(self.own)
+            },
             hops: 0,
         }
     }
@@ -111,15 +119,17 @@ impl Clock {
             && timebase.source == Source::Gps
             && timebase.hops == 0
         {
-            self.clock = Some((offset, self.root()));
+            self.clock = Some((offset, self.root(true)));
         }
         if let Some(until) = self.sweep_until {
             if now >= until {
                 self.sweep_until = None;
                 match self.clock {
-                    None => self.clock = Some((now - rtc.unwrap_or(now), self.root())),
-                    Some((offset, _)) if self.is_lost(now) => {
-                        self.clock = Some((offset, self.root()));
+                    None => {
+                        self.clock = Some((now - rtc.unwrap_or(now), self.root(rtc.is_some())));
+                    }
+                    Some((offset, timebase)) if self.is_lost(now) => {
+                        self.clock = Some((offset, self.root(timebase.source.is_utc())));
                     }
                     Some(_) => {}
                 }
@@ -161,8 +171,11 @@ impl Clock {
         };
         if taken != Taken::Ignored {
             // A clock rooted at this node's id is its own, kept by others while it restarted.
-            let timebase = if theirs.source == Source::Node(self.own) {
-                self.root()
+            let timebase = if theirs.source.root() == Some(self.own) {
+                Timebase {
+                    source: theirs.source,
+                    hops: 0,
+                }
             } else {
                 theirs.next_hop()
             };
@@ -281,6 +294,43 @@ mod tests {
         let (time, timebase) = clock.at(SWEEP_US).unwrap();
         assert_eq!(time, rtc);
         assert_eq!(timebase.source, Source::Node(24));
+    }
+
+    #[test]
+    fn a_node_without_rtc_time_starts_a_boot_clock_that_any_utc_clock_outranks() {
+        let mut clock = Clock::new(0, 0);
+        clock.tick(SWEEP_US, None);
+        let (time, timebase) = clock.at(SWEEP_US).unwrap();
+        assert_eq!(time, SWEEP_US);
+        assert_eq!(timebase.source, Source::Boot(0));
+        let arrival = sent(&mut clock, 30, Source::Node(30), 0, 7, SWEEP_US + SECOND);
+        assert_eq!(arrival.taken, Taken::Adopted);
+        assert_eq!(clock.at(0).unwrap().1.source, Source::Node(30));
+    }
+
+    #[test]
+    fn a_boot_root_that_loses_its_upstream_keeps_a_boot_clock() {
+        let mut clock = Clock::new(28, 0);
+        sent(&mut clock, 24, Source::Boot(24), 0, 0, SECOND);
+        clock.tick(SECOND + LOST_US + 1, None);
+        clock.tick(SECOND + LOST_US + 1 + SWEEP_US, None);
+        assert_eq!(clock.at(0).unwrap().1.source, Source::Boot(28));
+    }
+
+    #[test]
+    fn a_node_restarted_without_rtc_time_takes_back_the_utc_clock_others_kept() {
+        let mut clock = Clock::new(0, 0);
+        clock.tick(SWEEP_US, None);
+        let now = SWEEP_US + SECOND;
+        let arrival = sent(&mut clock, 3, Source::Node(0), 1, UTC, now);
+        assert_eq!(arrival.taken, Taken::Adopted);
+        assert_eq!(
+            clock.at(0).unwrap().1,
+            Timebase {
+                source: Source::Node(0),
+                hops: 0
+            }
+        );
     }
 
     #[test]
