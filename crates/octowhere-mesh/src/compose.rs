@@ -99,7 +99,7 @@ pub fn compose(builder: &mut Builder, round: i64, base: u32, from: Sources) -> C
         on_key,
     } = from;
     let mut carried = Carried {
-        neighbours: table.neighbours(round),
+        neighbours: table.neighbours(round).bits(),
         requests: requests.pending().bits(),
         records: 0,
         former: 0,

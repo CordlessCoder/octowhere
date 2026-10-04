@@ -1309,7 +1309,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         };
         let mut packet = [0u8; MAX_PACKET];
         let mut builder = Builder::new(&mut packet[SIV_LEN..], &header);
-        let _ = builder.neighbours(self.table.neighbours(round));
+        let _ = builder.neighbours(self.table.neighbours(round).bits());
         let _ = builder.gone(own, &leaving.gone);
         let plain_len = builder.finish();
         let len = seal::seal(leaving.group.key(), &mut packet, plain_len);
@@ -1536,7 +1536,9 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         let Some(group) = &self.group else {
             return 0;
         };
-        (group.ids().bits() | self.table.neighbours(round)) & !(1 << group.own())
+        (group.ids() | self.table.neighbours(round))
+            .without(group.own())
+            .bits()
     }
 
     /// Takes the packet `DIO0` reported. Returns whether it moved the node to its timebase, or

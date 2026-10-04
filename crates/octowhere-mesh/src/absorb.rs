@@ -222,7 +222,12 @@ pub fn absorb<'p>(
             Record::Other(..) => {}
         }
     }
-    if table.covered_by(sender, &stamps, absorbed.neighbours, when.round) {
+    if table.covered_by(
+        sender,
+        &stamps,
+        Ids::from_bits(absorbed.neighbours),
+        when.round,
+    ) {
         for (id, slot) in heard_records.iter().flatten() {
             group.covered(*id, slot);
         }
