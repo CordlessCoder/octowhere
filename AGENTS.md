@@ -43,7 +43,9 @@ initialization or peripheral mappings.
   collisions and half-duplex radios; clocks with their own drift; stores that can fail a write
   and restart a node from what they hold; and seeded random sources, so that a run repeats.
   Scenarios are its tests (`tests/scenarios.rs`), which read each node's log lines;
-  `OCTOWHERE_SIM_LOG=1` prints them as they come. `tests/screens.rs` drives devices through
+  `OCTOWHERE_SIM_LOG=1` prints them as they come. `tests/security.rs` stages the open items of
+  the mesh's security review, with a recording of the air and a bare radio that replays or
+  forges packets. `tests/screens.rs` drives devices through
   their screens instead, each stage on `octowhere-ui`'s script driver linked to its node
   (`script::MeshLink`). The simulators run it open-ended through its `air`: from the host's
   UTC, paced by the host's clock at up to 120 times, but at the host's pace while a finger or

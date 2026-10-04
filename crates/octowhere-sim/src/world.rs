@@ -82,6 +82,9 @@ pub struct Node {
     pub fail_writes: bool,
     pub commands: VecDeque<Command>,
     pub commands_waker: Option<Waker>,
+    /// What a bare radio is to send next, and on which channel. It wakes `commands_waker`, as a
+    /// bare radio takes no commands.
+    pub to_send: VecDeque<(Vec<u8>, (u32, u8))>,
 }
 
 impl Node {
@@ -99,12 +102,15 @@ impl Node {
     }
 }
 
-struct Transmission {
-    sender: usize,
-    channel: (u32, u8),
-    start: Micros,
-    end: Micros,
-    bytes: Vec<u8>,
+/// A packet on the air.
+#[derive(Clone, Debug)]
+pub struct Transmission {
+    pub sender: usize,
+    /// The frequency and sync word it was sent with.
+    pub channel: (u32, u8),
+    pub start: Micros,
+    pub end: Micros,
+    pub bytes: Vec<u8>,
 }
 
 pub struct World {
@@ -117,6 +123,8 @@ pub struct World {
     pub nodes: RefCell<Vec<Node>>,
     links: RefCell<BTreeMap<(usize, usize), Link>>,
     air: RefCell<Vec<Transmission>>,
+    /// Every packet sent while recording, oldest first.
+    pub recorded: RefCell<Option<Vec<Transmission>>>,
     rng: RefCell<SplitMix>,
     pub lines: Lines,
 }
@@ -132,6 +140,7 @@ impl World {
             nodes: RefCell::default(),
             links: RefCell::default(),
             air: RefCell::default(),
+            recorded: RefCell::default(),
             rng: RefCell::new(SplitMix::new(seed)),
             lines: Lines::default(),
         }
@@ -204,13 +213,17 @@ impl World {
         let mut air = self.air.borrow_mut();
         // Long past any transmission that could still overlap one starting now.
         air.retain(|old| old.end + 1_000_000 > now);
-        air.push(Transmission {
+        let sent = Transmission {
             sender: node,
             channel: radio.channel,
             start: now,
             end,
             bytes: bytes.to_vec(),
-        });
+        };
+        if let Some(recorded) = self.recorded.borrow_mut().as_mut() {
+            recorded.push(sent.clone());
+        }
+        air.push(sent);
         end
     }
 

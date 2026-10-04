@@ -18,4 +18,4 @@ mod world;
 
 pub use logs::Line;
 pub use sim::{Config, Sim, UTC0_S, alone, grouped};
-pub use world::{CAPTURE_DB, Link};
+pub use world::{CAPTURE_DB, Link, Transmission};

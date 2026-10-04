@@ -4,14 +4,14 @@ use std::{
     alloc::Global,
     cell::{RefCell, RefMut},
     collections::VecDeque,
-    future::Future,
+    future::{Future, poll_fn},
     pin::Pin,
     rc::Rc,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    task::{Context, Wake, Waker},
+    task::{Context, Poll, Wake, Waker},
 };
 
 use octowhere_mesh::{
@@ -29,9 +29,9 @@ use octowhere_node::{
 use crate::{
     logs::{self, Line},
     rng::SplitMix,
-    seams::{SimCommands, SimDevice, SimRadio, SimRandom, SimStore, SimTime},
+    seams::{SimCommands, SimDevice, SimRadio, SimRandom, SimStore, SimTime, Sleep},
     store::Stored,
-    world::{Link, Micros, Mode, Node, Radio, World},
+    world::{Link, Micros, Mode, Node, Radio, Transmission, World},
 };
 
 /// UTC at the start of a simulation unless it is started at another: 2026-09-21.
@@ -132,10 +132,67 @@ impl Sim {
             fail_writes: false,
             commands: VecDeque::new(),
             commands_waker: None,
+            to_send: VecDeque::new(),
         });
         let task = self.task(node, start);
         self.tasks.push(task);
         node
+    }
+
+    /// Adds a radio with no node behind it, which sends what [`transmit`](Self::transmit) gives
+    /// it and hears nothing: a device that replays or forges packets. Returns its number, which
+    /// [`link`](Self::link) places it by. Restarting it or powering it off makes it a node.
+    pub fn add_radio(&mut self) -> usize {
+        let node = self.add(alone(0xEE), Config::default());
+        let world = self.world.clone();
+        let future = Box::pin(async move {
+            loop {
+                let (bytes, channel) = poll_fn(|cx| {
+                    let mut nodes = world.nodes.borrow_mut();
+                    let state = &mut nodes[node];
+                    match state.to_send.pop_front() {
+                        Some(next) => Poll::Ready(next),
+                        None => {
+                            state.commands_waker = Some(cx.waker().clone());
+                            Poll::Pending
+                        }
+                    }
+                })
+                .await;
+                world.nodes.borrow_mut()[node].radio.channel = channel;
+                let end = world.send(node, &bytes);
+                Sleep::new(&world, end).await;
+                world.sent(node);
+            }
+        });
+        let flag = Arc::new(Flag(AtomicBool::new(true)));
+        self.tasks[node] = Task {
+            future,
+            waker: Waker::from(flag.clone()),
+            flag,
+        };
+        node
+    }
+
+    /// Has `radio`, from [`add_radio`](Self::add_radio), send `bytes` on `channel` as soon as
+    /// the nodes next run.
+    pub fn transmit(&self, radio: usize, bytes: &[u8], channel: (u32, u8)) {
+        let mut nodes = self.world.nodes.borrow_mut();
+        let state = &mut nodes[radio];
+        state.to_send.push_back((bytes.to_vec(), channel));
+        if let Some(waker) = state.commands_waker.take() {
+            waker.wake();
+        }
+    }
+
+    /// Starts keeping every packet sent, or stops and forgets them.
+    pub fn record(&self, on: bool) {
+        *self.world.recorded.borrow_mut() = on.then(Vec::new);
+    }
+
+    /// The packets sent since recording started, oldest first.
+    pub fn recorded(&self) -> Vec<Transmission> {
+        self.world.recorded.borrow().clone().unwrap_or_default()
     }
 
     fn random(&mut self) -> SplitMix {
