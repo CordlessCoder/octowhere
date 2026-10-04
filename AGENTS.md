@@ -398,7 +398,11 @@ every 15 s (`stack-watermark-bench`, with the inject features to drive the board
 under "Memory". And `bench/ui-allocations` counts the stage's heap requests on the host, the
 largest, the sizes asked most and the most held at once, through every start-up, on the faces
 and through the settings panel and the screens it opens, counting only the stage's own steps
-and draws (`crates/octowhere-ui/tests/heap_requests.rs`); results in `context/BACKLOG.md`.
+and draws (`crates/octowhere-ui/tests/heap_requests.rs`); results in `context/BACKLOG.md`. And
+`bench/runtime-screens` times each step, draw and flush and samples the internal heap while
+`tools/runtime-screens-bench.sh` drives the 2026-10-04 hand-off's screens on a board, with
+each kind of item a list draws timed apart (`runtime-screens-bench`, summarised by
+`tools/runtime-screens-summary.py`; results in `docs/logs/display/runtime-screens-2026-10-04/`).
 
 ## Concurrency
 

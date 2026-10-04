@@ -59,8 +59,12 @@ until the feature set is complete, because profiling an incomplete firmware pric
     members' coordinates in the view, a true heading from WMM2025 or NORTH UP, and crowded
     nodes merged (`SCREEN-DESIGN-BRIEF.md`, "Member face as built"; on a board in
     `docs/logs/display/members-2026-10-04/`, with `fix-inject` standing in for fixes). Open:
-    - Turning the face redraws it whole each degree. Measure that draw on a board with a
-      calibrated compass, or a synthetic heading on a `bench/` branch, before judging it.
+    - Turning the face redraws it whole each degree, 82 to 99 ms a draw on a board after
+      `80ac3cd` and `0cc1cd0` (it was 315 ms without a fix of its own): the grid 35 to 40 ms,
+      the ring's arcs 16 to 30 ms, the text 12 to 17 ms
+      (`docs/logs/display/runtime-screens-2026-10-04/`). The grid's lines still find a distance
+      at every pixel near them, and could be drawn by a line rasteriser instead; judge it with
+      a calibrated compass turning.
     - Its step adds stack: `members::build` takes 4,576 bytes on the frame loop's path,
       `Stage::advance` grew 768 bytes and the radio task's poll 768 (the coordinates in the
       view). The watermark is due with removals' (below).
@@ -103,7 +107,12 @@ until the feature set is complete, because profiling an incomplete firmware pric
       it crossed into padding before blaming the code ("Binary size" in `AGENTS.md`).
     - Rerun `bench/stack-watermark`: the radio task's poll is 14,576 bytes and core 0's stack
       107,068.
-  - The consistency rules across the new screens, and their cost on a board.
+  - The consistency rules and the cost on a board, done (2026-10-04): the drawer's buttons take
+    taps over 40 px (`a54b8eb`); the member face draws a full frame in under 100 ms, from 315
+    without a fix and 123 with one (`80ac3cd`,
+    `0cc1cd0`); the charging gauge and the drawer's halftone step once a panel frame, where they
+    kept the frame loop stepping without a wait (`981a6c6`); the costs and the heap in
+    `docs/logs/display/runtime-screens-2026-10-04/`.
   BOOT and outlined text stay deferred (the hand-off). Not the design agent's: the rule that
   settles rival removals, now the lower remover's id (owner, 2026-10-04; `LORA-PROTOCOL.md`,
   "Two at once").
