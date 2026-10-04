@@ -4,6 +4,7 @@
 //! screens ask. `octowhere_mesh` holds the protocol and `context/LORA-PROTOCOL.md` the design.
 
 mod radio;
+mod time;
 mod unsaved;
 
 use alloc::boxed::Box;
@@ -13,6 +14,8 @@ use core::{
 };
 
 pub use self::radio::BoardRadio;
+pub use self::time::BoardTime;
+use self::time::local;
 use self::unsaved::{Due, Unsaved};
 use super::GPS_TIME;
 use defmt::{debug, info, warn};
@@ -22,7 +25,7 @@ use embassy_sync::{
     channel::Channel,
     signal::Signal,
 };
-use embassy_time::{Duration, Instant, Timer};
+use embassy_time::Instant;
 use esp_alloc::EspHeap;
 use lc76g::FixQuality;
 use octowhere::{
@@ -71,7 +74,7 @@ const ARRIVAL_LATENCY_US: i64 = 1_050;
 /// Positions a packet carries at most: as many as fit beside the neighbours record.
 const MAX_ENTRIES: usize = 24;
 /// How long a pairing waits for the group to be stored before it counts as a failure.
-const STORE_TIMEOUT: Duration = Duration::from_secs(10);
+const STORE_TIMEOUT_US: i64 = 10 * 1_000_000;
 /// A notice is a header alone.
 const NOTICE_LEN: usize = SIV_LEN + HEADER_LEN;
 /// The longest a pairing listens before it runs its timers again.
@@ -511,13 +514,13 @@ async fn leave(group: &mut Option<Group>) -> (bool, Option<Group>) {
 
 /// Stores `name` as this device's, and only then takes it up, so a failed write leaves the
 /// name that is stored.
-async fn rename(me: &mut Identity, group: Option<&mut Group>, name: Name) -> bool {
+async fn rename(me: &mut Identity, group: Option<&mut Group>, name: Name, utc: u32) -> bool {
     if !super::save_group(GroupWrite::Name(name)).await {
         return false;
     }
     me.name = name;
     if let Some(group) = group {
-        group.rename(name, utc_seconds(local()), me);
+        group.rename(name, utc, me);
     }
     true
 }
@@ -529,14 +532,6 @@ pub fn random<const N: usize>() -> Option<[u8; N]> {
     let mut bytes = [0; N];
     trng.read(&mut bytes);
     Some(bytes)
-}
-
-fn local() -> i64 {
-    Instant::now().as_micros() as i64
-}
-
-fn until(local: i64) -> Timer {
-    Timer::at(Instant::from_micros(local.max(0) as u64))
 }
 
 /// UTC seconds at local time `now`, from GNSS or the RTC, or 0 with neither.
@@ -608,8 +603,15 @@ pub trait Radio {
     async fn transmit(&mut self, packet: &[u8], at: Option<i64>) -> Option<bool>;
 }
 
-pub struct Mesh<R> {
+/// The local clock a node runs on, in microseconds.
+pub trait Time {
+    fn now(&self) -> i64;
+    async fn until(&self, at: i64);
+}
+
+pub struct Mesh<R, T> {
     radio: R,
+    time: T,
     me: Identity,
     group: Option<Group>,
     /// A group this device founded in a pairing whose last acknowledgement it never heard.
@@ -672,8 +674,8 @@ pub struct Mesh<R> {
     summary: Option<Box<(heapless::Vec<u8, SUMMARY_MAX>, u8)>>,
 }
 
-impl<R: Radio> Mesh<R> {
-    pub async fn new(radio: R, start: Start) -> Self {
+impl<R: Radio, T: Time> Mesh<R, T> {
+    pub async fn new(radio: R, time: T, start: Start) -> Self {
         let group = start.group.map(|group| *group);
         let own = group.as_ref().map_or(0, Group::own);
         let mut rekey = start.rekey.unwrap_or_default();
@@ -695,9 +697,10 @@ impl<R: Radio> Mesh<R> {
                 start.me.name, start.me.mac
             ),
         }
-        let now = local();
+        let now = time.now();
         let mut mesh = Self {
             radio,
+            time,
             me: start.me,
             group,
             founding: None,
@@ -761,8 +764,12 @@ impl<R: Radio> Mesh<R> {
 
     #[inline(never)]
     fn publish(&mut self) {
-        self.shown
-            .fill(&mut self.view, &self.me, self.group.as_ref(), local());
+        self.shown.fill(
+            &mut self.view,
+            &self.me,
+            self.group.as_ref(),
+            self.time.now(),
+        );
         publish(&mut self.view);
     }
 
@@ -839,7 +846,7 @@ impl<R: Radio> Mesh<R> {
             Command::Leave => {
                 self.founding = None;
                 self.shown.recovery = None;
-                let now = local();
+                let now = self.time.now();
                 let (left, group) = leave(&mut self.group).await;
                 if let Some(group) = group {
                     let gone = group.leaving(utc_seconds(now), &self.me);
@@ -866,7 +873,7 @@ impl<R: Radio> Mesh<R> {
                     Some(founding) => Some(&mut founding.group),
                     None => self.group.as_mut(),
                 };
-                let saved = rename(&mut self.me, group, name).await;
+                let saved = rename(&mut self.me, group, name, utc_seconds(self.time.now())).await;
                 info!("[MESH] renamed {} saved={}", name, saved);
                 if saved && let Some(group) = &self.group {
                     self.unsaved.slot(group.own());
@@ -878,7 +885,7 @@ impl<R: Radio> Mesh<R> {
             Command::Remove(id) => self.remove(id).await,
             #[cfg(feature = "pair-inject")]
             Command::Phantom => {
-                let now = utc_seconds(local());
+                let now = utc_seconds(self.time.now());
                 if let (Some(group), Some(seed), Some(mac)) =
                     (&mut self.group, random::<32>(), random::<6>())
                     && let Some(id) = group.lowest_free()
@@ -987,7 +994,7 @@ impl<R: Radio> Mesh<R> {
         let Some(own) = self.group.as_ref().map(Group::own) else {
             return;
         };
-        let now = local();
+        let now = self.time.now();
         self.take_readings(own);
         self.clock.tick(now, rtc_now(now));
         self.update_refresh(now);
@@ -1078,7 +1085,7 @@ impl<R: Radio> Mesh<R> {
             "[MESH] round={} sending={} sweeping={}",
             round,
             sending,
-            self.clock.is_sweeping(local())
+            self.clock.is_sweeping(self.time.now())
         );
         if sending {
             self.send(round, start, timebase, send_at).await;
@@ -1088,7 +1095,7 @@ impl<R: Radio> Mesh<R> {
     /// Sends the gone record of the group this device left in its next own slot, and forgets
     /// the group once it has gone out in [`LEAVE_REPEATS`] of them or the wait is over.
     async fn tell_leaving(&mut self) {
-        let now = local();
+        let now = self.time.now();
         let (Some(leaving), Some((time, timebase)), Some(schedule)) =
             (&self.leaving, self.clock.at(now), self.schedule.as_deref())
         else {
@@ -1108,7 +1115,7 @@ impl<R: Radio> Mesh<R> {
             return;
         }
         self.radio.standby().await;
-        until(send_at - PREPARE_US).await;
+        self.time.until(send_at - PREPARE_US).await;
         self.after = start + 1;
         let header = Header {
             sender: own,
@@ -1285,7 +1292,7 @@ impl<R: Radio> Mesh<R> {
                 self.shown.positions(&self.table);
             }
         }
-        if let Some((time, _)) = self.clock.at(local()) {
+        if let Some((time, _)) = self.clock.at(self.time.now()) {
             self.table.expire((time / 1_000_000) as u32);
         }
     }
@@ -1296,7 +1303,7 @@ impl<R: Radio> Mesh<R> {
     /// every slot.
     async fn listen(&mut self, end: i64) -> bool {
         loop {
-            let now = local();
+            let now = self.time.now();
             if self.update_refresh(now) {
                 self.publish();
             }
@@ -1352,17 +1359,17 @@ impl<R: Radio> Mesh<R> {
                 && ends < open.min(end)
             {
                 self.radio.standby().await;
-                until(ends).await;
+                self.time.until(ends).await;
                 continue;
             }
             if open >= end {
                 self.radio.standby().await;
-                until(end).await;
+                self.time.until(end).await;
                 return false;
             }
             if open > now {
                 self.radio.standby().await;
-                until(open).await;
+                self.time.until(open).await;
             }
             if !self.radio.start_receiving().await {
                 warn!("[MESH] receive start failed");
@@ -1785,7 +1792,7 @@ impl<R: Radio> Mesh<R> {
             info!("[MESH] no longer listening for the device a founding left unconfirmed");
         }
         self.shown.recovery = None;
-        self.stop_refresh(local());
+        self.stop_refresh(self.time.now());
         self.shown.sessions += 1;
         let session = self.shown.sessions;
         let (Some(nonce), Some(founding)) = (random::<16>(), random::<32>()) else {
@@ -1800,7 +1807,7 @@ impl<R: Radio> Mesh<R> {
         {
             warn!("[PAIR] tuning to the pairing channel failed");
         }
-        let now = local();
+        let now = self.time.now();
         let had_group = self.group.is_some();
         let mut pairing = match role {
             Role::Join => Pairing::join(&self.me, nonce, now),
@@ -1816,9 +1823,9 @@ impl<R: Radio> Mesh<R> {
         let mut frame = [0u8; MAX_FRAME];
         let mut shown = None;
         let mut listening = false;
-        let mut saving: Option<(Instant, u32)> = None;
+        let mut saving: Option<(i64, u32)> = None;
         loop {
-            let now = local();
+            let now = self.time.now();
             if let Some(len) = pairing.poll(now, &mut frame) {
                 let sent = self.radio.transmit(&frame[..len], None).await;
                 debug!(
@@ -1832,7 +1839,7 @@ impl<R: Radio> Mesh<R> {
             }
             let phase = pairing.phase();
             if shown != Some(phase) {
-                log_pairing(&pairing, phase);
+                log_pairing(&pairing, phase, self.time.now());
                 shown = Some(phase);
             }
             let view = pairing_view(session, &pairing);
@@ -1862,11 +1869,11 @@ impl<R: Radio> Mesh<R> {
                 let rekey = self.unsaved.rekey_due().then(|| self.rekey.clone());
                 let number =
                     super::send_group_write(GroupWrite::Group(Box::new(group), rekey)).await;
-                saving = Some((Instant::now(), number));
+                saving = Some((self.time.now(), number));
                 continue;
             }
             if phase == Phase::Storing
-                && saving.is_some_and(|(started, _)| started.elapsed() > STORE_TIMEOUT)
+                && saving.is_some_and(|(started, _)| now - started > STORE_TIMEOUT_US)
             {
                 warn!("[PAIR] storing the group timed out");
                 pairing.stored(false, now);
@@ -1898,9 +1905,9 @@ impl<R: Radio> Mesh<R> {
                             packet.payload[1], packet.length, packet.rssi, packet.snr
                         );
                         let mut payload = packet.payload;
-                        let started = local();
+                        let started = self.time.now();
                         pairing.receive(&mut payload[..packet.length], done);
-                        let took = local() - started;
+                        let took = self.time.now() - started;
                         if took > 5_000 {
                             info!("[PAIR] a frame took {}us to take", took);
                         }
@@ -1908,7 +1915,7 @@ impl<R: Radio> Mesh<R> {
                 }
                 Either3::First(false) => {}
                 Either3::Second(command) => {
-                    let now = local();
+                    let now = self.time.now();
                     info!("[PAIR] command {}", command);
                     match command {
                         Command::Choose(index) => pairing.choose(usize::from(index), now),
@@ -1927,7 +1934,7 @@ impl<R: Radio> Mesh<R> {
                 }
                 Either3::Third(ok) => {
                     if saving.is_some() && phase == Phase::Storing {
-                        pairing.stored(ok, local());
+                        pairing.stored(ok, self.time.now());
                     }
                 }
             }
@@ -1947,7 +1954,7 @@ impl<R: Radio> Mesh<R> {
                 if !had_group && role == Role::Add =>
             {
                 info!("[MESH] listening for the joining device under the founded group's key");
-                let until = local() + FOUNDING_WAIT_US;
+                let until = self.time.now() + FOUNDING_WAIT_US;
                 self.shown.recovery = Some(RecoveryView {
                     session,
                     phase: RecoveryPhase::Listening { until },
@@ -1970,7 +1977,7 @@ impl<R: Radio> Mesh<R> {
 
     /// Starts the timebase, the table and what the screens show of them afresh, at id `own`.
     fn restart(&mut self, own: u8) {
-        self.clock = Clock::new(own, local());
+        self.clock = Clock::new(own, self.time.now());
         self.table = Table::new(own);
         self.after = i64::MIN;
         self.timebase_shown = None;
@@ -2025,7 +2032,7 @@ impl<R: Radio> Mesh<R> {
     /// Removes the member `id`: makes a new key and sends it to every other member. The group
     /// switches to the key when the round the key messages name starts, and `id` is told then.
     async fn remove(&mut self, id: u8) {
-        let (Some(group), Some((time, _))) = (&self.group, self.clock.at(local())) else {
+        let (Some(group), Some((time, _))) = (&self.group, self.clock.at(self.time.now())) else {
             warn!("[REKEY] no group, or no timebase to time a switch on");
             return;
         };
@@ -2083,7 +2090,7 @@ impl<R: Radio> Mesh<R> {
             )
             .await;
             // Each key takes an X25519 the first time; let the other tasks run between.
-            Timer::after(Duration::from_millis(1)).await;
+            self.time.until(self.time.now() + 1_000).await;
         }
         self.keys_posted = true;
     }
@@ -2105,7 +2112,7 @@ impl<R: Radio> Mesh<R> {
     /// Takes a key message from `remover`. Returns `None` when it cannot be acted on yet, with
     /// no timebase, or else whether it is a removal to show.
     fn learned_key(&mut self, remover: u8, new: NewKey) -> Option<bool> {
-        let now = local();
+        let now = self.time.now();
         let (Some(group), Some((time, _))) = (&self.group, self.clock.at(now)) else {
             return None;
         };
@@ -2237,7 +2244,7 @@ impl<R: Radio> Mesh<R> {
             {
                 self.kept.keep(&message, Some(remover));
             }
-            Timer::after(Duration::from_millis(1)).await;
+            self.time.until(self.time.now() + 1_000).await;
         }
     }
 
@@ -2260,7 +2267,7 @@ impl<R: Radio> Mesh<R> {
             self.save_rekey();
             return;
         }
-        let Some((time, _)) = self.clock.at(local()) else {
+        let Some((time, _)) = self.clock.at(self.time.now()) else {
             warn!("[REKEY] no timebase to decline by");
             return;
         };
@@ -2592,8 +2599,10 @@ impl<R: Radio> Mesh<R> {
             return;
         };
         if heard {
-            until((local() + STORE_RETRY_US).min(end)).await;
-            if local() >= end {
+            self.time
+                .until((self.time.now() + STORE_RETRY_US).min(end))
+                .await;
+            if self.time.now() >= end {
                 warn!("[MESH] the founded group was never stored; this device founded no group");
                 self.founding = None;
                 self.set_recovery(RecoveryPhase::NotStored);
@@ -2678,7 +2687,7 @@ impl<R: Radio> Mesh<R> {
         {
             return;
         }
-        let now = local();
+        let now = self.time.now();
         self.clock.sweep_to(now + SWEEP_US);
         self.refresh_known = Some(Box::new(core::array::from_fn(|id| {
             group.member(id as u8).map(|member| member.mac)
@@ -2748,10 +2757,10 @@ impl<R: Radio> Mesh<R> {
     }
 }
 
-fn log_pairing(pairing: &Pairing, phase: Phase) {
+fn log_pairing(pairing: &Pairing, phase: Phase, now: i64) {
     let left = pairing
         .deadline()
-        .map_or(0, |deadline| (deadline - local()).max(0) / 1_000_000);
+        .map_or(0, |deadline| (deadline - now).max(0) / 1_000_000);
     match phase {
         Phase::Found => {
             for (i, mac) in pairing.candidates().enumerate() {
@@ -2808,7 +2817,7 @@ pub async fn offline(start: Start) {
                 shown.answer(Answer::Left(left));
             }
             Command::Rename(name) => {
-                let saved = rename(&mut me, group.as_mut(), name).await;
+                let saved = rename(&mut me, group.as_mut(), name, utc_seconds(local())).await;
                 if saved && let Some(group) = &group {
                     let id = group.own();
                     super::queue_group_write(GroupWrite::Slot {

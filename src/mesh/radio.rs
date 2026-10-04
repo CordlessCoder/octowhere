@@ -13,7 +13,10 @@ use sx127xlora::{
     types::{DeviceMode, OCP, PowerRamp, RxDone, TxConfig, TxDone},
 };
 
-use super::{Radio, Received, local, until};
+use super::{
+    Radio, Received,
+    time::{local, until},
+};
 use crate::{LoraPath, SensorLora};
 
 /// The longest a transmission can take, with margin for `DIO0`.
