@@ -189,6 +189,43 @@ mod rtc_inject {
         (mode != 0).then(|| (OCTOWHERE_RTC_INJECT_TIME.load(Ordering::Relaxed), mode))
     }
 }
+/// A position a debugger writes for the firmware to take as a GNSS fix, stamped with the RTC's
+/// time; `tools/fix-inject.py` does.
+#[cfg(feature = "fix-inject")]
+mod fix_inject {
+    use core::sync::atomic::{AtomicI32, AtomicU32, Ordering};
+
+    /// Degrees × 10⁷.
+    #[unsafe(no_mangle)]
+    static OCTOWHERE_FIX_INJECT_LATITUDE: AtomicI32 = AtomicI32::new(0);
+    #[unsafe(no_mangle)]
+    static OCTOWHERE_FIX_INJECT_LONGITUDE: AtomicI32 = AtomicI32::new(0);
+    /// 0 while none stands, [`SCREENS`] or [`MESH`]. The debugger writes it after the position.
+    #[unsafe(no_mangle)]
+    static OCTOWHERE_FIX_INJECT_ON: AtomicU32 = AtomicU32::new(0);
+
+    /// The screens take the position as this device's fix.
+    pub const SCREENS: u32 = 1;
+    /// The mesh takes it too, with GPS time from the RTC. Two RTCs disagree by more than the
+    /// slots' guard, so only one device in a group may claim it.
+    pub const MESH: u32 = 2;
+    /// The HDOP an injected fix reports, in thousandths.
+    pub const HDOP_MILLI: u32 = 1_000;
+
+    /// The position standing as a fix, while one does, and whether the mesh takes it.
+    pub fn position() -> Option<((i32, i32), bool)> {
+        let on = OCTOWHERE_FIX_INJECT_ON.load(Ordering::Acquire);
+        (on != 0).then(|| {
+            (
+                (
+                    OCTOWHERE_FIX_INJECT_LATITUDE.load(Ordering::Relaxed),
+                    OCTOWHERE_FIX_INJECT_LONGITUDE.load(Ordering::Relaxed),
+                ),
+                on == MESH,
+            )
+        })
+    }
+}
 static MOTION_STATE: Signal<CriticalSectionRawMutex, Motion> = Signal::new();
 /// Set by the frame loop while the compass or the member face shows; `motion_task` then samples
 /// fast.
@@ -975,6 +1012,9 @@ async fn sensor_task(task: SensorTask) {
     let mut injected = false;
     #[cfg(not(feature = "rtc-inject"))]
     let injected = false;
+    // The GPS time an injected fix gives the mesh, fixed as it starts so that slots hold still.
+    #[cfg(feature = "fix-inject")]
+    let mut injected_offset: Option<i64> = None;
 
     loop {
         Timer::after(Duration::from_millis(250)).await;
@@ -1122,6 +1162,40 @@ async fn sensor_task(task: SensorTask) {
         if let Some(fix) = state.gnss.fix {
             state.position = Some((fix.latitude.get(), fix.longitude.get()));
             ZONE_FIX.signal((fix.latitude.get(), fix.longitude.get()));
+        }
+        #[cfg(feature = "fix-inject")]
+        match (fix_inject::position(), utc.filter(|_| !stopped)) {
+            (Some((position, mesh_takes)), Some(utc)) => {
+                let now = Instant::now();
+                state.position = Some(position);
+                ZONE_FIX.signal(position);
+                GNSS_HEALTH.lock(|health| {
+                    health.set(GnssHealth {
+                        last_fix: Some(now.as_micros()),
+                        ..health.get()
+                    });
+                });
+                if mesh_takes {
+                    let offset =
+                        *injected_offset.get_or_insert(now.as_micros() as i64 - utc * 1_000_000);
+                    GPS_TIME.lock(|time| {
+                        time.set(Some(GpsTime {
+                            offset,
+                            updated: now,
+                        }))
+                    });
+                    mesh::FIX.lock(|latest| {
+                        latest.set(Some(mesh::Fix {
+                            latitude: position.0,
+                            longitude: position.1,
+                            stamp: utc as u32,
+                            quality: octowhere_mesh::packet::Quality::Autonomous,
+                            hdop_milli: Some(fix_inject::HDOP_MILLI),
+                        }))
+                    });
+                }
+            }
+            _ => injected_offset = None,
         }
         state.zone = ZONE_STATE.lock(Cell::get);
 
@@ -2664,16 +2738,21 @@ async fn frame_loop(
                 motion: motion_state,
                 sensors: sensor_state.map(|state| {
                     let signal = state.gnss.signal;
+                    // The HDOP of a fix a debugger stands in, while one does.
+                    #[cfg(feature = "fix-inject")]
+                    let injected = fix_inject::position().map(|_| fix_inject::HDOP_MILLI);
+                    #[cfg(not(feature = "fix-inject"))]
+                    let injected: Option<u32> = None;
                     Sensors {
                         clock: state.clock,
                         zone: state.zone,
                         battery: state.battery,
                         gnss: Gnss {
-                            fix: state.gnss.fix.is_some(),
+                            fix: state.gnss.fix.is_some() || injected.is_some(),
                             in_use: signal.satellites_used.get(),
                             in_view: signal.satellites_in_view.get(),
                             position: state.position,
-                            hdop_milli: signal.hdop.map(|hdop| hdop.get()),
+                            hdop_milli: signal.hdop.map(|hdop| hdop.get()).or(injected),
                             health: GNSS_HEALTH.lock(Cell::get),
                         },
                     }
