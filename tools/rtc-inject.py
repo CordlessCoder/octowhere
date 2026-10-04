@@ -40,7 +40,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("time", help="`now`, or an ISO 8601 time; UTC unless it has an offset")
     parser.add_argument("--as", dest="mode", choices=MODES, default="rtc")
-    parser.add_argument("--elf", default="target/xtensa-esp32s3-none-elf/release/octowhere")
+    parser.add_argument("--elf", default="firmware/target/xtensa-esp32s3-none-elf/release/octowhere")
     parser.add_argument("--probe", default="303a:1001")
     args = parser.parse_args()
 

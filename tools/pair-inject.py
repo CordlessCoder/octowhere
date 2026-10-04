@@ -70,7 +70,7 @@ def main():
                              "the id or `group` for `send`, the id for `remove` and `keep`")
     parser.add_argument("text", nargs="?", help="the text for `send`")
     parser.add_argument("--probe", default="303a:1001")
-    parser.add_argument("--elf", default="target/xtensa-esp32s3-none-elf/release/octowhere")
+    parser.add_argument("--elf", default="firmware/target/xtensa-esp32s3-none-elf/release/octowhere")
     args = parser.parse_args()
 
     address = symbols(args.elf, [COMMAND, NAME, TEXT])

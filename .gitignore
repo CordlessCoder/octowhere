@@ -1,4 +1,5 @@
 /target
+/firmware/target
 /host-tests/target
 /crates/*/target
 /tools/*/target

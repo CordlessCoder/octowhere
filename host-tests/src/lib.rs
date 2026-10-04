@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 #![allow(clippy::drop_non_drop)]
 
-#[path = "../../src/util.rs"]
+#[path = "../../firmware/src/util.rs"]
 pub mod util;
 
 /// `SwapThread` must not cross a thread boundary when its value is not `Send`.
@@ -21,7 +21,7 @@ pub mod util;
 /// ```
 pub const SWAP_SEND_BOUND: () = ();
 
-#[path = "../../src/gnss_time.rs"]
+#[path = "../../firmware/src/gnss_time.rs"]
 pub mod gnss_time;
 
 #[cfg(test)]

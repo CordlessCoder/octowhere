@@ -75,7 +75,7 @@
 
 ## Pin map
 
-GPIO numbers were removed from [`src/board.rs`](../src/board.rs) because esp-hal takes typed
+GPIO numbers were removed from [`firmware/src/board.rs`](../firmware/src/board.rs) because esp-hal takes typed
 peripheral singletons and a `u8` can never reach it. Two of those constants had already drifted
 without anything noticing: `RTC_INT` claimed GPIO39, which is the display reset, and `TP_I2C_ADDR`
 claimed `0x38`, the FT6236 address, where the CST9217 driver uses `0x5A`. The table below is

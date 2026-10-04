@@ -68,7 +68,7 @@ def main():
     parser.add_argument("longitude", nargs="?", type=float, help="degrees east")
     parser.add_argument("--toward", nargs=2, type=float, metavar=("BEARING", "METRES"))
     parser.add_argument("--mesh", action="store_true", help="the mesh takes it too")
-    parser.add_argument("--elf", default="target/xtensa-esp32s3-none-elf/release/octowhere")
+    parser.add_argument("--elf", default="firmware/target/xtensa-esp32s3-none-elf/release/octowhere")
     parser.add_argument("--probe", default="303a:1001")
     args = parser.parse_args()
     address = symbols(args.elf)

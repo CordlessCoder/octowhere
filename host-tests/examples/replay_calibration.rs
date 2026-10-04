@@ -16,7 +16,7 @@ use std::io::BufRead;
 
 use octowhere_host_tests::compass::{AxisMap, Calibration, CalibrationEvent, HardIron};
 
-/// `MAG_AXES` in `src/main.rs`.
+/// `MAG_AXES` in `firmware/src/main.rs`.
 const MAG_AXES: AxisMap = AxisMap([(0, -1.0), (1, -1.0), (2, 1.0)]);
 
 fn comp(line: &str) -> Option<[f32; 3]> {

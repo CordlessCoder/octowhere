@@ -866,7 +866,7 @@ The eFuse base MAC is the stable hardware identity, used to recognise a re-pair 
 device rather than issuing a second id.
 
 Group key, id, member table and the sequence-number block persist in a flash partition, not the
-SD card, which is removable. They are in the settings' ekv database (`src/settings.rs`): the group
+SD card, which is removable. They are in the settings' ekv database (`firmware/src/settings.rs`): the group
 key and this device's id under one key, each member's record under its own, and this device's
 X25519 secret and name apart from the group, each value behind a one-byte version. A device keeps
 its name and key pair when it leaves a group, and CLEAR SETTINGS keeps all of it (owner,

@@ -14,7 +14,7 @@ until the feature set is complete, because profiling an incomplete firmware pric
     `GroupStore` whose writes can fail, a source of `Commands`, and the allocator its two large
     stores are made in. It logs through defmt on the board and `log` on the host. The view and
     `GroupWrite` moved into the crate with it, and the UI re-exports the view where it was.
-    `src/mesh.rs` holds the board's side. Not yet confirmed on the boards: run
+    `firmware/src/mesh.rs` holds the board's side. Not yet confirmed on the boards: run
     `board-scripts/check.sh` on a build at or after the move. It was blocked on 2026-10-04 by
     the boards overloading each other's receivers up close (every packet one way failed its
     CRC at −6 dBm). The node keeps its async code; there was no state-machine rewrite.
@@ -219,7 +219,7 @@ until the feature set is complete, because profiling an incomplete firmware pric
   come close to their 33 ms.
 - Move the CO5300 driver into its own crate under `crates/`, with the QSPI command layer it
   needs, and implement more of the controller reusably (owner, 2026-09-24). Today
-  `src/drivers/co5300.rs` covers init, address windows, brightness, TE and pixel streaming.
+  `firmware/src/drivers/co5300.rs` covers init, address windows, brightness, TE and pixel streaming.
   The datasheet (`docs/datasheets/CO5300_Datasheet_V0.00.pdf`) also has TE modes and the scan
   line as proper settings, reading the current scan line (45h), partial and scroll areas, idle
   mode, deep standby, and high-brightness and contrast controls.
@@ -559,7 +559,7 @@ Candidates to measure:
   channel lerps per covered pixel. The SIMD extension could blend many at once.
 - Framebuffer fills and copies in
   [`crates/octowhere-ui/src/framebuffer.rs`](../crates/octowhere-ui/src/framebuffer.rs), and flush
-  staging in [`src/drivers/framebuffer.rs`](../src/drivers/framebuffer.rs). 128-bit loads and stores
+  staging in [`firmware/src/drivers/framebuffer.rs`](../firmware/src/drivers/framebuffer.rs). 128-bit loads and stores
   help only where PSRAM bandwidth is not the limit, so measure the bandwidth first.
 - fontdue rasterisation. The rotated-label path is the fontdue session's call, using the numbers
   above. Its outline accumulation is the other candidate.

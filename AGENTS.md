@@ -12,8 +12,10 @@ initialization or peripheral mappings.
 
 ## Repository map
 
-- `src/drivers/` owns the display path: QSPI, the CO5300 panel, and flushing the framebuffer to
-  it.
+- `firmware/` is the firmware, with the board's toolchain and cargo configuration ("Build and
+  test"). Its sources are under `firmware/src/`, below.
+- `firmware/src/drivers/` owns the display path: QSPI, the CO5300 panel, and flushing the
+  framebuffer to it.
 - `crates/octowhere-peripherals/` owns the I2C devices' drivers: touch, power, RTC,
   magnetometer, and their shared register helper. They are generic over `embedded-hal-async`'s
   I2C and build and test on the host; the firmware reaches them as `octowhere::peripherals`,
@@ -37,7 +39,8 @@ initialization or peripheral mappings.
   and the changes it stores (`GroupWrite`). The node is the crate's
   `run` feature, which needs nightly for the allocator its large stores are made in; without
   it the crate holds the view and the writes alone, on stable. It logs through defmt on the
-  board and `log` on the host (`fmt`). `src/mesh.rs` and its modules give it the board's seams.
+  board and `log` on the host (`fmt`). `firmware/src/mesh.rs` and its modules give it the
+  board's seams.
 - `crates/octowhere-sim/` runs several nodes on the host, each `octowhere-node`'s node
   unchanged, on virtual time: a simulated air between their radios by a link matrix, with
   collisions and half-duplex radios; clocks with their own drift; stores that can fail a write
@@ -79,11 +82,11 @@ initialization or peripheral mappings.
   `src/framebuffer.rs` holds the pixels. The firmware re-exports its `chrome`, `framebuffer`,
   `motion` and `ui` modules. The UI keeps re-exporting the motion modules under `ui::` for
   existing screen and test paths.
-- `src/main.rs` holds both cores, the bring-up of the parts behind the self-test, the sensor
-  and motion tasks, and the frame loop, which feeds the stage and flushes what it draws.
-- `src/board.rs` holds display geometry, the TCA9554 line indices, and the I2C addresses that
-  external crates take. GPIO numbers are not there: they live at the binding sites in `main.rs`,
-  and `docs/hardware-notes.md` has the pin map.
+- `firmware/src/main.rs` holds both cores, the bring-up of the parts behind the self-test, the
+  sensor and motion tasks, and the frame loop, which feeds the stage and flushes what it draws.
+- `firmware/src/board.rs` holds display geometry, the TCA9554 line indices, and the I2C
+  addresses that external crates take. GPIO numbers are not there: they live at the binding
+  sites in `main.rs`, and `docs/hardware-notes.md` has the pin map.
 - `crates/tz/` finds the time zone under a position and converts UTC to local time, from zone
   data built into the binary. `tools/tz-data.py` rebuilds `crates/tz/data/zones.bin` and the
   crate's test vectors from timezone-boundary-builder's boundaries and the IANA rules; its header
@@ -91,14 +94,15 @@ initialization or peripheral mappings.
   attribution the licence asks for. Its default `boundaries` feature, which `octowhere-ui`
   forwards, holds the boundaries and the lookups by position; without it only the tables before
   them are built in, which `tools/ui-web` uses.
-- `src/gnss_time.rs` estimates when each UTC second begins on the local timer, from when the
-  GNSS module's bursts arrive. It has no board dependency, and `host-tests` tests it.
-- `src/settings.rs` keeps settings in flash across restarts, in an ekv database: the time zone
-  mode, the manually chosen zone, the zone GNSS last placed the device in, the display's
+- `firmware/src/gnss_time.rs` estimates when each UTC second begins on the local timer, from
+  when the GNSS module's bursts arrive. It has no board dependency, and `host-tests` tests it.
+- `firmware/src/settings.rs` keeps settings in flash across restarts, in an ekv database: the
+  time zone mode, the manually chosen zone, the zone GNSS last placed the device in, the display's
   brightness, the screen timeout, and whether the screen rests on the always-on face. The
   mesh's state sits beside them: this device's Ed25519 seed, which its keys come from, and name, the end of its block of
   message sequence numbers, and its group's key and its generation, id, members and gone
-  members, and removals. Clearing the settings leaves the mesh's state (owner). `partitions.csv` is the flash layout, and the cargo runner flashes it.
+  members, and removals. Clearing the settings leaves the mesh's state (owner).
+  `firmware/partitions.csv` is the flash layout, and the cargo runner flashes it.
 - `tools/compass-texture.py` records the design's compass fields into
   `crates/octowhere-ui/src/ui/compass_texture.rs`, from the design's own generator, and checks
   the recording repaints it exactly.
@@ -167,8 +171,9 @@ partially. `HARDWARE-VERIFICATION.md` has what has been checked of that since.
 
 ## Build and test
 
-The `esp` toolchain from [`rust-toolchain.toml`](rust-toolchain.toml) and the target from
-[`.cargo/config.toml`](.cargo/config.toml) are selected automatically.
+The `esp` toolchain from [`firmware/rust-toolchain.toml`](firmware/rust-toolchain.toml) and the
+target from [`firmware/.cargo/config.toml`](firmware/.cargo/config.toml) are selected
+automatically for builds started in `firmware/`.
 
 The host lines below use `+stable`, but nightly is fine on the host (owner, 2026-10-03): a host
 crate may require it for a feature stable lacks, such as the allocator API before Rust 1.100.
@@ -176,13 +181,13 @@ Move that crate's lines, and those of the crates that build it, to `+nightly` in
 that needs it, not before.
 
 ```text
-cargo +stable fmt --all --check
+cargo +stable fmt --all --manifest-path firmware/Cargo.toml --check
 cargo +stable fmt --all --manifest-path host-tests/Cargo.toml --check
 cargo +stable fmt --all --manifest-path tools/ui-sim/Cargo.toml --check
 cargo +stable fmt --all --manifest-path tools/ui-web/Cargo.toml --check
 cargo +stable fmt --all --manifest-path crates/octowhere-sim/Cargo.toml --check
-cargo build --release --offline
-cargo clippy --release --offline -- -D warnings
+env -C firmware cargo build --release --offline
+env -C firmware cargo clippy --release --offline -- -D warnings
 cargo +stable test --manifest-path host-tests/Cargo.toml \
   --target x86_64-unknown-linux-gnu --locked
 cargo +stable clippy --manifest-path host-tests/Cargo.toml \
@@ -227,12 +232,11 @@ env -C /tmp cargo +nightly clippy --release --manifest-path $PWD/tools/ui-web/Ca
   --target wasm32-unknown-unknown --locked -- -D warnings
 ```
 
-The nightly lines start in `/tmp` because the root's `.cargo/config.toml` builds `core`
-and `alloc` from source for the board, and nightly applies that to any build started inside
-the repository, which then fails on a second `core`. `tools/ui-sim` and `tools/ui-web` run
-`octowhere-sim`, and so need nightly too.
+The nightly lines start in `/tmp`, as they had to while the firmware's cargo configuration,
+which builds `core` and `alloc` from source, sat at the root. `tools/ui-sim` and
+`tools/ui-web` run `octowhere-sim`, and so need nightly too.
 
-`--all` takes `cargo fmt` into the local path crates, so the root's line covers every crate
+`--all` takes `cargo fmt` into the local path crates, so the firmware's line covers every crate
 under `crates/` but `octowhere-sim`, which the firmware does not build; `host-tests`, `tools/ui-sim` and `tools/ui-web` are outside the firmware's
 graph and need their own. Drop `--check` to apply it.
 
@@ -240,14 +244,14 @@ The firmware's clippy run does not reach `crates/octowhere-ui`, because a path d
 a workspace member. Its own clippy line above is what lints it. The stable clippy there is newer
 than the `esp` one and flags more.
 
-`cargo run --release`, from the repository root, uses the configured `espflash` runner to flash
+`cargo run --release`, from `firmware/`, uses the configured `espflash` runner to flash
 the board with `partitions.csv` and decode its log. The firmware logs only through defmt, so the image holds an index per message rather than
 its text, and the serial stream needs the ELF to read. `espflash monitor --non-interactive
 --log-format defmt --elf <elf>` reads it, and restarts the board as it opens the port. Do not add
 `--no-reset`: it has left the board frozen in download mode. `DEFMT_LOG` in
-[`.cargo/config.toml`](.cargo/config.toml) sets the level at compile time. It is `info`, which
-leaves out the periodic sensor samples and the GNSS start-up trace; build with `DEFMT_LOG=debug`
-for them.
+[`firmware/.cargo/config.toml`](firmware/.cargo/config.toml) sets the level at compile time. It
+is `info`, which leaves out the periodic sensor samples and the GNSS start-up trace; build with
+`DEFMT_LOG=debug` for them.
 
 Every release build emits one `linker_messages` warning about a LOAD segment with RWX permissions.
 It is expected for this target and is not a regression.
@@ -267,28 +271,31 @@ panel will show, but they say nothing about draw time on the target. Commands ar
 of `examples/render.rs` and `tools/ui-sim/src/main.rs`. Keep the crate free of board
 dependencies: that is what lets the host build it, and its manifest enforces it.
 
-`host-tests` pulls the board-side modules it can test (`util` and `gnss_time`) in by `#[path]`
-rather than copying them, so those must keep compiling for std on x86. Board-only
-drivers stay out of it. See [`host-tests/README.md`](host-tests/README.md).
+`host-tests` pulls the board-side modules it can test (`util` and `gnss_time`) in from
+`firmware/src/` by `#[path]` rather than copying them, so those must keep compiling for std on
+x86. Board-only drivers stay out of it. See [`host-tests/README.md`](host-tests/README.md).
 
-The data-cache settings in [`.cargo/config.toml`](.cargo/config.toml) affect drawing and SPI flush
-timings. Change them only with a measurement.
+The data-cache settings in [`firmware/.cargo/config.toml`](firmware/.cargo/config.toml) affect
+drawing and SPI flush timings. Change them only with a measurement.
 
-`cargo outdated --root-deps-only` runs here and is the drift check. It rebuilds a temporary manifest
-with a stable cargo, so any `cargo-features` line in [`Cargo.toml`](Cargo.toml) stops it working.
-Weigh that cost before adding one.
+`cargo outdated --depth 1`, in `firmware/` and at the root, is the drift check.
+`--root-deps-only` fails in `firmware/`: it drops the path dependencies outside the workspace,
+and a feature names one. The check rebuilds a temporary manifest with a stable cargo, so any
+`cargo-features` line in a manifest stops it working. Weigh that cost before adding one.
 
 ## Binary size
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 1,848,064 bytes, 11.80% of the 15,663,104-byte app partition that
-`partitions.csv` gives it (the plain build at `03cc818`; at `58ea45c` it was 1,835,136, and
-1,837,792 with the inject features). `b06d686` alone added
+The image is currently 1,846,768 bytes, 11.79% of the 15,663,104-byte app partition that
+`partitions.csv` gives it (the plain build once the firmware moved into `firmware/`; it was
+1,848,064 at `03cc818`, and at `58ea45c` 1,835,136, and 1,837,792 with the inject features).
+Since the move, panic locations name the local crates by absolute path, as they always named
+registry crates. `b06d686` alone added
 36.8 KB to it while its functions grew by about 1 KB, so most of that is likely padding the
-image crossed into. Measure with `espflash save-image --chip esp32s3 --flash-size 16mb
---partition-table partitions.csv <elf> <out>`; without those two options it assumes 4 MB of flash
-and the default table. The time zone
+image crossed into. Measure from `firmware/` with `espflash save-image --chip esp32s3
+--flash-size 16mb --partition-table partitions.csv <elf> <out>`; without those two options it
+assumes 4 MB of flash and the default table. The time zone
 data is about 390 KB of that, and its boundary tolerance in `tools/tz-data.py` is the lever: the
 bench branch `bench/tz-boundary-size` tabulates size against accuracy. PP Fraktion Mono Bold with
 all of printable ASCII is about 54 KB; subsetting it to the glyphs the compass uses is the other
@@ -313,7 +320,9 @@ Code written to take a measurement is kept, not reverted. Commit it to its own `
 branch, based on a committed revision rather than on uncommitted work, and build it in a temporary
 `git worktree` so the main checkout is untouched. Gate it behind a cargo feature that diverts
 `async_main`, as `fontdue-target-bench` does, so the branch still builds normally. Report the
-branch and the command that reruns it alongside the numbers. Existing ones: `bench/f32-division`,
+branch and the command that reruns it alongside the numbers. The branches below predate the
+firmware's move into `firmware/` (2026-10-04), so each builds from its own root, as the
+repository did then. Existing ones: `bench/f32-division`,
 and `bench/fontdue`, which adds IRAM placement (`fontdue-iram`), a serial glyph dump
 (`fontdue-bench-dump`, compared by `tools/compare-glyph-dumps.py`) and a compressed line store
 decode bench (`fontdue-line-store`) to the font benchmark; `bench/opt-level`, which times the
@@ -457,7 +466,7 @@ Core 1 owns the display SPI/DMA path.
   controller out of it again.
 - `radio_task`, on `BUS_EXECUTOR`, owns the LoRa radio, its `DIO0` line and the RF switch. It
   runs the link test when a `lora-link-*` feature is on, and otherwise the mesh's node on the
-  board's seams (`src/mesh.rs`), which takes the latest fix from `mesh::FIX`, set by `gnss_task`, the RTC's time from
+  board's seams (`firmware/src/mesh.rs`), which takes the latest fix from `mesh::FIX`, set by `gnss_task`, the RTC's time from
   `mesh::RTC_TIME`, set by `sensor_task`, and GPS time from `GPS_TIME`. It is spawned only when
   the radio answered at boot; otherwise `mesh::offline`, in thread mode, keeps the name and can
   leave the group, and tells the screens there is no radio. Either publishes what the screens
@@ -484,7 +493,7 @@ Core 1 owns the display SPI/DMA path.
   when a frame's shift differs from the last one sent; an unshifted full flush keeps the
   straight copy. A frame can also switch the panel out of sleep before it goes
   out, or into sleep after. The panel comes up dark. TE pulses when the panel's scan
-  reaches `TE_LINE` in `src/drivers/co5300.rs`, so a flush runs behind the scan. A full flush
+  reaches `TE_LINE` in `firmware/src/drivers/co5300.rs`, so a flush runs behind the scan. A full flush
   takes about as long as the scan, so moving the line, or waiting for TE's level instead of its
   edge, brings back tearing.
 
@@ -563,12 +572,12 @@ poisons the thread and a later `get()` panics.
 
 The display path is split across:
 
-- [`src/drivers/qspi_bus.rs`](src/drivers/qspi_bus.rs), which owns QSPI command transfers.
-- [`src/drivers/co5300.rs`](src/drivers/co5300.rs), which initializes the panel, handles TE,
+- [`firmware/src/drivers/qspi_bus.rs`](firmware/src/drivers/qspi_bus.rs), which owns QSPI command transfers.
+- [`firmware/src/drivers/co5300.rs`](firmware/src/drivers/co5300.rs), which initializes the panel, handles TE,
   address windows, brightness, and double-buffered DMA pixel streaming.
 - [`crates/octowhere-ui/src/framebuffer.rs`](crates/octowhere-ui/src/framebuffer.rs), which
   stores draw-target pixels. The firmware allocates it in PSRAM.
-- [`src/drivers/framebuffer.rs`](src/drivers/framebuffer.rs), whose `Flush` trait streams the
+- [`firmware/src/drivers/framebuffer.rs`](firmware/src/drivers/framebuffer.rs), whose `Flush` trait streams the
   framebuffer to the panel and aligns partial flushes to the controller's pixel granularity.
 
 `chrome::Color` selects the framebuffer and panel colour format. Keep the format consistent through
@@ -592,7 +601,7 @@ loudly; it transmits or listens through the wrong path. That also couples the ra
 I2C bus, so any timing the protocol depends on includes an I2C transaction and waiting for the bus.
 
 `radio_task` runs the mesh, `octowhere-node`'s node on `crates/octowhere-mesh` with the
-board's seams in `src/mesh.rs`: slots, in an order the
+board's seams in `firmware/src/mesh.rs`: slots, in an order the
 group's key shuffles each round, carrying neighbours, a digest of the member table, the member
 and gone records asked for or changed, a digest of the messages held, a summary of them when
 a neighbour's differs, messages, and positions, with a timebase taken from other nodes without
@@ -600,7 +609,7 @@ a fix, under the group key pairing gave the node. Member, gone and key records c
 device's Ed25519 signature, which a node checks before taking them (the protocol's
 "Signatures"); a check takes about 32 ms on the board, and a signature about 35. A node in no group sends nothing and keeps the
 radio asleep. Without a fix a node has no position of its own. Commands reach the mesh through
-`COMMANDS` in `src/mesh/device.rs`: start a pairing to add or join, choose a device found, answer the code, cancel,
+`COMMANDS` in `firmware/src/mesh/device.rs`: start a pairing to add or join, choose a device found, answer the code, cancel,
 leave the group, rename, refresh, send text, remove a member while its id still holds the
 device named, and decline a removal, named by its new key.
 A refresh listens throughout for three rounds and keeps sending; a pairing stops it. A device
@@ -702,7 +711,7 @@ errata workaround, are in [`docs/hardware-notes.md`](docs/hardware-notes.md).
   4 KiB. The firmware formats it when it finds no database. `espflash erase-region 0xF00000
   0x100000` clears it. The 24 KiB `nvs` partition at `0x9000` held settings before and is unused.
 
-Check the allocator and framebuffer definitions in [`src/main.rs`](src/main.rs) and
+Check the allocator and framebuffer definitions in [`firmware/src/main.rs`](firmware/src/main.rs) and
 [`crates/octowhere-ui/src/chrome.rs`](crates/octowhere-ui/src/chrome.rs) when changing memory
 placement.
 
@@ -789,22 +798,22 @@ and `members.rs`; the member face draws from a list, as the group screens do.
 
 ## Dependencies and conventions
 
-The root manifest owns the firmware's dependency versions, features, and git patches. Each local
-crate owns its own, and the host crates keep their own lockfiles.
+`firmware/Cargo.toml` owns the firmware's dependency versions, features, and git patches. Each
+local crate owns its own, and the host crates keep their own lockfiles.
 
 Two forks are load-bearing. `fontdue` and `fontdue-macros` are forked for the
 `fontdue_font_from_file!` compile-time font macro, `FontRepr`, and the `raster` module, none of
 which exist upstream. They are git dependencies of `crates/octowhere-ui`, whose manifest holds the
 pin, and the firmware reaches them as `octowhere::fontdue`. `tca9554` is forked to replace the
 atomic register masks with a mutex-guarded cache and a `RawMutex` type parameter, and is a patch
-in the root manifest. Dropping either will not compile.
+in the firmware's manifest. Dropping either will not compile.
 
 `octowhere-ui`, `octowhere-tz`, `octowhere-motion`, `octowhere-mesh`, `octowhere-node`,
 `octowhere-peripherals`,
 `lc76g`, `sx127x-lora` and `sx127x-common` are local path crates. `octowhere-tz` lives in
 `crates/tz`, and the firmware reaches it as `octowhere::tz`.
 `crates/sx127x-lora` publishes the package name `sx127xlora`, so the manifest key and the directory
-differ. Check [`Cargo.toml`](Cargo.toml) before relying on a fork-only API or changing a dependency.
+differ. Check [`firmware/Cargo.toml`](firmware/Cargo.toml) before relying on a fork-only API or changing a dependency.
 
 The ESP32-S3's FPU is single precision, so `f64` arithmetic is emulated in software. Code
 that runs on the board uses `f32` and libm's `f` functions, even where it ports a design
@@ -813,7 +822,7 @@ script written in doubles; a test against the script's output checks the result 
 why. libm's `f32` trigonometry still computes in `f64` inside, and `context/BACKLOG.md` has
 that lead.
 
-`src/lib.rs` deliberately carries `#![expect(unused)]` while the firmware is being built. `PERF:` comments
+`firmware/src/lib.rs` deliberately carries `#![expect(unused)]` while the firmware is being built. `PERF:` comments
 mark measured or suspected hot spots and open questions; they are context, not a task list.
 
 ## Writing conventions

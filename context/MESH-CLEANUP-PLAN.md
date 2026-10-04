@@ -30,7 +30,7 @@ left, never from `origin/master`.
   - the node's stable test and clippy, and its nightly test and clippy with `phantom` and `log`;
   - the simulator's nightly test (`--no-fail-fast`; the ignored #84 scenario stays ignored)
     and clippy;
-  - `cargo build --release --offline` and the firmware's clippy;
+  - the firmware's build and clippy, from `firmware/`;
   - every `fmt --check` line;
   - the UI's test and clippy whenever `octowhere-node`'s `view` changes (step 9);
   - `tools/ui-sim` and `tools/ui-web` clippy whenever a public type they use changes.
@@ -39,7 +39,7 @@ left, never from `origin/master`.
 
   ```text
   OBJDUMP=$(ls ~/.rustup/toolchains/esp/xtensa-esp-elf/*/xtensa-esp-elf/bin/xtensa-esp-elf-objdump | head -1)
-  $OBJDUMP -d --no-show-raw-insn -C target/xtensa-esp32s3-none-elf/release/octowhere \
+  $OBJDUMP -d --no-show-raw-insn -C firmware/target/xtensa-esp32s3-none-elf/release/octowhere \
     | awk '/^[0-9a-f]+ <.*>:$/ {name=$0; getline; if ($0 ~ /entry/) {split($0, a, ","); sz=a[2]; gsub(/ /, "", sz); print sz "\t" name}}' \
     | awk -F'\t' '{v=$1; if (v ~ /^0x/) v=strtonum(v); print v "\t" $2}' | sort -rn | head -12
   ```
@@ -137,7 +137,7 @@ Comments only.
   takes over 100 of a packet's 239 bytes, so no more than two fit. `MAX_RECORDS + 1` is
   unexplained.
 - `members.rs`'s copy of `set()` leaves out `unsent` without saying why.
-- `MESH_VERSION` (`src/settings.rs:69`) is still 1, though the layouts grew through shims,
+- `MESH_VERSION` (`firmware/src/settings.rs:69`) is still 1, though the layouts grew through shims,
   while its comment says a later layout can tell itself apart. Correct the comment, not the
   version.
 - `pair.rs` has two stacked docs, the first stale.
@@ -165,7 +165,7 @@ raw bits. There are 113 `1 << ` sites, tests included:
 | `node.rs` | 13 |
 | `table.rs` | 9 |
 | `absorb.rs` | 7 |
-| `compose.rs`, `schedule.rs`, `src/settings.rs` | 4 each |
+| `compose.rs`, `schedule.rs`, `firmware/src/settings.rs` | 4 each |
 | `packet.rs`, `unsaved.rs` | 2 each |
 
 Commit a module at a time. Raw `u32` stays at every boundary that is stored or sent; leave
@@ -224,7 +224,7 @@ Record the frames before and after.
 
 ## Step 12: the group header's flash layout (#67)
 
-`src/settings.rs` writes and reads the group's key, this device's id and the generation at
+`firmware/src/settings.rs` writes and reads the group's key, this device's id and the generation at
 offsets one apart (line 55 documents them; the write is at 437–463, the read about 395).
 
 1. Add a test of today's bytes first. The firmware's settings code has no host test, so copy
