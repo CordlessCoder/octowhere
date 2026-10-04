@@ -149,3 +149,30 @@ fn a_removal_declined_after_its_switch_takes_the_decliner_back() {
         "the decline was stored"
     );
 }
+
+/// A node restarted between learning of a removal and its switch still switches with the
+/// group, from the removal it stored.
+#[test]
+fn a_restart_during_a_removal_still_switches() {
+    let mut sim = pair(8);
+    sim.run_while_not(30 * 60, |sim| {
+        sim.count(0, "heard id=1") >= 1 && sim.count(1, "heard id=0") >= 1
+    });
+    sim.command(0, Command::Phantom);
+    sim.run_while_not(30 * 60, |sim| sim.count(1, "is Phantom now") == 1);
+    sim.command(0, Command::Remove(2));
+    let asked = sim.run_while_not(30 * 60, |sim| sim.count(1, "asks to remove 2") == 1);
+    assert!(asked);
+    sim.restart(1);
+    sim.run_for(1);
+    assert_eq!(
+        sim.count(1, "removal pending=true"),
+        1,
+        "the removal was stored"
+    );
+    let switched = sim.run_while_not(60 * 60, |sim| {
+        sim.count(0, "switched to generation 1") == 1
+            && sim.count(1, "switched to generation 1") == 1
+    });
+    assert!(switched, "after {} s", sim.now_s());
+}
