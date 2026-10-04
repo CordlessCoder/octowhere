@@ -2,8 +2,8 @@
 //! repository root:
 //!
 //! ```text
-//! xz -dc docs/logs/compass/<file> | cargo +stable run --manifest-path host-tests/Cargo.toml \
-//!   --target x86_64-unknown-linux-gnu --example replay_calibration
+//! xz -dc docs/logs/compass/<file> | cargo run -p octowhere-host-tests \
+//!   --example replay_calibration
 //! ```
 //!
 //! It prints each calibration event; `VERBOSE=1` prints every sample. A `[COMPASS]

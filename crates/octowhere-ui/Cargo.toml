@@ -4,8 +4,6 @@ version = "0.1.0"
 edition = "2024"
 description = "Screens, drawing and input handling for octowhere, free of board dependencies"
 
-[workspace]
-
 [features]
 default = ["boundaries"]
 # The time zones' boundaries, for finding the zone under a position (`tz::Database::locate`).

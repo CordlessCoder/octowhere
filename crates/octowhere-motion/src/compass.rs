@@ -198,10 +198,6 @@ impl HardIron {
     /// Solves the normal equations by Gaussian elimination with partial pivoting. `None` when
     /// they are singular, as they are while every sample lies in one plane, or the sphere has no
     /// real radius.
-    #[expect(
-        clippy::needless_range_loop,
-        reason = "row and column indices read as the algebra"
-    )]
     fn solve(&self) -> Option<[f64; 4]> {
         let mut m = [[0.0f64; 5]; 4];
         for (row, (normal, rhs)) in m.iter_mut().zip(unpack(&self.normal).iter().zip(self.rhs)) {
@@ -310,10 +306,6 @@ impl HardIron {
     }
 }
 
-#[expect(
-    clippy::needless_range_loop,
-    reason = "row and column indices read as the algebra"
-)]
 fn unpack(packed: &[f64; 10]) -> [[f64; 4]; 4] {
     let mut matrix = [[0.0; 4]; 4];
     let mut index = 0;

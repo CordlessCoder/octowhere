@@ -1,0 +1,6 @@
+# Nightly for the mesh's node, which the simulators run. The firmware has its own, in
+# `firmware/`.
+[toolchain]
+channel = "nightly"
+components = ["clippy", "rustfmt"]
+targets = ["wasm32-unknown-unknown"]

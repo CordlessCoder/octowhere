@@ -1,10 +1,9 @@
 //! Renders every screen in each of its states, to 466×466 PNGs through the firmware's own
 //! drawing code, and lays a frame of each state out in `screen-atlas.png` with the revision that
-//! drew it, so two revisions' atlases compare tile for tile. From the repository root:
+//! drew it, so two revisions' atlases compare tile for tile:
 //!
 //! ```text
-//! cargo +stable run --manifest-path crates/octowhere-ui/Cargo.toml \
-//!   --target x86_64-unknown-linux-gnu --example render -- [out-dir]
+//! cargo run -p octowhere-ui --example render -- [out-dir]
 //! ```
 //!
 //! The output directory defaults to `target/renders` under the crate. The readings are

@@ -1,0 +1,14 @@
+# The host's workspace. The firmware is its own, in `firmware/`, for the board's target and
+# toolchain, and builds the crates here it needs by path.
+[workspace]
+resolver = "3"
+members = ["crates/*", "host-tests", "tools/ui-sim", "tools/ui-web"]
+
+# The web simulator's module, which `tools/ui-web/build.sh` builds.
+[profile.web]
+inherits = "release"
+lto = true
+codegen-units = 1
+panic = "abort"
+# Function names are most of what is left once the code is optimised.
+strip = true

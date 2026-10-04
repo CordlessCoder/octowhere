@@ -4,8 +4,6 @@ version = "0.1.0"
 edition = "2024"
 description = "A node of the octowhere location mesh: what it shows the screens, and what it stores"
 
-[workspace]
-
 [dependencies]
 defmt = { version = "1.1.1", optional = true }
 embassy-futures = "0.1.2"

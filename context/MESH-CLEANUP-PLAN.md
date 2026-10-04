@@ -5,7 +5,11 @@ node"; tasks #63–#77), in the order agreed with the owner on 2026-10-04: the n
 first, the stored formats last. Written 2026-10-04 for the next session to follow.
 
 **Base commit: `03cc818`** (master, local). Start every step from the commit the step before
-left, never from `origin/master`.
+left, never from `origin/master`. After the plan (`ffe5bdc`), the firmware moved into
+`firmware/` (`41e6c18`) and the root became the host's workspace, on nightly, in the commit
+after it. The log and the frames were unchanged by that. The image changed, since panic
+locations now name the local crates by absolute path. The commands below are for the new
+layout. Step 1 starts from the workspace commit.
 
 ## Rules for every step
 
@@ -14,8 +18,7 @@ left, never from `origin/master`.
   baseline once, before the first edit, and compare after each step:
 
   ```text
-  OCTOWHERE_SIM_LOG=1 env -C /tmp cargo +nightly test \
-    --manifest-path $PWD/crates/octowhere-sim/Cargo.toml --locked \
+  OCTOWHERE_SIM_LOG=1 cargo test -p octowhere-sim --locked \
     --test scenarios --test security --test removals --test messages --test screens \
     -- --test-threads 1 --nocapture 2>&1 \
     | grep -v 'finished in\|Finished\|Running\|Compiling\|Blocking' > <log>
@@ -25,15 +28,10 @@ left, never from `origin/master`.
   At `03cc818` it is 15,615 lines, and two runs matched byte for byte. Keep every log string as
   it is; the security scenarios read some of them. A step that must change a string says so, and
   then the diff may show that string alone.
-- **Gates.** All of these pass before a commit. Lines are from `AGENTS.md`, "Build and test":
-  - the mesh crate's stable test and clippy;
-  - the node's stable test and clippy, and its nightly test and clippy with `phantom` and `log`;
-  - the simulator's nightly test (`--no-fail-fast`; the ignored #84 scenario stays ignored)
-    and clippy;
-  - the firmware's build and clippy, from `firmware/`;
-  - every `fmt --check` line;
-  - the UI's test and clippy whenever `octowhere-node`'s `view` changes (step 9);
-  - `tools/ui-sim` and `tools/ui-web` clippy whenever a public type they use changes.
+- **Gates.** Every line of `AGENTS.md`'s "Build and test", from the root and from
+  `firmware/`, passes before a commit. The root's `cargo test --workspace` runs the UI's and
+  the simulators' tests beside the mesh's, so a change to a type they use shows there. The
+  ignored #84 scenario stays ignored.
 - **Stack.** After each step that touches `node.rs` or a mesh type the node holds, list the
   firmware's largest frames and compare them with the baseline below:
 
@@ -66,7 +64,7 @@ left, never from `origin/master`.
 | `Mesh::queue_unsaved` | 5,360 |
 | `Pairing::start_transfer` | 5,344 |
 | `Group::clone` | 5,136 |
-| Flash image, plain build | 1,848,064 bytes (`espflash save-image`, `AGENTS.md`'s options) |
+| Flash image, plain build | 1,848,064 bytes (`espflash save-image`, `AGENTS.md`'s options); 1,846,768 after the move |
 
 ## Step 0: the boards (whenever they are connected)
 

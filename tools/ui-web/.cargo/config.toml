@@ -1,4 +1,3 @@
-# Overrides the repository's firmware target for tools reading this directory's configuration.
-# Build with build.sh: nightly started inside the repository builds `core` for the board too.
+# A build started here is for the page.
 [build]
 target = "wasm32-unknown-unknown"

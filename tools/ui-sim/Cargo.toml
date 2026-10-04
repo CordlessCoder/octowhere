@@ -15,5 +15,3 @@ octowhere-node = { version = "0.1.0", path = "../../crates/octowhere-node" }
 octowhere-sim = { version = "0.1.0", path = "../../crates/octowhere-sim" }
 octowhere-ui = { version = "0.1.0", path = "../../crates/octowhere-ui" }
 png = "0.18.1"
-
-[workspace]

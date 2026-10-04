@@ -6,6 +6,9 @@ on:
   push:
     branches: [master]
     paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
       - "crates/**"
       - "assets/**"
       - "tools/ui-web/**"
@@ -26,8 +29,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Install the toolchain tools/ui-web asks for
-        working-directory: tools/ui-web
+      - name: Install the toolchain the host side asks for
         run: rustup toolchain install
       - name: Install wasm-opt, which build.sh shrinks the module with
         run: |

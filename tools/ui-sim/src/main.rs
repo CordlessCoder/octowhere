@@ -1,13 +1,9 @@
 //! A desktop window running the firmware's UI stage. The mouse is the touchscreen, and the
-//! keyboard sets the compass readings the motion task would publish. From the repository root:
+//! keyboard sets the compass readings the motion task would publish:
 //!
 //! ```text
-//! env -C /tmp cargo +nightly run --release --manifest-path $PWD/tools/ui-sim/Cargo.toml -- \
-//!     [--scale 2] [--boards 3 [--alone] [--log]]
+//! cargo run --release -p ui-sim -- [--scale 2] [--boards 3 [--alone] [--log]]
 //! ```
-//!
-//! It needs nightly for the mesh's node, and starts outside the repository, whose cargo
-//! configuration builds `core` for the board.
 //!
 //! `--boards <n>` shows up to six devices side by side, each its own stage and its own mesh
 //! node, unchanged from the firmware's, on `octowhere-sim`'s simulated air between them. They

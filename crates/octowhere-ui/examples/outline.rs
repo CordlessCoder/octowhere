@@ -1,10 +1,8 @@
 //! Renders sample sheets of outlined text, the hollow ring and a halo at radius 1 and 2, in the
-//! faces and sizes the screens use. They show the primitive, not a screen. From the repository
-//! root:
+//! faces and sizes the screens use. They show the primitive, not a screen:
 //!
 //! ```text
-//! cargo +stable run --manifest-path crates/octowhere-ui/Cargo.toml \
-//!   --target x86_64-unknown-linux-gnu --example outline -- [out-dir]
+//! cargo run -p octowhere-ui --example outline -- [out-dir]
 //! ```
 //!
 //! The output directory defaults to `target/renders` under the crate.

@@ -16,12 +16,3 @@ octowhere-node = { version = "0.1.0", path = "../../crates/octowhere-node" }
 octowhere-sim = { version = "0.1.0", path = "../../crates/octowhere-sim" }
 # Without the time zones' boundaries: the page sets zones by name and never looks one up.
 octowhere-ui = { version = "0.1.0", path = "../../crates/octowhere-ui", default-features = false }
-
-[profile.release]
-lto = true
-codegen-units = 1
-panic = "abort"
-# Function names are most of what is left once the code is optimised.
-strip = true
-
-[workspace]

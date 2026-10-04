@@ -3,8 +3,8 @@
 Run the production synchronization and GNSS tests with:
 
 ```text
-RUSTUP_TOOLCHAIN=stable cargo test --manifest-path host-tests/Cargo.toml --offline --target x86_64-unknown-linux-gnu
-RUSTUP_TOOLCHAIN=stable cargo clippy --manifest-path host-tests/Cargo.toml --offline --target x86_64-unknown-linux-gnu --all-targets -- -D warnings
+cargo test -p octowhere-host-tests
+cargo clippy -p octowhere-host-tests --all-targets -- -D warnings
 ```
 
 `examples/replay_calibration.rs` replays a recorded serial log through the compass calibration;

@@ -12,8 +12,9 @@ initialization or peripheral mappings.
 
 ## Repository map
 
-- `firmware/` is the firmware, with the board's toolchain and cargo configuration ("Build and
-  test"). Its sources are under `firmware/src/`, below.
+- `firmware/` is the firmware: its own Cargo workspace, with the board's toolchain and cargo
+  configuration ("Build and test"). Its sources are under `firmware/src/`, below. The root is a
+  second workspace, of everything else that builds with cargo, for the host.
 - `firmware/src/drivers/` owns the display path: QSPI, the CO5300 panel, and flushing the
   framebuffer to it.
 - `crates/octowhere-peripherals/` owns the I2C devices' drivers: touch, power, RTC,
@@ -171,78 +172,51 @@ partially. `HARDWARE-VERIFICATION.md` has what has been checked of that since.
 
 ## Build and test
 
-The `esp` toolchain from [`firmware/rust-toolchain.toml`](firmware/rust-toolchain.toml) and the
-target from [`firmware/.cargo/config.toml`](firmware/.cargo/config.toml) are selected
-automatically for builds started in `firmware/`.
+The repository is two Cargo workspaces. `firmware/` is the board's: the `esp` toolchain from
+[`firmware/rust-toolchain.toml`](firmware/rust-toolchain.toml), and from
+[`firmware/.cargo/config.toml`](firmware/.cargo/config.toml) the board's target, with `core`
+and `alloc` built from source. Cargo reads that configuration from the directory it starts in
+and every parent, so a build started inside `firmware/` is for the board and one started
+anywhere else is not. The root is the host's: every crate under `crates/`, `host-tests`,
+`tools/ui-sim` and `tools/ui-web`, on the nightly from
+[`rust-toolchain.toml`](rust-toolchain.toml), which the mesh's node needs for the allocator
+API. The firmware builds the crates it takes from `crates/` by path, and pins their
+dependencies in its own lockfile; the root's lockfile pins them for the host.
 
-The host lines below use `+stable`, but nightly is fine on the host (owner, 2026-10-03): a host
-crate may require it for a feature stable lacks, such as the allocator API before Rust 1.100.
-Move that crate's lines, and those of the crates that build it, to `+nightly` in the change
-that needs it, not before.
+From the root:
 
 ```text
-cargo +stable fmt --all --manifest-path firmware/Cargo.toml --check
-cargo +stable fmt --all --manifest-path host-tests/Cargo.toml --check
-cargo +stable fmt --all --manifest-path tools/ui-sim/Cargo.toml --check
-cargo +stable fmt --all --manifest-path tools/ui-web/Cargo.toml --check
-cargo +stable fmt --all --manifest-path crates/octowhere-sim/Cargo.toml --check
-env -C firmware cargo build --release --offline
-env -C firmware cargo clippy --release --offline -- -D warnings
-cargo +stable test --manifest-path host-tests/Cargo.toml \
-  --target x86_64-unknown-linux-gnu --locked
-cargo +stable clippy --manifest-path host-tests/Cargo.toml \
-  --target x86_64-unknown-linux-gnu --locked --all-targets -- -D warnings
-cargo +stable test --manifest-path crates/octowhere-ui/Cargo.toml \
-  --target x86_64-unknown-linux-gnu --locked
-cargo +stable clippy --manifest-path crates/octowhere-ui/Cargo.toml \
-  --target x86_64-unknown-linux-gnu --locked --all-targets -- -D warnings
-cargo +stable test --manifest-path crates/octowhere-motion/Cargo.toml \
-  --target x86_64-unknown-linux-gnu --locked
-cargo +stable clippy --manifest-path crates/octowhere-motion/Cargo.toml \
-  --target x86_64-unknown-linux-gnu --locked --all-targets -- -D warnings
-cargo +stable test --manifest-path crates/octowhere-node/Cargo.toml \
-  --target x86_64-unknown-linux-gnu --locked
-cargo +stable clippy --manifest-path crates/octowhere-node/Cargo.toml \
-  --target x86_64-unknown-linux-gnu --locked --all-targets -- -D warnings
-env -C /tmp cargo +nightly test --manifest-path $PWD/crates/octowhere-node/Cargo.toml \
-  --locked --features phantom
-env -C /tmp cargo +nightly clippy --manifest-path $PWD/crates/octowhere-node/Cargo.toml \
-  --locked --all-targets --features phantom,log -- -D warnings
-env -C /tmp cargo +nightly test --manifest-path $PWD/crates/octowhere-sim/Cargo.toml --locked
-env -C /tmp cargo +nightly clippy --manifest-path $PWD/crates/octowhere-sim/Cargo.toml \
-  --locked --all-targets -- -D warnings
-cargo +stable test --manifest-path crates/octowhere-mesh/Cargo.toml \
-  --target x86_64-unknown-linux-gnu --locked
-cargo +stable clippy --manifest-path crates/octowhere-mesh/Cargo.toml \
-  --target x86_64-unknown-linux-gnu --locked --all-targets -- -D warnings
-cargo +stable test --manifest-path crates/octowhere-peripherals/Cargo.toml \
-  --target x86_64-unknown-linux-gnu --locked
-cargo +stable clippy --manifest-path crates/octowhere-peripherals/Cargo.toml \
-  --target x86_64-unknown-linux-gnu --locked --all-targets -- -D warnings
-cargo +stable test --manifest-path crates/tz/Cargo.toml --target x86_64-unknown-linux-gnu
-cargo +stable clippy --manifest-path crates/tz/Cargo.toml \
-  --target x86_64-unknown-linux-gnu --all-targets -- -D warnings
-cargo +stable test --manifest-path crates/tz/Cargo.toml --target x86_64-unknown-linux-gnu \
-  --no-default-features
-cargo +stable clippy --manifest-path crates/tz/Cargo.toml \
-  --target x86_64-unknown-linux-gnu --all-targets --no-default-features -- -D warnings
-env -C /tmp cargo +nightly clippy --release --manifest-path $PWD/tools/ui-sim/Cargo.toml \
-  --locked -- -D warnings
-env -C /tmp cargo +nightly clippy --release --manifest-path $PWD/tools/ui-web/Cargo.toml \
-  --target wasm32-unknown-unknown --locked -- -D warnings
+cargo fmt --all --check
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test -p octowhere-node --locked
+cargo clippy -p octowhere-node --all-targets --locked -- -D warnings
+cargo test -p octowhere-node --locked --features phantom
+cargo test -p octowhere-tz --locked --no-default-features
+cargo clippy -p octowhere-tz --all-targets --locked --no-default-features -- -D warnings
+cargo clippy -p ui-web --target wasm32-unknown-unknown --locked -- -D warnings
 ```
 
-The nightly lines start in `/tmp`, as they had to while the firmware's cargo configuration,
-which builds `core` and `alloc` from source, sat at the root. `tools/ui-sim` and
-`tools/ui-web` run `octowhere-sim`, and so need nightly too.
+From `firmware/`:
 
-`--all` takes `cargo fmt` into the local path crates, so the firmware's line covers every crate
-under `crates/` but `octowhere-sim`, which the firmware does not build; `host-tests`, `tools/ui-sim` and `tools/ui-web` are outside the firmware's
-graph and need their own. Drop `--check` to apply it.
+```text
+cargo fmt --check
+cargo build --release --offline
+cargo clippy --release --offline -- -D warnings
+```
 
-The firmware's clippy run does not reach `crates/octowhere-ui`, because a path dependency is not
-a workspace member. Its own clippy line above is what lints it. The stable clippy there is newer
-than the `esp` one and flags more.
+A build of the whole workspace turns on, in each crate, every feature any member asks of it.
+So `cargo test --workspace` tests the node with the simulator's `run`, `log` and `phantom`,
+and `octowhere-tz` with its boundaries; the lines with `-p` test them without. A plain
+`cargo build` in `tools/ui-web` builds the page's module for WebAssembly, from its own
+`.cargo/config.toml`.
+
+The firmware's clippy lints the firmware alone, because the crates it builds by path are not
+members of its workspace. The root's clippy lints those, and its nightly flags more than the
+`esp` toolchain's.
+
+The root's `cargo fmt --all` covers every member, and the firmware's line its own sources.
+Drop `--check` to apply either.
 
 `cargo run --release`, from `firmware/`, uses the configured `espflash` runner to flash
 the board with `partitions.csv` and decode its log. The firmware logs only through defmt, so the image holds an index per message rather than
@@ -291,7 +265,8 @@ The image is currently 1,846,768 bytes, 11.79% of the 15,663,104-byte app partit
 `partitions.csv` gives it (the plain build once the firmware moved into `firmware/`; it was
 1,848,064 at `03cc818`, and at `58ea45c` 1,835,136, and 1,837,792 with the inject features).
 Since the move, panic locations name the local crates by absolute path, as they always named
-registry crates. `b06d686` alone added
+registry crates, so the size moves a little with the checkout's path: a worktree with a longer
+one built 96 bytes more. `b06d686` alone added
 36.8 KB to it while its functions grew by about 1 KB, so most of that is likely padding the
 image crossed into. Measure from `firmware/` with `espflash save-image --chip esp32s3
 --flash-size 16mb --partition-table partitions.csv <elf> <out>`; without those two options it
@@ -799,7 +774,7 @@ and `members.rs`; the member face draws from a list, as the group screens do.
 ## Dependencies and conventions
 
 `firmware/Cargo.toml` owns the firmware's dependency versions, features, and git patches. Each
-local crate owns its own, and the host crates keep their own lockfiles.
+local crate owns its own, and the host side shares the root's lockfile.
 
 Two forks are load-bearing. `fontdue` and `fontdue-macros` are forked for the
 `fontdue_font_from_file!` compile-time font macro, `FontRepr`, and the `raster` module, none of

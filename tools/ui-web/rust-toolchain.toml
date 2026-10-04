@@ -1,5 +1,0 @@
-# The repository's own toolchain is espup's, for the board. Nightly for the mesh's node, which
-# the several devices run on.
-[toolchain]
-channel = "nightly"
-targets = ["wasm32-unknown-unknown"]
