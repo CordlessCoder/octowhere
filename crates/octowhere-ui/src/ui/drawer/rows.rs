@@ -124,12 +124,18 @@ pub fn look(event: &Event, context: &Context) -> Look {
         Kind::Messages {
             thread,
             unread,
+            newest,
             from,
-            ..
         } => {
             let mail = context.mail();
-            let sender = mail.name(Thread::Member(from));
-            let private = matches!(thread, Thread::Member(_));
+            let sender = mail
+                .messages
+                .and_then(|messages| messages.get(newest))
+                .map_or_else(
+                    || format(format_args!("MEMBER {from:02}")),
+                    |message| mail.sender(message).0,
+                );
+            let private = matches!(thread, Thread::Member(..));
             Look {
                 state: if unread > 0 { "NEW" } else { "READ" },
                 state_color: chrome::VIOLET,

@@ -72,6 +72,17 @@ fn mesh<'d>(driver: &'d Driver) -> &'d Sim {
     driver.mesh.as_ref().expect("a scripted mesh")
 }
 
+/// The conversation with the member at `id`.
+fn member(driver: &Driver, id: u8) -> Thread {
+    let device = mesh(driver)
+        .view()
+        .group
+        .as_ref()
+        .and_then(|group| group.member(id))
+        .map_or([0; 8], |member| member.device);
+    Thread::Member(id, device)
+}
+
 fn own(driver: &Driver) -> u8 {
     mesh(driver)
         .view()
@@ -94,7 +105,7 @@ fn the_inbox_lists_conversations_and_a_tap_opens_one() {
     tap(&mut driver, 233, 26);
     assert_eq!(child(&driver), None);
     tap(&mut driver, 233, 265);
-    assert_eq!(child(&driver), Some(Child::Thread(Thread::Member(1))));
+    assert_eq!(child(&driver), Some(Child::Thread(member(&driver, 1))));
 }
 
 #[test]
@@ -147,7 +158,7 @@ fn an_arrival_tells_of_its_conversation_and_its_toast_opens_it() {
     assert!(driver.stage.toast().is_some(), "a toast tells of it");
     tap(&mut driver, 233, 360);
     driver.wait(300_000);
-    assert_eq!(child(&driver), Some(Child::Thread(Thread::Member(1))));
+    assert_eq!(child(&driver), Some(Child::Thread(member(&driver, 1))));
 }
 
 #[test]
@@ -195,7 +206,7 @@ fn a_draft_is_reviewed_then_sent_once() {
     let before = mesh(&driver).messages().len();
     tap(&mut driver, 306, 391);
     tap(&mut driver, 306, 391);
-    assert_eq!(child(&driver), Some(Child::Thread(Thread::Member(1))));
+    assert_eq!(child(&driver), Some(Child::Thread(member(&driver, 1))));
     let messages = mesh(&driver).messages();
     assert_eq!(messages.len(), before + 1, "sent once");
     let sent = *messages.iter().last().unwrap();
@@ -219,7 +230,7 @@ fn a_cancelled_draft_comes_back_to_the_same_conversation() {
     tap(&mut driver, 233, 426);
     type_text(&mut driver, "half a thought");
     tap(&mut driver, 133, 131);
-    assert_eq!(child(&driver), Some(Child::Thread(Thread::Member(1))));
+    assert_eq!(child(&driver), Some(Child::Thread(member(&driver, 1))));
     // Closed and opened again, the draft is still there.
     driver.cover();
     driver.wait(SECOND);
@@ -273,11 +284,10 @@ fn the_messages_damage_redraws_what_changed() {
 
 /// Member 1 wrote to this device and to the group, was removed, and a new device paired in at
 /// the id it freed, as the lowest free id goes to the next device paired. The messages stay in
-/// the store for a day, and the screens name each sender by the member now at its id, so they
-/// show the newcomer as having written them, and a reply in that private conversation goes to
-/// the newcomer.
+/// the store for a day. They once named their sender by the member now at its id, showing the
+/// newcomer as their writer and sending a reply in that private conversation to it; now they
+/// keep the removed device and its name, marked removed, and its conversation takes no reply.
 #[test]
-#[ignore = "messages name their sender by member id"]
 fn a_removed_members_messages_are_not_shown_as_a_newcomers() {
     let mut driver = start(false);
     let now = driver.now();
@@ -315,7 +325,16 @@ fn a_removed_members_messages_are_not_shown_as_a_newcomers() {
             "{:?} shows the message: {texts:?}",
             child(&driver)
         );
-        shown.push((child(&driver), texts));
+        let thread = child(&driver);
+        if let Some(Child::Thread(Thread::Member(..))) = thread {
+            tap(&mut driver, 233, 426);
+            assert_eq!(
+                child(&driver),
+                thread,
+                "WRITE takes no reply to a removed member"
+            );
+        }
+        shown.push((thread, texts));
         tap(&mut driver, 233, 26);
     }
     assert!(
@@ -324,4 +343,22 @@ fn a_removed_members_messages_are_not_shown_as_a_newcomers() {
             .all(|(_, texts)| !texts.iter().any(|text| text.contains("NEWCOMER"))),
         "{shown:#?}"
     );
+    let texts = |thread: fn(&Child) -> bool| {
+        shown
+            .iter()
+            .find(|(child, _)| child.as_ref().is_some_and(thread))
+            .map(|(_, texts)| texts.clone())
+            .unwrap_or_default()
+    };
+    let group = texts(|child| matches!(child, Child::Thread(Thread::Group)));
+    assert!(
+        group.iter().any(|text| text == "NORTH-1 / REMOVED"),
+        "{group:?}"
+    );
+    let private = texts(|child| matches!(child, Child::Thread(Thread::Member(..))));
+    assert!(
+        private.iter().any(|text| text == "PRIVATE / REMOVED"),
+        "{private:?}"
+    );
+    assert!(private.iter().any(|text| text == "NORTH-1"), "{private:?}");
 }

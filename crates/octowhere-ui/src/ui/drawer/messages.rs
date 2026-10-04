@@ -16,7 +16,10 @@ use crate::{
         gesture::Micros,
         group::{
             layout::{Face, Line, List, format, rect},
-            view::{Carriage, GroupView, IDS, MessageView, MessagesView, TEXT_MAX, Thread},
+            view::{
+                Carriage, GroupView, IDS, MemberView, MessageView, MessagesView, Name, TEXT_MAX,
+                Thread,
+            },
         },
         text::{self, style, wrap},
     },
@@ -73,26 +76,77 @@ impl Mail<'_> {
     pub fn name(&self, thread: Thread) -> Line {
         match thread {
             Thread::Group => format(format_args!("GROUP")),
-            Thread::Member(id) => self.member_name(id),
+            Thread::Member(id, device) => match self.device_name(device) {
+                Some(name) => upper(name.as_str()),
+                None => format(format_args!("MEMBER {id:02}")),
+            },
         }
     }
 
-    fn member_name(&self, id: u8) -> Line {
-        match self.group.and_then(|group| group.member(id)) {
-            Some(member) => upper(member.name.as_str()),
-            None => format(format_args!("MEMBER {id:02}")),
+    /// The member with `device`, at whichever id it holds now.
+    fn member_with(&self, device: [u8; 8]) -> Option<&MemberView> {
+        if device == [0; 8] {
+            return None;
+        }
+        let (_, member) = self
+            .group?
+            .members()
+            .find(|(_, member)| member.device == device)?;
+        Some(member)
+    }
+
+    /// Whether `device`, which this device had messages with, is no member now.
+    #[must_use]
+    pub fn is_removed(&self, device: [u8; 8]) -> bool {
+        device != [0; 8] && self.member_with(device).is_none()
+    }
+
+    /// `device`'s name: the member's now, or the name it had when its newest message here was
+    /// taken.
+    fn device_name(&self, device: [u8; 8]) -> Option<Name> {
+        if let Some(member) = self.member_with(device) {
+            return Some(member.name);
+        }
+        if device == [0; 8] {
+            return None;
+        }
+        self.all()
+            .rev()
+            .filter(|message| message.peer == device)
+            .find_map(MessageView::peer_name)
+    }
+
+    /// Who sent `message`, in capitals for a row, and the colour to set it in: a member's now,
+    /// or a member no more, marked removed.
+    #[must_use]
+    pub fn sender(&self, message: &MessageView) -> (Line, Color) {
+        if let Some(member) = self.member_with(message.peer) {
+            return (upper(member.name.as_str()), chrome::VIOLET);
+        }
+        match message.peer_name() {
+            Some(name) => (
+                format(format_args!("{} / REMOVED", upper(name.as_str()))),
+                chrome::GRAY,
+            ),
+            None => (
+                format(format_args!("MEMBER {:02}", message.from)),
+                chrome::GRAY,
+            ),
         }
     }
 
-    /// Who may be written to in `thread`: the group while there is one, a member while it is
-    /// one.
+    /// Who may be written to in `thread`: the group while there is one, a member while its
+    /// device holds its id.
     #[must_use]
     pub fn writable(&self, thread: Thread) -> bool {
         match thread {
             Thread::Group => self.group.is_some(),
-            Thread::Member(id) => self
-                .group
-                .is_some_and(|group| id != group.own && group.member(id).is_some()),
+            Thread::Member(id, device) => self.group.is_some_and(|group| {
+                id != group.own
+                    && group
+                        .member(id)
+                        .is_some_and(|member| member.device == device)
+            }),
         }
     }
 }
@@ -108,10 +162,13 @@ fn upper(text: &str) -> Line {
 }
 
 /// What a conversation is labelled with above its name.
-fn label(thread: Thread) -> Line {
+fn label(thread: Thread, mail: &Mail) -> Line {
     match thread {
         Thread::Group => format(format_args!("ALL MEMBERS")),
-        Thread::Member(id) => format(format_args!("PRIVATE / [{id:02}]")),
+        Thread::Member(_, device) if mail.is_removed(device) => {
+            format(format_args!("PRIVATE / REMOVED"))
+        }
+        Thread::Member(id, _) => format(format_args!("PRIVATE / [{id:02}]")),
     }
 }
 
@@ -207,7 +264,7 @@ fn inbox_row(list: &mut List, conversation: &Conversation, top: i32, mail: &Mail
     let thread = conversation.thread;
     scaled.text(
         list,
-        &label(thread),
+        &label(thread, mail),
         (94, top + 3),
         Face::Mono,
         11,
@@ -249,8 +306,8 @@ fn inbox_row(list: &mut List, conversation: &Conversation, top: i32, mail: &Mail
         let preview = if newest.from == own {
             format(format_args!("You: {}", newest.text()))
         } else if thread == Thread::Group {
-            match mail.group.and_then(|group| group.member(newest.from)) {
-                Some(member) => format(format_args!("{}: {}", member.name.as_str(), newest.text())),
+            match mail.device_name(newest.peer) {
+                Some(name) => format(format_args!("{}: {}", name.as_str(), newest.text())),
                 None => format(format_args!("{}", newest.text())),
             }
         } else {
@@ -372,9 +429,9 @@ pub fn conversation(list: &mut List, thread: Thread, scroll: i32, mail: &Mail, n
         .count();
     let meta = match (thread, unread) {
         (Thread::Group, unread) => format(format_args!("ALL MEMBERS / {unread:02} UNREAD")),
-        (Thread::Member(id), 0) => format(format_args!("PRIVATE / [{id:02}]")),
-        (Thread::Member(id), unread) => {
-            format(format_args!("PRIVATE / [{id:02}] / {unread:02} UNREAD"))
+        (Thread::Member(..), 0) => label(thread, mail),
+        (Thread::Member(..), unread) => {
+            format(format_args!("{} / {unread:02} UNREAD", label(thread, mail)))
         }
     };
     parts::meta(list, &meta);
@@ -421,14 +478,8 @@ fn message_row(
     if message.from == mail.own() {
         scaled.text(list, "YOU", (88, top + 3), Face::Mono, 12, chrome::GRAY);
     } else {
-        scaled.text(
-            list,
-            &mail.member_name(message.from),
-            (88, top + 3),
-            Face::Mono,
-            12,
-            chrome::VIOLET,
-        );
+        let (sender, color) = mail.sender(message);
+        scaled.text(list, &sender, (88, top + 3), Face::Mono, 12, color);
     }
     let elapsed = (now as i64 - message.at).max(0) as Micros;
     list.changes_at(now + super::age_due(elapsed));
@@ -472,8 +523,8 @@ pub fn destinations(mail: &Mail) -> Vec<Thread, CONVERSATIONS> {
     let mut list = Vec::new();
     if let Some(group) = mail.group {
         _ = list.push(Thread::Group);
-        for (id, _) in group.members().filter(|&(id, _)| id != group.own) {
-            _ = list.push(Thread::Member(id));
+        for (id, member) in group.members().filter(|&(id, _)| id != group.own) {
+            _ = list.push(Thread::Member(id, member.device));
         }
     }
     list
@@ -496,7 +547,7 @@ pub fn picker(list: &mut List, scroll: i32, mail: &Mail) {
             let scaled = Scaled::new(top, PICKER_ROW);
             scaled.text(
                 list,
-                &label(thread),
+                &label(thread, mail),
                 (94, top + 3),
                 Face::Mono,
                 11,
@@ -573,7 +624,7 @@ pub fn review(list: &mut List, thread: Thread, text: &str, scroll: i32, mail: &M
             format(format_args!("TO GROUP / ALL MEMBERS")),
             format(format_args!("TO ALL MEMBERS")),
         ),
-        Thread::Member(_) => (
+        Thread::Member(..) => (
             format(format_args!("TO {name} / PRIVATE")),
             format(format_args!("PRIVATE TO {name}")),
         ),

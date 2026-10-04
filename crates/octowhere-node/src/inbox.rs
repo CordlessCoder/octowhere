@@ -5,9 +5,15 @@
 use alloc::boxed::Box;
 use core::alloc::Allocator;
 
-use octowhere_mesh::messages::{Name, Store};
+use octowhere_mesh::{
+    members,
+    messages::{Name, Store},
+};
 
 use crate::view::{At, Carriage, MessageView, MessagesView};
+
+/// The other member of a message, by its device's fingerprint and its name.
+pub type Peer = Option<([u8; 8], members::Name)>;
 
 pub struct Inbox<A: Allocator> {
     view: Box<MessagesView, A>,
@@ -72,10 +78,15 @@ impl<A: Allocator> Inbox<A> {
         }
     }
 
-    /// Shows a message made here, queued at `at`, and returns its number.
-    pub fn queue(&mut self, from: u8, to: Option<u8>, text: &[u8], at: At) -> u32 {
+    /// Shows a message made here, queued at `at`, to `peer`'s device if it is private, and
+    /// returns its number.
+    pub fn queue(&mut self, from: u8, to: Option<u8>, text: &[u8], at: At, peer: Peer) -> u32 {
         let id = self.number();
-        self.view.push(MessageView::new(id, at, from, to, text));
+        let mut message = MessageView::new(id, at, from, to, text);
+        if let Some((device, name)) = peer {
+            message.set_peer(device, name);
+        }
+        self.view.push(message);
         self.changed = true;
         id
     }
@@ -137,6 +148,7 @@ impl<A: Allocator> Inbox<A> {
     /// Shows a message that arrived: another member's, or after a restart this device's own,
     /// which another member carried. One stamped before this node had a timebase came back
     /// after a restart, and is not counted unread.
+    #[expect(clippy::too_many_arguments)]
     pub fn arrived(
         &mut self,
         name: Name,
@@ -145,6 +157,7 @@ impl<A: Allocator> Inbox<A> {
         stamp: u32,
         at: At,
         text: &[u8],
+        peer: Peer,
     ) {
         if self.by_name(name).is_some() {
             return;
@@ -153,6 +166,9 @@ impl<A: Allocator> Inbox<A> {
         let recovered = self.since.is_none_or(|since| stamp < since);
         let mut message = MessageView::new(self.number(), at, origin, to, text);
         message.seq = seq;
+        if let Some((device, name)) = peer {
+            message.set_peer(device, name);
+        }
         message.recovered = recovered;
         if origin == own {
             let acked = to.is_some_and(|to| self.early_acks.iter().any(|&ack| ack == (to, seq)));

@@ -356,6 +356,14 @@ impl Sim {
         message.seq = id;
         message.carriage = carriage;
         message.unread = unread;
+        // The other member, as the node names it: the sender, or the recipient of this
+        // device's own.
+        if let Some(group) = &self.view.group {
+            let peer = if from == group.own { to } else { Some(from) };
+            if let Some(member) = peer.and_then(|id| group.member(id)) {
+                message.set_peer(member.device, member.name);
+            }
+        }
         self.messages.push(message);
         self.messages_changed = true;
         id

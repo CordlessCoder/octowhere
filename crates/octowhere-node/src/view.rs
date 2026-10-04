@@ -416,6 +416,15 @@ pub struct MessageView {
     pub from: u8,
     /// Its destination's id, or `None` for the whole group.
     pub to: Option<u8>,
+    /// The other member's device, by its public key's fingerprint: the sender's of a message
+    /// that came, the recipient's of this device's private one. All zeroes for this device's to
+    /// the group, and for a sender that no member now at its id can have been. An id can pass
+    /// to another device after a removal, so this, not `from` or `to`, says who it was with.
+    pub peer: [u8; 8],
+    peer_name_len: u8,
+    /// The other member's name when the message was taken, which names it once it is no
+    /// member.
+    peer_name: [u8; NAME_LEN],
     pub carriage: Carriage,
     /// Arrived and not yet read.
     pub unread: bool,
@@ -438,6 +447,9 @@ impl MessageView {
             at,
             from,
             to,
+            peer: [0; 8],
+            peer_name_len: 0,
+            peer_name: [0; NAME_LEN],
             carriage: Carriage::Queued,
             unread: false,
             recovered: false,
@@ -456,9 +468,24 @@ impl MessageView {
     pub fn thread(&self, own: u8) -> Thread {
         match self.to {
             None => Thread::Group,
-            Some(to) if self.from == own => Thread::Member(to),
-            Some(_) => Thread::Member(self.from),
+            Some(to) if self.from == own => Thread::Member(to, self.peer),
+            Some(_) => Thread::Member(self.from, self.peer),
         }
+    }
+
+    /// Names the other member: its device and its name now.
+    pub fn set_peer(&mut self, device: [u8; 8], name: Name) {
+        let bytes = name.as_bytes();
+        self.peer = device;
+        self.peer_name_len = bytes.len() as u8;
+        self.peer_name = [0; NAME_LEN];
+        self.peer_name[..bytes.len()].copy_from_slice(bytes);
+    }
+
+    /// The other member's name when the message was taken, if it was told.
+    #[must_use]
+    pub fn peer_name(&self) -> Option<Name> {
+        Name::new(&self.peer_name[..usize::from(self.peer_name_len)])
     }
 }
 
@@ -467,7 +494,9 @@ impl MessageView {
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Thread {
     Group,
-    Member(u8),
+    /// This device's with one member: its id, and its device, which tells it apart from a device
+    /// that took the id after it was removed.
+    Member(u8, [u8; 8]),
 }
 
 /// The messages this device can read, oldest first by when each was sent. All zeroes is none, so

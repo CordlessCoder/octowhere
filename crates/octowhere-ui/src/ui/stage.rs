@@ -1324,7 +1324,7 @@ impl Stage {
             drawer::Exit::Send { to, text } => {
                 let to = match to {
                     Thread::Group => None,
-                    Thread::Member(id) => Some(id),
+                    Thread::Member(id, _) => Some(id),
                 };
                 effects.mesh = Some(Request::Send { to, text });
             }

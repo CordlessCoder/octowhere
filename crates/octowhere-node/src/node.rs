@@ -2593,6 +2593,18 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
     /// Takes a packet from `sender` under the old key `key` of generation `generation`: it
     /// missed a switch, or took a rival key that lost, and the key message of generation
     /// `catches_up_with` goes to it.
+    /// The member at `id` as the other member of a message stamped `stamp`: none when it joined
+    /// after the message was sent, so that a device given the id of one removed is not taken for
+    /// it. On a clock started from a boot, stamps are no UTC to compare with.
+    fn peer(&self, id: u8, stamp: u32) -> crate::inbox::Peer {
+        let member = self.group.as_ref()?.member(id)?;
+        let utc = self
+            .clock
+            .at(self.time.now())
+            .is_some_and(|(_, timebase)| timebase.source.is_utc());
+        (!utc || member.joined <= stamp).then(|| (fingerprint(&member.public), member.name))
+    }
+
     /// UTC seconds at local time `now`, from GNSS or the RTC, or else from a timebase its root
     /// started from UTC.
     fn utc(&self, now: i64) -> Option<i64> {
@@ -2712,9 +2724,12 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             To::Member(id) => Some(id),
         };
         let own = group.own();
+        let peer = destination
+            .and_then(|id| group.member(id))
+            .map(|member| (fingerprint(&member.public), member.name));
         outgoing.shown = self
             .inbox
-            .queue(own, destination, text.as_bytes(), self.time.now());
+            .queue(own, destination, text.as_bytes(), self.time.now(), peer);
         _ = self.outbox.push_back(outgoing);
         info!("[MSG] queued to {:?}: {}", to, Ascii(text.as_bytes()));
         self.show_messages();
@@ -2815,8 +2830,18 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                             info!("[MSG] from {} to all: {}", origin, Ascii(text));
                         }
                         let at = self.local_at(message.stamp());
-                        self.inbox
-                            .arrived(message.name(), own, None, message.stamp(), at, text);
+                        let peer = (origin != own)
+                            .then(|| self.peer(origin, message.stamp()))
+                            .flatten();
+                        self.inbox.arrived(
+                            message.name(),
+                            own,
+                            None,
+                            message.stamp(),
+                            at,
+                            text,
+                            peer,
+                        );
                     }
                     _ if origin != own => info!("[MSG] from {} to all, kind unknown", origin),
                     _ => {}
@@ -2848,6 +2873,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                     Some((&kind::TEXT, text)) => {
                         info!("[MSG] from {} to this device: {}", origin, Ascii(text));
                         let at = self.local_at(message.stamp());
+                        let peer = self.peer(origin, message.stamp());
                         self.inbox.arrived(
                             message.name(),
                             own,
@@ -2855,6 +2881,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                             message.stamp(),
                             at,
                             text,
+                            peer,
                         );
                     }
                     Some((&kind::ACK, seq)) => {
@@ -2928,8 +2955,22 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                     && let Some((&kind::TEXT, text)) = plain.split_first()
                 {
                     let at = self.local_at(message.stamp());
-                    self.inbox
-                        .arrived(message.name(), own, Some(dest), message.stamp(), at, text);
+                    // The device whose key opened it, while it is still the member there.
+                    let peer = self
+                        .group
+                        .as_ref()
+                        .and_then(|group| group.member(dest))
+                        .filter(|member| member.public == public)
+                        .map(|member| (fingerprint(&public), member.name));
+                    self.inbox.arrived(
+                        message.name(),
+                        own,
+                        Some(dest),
+                        message.stamp(),
+                        at,
+                        text,
+                        peer,
+                    );
                 }
                 Arrival::Done
             }
