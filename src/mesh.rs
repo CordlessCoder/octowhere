@@ -4,6 +4,7 @@
 //! screens ask. `octowhere_mesh` holds the protocol and `context/LORA-PROTOCOL.md` the design.
 
 mod radio;
+mod random;
 mod time;
 mod unsaved;
 
@@ -14,6 +15,7 @@ use core::{
 };
 
 pub use self::radio::BoardRadio;
+pub use self::random::{BoardRandom, random};
 pub use self::time::BoardTime;
 use self::time::local;
 use self::unsaved::{Due, Unsaved};
@@ -525,15 +527,6 @@ async fn rename(me: &mut Identity, group: Option<&mut Group>, name: Name, utc: u
     true
 }
 
-/// Random bytes from the hardware's true random source, or `None` without it. `async_main`
-/// enables it at boot.
-pub fn random<const N: usize>() -> Option<[u8; N]> {
-    let trng = esp_hal::rng::Trng::try_new().ok()?;
-    let mut bytes = [0; N];
-    trng.read(&mut bytes);
-    Some(bytes)
-}
-
 /// UTC seconds at local time `now`, from GNSS or the RTC, or 0 with neither.
 fn utc_seconds(now: i64) -> u32 {
     utc_now(now).map_or(0, |utc| utc.clamp(0, i64::from(u32::MAX)) as u32)
@@ -609,9 +602,21 @@ pub trait Time {
     async fn until(&self, at: i64);
 }
 
-pub struct Mesh<R, T> {
+/// Where a node's keys and nonces come from.
+pub trait Random {
+    /// Fills `out` with random bytes. Returns false where there is no source.
+    fn fill(&mut self, out: &mut [u8]) -> bool;
+
+    fn bytes<const N: usize>(&mut self) -> Option<[u8; N]> {
+        let mut bytes = [0; N];
+        self.fill(&mut bytes).then_some(bytes)
+    }
+}
+
+pub struct Mesh<R, T, G> {
     radio: R,
     time: T,
+    random: G,
     me: Identity,
     group: Option<Group>,
     /// A group this device founded in a pairing whose last acknowledgement it never heard.
@@ -674,8 +679,8 @@ pub struct Mesh<R, T> {
     summary: Option<Box<(heapless::Vec<u8, SUMMARY_MAX>, u8)>>,
 }
 
-impl<R: Radio, T: Time> Mesh<R, T> {
-    pub async fn new(radio: R, time: T, start: Start) -> Self {
+impl<R: Radio, T: Time, G: Random> Mesh<R, T, G> {
+    pub async fn new(radio: R, time: T, random: G, start: Start) -> Self {
         let group = start.group.map(|group| *group);
         let own = group.as_ref().map_or(0, Group::own);
         let mut rekey = start.rekey.unwrap_or_default();
@@ -701,6 +706,7 @@ impl<R: Radio, T: Time> Mesh<R, T> {
         let mut mesh = Self {
             radio,
             time,
+            random,
             me: start.me,
             group,
             founding: None,
@@ -886,9 +892,11 @@ impl<R: Radio, T: Time> Mesh<R, T> {
             #[cfg(feature = "pair-inject")]
             Command::Phantom => {
                 let now = utc_seconds(self.time.now());
-                if let (Some(group), Some(seed), Some(mac)) =
-                    (&mut self.group, random::<32>(), random::<6>())
-                    && let Some(id) = group.lowest_free()
+                if let (Some(group), Some(seed), Some(mac)) = (
+                    &mut self.group,
+                    self.random.bytes::<32>(),
+                    self.random.bytes::<6>(),
+                ) && let Some(id) = group.lowest_free()
                 {
                     let phantom =
                         Identity::new(seed, mac, Name::new(b"Phantom").expect("printable"));
@@ -1795,7 +1803,8 @@ impl<R: Radio, T: Time> Mesh<R, T> {
         self.stop_refresh(self.time.now());
         self.shown.sessions += 1;
         let session = self.shown.sessions;
-        let (Some(nonce), Some(founding)) = (random::<16>(), random::<32>()) else {
+        let (Some(nonce), Some(founding)) = (self.random.bytes::<16>(), self.random.bytes::<32>())
+        else {
             warn!("[PAIR] no true random source; not pairing");
             self.shown.pairing = Some(refused(session, role, Refused::NoRandom));
             return;
@@ -2041,7 +2050,7 @@ impl<R: Radio, T: Time> Mesh<R, T> {
         if !self.reserve(remaining.count_ones(), time).await {
             return;
         }
-        let Some(key) = random::<32>() else {
+        let Some(key) = self.random.bytes::<32>() else {
             warn!("[REKEY] no random source for a key");
             return;
         };

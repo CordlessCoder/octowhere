@@ -1618,6 +1618,7 @@ async fn radio_task(task: RadioTask) {
     mesh::Mesh::new(
         mesh::BoardRadio::new(lora, dio0, path),
         mesh::BoardTime,
+        mesh::BoardRandom,
         mesh,
     )
     .await
