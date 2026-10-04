@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use crate::identity::{Identity, SIGNATURE_LEN, dh_public, verify};
 use crate::members::{MISMATCHES, PUBLIC_LEN};
 use crate::seal::{self, Inauthentic, Key, SIV_LEN};
-use crate::{AHEAD_S, IDS};
+use crate::{AHEAD_S, IDS, Ids};
 
 /// How long every node holds a message, from its timestamp.
 pub const HORIZON_S: u32 = 24 * 60 * 60;
@@ -618,13 +618,13 @@ impl Store {
         if out.len() < 4 {
             return (0, first);
         }
-        let mut covered = 0u32;
+        let mut covered = Ids::EMPTY;
         let mut len = 4;
         let mut next = first;
         for origin in (0..IDS).map(|at| (first + at) % IDS) {
             next = origin;
             let Some(first) = self.next_from(origin, 0) else {
-                covered |= 1 << origin;
+                covered.insert(origin);
                 continue;
             };
             let start = len;
@@ -646,11 +646,11 @@ impl Store {
             }
             out[start + 5..start + 9].copy_from_slice(&newest.to_be_bytes());
             out[start + 9] = holes as u8;
-            covered |= 1 << origin;
+            covered.insert(origin);
         }
-        out[..4].copy_from_slice(&covered.to_le_bytes());
+        out[..4].copy_from_slice(&covered.bits().to_le_bytes());
         // A summary that covered every origin starts the next from the same one.
-        if covered == u32::MAX {
+        if covered == Ids::ALL {
             next = first;
         }
         (len, next)
@@ -661,7 +661,7 @@ impl Store {
         let Some(covered) = summary.get(..4) else {
             return;
         };
-        let covered = u32::from_le_bytes(covered.try_into().expect("four bytes"));
+        let covered = Ids::from_bits(u32::from_le_bytes(covered.try_into().expect("four bytes")));
         let mut entries: [Option<&[u8]>; IDS as usize] = [None; IDS as usize];
         let mut rest = &summary[4..];
         while let Some(&origin) = rest.first() {
@@ -675,7 +675,7 @@ impl Store {
         }
         for at in 0..CAPACITY {
             let held = &self.messages[at];
-            if held.seq == 0 || covered & 1 << held.origin == 0 {
+            if held.seq == 0 || !covered.contains(held.origin) {
                 continue;
             }
             if lacks(entries[usize::from(held.origin)], held.seq) {
