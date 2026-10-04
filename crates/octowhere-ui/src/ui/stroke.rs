@@ -39,15 +39,52 @@ pub fn draw_path<D: CoverageTarget<Color = Color>>(
             .reduce(|(l0, r0), (l1, r1)| (l0.min(l1), r0.max(r1)));
         [span, None]
     };
+    // A list's paths hold at most six points.
+    let segments: heapless::Vec<Segment, 8> = points
+        .windows(2)
+        .map(|pair| Segment::new(at(&pair[0]), at(&pair[1])))
+        .collect();
     fill_rows(bounds, color, target, spans, |x, y| {
-        points
-            .windows(2)
-            .map(|pair| {
-                let distance = to_segment((x, y), at(&pair[0]), at(&pair[1]));
-                (half + 0.5 - distance).clamp(0.0, 1.0)
-            })
+        segments
+            .iter()
+            .map(|segment| (half + 0.5 - segment.distance((x, y))).clamp(0.0, 1.0))
             .fold(0.0, f32::max)
     });
+}
+
+/// A segment from `a`, `length` long in the unit direction `u`, found once for the distances
+/// to every pixel near it.
+struct Segment {
+    a: (f32, f32),
+    u: (f32, f32),
+    length: f32,
+}
+
+impl Segment {
+    fn new(a: (f32, f32), b: (f32, f32)) -> Self {
+        let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+        let length = distance(dx, dy);
+        let u = if length > 0.0 {
+            (dx / length, dy / length)
+        } else {
+            (0.0, 0.0)
+        };
+        Self { a, u, length }
+    }
+
+    /// The distance from `p`: across the segment where `p` lies beside it, which needs no
+    /// root, and to the nearer end past it.
+    fn distance(&self, p: (f32, f32)) -> f32 {
+        let (px, py) = (p.0 - self.a.0, p.1 - self.a.1);
+        let along = px * self.u.0 + py * self.u.1;
+        if along <= 0.0 {
+            distance(px, py)
+        } else if along >= self.length {
+            distance(px - self.u.0 * self.length, py - self.u.1 * self.length)
+        } else {
+            (px * self.u.1 - py * self.u.0).abs()
+        }
+    }
 }
 
 /// The polygon through `points`, in quarter pixels, filled.
