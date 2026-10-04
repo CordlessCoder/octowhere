@@ -201,7 +201,8 @@ until the feature set is complete, because profiling an incomplete firmware pric
   `take()` into the crate before the simulator's scenarios. Leave the slot encoding and the
   flash header until tests cover them, since they touch the stored format. Done: the review's
   quick wins (`96b6d81`), the radio's fields and methods as `mesh::Radio` (`471e8f7`), and the `unsaved`,
-  `unsaved_group` and `rekey_unsaved` flags as `mesh::unsaved::Unsaved`. Left:
+  `unsaved_group` and `rekey_unsaved` flags as `Unsaved`, and the node's own `heard` and
+  `refresh` in place of the view's, which only copies them now. Left:
   - In the node, which has no tests but `unsaved`'s:
     - Move `send()`'s packet-filling policy into the crate as a tested `compose()`: a summary
       only with room for the own position, slot and former records sharing `MAX_RECORDS`,
@@ -215,8 +216,6 @@ until the feature set is complete, because profiling an incomplete firmware pric
     - Split `step()`'s choice of what goes out next into a plain function returning an enum;
       make `listen` reset `after` itself rather than its three callers; `send`, `send_old` and
       `send_notice` take a `Timebase`, not an `Option` whose `None` cannot happen.
-    - Stop protocol decisions reading the view: `lagging` from `shown.heard`, and the refresh's
-      timer in `shown.refresh`, which drives `clock.sweep_to`.
     - Give `arrived()` and `learned_key()` enums for their results.
   - Duplication in the crate and `settings.rs`:
     - One slot encoding: `Builder::slot`, the pairing's `welcome` and `read_welcome`, and

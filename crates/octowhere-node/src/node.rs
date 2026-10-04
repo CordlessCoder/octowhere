@@ -312,13 +312,13 @@ struct Shown {
     pairing: Option<PairingView>,
     answered: u32,
     answer: Option<Answer>,
-    /// When each id was last heard sending, on the local clock.
+    /// The node's `heard` and `refresh`, copied in as it renders. Protocol decisions read the
+    /// node's own, never these.
     heard: [Option<i64>; IDS as usize],
+    refresh: Option<RefreshView>,
     /// The newest position held for each id, as its UTC second. Kept past the table's expiry,
     /// so an old position shows as old rather than never received.
     positions: [Option<u32>; IDS as usize],
-    /// The refresh under way, or the last, while the group stays this device's.
-    refresh: Option<RefreshView>,
     /// A founding's wait, under way or ended, until another pairing starts.
     recovery: Option<RecoveryView>,
 }
@@ -637,6 +637,10 @@ pub struct Mesh<R, T, G, D, S, A: Allocator> {
     /// The timebase time the next own slot is looked for from, past the last one decided.
     after: i64,
     timebase_shown: Option<Timebase>,
+    /// When each id was last heard sending, on the local clock.
+    heard: [Option<i64>; IDS as usize],
+    /// The refresh under way, or the last, while the group stays this device's.
+    refresh: Option<RefreshView>,
     /// What the screens are shown.
     shown: Shown,
     /// The view [`publish`] fills.
@@ -732,6 +736,8 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             table: Table::new(own),
             after: i64::MIN,
             timebase_shown: None,
+            heard: [None; IDS as usize],
+            refresh: None,
             shown: Shown::new(true),
             view: blank_view(),
             notice: None,
@@ -784,6 +790,8 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
     #[inline(never)]
     fn publish(&mut self) {
         let now = self.time.now();
+        self.shown.heard = self.heard;
+        self.shown.refresh = self.refresh;
         self.shown.fill(
             &mut self.view,
             &self.me,
@@ -881,7 +889,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                 if left {
                     self.forget_messages();
                     self.unsaved.group_replaced();
-                    self.shown.refresh = None;
+                    self.refresh = None;
                     self.refresh_known = None;
                     info!("[MESH] left the group");
                 } else {
@@ -1467,7 +1475,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             // removed reads, and its slot order and clock are still the old key's.
             Opened::Pending { sender } => {
                 info!("[REKEY] heard {} on the key to switch to", sender);
-                if let Some(heard) = self.shown.heard.get_mut(usize::from(sender)) {
+                if let Some(heard) = self.heard.get_mut(usize::from(sender)) {
                     *heard = Some(done);
                 }
                 return false;
@@ -1520,10 +1528,10 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             );
             self.notice = Some(start - slot);
         }
-        if let Some(heard) = self.shown.heard.get_mut(usize::from(header.sender)) {
+        if let Some(heard) = self.heard.get_mut(usize::from(header.sender)) {
             *heard = Some(done);
         }
-        if let Some(refresh) = &mut self.shown.refresh
+        if let Some(refresh) = &mut self.refresh
             && refresh.is_listening()
             && header.sender != group.own()
             && header.sender < IDS
@@ -1875,6 +1883,8 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                     Phase::Done(_) => pairing.group(),
                     _ => self.group.as_ref(),
                 };
+                self.shown.heard = self.heard;
+                self.shown.refresh = self.refresh;
                 self.shown.fill(
                     &mut self.view,
                     &self.me,
@@ -1974,7 +1984,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                 self.unsaved.group_replaced();
                 if role == Role::Join || !had_group {
                     self.restart(group.own());
-                    self.shown.refresh = None;
+                    self.refresh = None;
                 }
             }
             // A founder whose write failed has sent its done all the same, so the joining
@@ -2012,7 +2022,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         self.timebase_shown = None;
         self.notice = None;
         self.requests = Requests::default();
-        self.shown.heard = [None; IDS as usize];
+        self.heard = [None; IDS as usize];
         self.shown.positions = [None; IDS as usize];
         self.forget_messages();
     }
@@ -2146,7 +2156,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             return None;
         };
         let round = round_at(time) as u32;
-        let lagging = !self.shown.heard.iter().enumerate().any(|(id, heard)| {
+        let lagging = !self.heard.iter().enumerate().any(|(id, heard)| {
             id != usize::from(group.own()) && heard.is_some_and(|at| now - at < LAGGING_US)
         });
         let (removed, generation) = (new.removed, new.generation);
@@ -2713,11 +2723,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             warn!("[MESH] no group to refresh");
             return;
         };
-        if self
-            .shown
-            .refresh
-            .is_some_and(|refresh| refresh.is_listening())
-        {
+        if self.refresh.is_some_and(|refresh| refresh.is_listening()) {
             return;
         }
         let now = self.time.now();
@@ -2725,8 +2731,8 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         self.refresh_known = Some(Box::new(core::array::from_fn(|id| {
             group.member(id as u8).map(|member| member.mac)
         })));
-        self.shown.refresh = Some(RefreshView {
-            session: self.shown.refresh.map_or(1, |refresh| refresh.session + 1),
+        self.refresh = Some(RefreshView {
+            session: self.refresh.map_or(1, |refresh| refresh.session + 1),
             phase: RefreshPhase::Listening {
                 until: now + SWEEP_US,
             },
@@ -2738,7 +2744,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
 
     /// When the refresh under way ends.
     fn refresh_until(&self) -> Option<i64> {
-        match self.shown.refresh?.phase {
+        match self.refresh?.phase {
             RefreshPhase::Listening { until } => Some(until),
             _ => None,
         }
@@ -2748,7 +2754,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
     /// whether that changed what the screens show.
     fn update_refresh(&mut self, now: i64) -> bool {
         let (Some(refresh), Some(group), Some(known)) = (
-            &mut self.shown.refresh,
+            &mut self.refresh,
             &self.group,
             self.refresh_known.as_deref(),
         ) else {
@@ -2780,7 +2786,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
     /// Ends a refresh under way early, as a pairing takes the radio.
     fn stop_refresh(&mut self, now: i64) {
         self.update_refresh(now);
-        if let Some(refresh) = &mut self.shown.refresh
+        if let Some(refresh) = &mut self.refresh
             && refresh.is_listening()
         {
             refresh.phase = RefreshPhase::Interrupted { at: now };
