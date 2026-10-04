@@ -189,8 +189,8 @@ pub struct Pending {
 pub struct Old {
     pub key: Key,
     pub generation: u16,
-    /// The members not yet heard on a newer key, as a set.
-    pub waiting: u32,
+    /// The members not yet heard on a newer key.
+    pub waiting: Ids,
     /// Whether a rival of its generation won over it, rather than a removal after it.
     pub lost: bool,
 }
@@ -232,8 +232,8 @@ pub struct Undo {
     pub switched: u32,
     /// The last round the removal can be declined in.
     pub until: u32,
-    /// The ids whose slots changed since this device's switch, as a set.
-    pub changed: u32,
+    /// The ids whose slots changed since this device's switch.
+    pub changed: Ids,
     /// The id of the member removed.
     pub removed: u8,
     /// Whether another member made the removal. This device's own is kept only so that a rival
@@ -248,8 +248,8 @@ pub struct Reverted {
     /// From when, in timebase seconds, messages were made under the key left; the caller
     /// forgets them.
     pub since: u32,
-    /// The ids whose records were forgotten, as a set, the member removed among them.
-    pub forgotten: u32,
+    /// The ids whose records were forgotten, the member removed among them.
+    pub forgotten: Ids,
 }
 
 /// What a key message did.
@@ -283,8 +283,8 @@ pub struct Rekey {
     /// The fingerprint of the key the group's key followed, which a rival of it follows too.
     /// `None` when this device did not switch to it.
     follows: Option<[u8; 8]>,
-    /// The members this device removed under a key a rival won over, to remove again, as a set.
-    again: u32,
+    /// The members this device removed under a key a rival won over, to remove again.
+    again: Ids,
 }
 
 impl Rekey {
@@ -331,9 +331,9 @@ impl Rekey {
             .map(|undo| undo.until)
     }
 
-    /// Notes the ids, a set, whose slots changed, which declining the last removal forgets.
-    /// Returns whether that changed what is kept.
-    pub fn changed(&mut self, ids: u32) -> bool {
+    /// Notes the ids whose slots changed, which declining the last removal forgets. Returns
+    /// whether that changed what is kept.
+    pub fn changed(&mut self, ids: Ids) -> bool {
         match &mut self.undo {
             Some(undo) if undo.changed | ids != undo.changed => {
                 undo.changed |= ids;
@@ -353,17 +353,17 @@ impl Rekey {
             .map(|&(_, remover)| remover)
     }
 
-    /// The members this device removed under a key a rival won over, as a set: it removes each
-    /// again once that member's record is back.
+    /// The members this device removed under a key a rival won over: it removes each again
+    /// once that member's record is back.
     #[must_use]
-    pub fn again(&self) -> u32 {
+    pub fn again(&self) -> Ids {
         self.again
     }
 
     /// Whether some member has not been heard on the newest key since a switch.
     #[must_use]
     pub fn is_waiting(&self) -> bool {
-        self.old().any(|old| old.waiting != 0)
+        self.old().any(|old| !old.waiting.is_empty())
     }
 
     /// Starts removing the member `id` with the fresh key `key`, in round `round`. Returns the
@@ -374,11 +374,11 @@ impl Rekey {
             return None;
         }
         let removed = group.member(id)?;
-        let remaining = group.ids().bits() & !(1 << id) & !(1 << group.own());
+        let remaining = group.ids().without(id).without(group.own());
         let new = NewKey {
             key,
             generation: group.generation().wrapping_add(1),
-            switch: round + switch_rounds(remaining.count_ones() + 1),
+            switch: round + switch_rounds(remaining.count() + 1),
             removed: id,
             fingerprint: fingerprint(&removed.public),
             follows: key_fingerprint(group.key()),
@@ -389,7 +389,7 @@ impl Rekey {
             switch: new.switch,
         });
         self.removing = Some((new.generation, id));
-        self.again &= !(1 << id);
+        self.again.remove(id);
         Some(new)
     }
 
@@ -493,15 +493,15 @@ impl Rekey {
             }
         }
         self.compact();
-        let changed = undo.changed | group.take_changed().bits();
-        let forgotten = group.forget_changed(Ids::from_bits(changed)).bits();
+        let changed = undo.changed | group.take_changed();
+        let forgotten = group.forget_changed(changed);
         group.take_changed();
         group.rekey(undo.key, undo.generation);
         self.last = None;
         self.removing = None;
         self.follows = None;
         // A rival this device lost to, made again, would only race the key gone back to.
-        self.again = 0;
+        self.again = Ids::EMPTY;
         Some(Reverted {
             since: undo.switched.saturating_mul(ROUND_S),
             forgotten,
@@ -542,9 +542,9 @@ impl Rekey {
             Some((generation, id))
                 if !ours && generation == new.generation && id != new.removed =>
             {
-                1 << id
+                Ids::of(id)
             }
-            _ => 0,
+            _ => Ids::EMPTY,
         };
         let at = new.switch.saturating_mul(ROUND_S);
         // A rival removing the member the losing key removed leaves it gone.
@@ -557,7 +557,7 @@ impl Rekey {
                 (group.remove(&new.fingerprint, at), record)
             }
         };
-        let changed = group.take_changed().bits();
+        let changed = group.take_changed();
         let of_undo = |undo: &Undo| rival && undo.new_generation == new.generation;
         self.undo = match (self.undo.take(), removed) {
             // A rival keeps the key before both, and the day the first switch gave.
@@ -587,9 +587,9 @@ impl Rekey {
             }),
             (None, None) => None,
         };
-        self.wait_only_for(group.ids().bits());
-        let waiting = group.ids().bits() & !(1 << group.own());
-        if waiting != 0 {
+        self.wait_only_for(group.ids());
+        let waiting = group.ids().without(group.own());
+        if !waiting.is_empty() {
             self.old.rotate_right(1);
             self.old[0] = Some(Old {
                 key: group.key().clone(),
@@ -633,11 +633,11 @@ impl Rekey {
         for old in self.old.iter_mut() {
             if let Some(held) = old
                 && held.generation < generation
-                && held.waiting & 1 << id != 0
+                && held.waiting.contains(id)
             {
                 changed = true;
-                held.waiting &= !(1 << id);
-                if held.waiting == 0 {
+                held.waiting.remove(id);
+                if held.waiting.is_empty() {
                     *old = None;
                 }
             }
@@ -648,17 +648,17 @@ impl Rekey {
         changed
     }
 
-    /// Stops waiting for anyone outside `members`, a set of ids: a member removed or gone is
-    /// never heard on a newer key. Returns whether that changed what is kept.
-    pub fn wait_only_for(&mut self, members: u32) -> bool {
+    /// Stops waiting for anyone outside `members`: a member removed or gone is never heard on a
+    /// newer key. Returns whether that changed what is kept.
+    pub fn wait_only_for(&mut self, members: Ids) -> bool {
         let mut changed = false;
         for old in self.old.iter_mut() {
             if let Some(held) = old
-                && held.waiting & !members != 0
+                && !(held.waiting & !members).is_empty()
             {
                 changed = true;
                 held.waiting &= members;
-                if held.waiting == 0 {
+                if held.waiting.is_empty() {
                     *old = None;
                 }
             }
@@ -685,14 +685,14 @@ impl Rekey {
     #[must_use]
     pub fn is_waiting_for(&self, generation: u16, sender: u8) -> bool {
         self.old()
-            .any(|old| old.generation == generation && old.waiting & 1 << sender != 0)
+            .any(|old| old.generation == generation && old.waiting.contains(sender))
     }
 
     /// Whether `id` is a member still waited for under a key older than `generation`'s.
     #[must_use]
     pub fn is_waiting_for_under_older(&self, id: u8, generation: u16) -> bool {
         self.old()
-            .any(|old| old.generation < generation && old.waiting & 1 << id != 0)
+            .any(|old| old.generation < generation && old.waiting.contains(id))
     }
 
     /// The id this device removed last, if a rival key could still undo it.
@@ -709,7 +709,7 @@ impl Rekey {
     /// Drops a member that went from the members waited for. Returns whether that changed
     /// what is kept.
     pub fn went(&mut self, id: u8) -> bool {
-        self.wait_only_for(!(1 << id))
+        self.wait_only_for(Ids::ALL.without(id))
     }
 }
 
@@ -769,7 +769,7 @@ impl Rekey {
         for old in self.old() {
             put(old.key.bytes());
             put(&old.generation.to_be_bytes());
-            put(&old.waiting.to_be_bytes());
+            put(&old.waiting.bits().to_be_bytes());
         }
         put(&[self.declined().count() as u8]);
         for declined in self.declined() {
@@ -800,7 +800,7 @@ impl Rekey {
                 put(&undo.new_generation.to_be_bytes());
                 put(&undo.switched.to_be_bytes());
                 put(&undo.until.to_be_bytes());
-                put(&undo.changed.to_be_bytes());
+                put(&undo.changed.bits().to_be_bytes());
                 put(&[undo.removed, u8::from(undo.theirs)]);
             }
             None => put(&[0]),
@@ -833,7 +833,7 @@ impl Rekey {
             }
             None => put(&[0]),
         }
-        put(&self.again.to_be_bytes());
+        put(&self.again.bits().to_be_bytes());
         len
     }
 
@@ -862,7 +862,7 @@ impl Rekey {
         for old in rekey.old.iter_mut().take(count) {
             let key = Key::new(take(32)?.try_into().ok()?);
             let generation = u16::from_be_bytes(take(2)?.try_into().ok()?);
-            let waiting = u32::from_be_bytes(take(4)?.try_into().ok()?);
+            let waiting = Ids::from_bits(u32::from_be_bytes(take(4)?.try_into().ok()?));
             *old = Some(Old {
                 key,
                 generation,
@@ -897,7 +897,7 @@ impl Rekey {
                 new_generation: u16::from_be_bytes(take(2)?.try_into().ok()?),
                 switched: u32::from_be_bytes(take(4)?.try_into().ok()?),
                 until: u32::from_be_bytes(take(4)?.try_into().ok()?),
-                changed: u32::from_be_bytes(take(4)?.try_into().ok()?),
+                changed: Ids::from_bits(u32::from_be_bytes(take(4)?.try_into().ok()?)),
                 removed: take(1)?[0],
                 theirs: take(1)?[0] == 1,
             });
@@ -934,7 +934,7 @@ impl Rekey {
             }
         }
         if let Some(again) = take(4) {
-            rekey.again = u32::from_be_bytes(again.try_into().ok()?);
+            rekey.again = Ids::from_bits(u32::from_be_bytes(again.try_into().ok()?));
         }
         rest.is_empty().then_some(rekey)
     }
@@ -1021,9 +1021,9 @@ pub struct Switched {
     pub remover: u8,
     /// The member the losing key of a rival removed, given its place back.
     pub restored: Option<u8>,
-    /// The members this device removed under the losing key, as a set: it removes them again
-    /// under the new key once their records are back.
-    pub undone: u32,
+    /// The members this device removed under the losing key: it removes them again under the
+    /// new key once their records are back.
+    pub undone: Ids,
 }
 
 #[cfg(test)]
@@ -1124,7 +1124,7 @@ mod tests {
         );
         let old = rekey.old().next().unwrap();
         assert!(old.key == Key::new([5; 32]));
-        assert_eq!(old.waiting, 1 << 1 | 1 << 3);
+        assert_eq!(old.waiting, Ids::of(1).with(3));
         assert!(rekey.is_waiting_for(3, 3));
         rekey.on_key(1, 4);
         assert!(rekey.is_waiting());
@@ -1146,7 +1146,7 @@ mod tests {
         rekey.switch(&mut g).unwrap();
         assert_eq!(rekey.old().count(), 2);
         assert!(
-            rekey.old().all(|old| old.waiting == 1 << 1),
+            rekey.old().all(|old| old.waiting == Ids::of(1)),
             "the second removal's member is waited for on neither key"
         );
         rekey.on_key(1, 4);
@@ -1388,7 +1388,7 @@ mod tests {
         assert_eq!(rekey.learned(&g, 1, rival.clone(), 1_001), Learned::Pending);
         let switched = rekey.switch(&mut g).unwrap();
         assert_eq!(switched.removed, Some(0));
-        assert_eq!(switched.undone, 1 << 3, "3 is a member again");
+        assert_eq!(switched.undone, Ids::of(3), "3 is a member again");
         assert_eq!(rekey.removing(), None);
 
         // After the switch.
@@ -1400,14 +1400,14 @@ mod tests {
         assert_eq!(rekey.learned(&g, 1, rival, 1_020), Learned::Pending);
         let switched = rekey.switch(&mut g).unwrap();
         assert_eq!(switched.restored, Some(3));
-        assert_eq!(switched.undone, 1 << 3);
+        assert_eq!(switched.undone, Ids::of(3));
         assert!(g.member(3).is_some(), "with its record, to remove again");
         let mut out = [0; STORED_MAX];
         let len = rekey.encode(&mut out);
         let mut read = Rekey::decode(&out[..len]).unwrap();
-        assert_eq!(read.again(), 1 << 3, "across a restart");
+        assert_eq!(read.again(), Ids::of(3), "across a restart");
         read.start(&g, 3, Key::new([32; 32]), 1_030).unwrap();
-        assert_eq!(read.again(), 0);
+        assert_eq!(read.again(), Ids::EMPTY);
 
         // A later removal by another member undoes nothing.
         let mut g = group(2, &members);
@@ -1415,7 +1415,7 @@ mod tests {
         rekey.start(&g, 3, Key::new([30; 32]), 1_000).unwrap();
         rekey.switch(&mut g).unwrap();
         rekey.learned(&g, 1, new(40, 5, 1_030, 0, 1).after(30), 1_020);
-        assert_eq!(rekey.switch(&mut g).unwrap().undone, 0);
+        assert_eq!(rekey.switch(&mut g).unwrap().undone, Ids::EMPTY);
 
         // A rival from a higher id loses.
         let g = group(2, &members);
@@ -1437,7 +1437,7 @@ mod tests {
         assert_eq!(rekey.undo_until(), Some(until));
         // A member renamed after the switch, under the new key.
         g.merge(3, signed(3, 4, 2_000), 0);
-        assert!(rekey.changed(g.take_changed().bits()));
+        assert!(rekey.changed(g.take_changed()));
         assert_eq!(
             rekey.undo(&mut g, until, 3),
             None,
@@ -1447,7 +1447,7 @@ mod tests {
             rekey.undo(&mut g, until, 2),
             Some(Reverted {
                 since: 1_010 * ROUND_S,
-                forgotten: 1 << 2 | 1 << 3,
+                forgotten: Ids::of(2).with(3),
             })
         );
         assert_eq!(g.generation(), 3);
@@ -1500,7 +1500,7 @@ mod tests {
             rekey
                 .undo(&mut g, 1_040, 3)
                 .map(|reverted| reverted.forgotten),
-            Some(1 << 3)
+            Some(Ids::of(3))
         );
         assert_eq!(g.generation(), 4);
         assert_eq!(g.gone(2).map(|gone| gone.changed), Some(1_010 * ROUND_S));
@@ -1522,7 +1522,7 @@ mod tests {
         );
         let reverted = rekey.undo(&mut g, 1_030, 3).unwrap();
         assert_eq!(reverted.since, 1_010 * ROUND_S, "from the first switch");
-        assert_eq!(reverted.forgotten, 1 << 2 | 1 << 3);
+        assert_eq!(reverted.forgotten, Ids::of(2).with(3));
         assert_eq!(g.generation(), 3);
         assert!(*g.key() == Key::new([5; 32]));
         for (remover, rival) in [(3, losing), (1, winning)] {
@@ -1627,7 +1627,7 @@ mod tests {
         rekey.switch(&mut g).unwrap();
         rekey.learned(&g, 1, rival.clone(), 1_020);
         let switched = rekey.switch(&mut g).unwrap();
-        assert_eq!((switched.removed, switched.undone), (Some(3), 0));
+        assert_eq!((switched.removed, switched.undone), (Some(3), Ids::EMPTY));
         assert!(g.gone(3).is_some());
 
         // Before it.
@@ -1635,7 +1635,7 @@ mod tests {
         let mut rekey = Rekey::default();
         rekey.start(&g, 3, Key::new([30; 32]), 1_000).unwrap();
         rekey.learned(&g, 1, rival, 1_001);
-        assert_eq!(rekey.switch(&mut g).unwrap().undone, 0);
+        assert_eq!(rekey.switch(&mut g).unwrap().undone, Ids::EMPTY);
     }
 
     #[test]
@@ -1646,7 +1646,7 @@ mod tests {
         rekey.old[0] = Some(Old {
             key: Key::new([20; 32]),
             generation: 3,
-            waiting: 1 << 3,
+            waiting: Ids::of(3),
             lost: true,
         });
         rekey.switch(&mut g).unwrap();
@@ -1678,14 +1678,14 @@ mod tests {
                 }),
             }),
             follows: Some([4; 8]),
-            again: u32::MAX,
+            again: Ids::ALL,
             undo: Some(Undo {
                 key: Key::new([5; 32]),
                 generation: 3,
                 new_generation: 4,
                 switched: 1_010,
                 until: 2_930,
-                changed: u32::MAX,
+                changed: Ids::ALL,
                 removed: 2,
                 theirs: true,
             }),
@@ -1695,7 +1695,7 @@ mod tests {
             *old = Some(Old {
                 key: Key::new([at as u8; 32]),
                 generation: at as u16,
-                waiting: u32::MAX,
+                waiting: Ids::ALL,
                 lost: at % 2 == 1,
             });
         }
@@ -1715,7 +1715,7 @@ mod tests {
         );
         assert_eq!(read.last, rekey.last);
         assert_eq!(read.follows, rekey.follows);
-        assert_eq!(read.again(), u32::MAX);
+        assert_eq!(read.again(), Ids::ALL);
     }
 
     #[test]
@@ -1752,7 +1752,7 @@ mod tests {
         rekey.learned(&g, 1, new(9, 4, 1_010, 2, 3), 1_000);
         rekey.switch(&mut g).unwrap();
         g.merge(1, signed(1, 2, 2_000), 0);
-        rekey.changed(g.take_changed().bits());
+        rekey.changed(g.take_changed());
         let len = rekey.encode(&mut out);
         let mut read = Rekey::decode(&out[..len]).unwrap();
         let undo = read.undo.as_ref().unwrap();
@@ -1768,7 +1768,7 @@ mod tests {
         );
         assert_eq!(
             (undo.changed, undo.removed, undo.theirs),
-            (1 << 1 | 1 << 2, 2, true)
+            (Ids::of(1).with(2), 2, true)
         );
         assert!(read.undo(&mut g, 1_010, 2).is_some());
         assert!(*g.key() == Key::new([5; 32]));
@@ -1786,7 +1786,7 @@ mod tests {
             ..last
         });
         let len = before.encode(&mut out);
-        assert!(Rekey::decode(&out[..len - 4]).is_some_and(|read| read.again() == 0));
+        assert!(Rekey::decode(&out[..len - 4]).is_some_and(|read| read.again().is_empty()));
         assert!(
             Rekey::decode(&out[..len - 7])
                 .is_some_and(|read| read.last.is_some_and(|last| last.record.is_none()))

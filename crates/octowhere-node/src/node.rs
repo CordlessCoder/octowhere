@@ -10,7 +10,7 @@ use core::alloc::Allocator;
 use defmt::{debug, info, warn};
 use embassy_futures::select::{Either, Either3, select, select3};
 use octowhere_mesh::{
-    IDS, Zeroable,
+    IDS, Ids, Zeroable,
     absorb::{Event, State, When, absorb},
     clock::{Clock, SWEEP_US, Taken, UTC_BOUND_US},
     compose::{Sources, compose},
@@ -693,7 +693,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         // The stored state may still wait on an older key for a member removed since, as
         // earlier builds left it.
         if let Some(group) = &group {
-            rekey.wait_only_for(group.ids().bits());
+            rekey.wait_only_for(group.ids());
         }
         match &group {
             Some(group) => info!(
@@ -1113,7 +1113,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             self.unsaved.everything();
         }
         if let Some(group) = &mut self.group
-            && self.removals.rekey.changed(group.take_changed().bits())
+            && self.removals.rekey.changed(group.take_changed())
         {
             self.unsaved.rekey();
         }
@@ -1211,10 +1211,12 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         }
         // A member this device removed again once its record is back.
         let again =
-            self.removals.rekey.again() & self.group.as_ref().map_or(0, |group| group.ids().bits());
-        if again != 0 && self.removals.rekey.pending().is_none() {
+            self.removals.rekey.again() & self.group.as_ref().map_or(Ids::EMPTY, Group::ids);
+        if let Some(id) = again.first()
+            && self.removals.rekey.pending().is_none()
+        {
             // One that does not start is tried again at the next step.
-            _ = self.remove(again.trailing_zeros() as u8).await;
+            _ = self.remove(id).await;
         }
         self.retry_unread(own);
         self.inbox.started(round_start_s(time));
@@ -1963,7 +1965,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                     .clone();
                 // The member added is one more id that declining the last removal forgets, and
                 // this write may stand in for a switch's not yet stored.
-                if self.removals.rekey.changed(group.take_changed().bits()) {
+                if self.removals.rekey.changed(group.take_changed()) {
                     self.unsaved.rekey();
                 }
                 let rekey = self
@@ -2284,10 +2286,10 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             warn!("[REKEY] a rival key won; {} is a member again", restored);
             self.unsaved.slot(restored);
         }
-        if switched.undone != 0 {
+        if !switched.undone.is_empty() {
             warn!(
                 "[REKEY] this device's removal lost; removing {:#010x} again",
-                switched.undone
+                switched.undone.bits()
             );
         }
         if let Some(until) = self.removals.rekey.undo_until() {
@@ -2433,7 +2435,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         info!(
             "[REKEY] declined after the switch: back on generation {}, forgot records {:#010x}, {} positions and {} messages",
             group.generation(),
-            reverted.forgotten,
+            reverted.forgotten.bits(),
             positions,
             messages
         );
