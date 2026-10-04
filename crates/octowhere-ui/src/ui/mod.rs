@@ -13,6 +13,7 @@ pub mod gesture;
 pub mod group;
 pub mod icon;
 pub mod identity;
+pub mod members;
 pub use octowhere_motion::{compass, fusion, imu};
 pub mod pager;
 pub mod panel;

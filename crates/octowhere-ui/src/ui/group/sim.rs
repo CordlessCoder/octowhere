@@ -83,6 +83,22 @@ fn name(text: &str) -> Name {
     Name::new(text.as_bytes()).expect("a fixture name is printable")
 }
 
+/// Dublin, where this device stands, in degrees × 10⁷.
+const DUBLIN: (i32, i32) = (533_498_000, -62_603_000);
+
+/// Where member `id` stands: spread round Dublin at bearings a golden angle apart, further out
+/// each, so that their bearings and distances differ.
+fn around(id: u8) -> (i32, i32) {
+    let metres = 180.0 * f32::from(id);
+    let (sin, cos) = libm::sincosf((137.5 * f32::from(id)).to_radians());
+    let north = metres * cos / 111_320.0;
+    let east = metres * sin / (111_320.0 * libm::cosf(53.35_f32.to_radians()));
+    (
+        DUBLIN.0 + (north * 1e7) as i32,
+        DUBLIN.1 + (east * 1e7) as i32,
+    )
+}
+
 /// A group of `count` members with this device at id 0, heard and placed at varied times
 /// before `now`.
 #[must_use]
@@ -109,6 +125,7 @@ pub fn group(count: u8, now: Micros) -> GroupView {
                 joined: Some(seconds(86_400 * 3)),
                 heard: None,
                 position: Position::At(seconds(12)),
+                coordinates: Some(DUBLIN),
             }
         } else {
             let pattern = usize::from(id - 1) % NAMES.len();
@@ -130,6 +147,7 @@ pub fn group(count: u8, now: Micros) -> GroupView {
                     3 => Position::Unknown,
                     _ => Position::At(seconds(60 * i64::from(id))),
                 },
+                coordinates: (pattern != 2).then(|| around(id)),
             }
         };
         members[usize::from(id)] = Some(member);
@@ -453,6 +471,7 @@ impl Sim {
                             joined: Some(now as At),
                             heard: None,
                             position: Position::Never,
+                            coordinates: None,
                         });
                         let count = group.count() as u8;
                         if let Some(pairing) = self.pairing() {
@@ -475,6 +494,7 @@ impl Sim {
                             joined: Some(now as At),
                             heard: None,
                             position: Position::Never,
+                            coordinates: None,
                         };
                         joined.members[2] = Some(me);
                         if let Some(pairing) = self.pairing() {
@@ -523,6 +543,7 @@ impl Sim {
                         joined: Some(now as At - 3_600 * SECOND as At),
                         heard: None,
                         position: Position::Never,
+                        coordinates: None,
                     });
                     if let Some(refresh) = &mut self.view.refresh {
                         refresh.learned |= 1 << id;
@@ -555,6 +576,7 @@ impl Sim {
                     joined: Some(now as At),
                     heard: Some(now as At),
                     position: Position::Never,
+                    coordinates: None,
                 });
                 self.view.group = Some(group);
                 self.set_recovery(RecoveryPhase::Stored);

@@ -402,12 +402,13 @@ const VIEW_NAMES = [
   "POWER OFF", "GROUP", "EVENTS", "MESSAGES", "EVENT", "MANAGE HISTORY",
 ];
 const RESTS = ["AWAKE", "DIMMING", "ALWAYS ON", "DARK"];
+const FACES = ["CLOCK", "COMPASS", "MEMBERS"];
 
 function showState(status) {
   let screen;
   if (status & 16) screen = "--";
   else if (status & 1) screen = "START-UP";
-  else screen = VIEW_NAMES[(status >> 5) & 15] ?? (status & 8 ? "COMPASS" : "CLOCK");
+  else screen = VIEW_NAMES[(status >> 5) & 15] ?? FACES[(status >> 9) & 3];
   document.getElementById("state-screen").textContent = screen;
   document.getElementById("state-rest").textContent = status & 16 ? "POWERED OFF" : RESTS[(status >> 1) & 3];
 }
@@ -821,7 +822,8 @@ const HINTS = {
   dark: "The screen is off. Double-tap it to wake it.",
   powered: "Powered off. Hold PWR for half a second to power it on.",
   clock: "The clock. Swipe sideways for the compass, drag down from the top for settings, or up for events.",
-  compass: "The compass. Turn it with the heading control, or swipe back to the clock.",
+  compass: "The compass. Turn it with the heading control, or swipe sideways for the clock or the members.",
+  members: "Where the group's members are, on a ring that turns with the heading. Tap the middle for the next member.",
 };
 
 // What shows over the faces, by the status's bits 5–8.
@@ -858,7 +860,7 @@ function showStatus(status) {
   else if (rest === 2) text = HINTS.alwaysOn;
   else if (rest === 3) text = HINTS.dark;
   else if (view) text = view;
-  else text = status & 8 ? HINTS.compass : HINTS.clock;
+  else text = [HINTS.clock, HINTS.compass, HINTS.members][(status >> 9) & 3];
   hint.textContent = several ? `Device ${selected + 1}. ${text}` : text;
   showState(status);
 }

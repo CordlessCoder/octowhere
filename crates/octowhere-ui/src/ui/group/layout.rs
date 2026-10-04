@@ -13,7 +13,7 @@ use heapless::{String, Vec};
 use super::super::{
     gesture::Micros,
     icon::Glyph,
-    panel, stroke,
+    members, panel, stroke,
     text::{self, style},
 };
 use crate::chrome::{
@@ -21,7 +21,7 @@ use crate::chrome::{
     INTERFERENCE_BOLD, OnBackground, SHAPIRO, Window,
 };
 
-pub type Line = String<36>;
+pub type Line = String<40>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Face {
@@ -154,7 +154,28 @@ pub enum Shape {
     /// The status glyph in its frame, in a colour.
     Glyph(Glyph, Color),
     Path(Path),
+    /// The polygon through a path's points, filled; its width is unused.
+    Polygon(Path),
     Arc(Arc),
+    Turned(Turned),
+}
+
+/// Text centred on `center` and turned clockwise by `angle` tenths of a degree, as the member
+/// face's labels are turned along its ring.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Turned {
+    pub text: Line,
+    pub face: Face,
+    pub size: u8,
+    pub color: Color,
+    pub center: Point,
+    pub angle: i16,
+}
+
+impl Turned {
+    fn style(&self, font: &FontdueRenderer<'static, Color>) -> FontdueRenderer<'static, Color> {
+        style(font, self.color, u32::from(self.size), self.face.index())
+    }
 }
 
 /// Straight segments through `points`, in quarter pixels, `width` quarter pixels wide.
@@ -185,6 +206,9 @@ pub enum Backdrop {
     /// The same scatter breathing at a level, clear of every text's ink by 2 px, as the
     /// 2026-10-04 screens have it.
     Breathing(u8),
+    /// The member face's grid, turned this many degrees anticlockwise so that it keeps to
+    /// true north.
+    Grid(u16),
     /// Nothing: the items lie over whatever was drawn before them.
     None,
 }
@@ -205,7 +229,7 @@ pub struct Item {
 pub const GLYPH: Rectangle = Rectangle::new(Point::new(342, 96), Size::new_equal(42));
 const GLYPH_MODULE: i32 = 6;
 
-const ITEMS: usize = 100;
+const ITEMS: usize = 128;
 
 /// One screen's drawing.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -298,6 +322,15 @@ impl List {
         }));
     }
 
+    /// The polygon through `points`, in quarter pixels, filled.
+    pub fn polygon(&mut self, points: &[(i16, i16)], color: Color) {
+        self.push(Shape::Polygon(Path {
+            points: points.iter().copied().take(6).collect(),
+            width: 0,
+            color,
+        }));
+    }
+
     pub fn arc(&mut self, arc: Arc) {
         self.push(Shape::Arc(arc));
     }
@@ -335,8 +368,11 @@ impl List {
                     *rect = rect.translate(Point::new(dx, 0));
                 }
                 Shape::Glyph(..) => {}
-                Shape::Path(path) => path.points.iter_mut().for_each(|(x, _)| *x += quarter),
+                Shape::Path(path) | Shape::Polygon(path) => {
+                    path.points.iter_mut().for_each(|(x, _)| *x += quarter);
+                }
                 Shape::Arc(arc) => arc.center.x += dx,
+                Shape::Turned(turned) => turned.center.x += dx,
             }
         }
     }
@@ -351,6 +387,7 @@ impl List {
             Backdrop::Breathing(breath) => {
                 panel::draw_breathing_scatter(breath, &self.clears(font), target)?;
             }
+            Backdrop::Grid(turn) => members::draw_grid(turn, target)?,
             Backdrop::None => {}
         }
         for item in &self.items {
@@ -376,6 +413,7 @@ impl List {
     ) {
         match (before.backdrop, self.backdrop) {
             (Backdrop::Panel, Backdrop::Panel) | (Backdrop::None, Backdrop::None) => {}
+            (Backdrop::Grid(was), Backdrop::Grid(is)) if was == is => {}
             (Backdrop::Breathing(was), Backdrop::Breathing(is)) => {
                 let (old, new) = (before.clears(font), self.clears(font));
                 if (was, &old) != (is, &new) {
@@ -425,10 +463,14 @@ fn bounds(item: &Item, font: &FontdueRenderer<'static, Color>) -> Rectangle {
         }
         Shape::Fill(rect, _) | Shape::Boxed(rect, ..) => *rect,
         Shape::Glyph(..) => GLYPH,
-        Shape::Path(path) => {
+        Shape::Path(path) | Shape::Polygon(path) => {
             stroke::path_bounds(&path.points, path.width).unwrap_or(Rectangle::zero())
         }
         Shape::Arc(arc) => stroke::arc_bounds(arc.center, arc.radius, arc.width, arc.span),
+        Shape::Turned(turned) => {
+            let reach = libm::ceilf(turned.style(font).rotated_reach(&turned.text)) as u32;
+            Rectangle::with_center(turned.center, Size::new_equal(2 * reach + 3))
+        }
     };
     match item.clip {
         Some(clip) => area.intersection(&clip),
@@ -467,11 +509,21 @@ fn draw_shape<D: CoverageTarget<Color = Color>>(
             stroke::draw_path(&path.points, path.width, path.color, target);
             Ok(())
         }
+        Shape::Polygon(path) => {
+            stroke::fill_polygon(&path.points, path.color, target);
+            Ok(())
+        }
         Shape::Arc(arc) => {
             stroke::draw_arc(
                 arc.center, arc.radius, arc.width, arc.span, arc.color, target,
             );
             Ok(())
+        }
+        Shape::Turned(turned) => {
+            let (sin, cos) = libm::sincosf((f32::from(turned.angle) / 10.0).to_radians());
+            turned
+                .style(font)
+                .draw_rotated(&turned.text, turned.center, cos, sin, target)
         }
     }
 }

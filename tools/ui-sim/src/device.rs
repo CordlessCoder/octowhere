@@ -261,7 +261,9 @@ impl Readings {
                 fix: self.fix,
                 in_use: if self.fix { 9 } else { 0 },
                 in_view: 14,
-                position: self.fix.then_some(self.position),
+                // The firmware keeps the last fix's position while there is none.
+                position: Some(self.position),
+                hdop_milli: self.fix.then_some(1_100),
                 health: GnssHealth {
                     recovering: RECEIVER[self.receiver].is_some(),
                     failed_resets: RECEIVER[self.receiver].unwrap_or(0),

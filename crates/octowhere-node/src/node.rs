@@ -329,9 +329,9 @@ struct Shown {
     /// node's own, never these.
     heard: [Option<i64>; IDS as usize],
     refresh: Option<RefreshView>,
-    /// The newest position held for each id, as its UTC second. Kept past the table's expiry,
-    /// so an old position shows as old rather than never received.
-    positions: [Option<u32>; IDS as usize],
+    /// The newest position held for each id: its UTC second and its coordinates. Kept past the
+    /// table's expiry, so an old position shows as old rather than never received.
+    positions: [Option<(u32, (i32, i32))>; IDS as usize],
     /// A founding's wait, under way or ended, until another pairing starts.
     recovery: Option<RecoveryView>,
 }
@@ -356,11 +356,13 @@ impl Shown {
         self.answer = Some(answer);
     }
 
-    /// Notes the stamps of the positions `table` holds.
+    /// Notes the newest of the positions `table` holds.
     fn positions(&mut self, table: &Table) {
         for entry in table.entries() {
-            if let Some(held) = self.positions.get_mut(usize::from(entry.id)) {
-                *held = Some(held.map_or(entry.stamp, |held| held.max(entry.stamp)));
+            if let Some(held) = self.positions.get_mut(usize::from(entry.id))
+                && held.is_none_or(|(stamp, _)| entry.stamp >= stamp)
+            {
+                *held = Some((entry.stamp, (entry.latitude, entry.longitude)));
             }
         }
     }
@@ -423,8 +425,9 @@ impl Shown {
                 },
                 position: match self.positions[index] {
                     None => Position::Never,
-                    Some(stamp) => local_at(stamp).map_or(Position::Unknown, Position::At),
+                    Some((stamp, _)) => local_at(stamp).map_or(Position::Unknown, Position::At),
                 },
+                coordinates: self.positions[index].map(|(_, coordinates)| coordinates),
             });
         }
     }

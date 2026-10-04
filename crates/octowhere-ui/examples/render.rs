@@ -16,6 +16,8 @@ mod atlas;
 mod events;
 #[path = "render/group.rs"]
 mod group;
+#[path = "render/members.rs"]
+mod members;
 
 use std::{collections::HashMap, fs::File, io::BufWriter, path::PathBuf};
 
@@ -52,16 +54,11 @@ fn main() {
         roll_deg: -12,
         disturbed: false,
     };
-    let mut frames: Vec<(String, Stage)> = Screen::ALL
-        .iter()
-        .map(|&screen| {
-            let name = match screen {
-                Screen::Clock => "clock",
-                Screen::Compass => "compass-heading",
-            };
-            (name.into(), stage(screen, calibrated))
-        })
-        .collect();
+    // The member face's states are drawn in `members`.
+    let mut frames: Vec<(String, Stage)> = vec![
+        ("clock".into(), stage(Screen::Clock, calibrated)),
+        ("compass-heading".into(), stage(Screen::Compass, calibrated)),
+    ];
     for (name, compass) in [
         ("no-data", CompassView::default()),
         (
@@ -265,7 +262,7 @@ fn main() {
         println!("{}", path.display());
         drawn.insert(name, fb);
     }
-    for (name, fb) in events::frames() {
+    for (name, fb) in events::frames().into_iter().chain(members::frames()) {
         let path = out.join(format!("{name}.png"));
         write_png(&fb, &path);
         println!("{}", path.display());

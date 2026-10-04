@@ -250,7 +250,9 @@ impl Readings {
                 fix: self.fix,
                 in_use: if self.fix { 9 } else { 0 },
                 in_view: 14,
-                position: self.fix.then_some(self.position),
+                // The firmware keeps the last fix's position while there is none.
+                position: Some(self.position),
+                hdop_milli: self.fix.then_some(1_100),
                 health: GnssHealth {
                     recovering: self.receiver > 0,
                     failed_resets: self.receiver.saturating_sub(1),
@@ -627,6 +629,7 @@ impl Device {
         let screen = match self.stage.screen() {
             Screen::Clock => 0,
             Screen::Compass => 1,
+            Screen::Members => 2,
         };
         let view = if self.stage.power_off().is_some() {
             9
@@ -653,9 +656,9 @@ impl Device {
         };
         u32::from(self.stage.starting_up())
             | rest << 1
-            | screen << 3
             | u32::from(self.powered_off) << 4
             | view << 5
+            | screen << 9
     }
 }
 
@@ -991,10 +994,11 @@ pub extern "C" fn light() -> f32 {
 }
 
 /// Where the device is: bit 0 while it starts up, bits 1–2 its rest (awake, dimming, on the
-/// always-on face, dark), bit 3 on the compass, bit 4 once powered off, and bits 5–8 what
-/// shows over the faces: nothing (0), the settings panel (1), a screen it opened (2
-/// brightness, 3 device, 4 clear, 5 zone picker, 6 replay, 7 timeout, 8 always on), or the
-/// power-off confirmation (9).
+/// always-on face, dark), bit 4 once powered off, bits 5–8 what shows over the faces, and bits
+/// 9–10 the face (0 clock, 1 compass, 2 members). Over the faces: nothing (0), the settings
+/// panel (1), a screen it opened (2 brightness, 3 device, 4 clear, 5 zone picker, 6 replay,
+/// 7 timeout, 8 always on, 10 group), the power-off confirmation (9), or the drawer (11
+/// events, 12 messages, 13 an event, 14 managing history).
 #[unsafe(no_mangle)]
 pub extern "C" fn status() -> u32 {
     with(|device| device.status())

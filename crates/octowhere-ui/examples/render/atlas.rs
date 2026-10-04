@@ -214,6 +214,20 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
             ("events-aod-unread", "ALWAYS ON / UNREAD"),
         ],
     ),
+    (
+        "MEMBERS",
+        &[
+            ("members-bearing-circle-four", "MEMBERS / FOUR"),
+            ("members-bearing-circle-one", "MEMBERS / ONE"),
+            ("members-heading-unavailable", "MEMBERS / NORTH UP"),
+            ("members-selected-next", "MEMBERS / NEXT"),
+            ("members-crowded", "MEMBERS / CROWDED"),
+            ("members-no-own-fix", "MEMBERS / NO OWN FIX"),
+            ("members-none", "MEMBERS / NO POSITIONS"),
+            ("members-no-group", "MEMBERS / NO GROUP"),
+            ("members-swiping", "MEMBERS / SWIPING"),
+        ],
+    ),
 ];
 
 const COLUMNS: usize = 7;

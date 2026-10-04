@@ -966,6 +966,10 @@ pub const COMPASS_NOISE: [(u8, u8, u8); 6] = [
 /// controls that cannot be used yet: no status meaning (2026-10-04 hand-off).
 pub const TRACK: Color = color_from_hex("#30343a");
 pub const DISABLED: Color = color_from_hex("#444952");
+/// The member face's grid, its lines and the marks where they cross: structure that keeps to
+/// true north, with no status meaning and no scale (2026-10-04 hand-off).
+pub const GRID_LINE: Color = color_from_hex("#0c1521");
+pub const GRID_MARK: Color = color_from_hex("#4b628b");
 /// The settings halftone's purples, darkest first: sparse marks take the dark ones and dense
 /// marks the bright (2026-09-30 update).
 pub const HALFTONE: [Color; 3] = [

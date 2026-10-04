@@ -34,6 +34,8 @@ pub struct MemberView {
     /// When this device last heard a packet the member sent itself. `None` for this device.
     pub heard: Option<At>,
     pub position: Position,
+    /// Where its newest position put it, in degrees × 10⁷, latitude then longitude.
+    pub coordinates: Option<(i32, i32)>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

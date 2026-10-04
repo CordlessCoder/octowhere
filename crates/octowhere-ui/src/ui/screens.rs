@@ -11,7 +11,9 @@ use super::{
     clock::ClockView,
     clock_screen,
     compass::CompassView,
-    compass_screen, panel,
+    compass_screen,
+    group::layout::List,
+    panel,
     rest::{AlwaysOn, Timeout},
 };
 use crate::{
@@ -23,11 +25,13 @@ use crate::{
 pub enum Screen {
     Clock,
     Compass,
+    /// Where the group's members are.
+    Members,
 }
 
 impl Screen {
     /// Every screen, in the order the pager visits them.
-    pub const ALL: [Self; 2] = [Self::Clock, Self::Compass];
+    pub const ALL: [Self; 3] = [Self::Clock, Self::Compass, Self::Members];
 
     #[must_use]
     pub fn next(self) -> Self {
@@ -65,6 +69,8 @@ pub struct Gnss {
     pub in_view: u8,
     /// The last fix's latitude and longitude, in 1e-7 degrees.
     pub position: Option<(i32, i32)>,
+    /// The horizontal dilution of precision the module reports, in thousandths.
+    pub hdop_milli: Option<u32>,
     pub health: GnssHealth,
 }
 
@@ -138,8 +144,10 @@ pub struct State {
     pub panel_accents: panel::Accents,
 }
 
+/// Draws `state`, with the member face from `members` where it shows.
 pub fn render<D>(
     state: State,
+    members: Option<&List>,
     font: &chrome::FontdueRenderer<'static, Color>,
     target: &mut D,
 ) -> Result<(), D::Error>
@@ -183,7 +191,7 @@ where
     if state.sheet >= height {
         return Ok(());
     }
-    render_page(state, state.offset, font, target)?;
+    render_page(state, members, state.offset, font, target)?;
     if let Some((screen, offset)) = state.neighbour {
         render_page(
             // A page crossing into view has not settled, so its accents have not begun.
@@ -193,6 +201,7 @@ where
                 clock_accents: clock_screen::Accents::HIDDEN,
                 ..state
             },
+            members,
             offset,
             font,
             target,
@@ -311,6 +320,7 @@ fn fill_around<D: DrawTarget<Color = Color>>(
 /// Draws one screen shifted right by `offset`, clipped to the part of it that is on the panel.
 fn render_page<D>(
     state: State,
+    members: Option<&List>,
     offset: i32,
     font: &chrome::FontdueRenderer<'static, Color>,
     target: &mut D,
@@ -336,5 +346,6 @@ where
         Screen::Compass => {
             compass_screen::draw(&peripherals.compass, state.compass_accents, font, target)
         }
+        Screen::Members => members.map_or(Ok(()), |list| list.draw(font, target)),
     }
 }

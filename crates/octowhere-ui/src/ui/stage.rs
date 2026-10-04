@@ -21,6 +21,7 @@ use super::{
         view::{MeshView, Request},
     },
     identity,
+    members::{self, Tap},
     pager::Pager,
     panel::{self, Cell},
     picker::Picker,
@@ -317,6 +318,8 @@ enum Drawn {
     /// The drawer's, open and at rest, which compares the drawer's lists of this step and the
     /// last.
     Drawer,
+    /// The member face's, settled, which compares its lists of this step and the last.
+    Members,
 }
 
 pub struct Stage {
@@ -433,6 +436,16 @@ pub struct Stage {
     /// What lies over the screen after the last step: the toast, and whether the unread arc.
     overlay: Option<(alloc::boxed::Box<List>, bool)>,
     overlay_spare: Option<alloc::boxed::Box<List>>,
+    /// What the member face drew at the last step, while it shows, and a list to build it into
+    /// next.
+    members_list: Option<alloc::boxed::Box<List>>,
+    members_spare: Option<alloc::boxed::Box<List>>,
+    /// The member the face shows selected.
+    member: Option<u8>,
+    /// The declination where the device last had a fix, and the true heading the member face
+    /// turns by.
+    declination: Option<f32>,
+    true_heading: Option<u16>,
 }
 
 impl Stage {
@@ -517,6 +530,11 @@ impl Stage {
             held_toast: None,
             overlay: None,
             overlay_spare: None,
+            members_list: None,
+            members_spare: None,
+            member: None,
+            declination: None,
+            true_heading: None,
             peripherals,
         }
     }
@@ -622,6 +640,7 @@ impl Stage {
         let toast = self.toast.map(|toast| toast.since + TOAST_FOR);
         let drawer = self.drawer_list.as_ref().and_then(|list| list.due());
         let overlay = self.overlay.as_ref().and_then(|(list, _)| list.due());
+        let members = self.members_list.as_ref().and_then(|list| list.due());
         [
             self.startup_due,
             rest,
@@ -633,6 +652,7 @@ impl Stage {
             toast,
             drawer,
             overlay,
+            members,
         ]
         .into_iter()
         .flatten()
@@ -677,7 +697,10 @@ impl Stage {
         self.level_since = None;
         self.clock_settled = None;
         // An open panel or page keeps its snapshot: the face changes under it.
-        if matches!(self.drawn, Some(Drawn::Compass(..) | Drawn::Clock(_))) {
+        if matches!(
+            self.drawn,
+            Some(Drawn::Compass(..) | Drawn::Clock(_) | Drawn::Members)
+        ) {
             self.drawn = None;
         }
     }
@@ -716,6 +739,26 @@ impl Stage {
             group::layout::Shape::Text(text) => Some(text.text.as_str()),
             _ => None,
         })
+    }
+
+    /// The text the member face showed at the last step, its rim labels among it, for tests
+    /// and tools to read.
+    pub fn members_text(&self) -> impl Iterator<Item = &str> {
+        let items = self
+            .members_list
+            .as_ref()
+            .map_or(&[][..], |list| list.items());
+        items.iter().filter_map(|item| match &item.shape {
+            group::layout::Shape::Text(text) => Some(text.text.as_str()),
+            group::layout::Shape::Turned(turned) => Some(turned.text.as_str()),
+            _ => None,
+        })
+    }
+
+    /// The member the member face shows selected.
+    #[must_use]
+    pub fn member(&self) -> Option<u8> {
+        self.member
     }
 
     /// How far a face has moved off the panel, sideways or down.
@@ -840,6 +883,7 @@ impl Stage {
             self.peripherals.battery = sensors.battery;
             self.charge.read(sensors.battery, now);
             self.peripherals.gnss = sensors.gnss;
+            self.declination = members::declination(&sensors.gnss, &self.peripherals.clock.clock());
             full |= self.screen == Screen::Clock;
             if let Some(id) = self.events.gnss(&sensors.gnss.health, now) {
                 self.announce(id, now, &mut update);
@@ -967,7 +1011,7 @@ impl Stage {
         let view = self.pager.view();
         self.screen = Screen::ALL[view.page];
         let face_shows = self.page.is_none() && !self.sheet.is_open();
-        let samples_fast = |screen: Screen| screen == Screen::Compass;
+        let samples_fast = |screen: Screen| matches!(screen, Screen::Compass | Screen::Members);
         update.samples_fast = face_shows
             && (samples_fast(self.screen)
                 || view
@@ -1020,7 +1064,12 @@ impl Stage {
         };
         self.group_due = group_list.as_ref().and_then(|list| list.due());
         let drawer_before = self.build_drawer(now);
-        self.track_damage(full, group_list, drawer_before);
+        let members_before = self.build_members(now);
+        self.track_damage(full, group_list, drawer_before, members_before);
+        if self.members_list.is_none() {
+            // Lists are kilobytes; a hidden face keeps none.
+            self.members_spare = None;
+        }
         self.track_overlay(now);
 
         let moved = current != previous
@@ -1218,6 +1267,54 @@ impl Stage {
         );
         self.breathing |= self.rest == Rest::Awake;
         self.drawer_list.replace(list)
+    }
+
+    /// Builds the member face this step, while it shows on the faces, and returns what it drew
+    /// the step before.
+    fn build_members(&mut self, now: Micros) -> Option<alloc::boxed::Box<List>> {
+        let view = self.pager.view();
+        let shows = self.page.is_none()
+            && !self.sheet.is_open()
+            && (self.screen == Screen::Members
+                || view
+                    .neighbour
+                    .is_some_and(|(page, _)| Screen::ALL[page] == Screen::Members));
+        self.true_heading = members::hold(
+            self.true_heading,
+            members::true_heading(&self.peripherals.compass, self.declination),
+        );
+        if !shows {
+            return self.members_list.take();
+        }
+        let mut list = self.members_spare.take().unwrap_or_else(new_list);
+        self.member = members::build(&self.members_context(now), &self.renderer, &mut list);
+        self.members_list.replace(list)
+    }
+
+    fn members_context(&self, now: Micros) -> members::Context<'_> {
+        members::Context {
+            group: self.mesh.group.as_ref(),
+            gnss: &self.peripherals.gnss,
+            heading: self.true_heading,
+            selected: self.member,
+            now,
+        }
+    }
+
+    /// Takes a tap on the member face: the next member, or the screen that lists them.
+    fn tap_members(&mut self, point: Point, now: Micros) {
+        match members::tap(&self.members_context(now), point) {
+            Some(Tap::Select(id)) => self.member = Some(id),
+            Some(Tap::Members) => {
+                self.sheet.set(true);
+                self.page = Some((Page::Group(Flow::members()), now));
+            }
+            Some(Tap::Group) => {
+                self.sheet.set(true);
+                self.page = Some((Page::Group(Flow::group()), now));
+            }
+            None => {}
+        }
     }
 
     /// Works out what lies over the screen this step, the toast and the unread arc, and damages
@@ -1469,7 +1566,7 @@ impl Stage {
     /// Whether the compass shows and its heading has turned far enough to count as use.
     fn heading_moved(&mut self, face_shows: bool) -> bool {
         let heading = self.peripherals.compass.heading_decidegrees;
-        if !face_shows || self.screen != Screen::Compass {
+        if !face_shows || !matches!(self.screen, Screen::Compass | Screen::Members) {
             return false;
         }
         match (self.heading_anchor, heading) {
@@ -1754,6 +1851,7 @@ impl Stage {
         full: bool,
         group_list: Option<alloc::boxed::Box<List>>,
         drawer_before: Option<alloc::boxed::Box<List>>,
+        members_before: Option<alloc::boxed::Box<List>>,
     ) {
         let view = self.pager.view();
         let faces_settled = self.page.is_none()
@@ -1778,6 +1876,8 @@ impl Stage {
                 self.peripherals.battery,
                 self.clock_accents,
             )))
+        } else if faces_settled && self.screen == Screen::Members && self.members_list.is_some() {
+            Some(Drawn::Members)
         } else if let Some(list) = group_list {
             Some(Drawn::Group(list))
         } else if let Some((page, _)) = &self.page {
@@ -1823,6 +1923,14 @@ impl Stage {
                     _ => self.changed.make_full(),
                 }
             }
+            (Some(Drawn::Members), Some(Drawn::Members)) => {
+                match (&members_before, &self.members_list) {
+                    (Some(before), Some(after)) => {
+                        after.damage(before, &self.renderer, &mut self.changed);
+                    }
+                    _ => self.changed.make_full(),
+                }
+            }
             (
                 Some(Drawn::Page(page, accents, state)),
                 Some(Drawn::Page(now, now_accents, now_state)),
@@ -1843,6 +1951,7 @@ impl Stage {
         }
         self.drawn = drawn;
         self.drawer_spare = drawer_before;
+        self.members_spare = members_before;
     }
 
     /// The open panel's damage: the grid while it scrolls, a cell whose reading changed, or
@@ -1968,6 +2077,11 @@ impl Stage {
             GestureEvent::Tap(point) => {
                 if self.sheet.is_open() {
                     self.tap_panel(point, now, update);
+                } else if self.sheet.is_closed()
+                    && self.screen == Screen::Members
+                    && !self.pager.is_moving()
+                {
+                    self.tap_members(point, now);
                 }
             }
             GestureEvent::None => {}
@@ -2515,6 +2629,7 @@ impl Stage {
                 panel_scroll: self.grid.scroll,
                 panel_accents: self.panel_accents,
             },
+            self.members_list.as_deref(),
             &self.renderer,
             target,
         )

@@ -190,7 +190,8 @@ mod rtc_inject {
     }
 }
 static MOTION_STATE: Signal<CriticalSectionRawMutex, Motion> = Signal::new();
-/// Set by the frame loop while the compass screen shows; `motion_task` then samples fast.
+/// Set by the frame loop while the compass or the member face shows; `motion_task` then samples
+/// fast.
 static COMPASS_ACTIVE: AtomicBool = AtomicBool::new(false);
 static COMPASS_RECALIBRATE: AtomicBool = AtomicBool::new(false);
 /// Settings for `settings_task` to save. A full queue drops the newest, which the next change of
@@ -2672,6 +2673,7 @@ async fn frame_loop(
                             in_use: signal.satellites_used.get(),
                             in_view: signal.satellites_in_view.get(),
                             position: state.position,
+                            hdop_milli: signal.hdop.map(|hdop| hdop.get()),
                             health: GNSS_HEALTH.lock(Cell::get),
                         },
                     }

@@ -6,7 +6,7 @@
 pub mod parts;
 mod rows;
 
-pub use rows::{TOAST, TOAST_COMPACT, toast};
+pub use rows::{TOAST, TOAST_COMPACT, age, age_due, toast};
 
 use embedded_graphics::{prelude::Point, primitives::Rectangle};
 use heapless::Vec;

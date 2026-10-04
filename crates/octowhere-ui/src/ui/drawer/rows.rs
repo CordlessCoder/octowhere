@@ -206,7 +206,8 @@ pub fn age(elapsed: Micros) -> Line {
 }
 
 /// When an age shown at `elapsed` next changes, as a time after `elapsed`.
-fn age_due(elapsed: Micros) -> Micros {
+#[must_use]
+pub fn age_due(elapsed: Micros) -> Micros {
     let unit = match elapsed / SECOND {
         0..60 => SECOND,
         60..3_600 => 60 * SECOND,
