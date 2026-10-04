@@ -184,3 +184,28 @@ fn a_restart_within_the_day_shows_the_switch_to_decline_again() {
     });
     assert!(back, "after {} s", sim.now_s());
 }
+
+/// A node restarted out of everyone's reach hears nobody: the switch it can still decline comes
+/// back as soon as its own timebase can time it.
+#[test]
+fn a_restart_out_of_reach_shows_the_switch_once_it_has_a_timebase() {
+    let mut sim = group(3, 26);
+    sim.command(0, Command::Remove(2));
+    let switched = sim.run_while_not(60 * 60, |sim| {
+        matches!(
+            current(sim, 1).map(|view| view.stage),
+            Some(RemovalStage::Switched { .. })
+        )
+    });
+    assert!(switched, "after {} s", sim.now_s());
+    for other in [0, 2] {
+        sim.link(1, other, None);
+        sim.link(other, 1, None);
+    }
+    let before = sim.count(1, "[MESH] timebase");
+    sim.restart(1);
+    let timed = sim.run_while_not(10 * 60, |sim| sim.count(1, "[MESH] timebase") > before);
+    assert!(timed, "after {} s", sim.now_s());
+    sim.run_for(1);
+    assert!(current(&sim, 1).is_some(), "shown with its timebase");
+}

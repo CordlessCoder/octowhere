@@ -1209,6 +1209,8 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         if timebase != self.timebase_shown {
             log_timebase(timebase, self.clock.is_sweeping(now));
             self.timebase_shown = timebase;
+            // What the screens show of removals is timed on it.
+            self.publish();
         }
         let Some((time, _)) = self.clock.at(now) else {
             let end = self.clock.sweep_ends(now).unwrap_or(now + ROUND_US);
