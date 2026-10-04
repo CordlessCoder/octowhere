@@ -256,8 +256,10 @@ Weigh that cost before adding one.
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 1,635,968 bytes, 10.44% of the 15,663,104-byte app partition that
-`partitions.csv` gives it. Measure with `espflash save-image --chip esp32s3 --flash-size 16mb
+The image is currently 1,683,648 bytes, 10.75% of the 15,663,104-byte app partition that
+`partitions.csv` gives it (the inject features' build at `bb50a21`). `b06d686` alone added
+36.8 KB to it while its functions grew by about 1 KB, so most of that is likely padding the
+image crossed into. Measure with `espflash save-image --chip esp32s3 --flash-size 16mb
 --partition-table partitions.csv <elf> <out>`; without those two options it assumes 4 MB of flash
 and the default table. The time zone
 data is about 390 KB of that, and its boundary tolerance in `tools/tz-data.py` is the lever: the

@@ -26,9 +26,13 @@ until the feature set is complete, because profiling an incomplete firmware pric
     mid-run. Each node's clock drifts by its own amount from its own boot; its store applies
     the firmware's group writes, can fail them, and restarts the node from what it holds. Every
     random source is seeded. Not yet: a node's own fix moving, and positions to check against.
-  - Step 3, headless scenarios as Rust tests, like `ui::script`: pairing, the two missed
-    switches (`docs/logs/lora/catch-up-2026-10-03/`; must fail before `d6b9389`), a removal
-    declined after its switch, a restart mid-removal.
+  - Step 3, headless scenarios as Rust tests, in `crates/octowhere-sim/tests/scenarios.rs`.
+    Built (2026-10-04): hearing each other, a rename, out of reach, a run repeating from its
+    seed, members enrolled while records are asked for, the two missed switches, a removal
+    declined after its switch and kept across a restart, a restart mid-removal, and pairing a
+    device in. The pairing scenario found the pairing loop spinning once its write was saved
+    (fixed in `8b312ef`). Left: rival removals, which the owner revisits with these
+    (`LORA-PROTOCOL.md`, "Open"), and more nodes than two with links that come and go.
   - Step 4, several boards in `tools/ui-sim`, side by side, input to the panel clicked, the
     matrix editable live; the web simulator too (its build already compiles the mesh's crypto).
   - Board tests stay for RF (CRC overload up close), the radio's DIO0 quirk, I2C bus contention
