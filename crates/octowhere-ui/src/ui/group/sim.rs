@@ -112,6 +112,16 @@ pub const OWN_MAC: Mac = [0x48, 0xa1, 0xb2, 0xc3, 0x7a, 0x2f];
 const CODE: u32 = 482_731;
 const PARTS: u8 = 2;
 
+/// A synthetic fingerprint for the device with address `mac`.
+fn device(mac: &Mac) -> [u8; 8] {
+    let mut device = [0x5a; 8];
+    for (i, byte) in mac.iter().enumerate() {
+        device[i] ^= byte.rotate_left(i as u32 + 1);
+        device[7 - i] = device[7 - i].wrapping_mul(31).wrapping_add(*byte);
+    }
+    device
+}
+
 fn name(text: &str) -> Name {
     Name::new(text.as_bytes()).expect("a fixture name is printable")
 }
@@ -155,6 +165,7 @@ pub fn group(count: u8, now: Micros) -> GroupView {
             MemberView {
                 name: Name::from_mac(&OWN_MAC),
                 mac: OWN_MAC,
+                device: device(&OWN_MAC),
                 joined: Some(seconds(86_400 * 3)),
                 heard: None,
                 position: Position::At(seconds(12)),
@@ -165,6 +176,7 @@ pub fn group(count: u8, now: Micros) -> GroupView {
             MemberView {
                 name: name(NAMES[pattern]),
                 mac,
+                device: device(&mac),
                 joined: Some(seconds(86_400 + 3600 * i64::from(id))),
                 heard: match pattern {
                     0 => Some(seconds(8)),
@@ -678,6 +690,7 @@ impl Sim {
                         group.members[usize::from(id)] = Some(MemberView {
                             name: name("Ana's Watch 2"),
                             mac: PEER_MAC,
+                            device: device(&PEER_MAC),
                             joined: Some(now as At),
                             heard: None,
                             position: Position::Never,
@@ -701,6 +714,7 @@ impl Sim {
                         let me = MemberView {
                             name: self.view.name,
                             mac: self.view.mac,
+                            device: device(&self.view.mac),
                             joined: Some(now as At),
                             heard: None,
                             position: Position::Never,
@@ -750,6 +764,7 @@ impl Sim {
                     group.members[usize::from(id)] = Some(MemberView {
                         name: name("Fell Runner"),
                         mac: [0x48, 0xa1, 0xb2, 0xc3, 0x22, id],
+                        device: device(&[0x48, 0xa1, 0xb2, 0xc3, 0x22, id]),
                         joined: Some(now as At - 3_600 * SECOND as At),
                         heard: None,
                         position: Position::Never,
@@ -783,6 +798,7 @@ impl Sim {
                 group.members[1] = Some(MemberView {
                     name: name("Ana's Watch 2"),
                     mac: PEER_MAC,
+                    device: device(&PEER_MAC),
                     joined: Some(now as At),
                     heard: Some(now as At),
                     position: Position::Never,

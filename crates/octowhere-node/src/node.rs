@@ -14,7 +14,7 @@ use octowhere_mesh::{
     absorb::{Event, State, When, absorb},
     clock::{Clock, SWEEP_US, Taken},
     compose::{Sources, compose},
-    members::{Gone, Group, Name, Requests},
+    members::{Gone, Group, Member, Name, Requests, fingerprint},
     messages::{
         self, BODY_MAX, Insert, Message, Pairwise, Sequence, Store, Summaries, TEXT_MAX, To, kind,
     },
@@ -23,7 +23,7 @@ use octowhere_mesh::{
         Timebase,
     },
     pair::{End, Identity, MAX_FRAME, Pairing, Phase, Role},
-    rekey::{Kept, Learned, NewKey, Rekey},
+    rekey::{Kept, Learned, NewKey, Rekey, key_fingerprint},
     schedule::{
         GUARD_US, ROUND_US, SWEEP_EVERY, Schedule, airtime_us, base_of, is_sweep_round, round_at,
     },
@@ -37,8 +37,9 @@ use crate::{
     inbox::Inbox,
     unsaved::{Due, Unsaved},
     view::{
-        Answer, GroupView, MemberView, MeshView, MessagesView, PairingView, Position,
-        RecoveryPhase, RecoveryView, RefreshPhase, RefreshView, Refused, Request, Text,
+        Answer, Decline, GroupView, MemberView, MeshView, MessagesView, PairingView, Position,
+        RecoveryPhase, RecoveryView, RefreshPhase, RefreshView, Refused, RemovalStage, RemovalView,
+        RemovalsView, Request, Text, Unremovable,
     },
 };
 
@@ -121,6 +122,13 @@ pub enum Command {
     Read(u32),
     /// Removes the member with this id from the group.
     Remove(u8),
+    /// Removes the member at `id`, if it is still the device with this fingerprint.
+    RemoveDevice {
+        id: u8,
+        device: [u8; 8],
+    },
+    /// Declines the removal whose new key has this fingerprint.
+    KeepKey([u8; 8]),
     /// Declines the removal of the member with this id that another member asked for, before
     /// its switch or within a day after.
     Keep(u8),
@@ -246,6 +254,8 @@ impl From<Request> for Command {
             Request::Refresh => Self::Refresh,
             Request::Send { to, text } => Self::Send { to, text },
             Request::Read(id) => Self::Read(id),
+            Request::Remove { id, device } => Self::RemoveDevice { id, device },
+            Request::Keep { key } => Self::KeepKey(key),
         }
     }
 }
@@ -308,6 +318,7 @@ struct Shown {
     positions: [Option<(u32, (i32, i32))>; IDS as usize],
     /// A founding's wait, under way or ended, until another pairing starts.
     recovery: Option<RecoveryView>,
+    removals: RemovalsView,
 }
 
 impl Shown {
@@ -322,6 +333,7 @@ impl Shown {
             positions: [None; IDS as usize],
             refresh: None,
             recovery: None,
+            removals: RemovalsView::default(),
         }
     }
 
@@ -363,6 +375,7 @@ impl Shown {
             answer,
             refresh,
             recovery,
+            removals,
         } = view;
         *radio = self.radio;
         *mac = me.mac;
@@ -373,6 +386,7 @@ impl Shown {
         *answer = self.answer;
         *refresh = self.refresh;
         *recovery = self.recovery;
+        *removals = self.removals;
         let Some(group) = group else {
             *shown_group = None;
             return;
@@ -388,6 +402,8 @@ impl Shown {
             *slot = group.member(id).map(|member| MemberView {
                 name: member.name,
                 mac: member.mac,
+                // PERF: a SHA-256 for every member at every publish.
+                device: fingerprint(&member.public),
                 // A device that knew no UTC dated the record 0.
                 joined: (member.joined != 0)
                     .then(|| local_at(member.joined))
@@ -782,6 +798,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
 
     #[inline(never)]
     fn publish(&mut self) {
+        self.show_pending();
         let now = self.time.now();
         self.shown.heard = self.heard;
         self.shown.refresh = self.refresh;
@@ -800,6 +817,113 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
     fn show_messages(&mut self) {
         if self.inbox.changed() && self.device.publish_messages(self.inbox.view()) {
             self.inbox.shown();
+        }
+    }
+
+    /// Local time at the start of timebase round `round`, while there is a timebase.
+    fn local_at_round(&self, round: u32) -> Option<i64> {
+        let now = self.time.now();
+        self.clock
+            .at(now)
+            .map(|(time, _)| now - (time - i64::from(round) * ROUND_US))
+    }
+
+    /// What the screens show of the removal of the member `new` names by `remover`.
+    fn removal(&self, new: &NewKey, remover: u8, stage: RemovalStage) -> RemovalView {
+        let name = |id: u8| {
+            self.group
+                .as_ref()
+                .and_then(|group| group.member(id))
+                .map_or_else(
+                    || Name::from_mac(&[0, 0, 0, 0, 0, id]),
+                    |member| member.name,
+                )
+        };
+        RemovalView {
+            key: key_fingerprint(&new.key),
+            remover,
+            remover_name: name(remover),
+            removed: new.removed,
+            removed_name: name(new.removed),
+            device: new.fingerprint,
+            stage,
+        }
+    }
+
+    /// Shows the removal under way as it now is: it keeps its switch's time up to date.
+    fn show_pending(&mut self) {
+        let Some(pending) = self.rekey.pending().cloned() else {
+            self.show_declinable();
+            return;
+        };
+        let key = key_fingerprint(&pending.new.key);
+        let since = match self.shown.removals.current {
+            Some(RemovalView {
+                key: held,
+                stage: RemovalStage::Pending { since, .. },
+                ..
+            }) if held == key => since,
+            current => {
+                // A rival that replaced the one shown: that one lost.
+                if let Some(mut lost) =
+                    current.filter(|current| matches!(current.stage, RemovalStage::Pending { .. }))
+                {
+                    lost.stage = RemovalStage::Lost;
+                    self.shown.removals.rival = Some(lost);
+                }
+                self.time.now()
+            }
+        };
+        let switch = self.local_at_round(pending.switch);
+        self.shown.removals.current = Some(self.removal(
+            &pending.new,
+            pending.remover,
+            RemovalStage::Pending { since, switch },
+        ));
+    }
+
+    /// Shows the removal this device can still decline while nothing shows one, as after a
+    /// restart, once there is a timebase to place it on.
+    fn show_declinable(&mut self) {
+        if self.shown.removals.current.is_some() {
+            return;
+        }
+        let (Some(group), Some((undo, Some(last)))) = (&self.group, self.rekey.declinable()) else {
+            return;
+        };
+        let (Some(remover), Some(at), Some(until)) = (
+            self.rekey.remover_of(group.generation()),
+            self.local_at_round(undo.switched),
+            self.local_at_round(undo.until + 1),
+        ) else {
+            return;
+        };
+        let name = |id: u8, member: Option<&Member>| {
+            member.map_or_else(
+                || Name::from_mac(&[0, 0, 0, 0, 0, id]),
+                |member| member.name,
+            )
+        };
+        self.shown.removals.current = Some(RemovalView {
+            key: key_fingerprint(group.key()),
+            remover,
+            remover_name: name(remover, group.member(remover)),
+            removed: last.removed,
+            removed_name: name(last.removed, last.record.as_ref()),
+            device: last.fingerprint,
+            stage: RemovalStage::Switched {
+                at,
+                decline: Decline::Until(until),
+            },
+        });
+    }
+
+    /// Sets the stage of the removal shown, if it is the one with the new key `key`.
+    fn show_stage(&mut self, key: [u8; 8], stage: RemovalStage) {
+        if let Some(current) = &mut self.shown.removals.current
+            && current.key == key
+        {
+            current.stage = stage;
         }
     }
 
@@ -931,7 +1055,39 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                 self.inbox.read(id);
                 self.show_messages();
             }
-            Command::Remove(id) => self.remove(id).await,
+            Command::Remove(id) => {
+                let started = self.remove(id).await;
+                self.shown.answer(Answer::Removing(started));
+            }
+            Command::RemoveDevice { id, device } => {
+                let same = self
+                    .group
+                    .as_ref()
+                    .and_then(|group| group.member(id))
+                    .is_some_and(|member| fingerprint(&member.public) == device);
+                let started = if same {
+                    self.remove(id).await
+                } else {
+                    warn!("[REKEY] {} is another device now; not removed", id);
+                    Err(Unremovable::Changed)
+                };
+                self.shown.answer(Answer::Removing(started));
+            }
+            Command::KeepKey(key) => {
+                let removed = match (self.rekey.pending(), &self.group) {
+                    (Some(pending), _) if key_fingerprint(&pending.new.key) == key => {
+                        Some(pending.new.removed)
+                    }
+                    (None, Some(group)) if key_fingerprint(group.key()) == key => {
+                        self.rekey.undo_removed()
+                    }
+                    _ => None,
+                };
+                match removed {
+                    Some(removed) => self.keep(removed),
+                    None => warn!("[REKEY] that removal cannot be declined now"),
+                }
+            }
             #[cfg(feature = "phantom")]
             Command::Phantom => {
                 let now = utc_seconds(&self.device, self.time.now());
@@ -1066,6 +1222,12 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         if self.rekey.expire(round_at(time) as u32) {
             info!("[REKEY] a day since the switch; the key before it is dropped");
             self.save_rekey();
+            if let Some(current) = &mut self.shown.removals.current
+                && let RemovalStage::Switched { decline, .. } = &mut current.stage
+            {
+                *decline = Decline::Expired;
+            }
+            self.publish();
         }
         if self.notify.is_some() {
             self.tell_removed(time).await;
@@ -1081,7 +1243,8 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         // A member this device removed again once its record is back.
         let again = self.rekey.again() & self.group.as_ref().map_or(0, Group::ids);
         if again != 0 && self.rekey.pending().is_none() {
-            self.remove(again.trailing_zeros() as u8).await;
+            // One that does not start is tried again at the next step.
+            _ = self.remove(again.trailing_zeros() as u8).await;
         }
         self.retry_unread(own);
         self.inbox.started(round_start_s(time));
@@ -1636,8 +1799,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                     .removal_notice
                     .as_ref()
                     .map(|notice| notice.message.to());
-                self.catch_up
-                    .retain(|up| told == Some(To::Member(up.id)));
+                self.catch_up.retain(|up| told == Some(To::Member(up.id)));
             }
             self.save_rekey();
         }
@@ -2007,6 +2169,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         self.removal_notice = None;
         self.keys_posted = false;
         self.notify = None;
+        self.shown.removals = RemovalsView::default();
         self.caught_up = [0; IDS as usize];
         self.summary = None;
     }
@@ -2024,27 +2187,34 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
 
     /// Removes the member `id`: makes a new key and sends it to every other member. The group
     /// switches to the key when the round the key messages name starts, and `id` is told then.
-    async fn remove(&mut self, id: u8) {
+    async fn remove(&mut self, id: u8) -> Result<(), Unremovable> {
         let (Some(group), Some((time, _))) = (&self.group, self.clock.at(self.time.now())) else {
             warn!("[REKEY] no group, or no timebase to time a switch on");
-            return;
+            return Err(Unremovable::NoTime);
         };
+        if self.rekey.pending().is_some() {
+            warn!("[REKEY] a removal is under way");
+            return Err(Unremovable::Underway);
+        }
+        if id == group.own() || group.member(id).is_none() {
+            return Err(Unremovable::Changed);
+        }
         let remaining = group.ids() & !(1 << id) & !(1 << group.own());
         // Every key message has its number before the removal starts, so none is left behind.
         if !self.reserve(remaining.count_ones(), time).await {
-            return;
+            return Err(Unremovable::Unsaved);
         }
         let Some(key) = self.random.bytes::<32>() else {
             warn!("[REKEY] no random source for a key");
-            return;
+            return Err(Unremovable::NoRandom);
         };
         let round = round_at(time) as u32;
         let Some(group) = &self.group else {
-            return;
+            return Err(Unremovable::NoTime);
         };
         let Some(new) = self.rekey.start(group, id, Key::new(key), round) else {
             warn!("[REKEY] cannot remove {} now", id);
-            return;
+            return Err(Unremovable::Underway);
         };
         info!(
             "[REKEY] removing {}: generation {} from round {} (now {}), {} to tell",
@@ -2056,7 +2226,9 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         );
         self.keys_posted = false;
         self.save_rekey();
+        self.publish();
         self.post_keys(time).await;
+        Ok(())
     }
 
     /// Posts the key messages of this device's removal under way, one to every member but the
@@ -2111,8 +2283,16 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         };
         let round = round_at(time) as u32;
         let (removed, generation) = (new.removed, new.generation);
+        let rival = self
+            .rekey
+            .pending()
+            .filter(|pending| pending.new.generation == generation && pending.new.key != new.key)
+            .map(|_| self.removal(&new, remover, RemovalStage::Lost));
         match self.rekey.learned(group, remover, new, round) {
             Learned::Ignored => {
+                if let Some(rival) = rival {
+                    self.shown.removals.rival = Some(rival);
+                }
                 info!(
                     "[REKEY] key message from {} for generation {} ignored",
                     remover, generation
@@ -2171,12 +2351,27 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         if let Some(until) = self.rekey.undo_until() {
             info!("[REKEY] it can be declined until round {}", until);
         }
+
         self.kept.keep_only(group.generation(), switched.remover);
         self.refill = Some((group.generation(), switched.remover));
         self.caught_up = [0; IDS as usize];
         self.keys_posted = false;
         self.save_switch();
         self.sync_schedule();
+        let decline = match self.rekey.undo_until() {
+            Some(until) => self
+                .local_at_round(until + 1)
+                .map_or(Decline::Expired, Decline::Until),
+            None => Decline::Own,
+        };
+        if let Some(key) = self
+            .group
+            .as_ref()
+            .map(|group| key_fingerprint(group.key()))
+        {
+            let at = self.time.now();
+            self.show_stage(key, RemovalStage::Switched { at, decline });
+        }
     }
 
     /// Keeps a key message new to this node for catch-up, once its origin's signature checks
@@ -2261,16 +2456,26 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         {
             info!("[REKEY] declined: the member stays, and this device keeps its key");
             self.save_rekey();
+            if let Some(current) = &mut self.shown.removals.current
+                && current.removed == removed
+            {
+                current.stage = RemovalStage::Declined {
+                    at: self.time.now(),
+                };
+            }
+            self.publish();
             return;
         }
         let Some((time, _)) = self.clock.at(self.time.now()) else {
             warn!("[REKEY] no timebase to decline by");
             return;
         };
+        let key = key_fingerprint(group.key());
         let Some(reverted) = self.rekey.undo(group, round_at(time) as u32, removed) else {
             warn!("[REKEY] no removal of {} to decline", removed);
             return;
         };
+
         let positions = self.table.forget_others();
         let messages = self.messages.forget_since(reverted.since);
         self.inbox.prune(&self.messages);
@@ -2288,6 +2493,8 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         self.caught_up = [0; IDS as usize];
         self.save_switch();
         self.sync_schedule();
+        let at = self.time.now();
+        self.show_stage(key, RemovalStage::Declined { at });
         self.shown.positions(&self.table);
         self.publish();
     }
@@ -2575,6 +2782,15 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                     },
                     Some((&kind::REMOVED, _)) => {
                         warn!("[REKEY] {} removed this device from the group", origin);
+                        let name = self
+                            .group
+                            .as_ref()
+                            .and_then(|group| group.member(origin))
+                            .map_or_else(
+                                || Name::from_mac(&[0, 0, 0, 0, 0, origin]),
+                                |member| member.name,
+                            );
+                        self.shown.removals.removed_by = Some((origin, name, self.time.now()));
                     }
                     Some((&kind, _)) => {
                         warn!("[MSG] from {}, kind {} unknown", origin, kind);

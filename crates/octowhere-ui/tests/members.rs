@@ -50,6 +50,7 @@ fn member(now: u64) -> MemberView {
     MemberView {
         name: Name::new(b"Ridge").unwrap(),
         mac: [0x48, 0xa1, 0xb2, 0xc3, 0x8c, 0x91],
+        device: [0x9c, 0x2a, 0x7f, 0x10, 0, 0, 0, 1],
         joined: Some(0),
         heard: Some(now as i64 - 11 * SECOND as i64),
         position: Position::Never,

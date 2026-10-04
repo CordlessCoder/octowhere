@@ -51,6 +51,7 @@ fn member(name: &str, now: u64) -> MemberView {
     MemberView {
         name: Name::new(name.as_bytes()).expect("a fixture name is printable"),
         mac: [0x48, 0xa1, 0xb2, 0xc3, 0x8c, name.len() as u8],
+        device: [0x9c, 0x2a, 0x7f, name.len() as u8, 0, 0, 0, 0],
         joined: Some(now as i64 - 86_400 * SECOND as i64),
         heard: None,
         position: Position::Never,

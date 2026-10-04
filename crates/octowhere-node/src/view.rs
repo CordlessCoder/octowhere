@@ -31,6 +31,8 @@ pub enum Position {
 pub struct MemberView {
     pub name: Name,
     pub mac: Mac,
+    /// The device, by its public key's fingerprint, which a removal names it by.
+    pub device: [u8; 8],
     /// When it joined, if the device that added it knew UTC.
     pub joined: Option<At>,
     /// When this device last heard a packet the member sent itself. `None` for this device.
@@ -174,11 +176,30 @@ pub struct RecoveryView {
     pub count: u8,
 }
 
-/// How the last leave or rename went: whether it reached the flash.
+/// How the last leave, rename or removal asked for went.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Answer {
+    /// Whether the leave reached the flash.
     Left(bool),
+    /// Whether the name reached the flash.
     Renamed(bool),
+    /// Whether the removal started, and if not, why.
+    Removing(Result<(), Unremovable>),
+}
+
+/// Why a removal did not start.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Unremovable {
+    /// No timebase to time its switch on: no GPS time, and none taken from a member.
+    NoTime,
+    /// Another removal is under way.
+    Underway,
+    /// The id no longer holds the device asked for.
+    Changed,
+    /// The sequence numbers its key messages take could not be stored.
+    Unsaved,
+    /// No random source for the new key.
+    NoRandom,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -200,6 +221,58 @@ pub struct MeshView {
     pub refresh: Option<RefreshView>,
     /// A founding's wait, under way or ended, until another pairing starts.
     pub recovery: Option<RecoveryView>,
+    pub removals: RemovalsView,
+}
+
+/// A removal, as the screens show it. Its new key's fingerprint names it, since no other removal
+/// has that key; ids and names are labels, and a removed member's id can be taken again.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RemovalView {
+    pub key: [u8; 8],
+    pub remover: u8,
+    pub remover_name: Name,
+    pub removed: u8,
+    pub removed_name: Name,
+    /// The removed member's device, by its public key's fingerprint.
+    pub device: [u8; 8],
+    pub stage: RemovalStage,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RemovalStage {
+    /// Before this device switches: since when this device has known of it, and when it will
+    /// switch, while a timebase says.
+    Pending { since: At, switch: Option<At> },
+    /// This device switched to it, and whether it can still decline it.
+    Switched { at: At, decline: Decline },
+    /// This device declined it, and stays with the member.
+    Declined { at: At },
+    /// A rival removal won over it.
+    Lost,
+}
+
+/// Whether this device can still decline a removal it switched to.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Decline {
+    /// Until then, on the stage's clock.
+    Until(At),
+    /// This device made it.
+    Own,
+    /// A later removal replaced it as the one this device can decline.
+    Later,
+    /// Its day after the switch has passed.
+    Expired,
+}
+
+/// The group's removals, as this device knows them.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RemovalsView {
+    /// The removal under way, or the last this device switched to or declined.
+    pub current: Option<RemovalView>,
+    /// A rival of it this device learned of, which one of them beat.
+    pub rival: Option<RemovalView>,
+    /// Another member removed this device: who, its name, and when this device was told.
+    pub removed_by: Option<(u8, Name, At)>,
 }
 
 impl Default for MeshView {
@@ -216,6 +289,7 @@ impl Default for MeshView {
             answer: None,
             refresh: None,
             recovery: None,
+            removals: RemovalsView::default(),
         }
     }
 }
@@ -237,6 +311,7 @@ impl MeshView {
             answer,
             refresh,
             recovery,
+            removals,
         } = other;
         self.radio = *radio;
         self.mac = *mac;
@@ -248,6 +323,7 @@ impl MeshView {
         self.answer = *answer;
         self.refresh = *refresh;
         self.recovery = *recovery;
+        self.removals = *removals;
     }
 
     /// The pairing asked for after `sessions` had started, once the mesh has taken it up.
@@ -524,4 +600,14 @@ pub enum Request {
     },
     /// Counts the message this device numbered so as read.
     Read(u32),
+    /// Removes the member at `id`, if it is still the device with this fingerprint.
+    Remove {
+        id: u8,
+        device: [u8; 8],
+    },
+    /// Declines the removal whose new key has this fingerprint: before this device switches, or
+    /// within a day after.
+    Keep {
+        key: [u8; 8],
+    },
 }

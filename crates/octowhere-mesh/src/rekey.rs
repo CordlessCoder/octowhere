@@ -243,6 +243,27 @@ impl Rekey {
         self.declined.iter().flatten()
     }
 
+    /// The member the removal last switched to removed, while it can still be declined.
+    #[must_use]
+    pub fn undo_removed(&self) -> Option<u8> {
+        self.undo
+            .as_ref()
+            .filter(|undo| undo.theirs)
+            .map(|undo| undo.removed)
+    }
+
+    /// The removal last switched to, while this device can still decline it, and the member it
+    /// removed as it was.
+    #[must_use]
+    pub fn declinable(&self) -> Option<(&Undo, Option<&Last>)> {
+        let undo = self.undo.as_ref().filter(|undo| undo.theirs)?;
+        let last = self
+            .last
+            .as_ref()
+            .filter(|last| last.generation == undo.new_generation);
+        Some((undo, last))
+    }
+
     /// The last round the removal last switched to can be declined in.
     #[must_use]
     pub fn undo_until(&self) -> Option<u32> {
