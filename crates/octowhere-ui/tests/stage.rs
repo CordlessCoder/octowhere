@@ -2356,6 +2356,32 @@ fn a_short_press_rests_the_screen_at_once_and_another_wakes_it() {
 }
 
 #[test]
+fn a_short_press_wakes_a_dimming_or_darkening_screen() {
+    for darkening in [false, true] {
+        let mut driver = resting_on(Screen::Clock, Timeout::Seconds15, false);
+        if darkening {
+            wait_until(&mut driver, 22_000_000, |rest| {
+                matches!(rest, Rest::Darkening { .. })
+            });
+        } else {
+            wait_until(&mut driver, 16_000_000, is_dimmed);
+        }
+        driver.wait(100_000);
+        driver.key(Key::Short);
+        assert_eq!(driver.stage.rest(), Rest::Awake, "darkening {darkening}");
+        let levels = levels_over(&mut driver, rest::WAKE_FADE + script::FRAME);
+        assert!(levels.is_sorted(), "{levels:?}");
+        assert_eq!(levels.last(), Some(&120), "{levels:?}");
+        driver.wait(10_000_000);
+        assert_eq!(
+            driver.stage.rest(),
+            Rest::Awake,
+            "the press restarts the timeout"
+        );
+    }
+}
+
+#[test]
 fn a_short_press_cancels_the_confirmation_and_rests() {
     let mut driver = resting_on(Screen::Clock, Timeout::Seconds15, false);
     driver.key(Key::Long);

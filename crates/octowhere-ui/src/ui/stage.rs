@@ -1581,6 +1581,7 @@ impl Stage {
             Rest::Awake => {}
             Rest::Dimmed { .. } | Rest::Darkening { .. } => {
                 self.rest = Rest::Awake;
+                self.restart(now);
                 self.fade_to(self.level, rest::WAKE_FADE, now);
             }
             Rest::AlwaysOn | Rest::Off => self.wake(now, update),
