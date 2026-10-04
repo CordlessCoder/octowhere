@@ -86,3 +86,31 @@ fn members_enrolled_while_records_are_asked_for_reach_the_other_node() {
         sim.now_s()
     );
 }
+
+/// A member out of reach through two removals is caught up a generation at a time once it is
+/// back, as two boards were in `docs/logs/lora/catch-up-2026-10-03/`.
+#[test]
+fn a_member_that_missed_two_switches_is_caught_up() {
+    let mut sim = pair(6);
+    sim.run_while_not(30 * 60, |sim| {
+        sim.count(0, "heard id=1") >= 1 && sim.count(1, "heard id=0") >= 1
+    });
+    sim.command(0, Command::Phantom);
+    sim.command(0, Command::Phantom);
+    let learned = sim.run_while_not(30 * 60, |sim| sim.count(1, "is Phantom now") == 2);
+    assert!(learned, "the phantoms reached node 1");
+    sim.link(0, 1, None);
+    sim.link(1, 0, None);
+    for (phantom, switches) in [(2, 1), (3, 2)] {
+        sim.command(0, Command::Remove(phantom));
+        let switched = sim.run_while_not(60 * 60, |sim| {
+            sim.count(0, "switched to generation") == switches
+        });
+        assert!(switched, "node 0 removed {phantom}");
+    }
+    let start = sim.now_s();
+    sim.link_all(Link::default());
+    let caught = sim.run_while_not(60 * 60, |sim| sim.count(1, "switched to generation") == 2);
+    assert!(caught, "node 1 caught up after {} s", sim.now_s() - start);
+    println!("caught up in {:.0} s", sim.now_s() - start);
+}
