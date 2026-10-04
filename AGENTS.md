@@ -33,7 +33,8 @@ initialization or peripheral mappings.
   its slot, listens, keeps the timebase, pairs, passes messages on and carries removals out, on
   whatever radio, clock, random source, device and group store it is given (`Radio`, `Time`,
   `Random`, `Device`, `GroupStore`, `Commands`). Beside it are what it shows the screens and
-  takes from them (`view`), and the changes it stores (`GroupWrite`). The node is the crate's
+  takes from them (`view`), the messages it shows them with how far each has gone (`inbox`),
+  and the changes it stores (`GroupWrite`). The node is the crate's
   `run` feature, which needs nightly for the allocator its large stores are made in; without
   it the crate holds the view and the writes alone, on stable. It logs through defmt on the
   board and `log` on the host (`fmt`). `src/mesh.rs` and its modules give it the board's seams.
@@ -63,7 +64,8 @@ initialization or peripheral mappings.
   published state and the requests they make of it in `view`, from `octowhere-node`, and a
   simulated mesh for the host in `sim`, `events`, what happened at run time (GNSS incidents
   and refreshes), each one entry through its life, `drawer`, the Events and Messages drawer an
-  upward drag opens, its details, the toasts that tell of an event and the unread arc, drawn
+  upward drag opens, its details, the conversations, drafts and their review (`messages`), the
+  toasts that tell of an event and the unread arc, drawn
   from lists as the group screens are and from the shared parts of the 2026-10-04 hand-off's
   consistency rules (`parts`), `members`, the member face: the members' bearings round a ring
   turned to the true heading over a grid that keeps to true north, `stroke`, antialiased paths,
@@ -448,7 +450,11 @@ Core 1 owns the display SPI/DMA path.
   the radio answered at boot; otherwise `mesh::offline`, in thread mode, keeps the name and can
   leave the group, and tells the screens there is no radio. Either publishes what the screens
   show of the mesh, which the frame loop takes on `mesh::VIEW_CHANGED`, and the frame loop
-  passes the stage's requests on through `mesh::request`.
+  passes the stage's requests on through `mesh::request`. The node publishes the messages
+  into the PSRAM buffer `async_main` lends through `mesh::lend_messages`, and the frame loop
+  copies them into the stage's own with `mesh::messages_since`; each copy holds a critical
+  section for as long as the messages held take to copy, a millisecond or two with the store
+  full.
 - `zone_task`, in thread mode, looks the zone up again whenever a fix moves about a kilometre
   in automatic mode, a zone at a time with a yield between, takes the settings panel's choice
   from `ZONE_CHOICE`, publishes the zone through `ZONE_STATE`, and queues a new zone for
@@ -590,7 +596,8 @@ holds every message for 24 hours in a store in PSRAM, lost at a restart, and the
 bring back what a neighbour lacks. A removal sends the new key to each remaining member, and
 the group switches to it at the round the key names; a node keeps the old key for any member
 not yet heard on the new one, and in a sweep round sends that member its key message under the
-old key. There are no screens for messages or removals yet: they wait for a design round. A pairing takes the radio to band O's upper channel at +2 dBm until it
+old key. Messages have their screens (`context/SCREEN-DESIGN-BRIEF.md`, "Messages as built";
+two boards in `docs/logs/lora/messages-2026-10-04/`); removals do not yet. A pairing takes the radio to band O's upper channel at +2 dBm until it
 ends; the protocol's "The exchange as built" has the frames and their order, and
 `docs/logs/lora/pairing-2026-10-02/` the first pairings between the two boards. The group
 screens send the commands, and `pair-inject` lets `tools/pair-inject.py` send them over the USB
@@ -655,7 +662,8 @@ errata workaround, are in [`docs/hardware-notes.md`](docs/hardware-notes.md).
   `FB::alloc(&PSRAM_HEAP)` rather than the global allocator. The mesh's message store, about
   49 KB, and the key messages it keeps for catch-up, about 25 KB, are made in place there by
   the node's `zeroed_in`, in the allocator the firmware hands it, from types whose all-zero
-  value is valid (`Zeroable`).
+  value is valid (`Zeroable`). So are the three copies of what the screens show of the
+  messages, 47,112 bytes each: the node's, the one it publishes into, and the stage's.
   Never add PSRAM to the global allocator, even as a fallback after the internal regions: a value
   holding an atomic could land there, and atomics in PSRAM break (owner).
 - esp-alloc serves the internal heap's two regions first fit, the 72 KiB one first, and grows a
@@ -713,10 +721,11 @@ The active UI uses the compile-time fontdue renderer in
 [`crates/octowhere-ui/src/chrome.rs`](crates/octowhere-ui/src/chrome.rs), with the Marathon Shapiro
 and PPFraktion font data under `assets/`. KH Interference Bold sets the large readings, the clock's
 label, the compass caption and the settings' row names and selected values; its asset is a trial,
-and a release needs a licensed one. KH Interference Regular sets the identity's subtitle. Fraktion
-Sans Light sets the clock's band lines, the offset picker's lower neighbour, the always-on face's
-battery value and the group screens' explanations. Fraktion Mono Regular sets names, addresses
-and the name keyboard, so that a name keeps its case. Maratype sets the identity's title and nothing else: the owner rejected it on every
+and a release needs a licensed one. It also sets members' names, in capitals, on the member face
+and in messages. KH Interference Regular sets the identity's subtitle. Fraktion Sans Light sets
+the clock's band lines, the offset picker's lower neighbour, the always-on face's battery value,
+the group screens' explanations and messages' bodies. Fraktion Mono Regular sets names,
+addresses and the keyboards, so that a name keeps its case. Maratype sets the identity's title and nothing else: the owner rejected it on every
 other screen. `embedded-layout` supplies the current text alignment helpers.
 
 Every font is built from its full font file, and the macro's `chars:` list picks the glyphs it

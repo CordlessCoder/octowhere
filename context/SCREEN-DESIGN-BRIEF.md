@@ -163,7 +163,8 @@ the panel. Touch targets are no smaller than about 10 mm.
 Captures drawn by the firmware's own code come from `crates/octowhere-ui/examples/render.rs`,
 which also lays a frame of each state out in `screen-atlas.png`, kept in
 `context/screen-captures/`, by section like the design's screen family board.
-It draws the faces' stills, the member face's states (`members-*`), and `panel-rest`, `settings-always-on`, `panel-end`,
+It draws the faces' stills, the member face's and the messages' states (`members-*`,
+`messages-*`), and `panel-rest`, `settings-always-on`, `panel-end`,
 `panel-scrolling`, `panel-pulling`, `panel-device`, `panel-device-end`, `settings-brightness`,
 `settings-timeout`, `settings-clear`, `picker-offset`,
 `picker-zone`, `power-off`, `power-off-sliding` and `power-off-confirmed`, and the start-up's `startup-selftest-*`, `startup-frame-*` and `startup-fault-*`;
@@ -390,7 +391,7 @@ The 2026-10-04 hand-off's Events drawer is `crates/octowhere-ui/src/ui/drawer/`,
 events in `ui/events.rs`. An upward drag on a face opens it and a pull down from the top of its
 list closes it. Its list, details, management page, toasts and unread arc follow the hand-off's
 geometry, measured on its targets (`examples/render/events.rs` renders them, named after the
-targets). The Messages root beside it shows NO MESSAGES until messages have their screens. The
+targets). The Messages root beside it is the inbox ("Messages as built"). The
 backdrop is the settings panel's halftone, breathing on the 10 s cycle and kept 2 px clear of
 every text's ink. Where the build chose what the hand-off left open:
 
@@ -420,6 +421,50 @@ every text's ink. Where the build chose what the hand-off left open:
   unread, over the faces, the panel's screens and the always-on face, and not in the drawer.
 - **Halftone.** The firmware's scatter keeps its hollow and solid marks, where the renders draw
   4 px solid marks only.
+
+## Messages as built
+
+The 2026-10-04 hand-off's messages are `crates/octowhere-ui/src/ui/drawer/messages.rs`, the
+Messages root and the screens it opens: a conversation, SEND TO, the draft on the keyboard and
+its review. They follow the hand-off's geometry, taken from its renderer
+(`examples/render/messages.rs` renders them, named after the targets). The node keeps what the
+screens show of the messages (`MessagesView` in `octowhere-node`'s `view`, kept by its `inbox`),
+and the firmware lends the stage a copy in PSRAM. Where the build chose what the hand-off left
+open:
+
+- **What shows.** Every message this device can read: its own, the group's, and those to it,
+  for as long as the store holds them. A conversation is the group's, or this device's with one
+  member, by the member's id.
+- **How far a message has gone.** QUEUED until a packet of this device's carries it, SENT once
+  one has, HEARD RELAYED once another member's packet has, DELIVERED once its destination
+  acknowledged it, which only a private message is. A message to someone in reach of its
+  origin is never relayed, since the origin's own packet reached everyone it would be relayed
+  to, so it can go from SENT to DELIVERED. Another member's message is RECEIVED.
+- **After a restart.** Messages that come back from another member are not news: they are
+  never unread and never told of. Another member's shows RECOVERED; this device's own shows how
+  far it had gone, from what came back with it.
+- **Order.** Conversations newest first, and a conversation's messages newest first, as the
+  fixtures have them. Scrolled down, a conversation keeps the message at the top in place as
+  newer ones come.
+- **Read.** A message counts as read once its whole row has shown in its open conversation for
+  a second. Opening the inbox, an event or a toast reads nothing. The node keeps the read
+  state, and a restart loses it.
+- **Events.** One event a conversation while it has unread messages. A newer message marks it
+  unread, moves it to the top and shows a toast; reading the messages reads it. Opening it opens
+  the conversation. MARK ALL READ reads events only, and the management page says so: messages
+  stay unread, and the unread arc with them.
+- **Toast.** MESSAGE and the conversation's name, then "New private message.", or for the group
+  "New message from" its sender. Never the words. A tap opens the conversation.
+- **Drafts.** One at a time. CANCEL, and closing the drawer, keep it until it is sent; WRITE to
+  the same conversation takes it up again, and WRITE to another starts afresh and drops it.
+  REVIEW is unavailable while the draft is blank, and SEND sends once and opens the
+  conversation.
+- **Wrapping.** A message's body breaks at spaces within 250 px, and inside a word too long for
+  a line; rows grow to hold it, and it is never cut. An inbox preview is cut with an ellipsis at
+  270 px.
+- **Names.** In capitals, in KH Interference Bold and Fraktion Mono. A title too wide at 26 px
+  is cut with an ellipsis; the caption under it gives the member's id. The draft has no
+  caption, so a long name there shows only its start.
 
 ## Member face as built
 
@@ -784,6 +829,9 @@ velocity. It sees a second contact but no gesture uses one.
 | Drawer root | A vertical drag in the list | Scrolls it, a pixel at a time; a downward pull with the list at its top closes the drawer |
 | Drawer root | A tap on the chevron, a row, OPTIONS | Closes the drawer, opens the event, opens the management page |
 | Drawer child | A tap on the back arrow or a button | Goes back, or acts |
+| Messages root, SEND TO | A tap on a row | Opens the conversation, or a draft to that destination |
+| Conversation, SEND TO, review | A vertical drag | Scrolls it, a pixel at a time |
+| Draft | A tap on a key, or in the field | Types, or moves the caret to the nearest place in the two lines showing |
 | Panel | A tap on a row of the visible page | Opens it |
 | Panel | A drag at least as sideways as vertical | Moves between the two pages, then snaps |
 | Panel | An upward drag | Closes the panel |
@@ -835,14 +883,15 @@ plumbing it is firmware work. There are three grades.
    - Touch contacts and the cover report.
    - From the mesh: this device's name and hardware address, and whether the radio answered
      at boot; the stored group's members with their ids, names, addresses and join times, when
-     each was last heard directly and where and when its newest position was observed; how the last
+     each was last heard directly and where and when its newest position was observed; the
+     messages this device can read, with how far each has gone and whether it is unread; how the last
      leave or rename went; and the pairing under way, with its role, phase, deadline, the
      devices found, the other device's address and its name once sent, the code, and the
      group's size and this device's id once the pairing holds them.
 2. **Known to the firmware, not passed to the screens:** GNSS time to the millisecond, fix
    quality, and when the clock was last set from GNSS. Also the compass calibration's internals.
-   From the mesh: the timebase, and the packets' signal;
-   messages, with whether each was acknowledged; and removals: who asked to remove whom, when
+   From the mesh: the timebase, and the packets' signal; other members' private messages,
+   which it cannot read; and removals: who asked to remove whom, when
    the group switches, and the day left to decline one.
 3. **Does not exist:** raise to wake, or any wake but a double tap or the power key (the
    IMU's wake-on-motion and the BOOT key are unused); a 12-hour clock (ruled out by the clock

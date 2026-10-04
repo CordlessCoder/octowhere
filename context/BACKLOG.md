@@ -69,9 +69,21 @@ until the feature set is complete, because profiling an incomplete firmware pric
       engineering choices without a render. Take them to the next design round.
     - WMM2025 holds until 2030.0; after that the face stays north up until the model's
       successor is built in.
-  - Messages: the store's messages, their transport evidence and unread state in the view, the
-    inbox, threads, recipient picker, a 160-character draft on the full keyboard, review and
-    send, and arrival toasts. The Messages root shows NO MESSAGES until then.
+  - Messages, done (2026-10-04): what the node can read of its store in the view, each with how
+    far it has gone and whether it is unread; the inbox, conversations, SEND TO, a 160-character
+    draft on the keyboard, its review, sending, arrival toasts and an event per conversation
+    (`SCREEN-DESIGN-BRIEF.md`, "Messages as built"; two boards in
+    `docs/logs/lora/messages-2026-10-04/`). Open:
+    - The read rule (a whole row shown for a second), one event per conversation, MARK ALL READ
+      reading events only, RECOVERED, and keeping one draft are engineering choices without a
+      render. Take them to the next design round.
+    - A private conversation is keyed by the member's id. An id another device takes after a
+      removal joins its conversation to the old member's for as long as the store holds it.
+    - The draft's title cuts a long name short, and the draft shows no id.
+    - Every step rebuilds an open conversation's rows, wrapping each message: measure it with a
+      full store on a board.
+    - Copying the messages to the screens holds a critical section for as long as the copy,
+      a millisecond or two with the store full; it happens only when they change.
   - Removing a member: request snapshots, deadlines, eligibility and rivals in the view, and the
     confirmation, pending, prompt, decline and notice screens.
   - The consistency rules across the new screens, and their cost on a board.
