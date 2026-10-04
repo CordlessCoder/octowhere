@@ -1,6 +1,7 @@
 //! What a node takes from a packet of its group: the positions, member and gone records, and
 //! messages it carries, and what its digests, requests and summary ask of this node.
 
+use crate::Ids;
 use crate::{
     IDS,
     identity::Identity,
@@ -229,7 +230,7 @@ pub fn absorb<'p>(
             messages.sent(name);
         }
     }
-    requests.heard(group, sender, theirs, asked);
+    requests.heard(group, sender, theirs, asked.map(Ids::from_bits));
     // A packet with no members digest is no full account of its sender.
     if theirs.is_some() {
         summaries.heard(messages, sender, their_messages, summary);
@@ -351,7 +352,7 @@ mod tests {
     #[test]
     fn records_a_full_account_carried_as_held_are_no_longer_news() {
         let mut node = Node::new();
-        node.group.ask(1 << 1);
+        node.group.ask(Ids::of(1));
         let held = *node.group.slot(1).unwrap();
         let Slot::Member(record) = held else {
             panic!("id 1 holds a member");
@@ -360,7 +361,7 @@ mod tests {
             builder.neighbours(0).unwrap();
             builder.member(1, &record).unwrap();
         });
-        assert_eq!(node.group.unsent() & 1 << 1, 0);
+        assert!(!node.group.unsent().contains(1));
     }
 
     #[test]

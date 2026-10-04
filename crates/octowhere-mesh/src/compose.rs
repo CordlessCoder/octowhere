@@ -3,6 +3,7 @@
 //! and the positions last. Room is kept for the node's own position throughout, so that a busy
 //! packet never crowds it out.
 
+use crate::Ids;
 use crate::{
     members::{GONE_LEN, Group, Requests},
     messages::{Name, Store},
@@ -73,7 +74,7 @@ impl Carried {
         group: &mut Group,
     ) {
         table.sent(self.positions());
-        requests.sent(self.requests);
+        requests.sent(Ids::from_bits(self.requests));
         for &name in self.messages() {
             store.sent(name);
         }
@@ -99,7 +100,7 @@ pub fn compose(builder: &mut Builder, round: i64, base: u32, from: Sources) -> C
     } = from;
     let mut carried = Carried {
         neighbours: table.neighbours(round),
-        requests: requests.pending(),
+        requests: requests.pending().bits(),
         records: 0,
         former: 0,
         summary: false,
@@ -212,7 +213,7 @@ mod tests {
             members[usize::from(id)] = Some(member(id + 1, NOW - 100));
         }
         let mut group = Group::new(Key::new([5; 32]), 0, members).unwrap();
-        group.ask(u32::MAX);
+        group.ask(Ids::ALL);
         group
     }
 
@@ -400,7 +401,7 @@ mod tests {
             carried.sent(&mut table, &mut requests, &mut store, &mut group);
             went |= carried.records;
             // A neighbour whose digest differs asks for every id it holds again.
-            group.ask(0b011);
+            group.ask(Ids::from_bits(0b011));
         }
         assert_eq!(
             went, 0b111,
@@ -422,7 +423,7 @@ mod tests {
         });
         let unsent = group.unsent();
         carried.sent(&mut table, &mut requests, &mut store, &mut group);
-        assert_eq!(group.unsent(), unsent & !carried.records);
+        assert_eq!(group.unsent().bits(), unsent.bits() & !carried.records);
         assert!(store.next_unsent(None).is_none());
         let (again, _) = compose_kinds(Sources {
             table: &table,

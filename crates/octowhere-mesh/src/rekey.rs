@@ -6,6 +6,7 @@ use bytemuck::Zeroable;
 use sha2::{Digest, Sha256};
 
 use crate::IDS;
+use crate::Ids;
 use crate::identity::{Identity, SIGNATURE_LEN, verify};
 use crate::members::{Group, Member, PUBLIC_LEN, RECORD_MAX_LEN, fingerprint};
 use crate::messages::{Message, To, kind};
@@ -373,7 +374,7 @@ impl Rekey {
             return None;
         }
         let removed = group.member(id)?;
-        let remaining = group.ids() & !(1 << id) & !(1 << group.own());
+        let remaining = group.ids().bits() & !(1 << id) & !(1 << group.own());
         let new = NewKey {
             key,
             generation: group.generation().wrapping_add(1),
@@ -492,8 +493,8 @@ impl Rekey {
             }
         }
         self.compact();
-        let changed = undo.changed | group.take_changed();
-        let forgotten = group.forget_changed(changed);
+        let changed = undo.changed | group.take_changed().bits();
+        let forgotten = group.forget_changed(Ids::from_bits(changed)).bits();
         group.take_changed();
         group.rekey(undo.key, undo.generation);
         self.last = None;
@@ -556,7 +557,7 @@ impl Rekey {
                 (group.remove(&new.fingerprint, at), record)
             }
         };
-        let changed = group.take_changed();
+        let changed = group.take_changed().bits();
         let of_undo = |undo: &Undo| rival && undo.new_generation == new.generation;
         self.undo = match (self.undo.take(), removed) {
             // A rival keeps the key before both, and the day the first switch gave.
@@ -586,8 +587,8 @@ impl Rekey {
             }),
             (None, None) => None,
         };
-        self.wait_only_for(group.ids());
-        let waiting = group.ids() & !(1 << group.own());
+        self.wait_only_for(group.ids().bits());
+        let waiting = group.ids().bits() & !(1 << group.own());
         if waiting != 0 {
             self.old.rotate_right(1);
             self.old[0] = Some(Old {
@@ -1436,7 +1437,7 @@ mod tests {
         assert_eq!(rekey.undo_until(), Some(until));
         // A member renamed after the switch, under the new key.
         g.merge(3, signed(3, 4, 2_000), 0);
-        assert!(rekey.changed(g.take_changed()));
+        assert!(rekey.changed(g.take_changed().bits()));
         assert_eq!(
             rekey.undo(&mut g, until, 3),
             None,
@@ -1751,7 +1752,7 @@ mod tests {
         rekey.learned(&g, 1, new(9, 4, 1_010, 2, 3), 1_000);
         rekey.switch(&mut g).unwrap();
         g.merge(1, signed(1, 2, 2_000), 0);
-        rekey.changed(g.take_changed());
+        rekey.changed(g.take_changed().bits());
         let len = rekey.encode(&mut out);
         let mut read = Rekey::decode(&out[..len]).unwrap();
         let undo = read.undo.as_ref().unwrap();

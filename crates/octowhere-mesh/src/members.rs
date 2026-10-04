@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 
 use crate::identity::{Identity, SIGNATURE_LEN, verify};
 use crate::seal::Key;
-use crate::{AHEAD_S, IDS};
+use crate::{AHEAD_S, IDS, Ids};
 
 pub const NAME_LEN: usize = 16;
 pub const MAC_LEN: usize = 6;
@@ -355,17 +355,16 @@ pub struct Group {
     /// The records, on the heap: they are kilobytes, and a group moved or copied on the stack
     /// would take that much under every call made meanwhile.
     held: Box<Records>,
-    /// The ids whose slots changed here, or were asked for, and have not been sent since, as
-    /// a set.
-    unsent: u32,
+    /// The ids whose slots changed here, or were asked for, and have not been sent since.
+    unsent: Ids,
     /// The places in `former` whose records are to be sent, as a set.
     former_unsent: u8,
     /// The id whose slot went last. The next goes from the one after it.
     sent_last: u8,
     /// The slots' digest, until they change.
     digest: Cell<Option<u32>>,
-    /// The ids whose slots changed since [`Group::take_changed`] last took them, as a set.
-    changed: u32,
+    /// The ids whose slots changed since [`Group::take_changed`] last took them.
+    changed: Ids,
     /// This node's record moved to another id and is not sent until it is signed again.
     unsigned_own: bool,
 }
@@ -414,11 +413,11 @@ impl Group {
                 slots,
                 former: [None; FORMER],
             }),
-            unsent: 0,
+            unsent: Ids::EMPTY,
             former_unsent: 0,
             sent_last: IDS - 1,
             digest: Cell::new(None),
-            changed: 0,
+            changed: Ids::EMPTY,
             unsigned_own: false,
         })
     }
@@ -475,17 +474,15 @@ impl Group {
         (0..IDS).filter_map(|id| Some((id, self.member(id)?)))
     }
 
-    /// The ids members hold, as a set.
+    /// The ids members hold.
     #[must_use]
-    pub fn ids(&self) -> u32 {
-        self.members().fold(0, |set, (id, _)| set | 1 << id)
+    pub fn ids(&self) -> Ids {
+        self.members().map(|(id, _)| id).collect()
     }
 
-    /// The ids with a member or a gone record, as a set.
-    fn held(&self) -> u32 {
-        (0..IDS)
-            .filter(|&id| self.slot(id).is_some())
-            .fold(0, |set, id| set | 1 << id)
+    /// The ids with a member or a gone record.
+    fn held(&self) -> Ids {
+        (0..IDS).filter(|&id| self.slot(id).is_some()).collect()
     }
 
     #[must_use]
@@ -579,13 +576,13 @@ impl Group {
             self.keep_former(id, gone);
         }
         self.held.slots[usize::from(id)] = slot;
-        self.unsent |= 1 << id;
-        self.changed |= 1 << id;
+        self.unsent.insert(id);
+        self.changed.insert(id);
         self.digest.set(None);
     }
 
-    /// The ids whose slots changed since the last call, as a set.
-    pub fn take_changed(&mut self) -> u32 {
+    /// The ids whose slots changed since the last call.
+    pub fn take_changed(&mut self) -> Ids {
         core::mem::take(&mut self.changed)
     }
 
@@ -695,22 +692,21 @@ impl Group {
         // sent: every node that took the losing key puts the record back as it switches, and the
         // others never removed it.
         self.held.slots[usize::from(id)] = record.map(Slot::Member);
-        self.changed |= 1 << id;
+        self.changed.insert(id);
         self.digest.set(None);
         true
     }
 
-    /// Forgets what the ids `ids`, a set, hold, other than this node's, and every gone record set
-    /// apart, as declining a removal after its switch does. Those are never stored, so a restart
+    /// Forgets what the ids `ids` hold, other than this node's, and every gone record set apart,
+    /// as declining a removal after its switch does. Those are never stored, so a restart
     /// forgets them too. The nodes that never switched send the rest again as they hold them.
-    /// Returns the ids that held something, as a set.
-    pub(crate) fn forget_changed(&mut self, ids: u32) -> u32 {
-        let mut forgotten = 0;
-        let own = self.own;
-        for id in (0..IDS).filter(|&id| ids & 1 << id != 0 && id != own) {
+    /// Returns the ids that held something.
+    pub(crate) fn forget_changed(&mut self, ids: Ids) -> Ids {
+        let mut forgotten = Ids::EMPTY;
+        for id in ids.without(self.own).iter() {
             if self.slot(id).is_some() {
                 self.set(id, None);
-                forgotten |= 1 << id;
+                forgotten.insert(id);
             }
         }
         for at in 0..FORMER {
@@ -735,7 +731,7 @@ impl Group {
         {
             // The sender missed it going: tell it.
             match held {
-                Held::Slot(at) => self.unsent |= 1 << at,
+                Held::Slot(at) => self.unsent.insert(at),
                 Held::Former(at) => self.former_unsent |= 1 << at,
             }
             return Merged::Unchanged;
@@ -778,7 +774,7 @@ impl Group {
         let vacated = match gone {
             Some((Held::Slot(at), _)) => {
                 self.held.slots[usize::from(at)] = None;
-                self.changed |= 1 << at;
+                self.changed.insert(at);
                 self.digest.set(None);
                 (at != id).then_some(at)
             }
@@ -807,7 +803,7 @@ impl Group {
         self.set(id, Some(Slot::Member(record)));
         if moving.is_some() {
             // The others need this node's new record; the one heard is no news to them.
-            self.unsent &= !(1 << id);
+            self.unsent.remove(id);
         }
         outcome
     }
@@ -840,7 +836,7 @@ impl Group {
             let member = self.member(at).expect("found above");
             if member.changed > gone.changed {
                 // Paired again since: the sender needs the newer record.
-                self.unsent |= 1 << at;
+                self.unsent.insert(at);
                 return Merged::Unchanged;
             }
             self.set(at, Some(Slot::Gone(gone)));
@@ -872,30 +868,34 @@ impl Group {
     /// Whether a record changed here and has not been sent since.
     #[must_use]
     pub fn has_unsent(&self) -> bool {
-        self.unsent() != 0 || self.former_unsent().next().is_some()
+        !self.unsent().is_empty() || self.former_unsent().next().is_some()
     }
 
     /// Counts the slot at `id` as sent, when a packet that reached this node's neighbours
     /// carried it as this node holds it.
     pub fn covered(&mut self, id: u8, slot: &Slot) {
         if self.slot(id) == Some(slot) {
-            self.unsent &= !(1 << id);
+            self.unsent.remove(id);
         }
     }
 
-    /// Marks the slots held of the ids in the set `ids` to be sent, as another node asked.
-    pub(crate) fn ask(&mut self, ids: u32) {
+    /// Marks the slots held of the ids `ids` to be sent, as another node asked.
+    pub(crate) fn ask(&mut self, ids: Ids) {
         self.unsent |= ids & self.held();
     }
 
-    /// The ids whose slots are to be sent, as a set: not a removal's gone record, which no other
-    /// node takes, nor this node's record while it waits to be signed again.
+    /// The ids whose slots are to be sent: not a removal's gone record, which no other node
+    /// takes, nor this node's record while it waits to be signed again.
     #[must_use]
-    pub fn unsent(&self) -> u32 {
-        let unsigned = (0..IDS)
+    pub fn unsent(&self) -> Ids {
+        let unsigned: Ids = (0..IDS)
             .filter(|&id| self.gone(id).is_some_and(|gone| !gone.is_signed()))
-            .fold(0, |set, id| set | 1 << id);
-        let own = if self.unsigned_own { 1 << self.own } else { 0 };
+            .collect();
+        let own = if self.unsigned_own {
+            Ids::of(self.own)
+        } else {
+            Ids::EMPTY
+        };
         self.unsent & self.held() & !unsigned & !own
     }
 
@@ -906,12 +906,12 @@ impl Group {
         let unsent = self.unsent();
         (1..=IDS)
             .map(move |step| (self.sent_last + step) % IDS)
-            .filter(move |&id| unsent & 1 << id != 0)
+            .filter(move |&id| unsent.contains(id))
     }
 
     /// Counts the slot at `id` as sent, once a packet carries it.
     pub fn sent(&mut self, id: u8) {
-        self.unsent &= !(1 << id);
+        self.unsent.remove(id);
         self.sent_last = id;
     }
 
@@ -945,8 +945,8 @@ pub const MISMATCHES: u8 = 2;
 /// for it, and all of a neighbour's once their tables keep differing.
 #[derive(Clone, Debug, Default)]
 pub struct Requests {
-    /// The ids the next packet asks for, as a set.
-    pending: u32,
+    /// The ids the next packet asks for.
+    pending: Ids,
     /// For each id, how many of its packets running carried a digest unlike this node's.
     mismatched: [u8; SLOTS],
 }
@@ -959,19 +959,19 @@ impl Requests {
         group: &mut Group,
         sender: u8,
         digest: Option<u32>,
-        asked: Option<u32>,
+        asked: Option<Ids>,
     ) {
         let ours = group.digest();
         // A sender held as gone is telling the others it left.
         if group.slot(sender).is_none() {
-            self.pending |= 1 << sender;
+            self.pending.insert(sender);
         }
         if let Some(mismatched) = self.mismatched.get_mut(usize::from(sender)) {
             match digest {
                 Some(theirs) if theirs != ours => {
                     *mismatched += 1;
                     if *mismatched >= MISMATCHES {
-                        self.pending = u32::MAX;
+                        self.pending = Ids::ALL;
                         *mismatched = 0;
                     }
                 }
@@ -986,14 +986,14 @@ impl Requests {
         }
     }
 
-    /// The ids to ask for, as a set.
+    /// The ids to ask for.
     #[must_use]
-    pub fn pending(&self) -> u32 {
+    pub fn pending(&self) -> Ids {
         self.pending
     }
 
     /// Takes the ids in `asked` as asked for, once a packet carried them.
-    pub fn sent(&mut self, asked: u32) {
+    pub fn sent(&mut self, asked: Ids) {
         self.pending &= !asked;
     }
 }
@@ -1174,13 +1174,13 @@ pub(crate) mod tests {
             g.merge(31, signed(31, 3, 200), 1_000),
             Merged::Changed { vacated: None }
         );
-        assert_eq!(g.unsent(), 1 << 3 | 1 << 31);
+        assert_eq!(g.unsent().bits(), 1 << 3 | 1 << 31);
         g.sent(3);
         g.sent(31);
         assert!(!g.has_unsent());
         // Only records held are sent, whatever is asked.
-        g.ask(u32::MAX);
-        assert_eq!(g.unsent(), 1 | 1 << 3 | 1 << 31);
+        g.ask(Ids::ALL);
+        assert_eq!(g.unsent().bits(), 1 | 1 << 3 | 1 << 31);
         for id in [0, 3, 31] {
             g.sent(id);
         }
@@ -1216,25 +1216,29 @@ pub(crate) mod tests {
         let mut requests = Requests::default();
         let ours = g.digest();
         requests.heard(&mut g, 3, Some(ours), None);
-        assert_eq!(requests.pending(), 0);
+        assert_eq!(requests.pending(), Ids::EMPTY);
         requests.heard(&mut g, 7, Some(ours), None);
         assert_eq!(
             requests.pending(),
-            1 << 7,
+            Ids::of(7),
             "a sender it holds no record for"
         );
-        requests.sent(1 << 7);
+        requests.sent(Ids::of(7));
         requests.heard(&mut g, 3, Some(ours ^ 1), None);
-        assert_eq!(requests.pending(), 0, "one packet may only be out of date");
+        assert_eq!(
+            requests.pending(),
+            Ids::EMPTY,
+            "one packet may only be out of date"
+        );
         requests.heard(&mut g, 3, Some(ours), None);
         requests.heard(&mut g, 3, Some(ours ^ 1), None);
         assert_eq!(
             requests.pending(),
-            0,
+            Ids::EMPTY,
             "a match in between starts the count again"
         );
         requests.heard(&mut g, 3, Some(ours ^ 1), None);
-        assert_eq!(requests.pending(), u32::MAX);
+        assert_eq!(requests.pending(), Ids::ALL);
     }
 
     #[test]
@@ -1242,10 +1246,10 @@ pub(crate) mod tests {
         let mut g = group(0, &[(0, 1), (3, 2)]);
         let mut requests = Requests::default();
         let ours = g.digest();
-        requests.heard(&mut g, 3, Some(ours), Some(u32::MAX));
+        requests.heard(&mut g, 3, Some(ours), Some(Ids::ALL));
         assert!(!g.has_unsent());
-        requests.heard(&mut g, 3, Some(ours ^ 1), Some(1 << 3 | 1 << 9));
-        assert_eq!(g.unsent(), 1 << 3, "only the records held");
+        requests.heard(&mut g, 3, Some(ours ^ 1), Some(Ids::of(3).with(9)));
+        assert_eq!(g.unsent(), Ids::of(3), "only the records held");
     }
 
     #[test]
@@ -1332,8 +1336,8 @@ pub(crate) mod tests {
         assert_eq!(g.gone(1), Some(&left(1, 2, 200)));
         assert_eq!(g.lowest_free(), Some(1));
         assert_eq!(g.count(), 2);
-        assert_eq!(g.ids(), 1 | 1 << 2);
-        assert_eq!(g.unsent(), 1 << 1, "it passes the news on");
+        assert_eq!(g.ids().bits(), 1 | 1 << 2);
+        assert_eq!(g.unsent(), Ids::of(1), "it passes the news on");
         assert_ne!(g.digest(), before);
         assert_eq!(g.merge_gone(1, left(1, 2, 200), 0), Merged::Unchanged);
     }
@@ -1352,7 +1356,7 @@ pub(crate) mod tests {
         let mut requests = Requests::default();
         let ours = g.digest();
         requests.heard(&mut g, 1, Some(ours), None);
-        assert_eq!(requests.pending(), 0);
+        assert_eq!(requests.pending(), Ids::EMPTY);
     }
 
     #[test]
@@ -1362,7 +1366,7 @@ pub(crate) mod tests {
         g.sent(1);
         assert_eq!(g.merge(1, signed(1, 2, 150), 0), Merged::Unchanged);
         assert!(g.member(1).is_none());
-        assert_eq!(g.unsent(), 1 << 1, "the gone record goes back");
+        assert_eq!(g.unsent(), Ids::of(1), "the gone record goes back");
     }
 
     #[test]
@@ -1445,9 +1449,9 @@ pub(crate) mod tests {
         g.merge(1, signed(1, 2, 550), 0);
         g.rename(Name::from_mac(&[0, 0, 0, 0, 0, 7]), 700, &key(1));
         let changed = g.take_changed();
-        assert_eq!(changed, 1 << 0 | 1 << 1 | 1 << 2);
+        assert_eq!(changed.bits(), 1 << 0 | 1 << 1 | 1 << 2);
         assert!(g.held.former.iter().any(Option::is_some));
-        assert_eq!(g.forget_changed(changed), 1 << 1 | 1 << 2);
+        assert_eq!(g.forget_changed(changed).bits(), 1 << 1 | 1 << 2);
         assert!(g.slot(1).is_none() && g.slot(2).is_none());
         assert_eq!(g.member(3), Some(&member(4, 100)));
         assert_eq!(g.me().changed, 700, "this node's own record stays");
@@ -1495,7 +1499,7 @@ pub(crate) mod tests {
     fn a_removals_gone_record_and_an_unsigned_own_record_are_not_sent() {
         let mut g = group(1, &[(0, 1), (1, 2), (2, 3)]);
         g.remove(&fingerprint(&member(3, 0).public), 500);
-        assert_eq!(g.unsent(), 0, "every node makes its own");
+        assert_eq!(g.unsent(), Ids::EMPTY, "every node makes its own");
         assert!(!g.has_unsent());
 
         let (low, high) = {
@@ -1506,10 +1510,10 @@ pub(crate) mod tests {
         let Merged::Renumbered { to, .. } = g.merge(1, signed(1, low, 100), 1_000) else {
             panic!("this node moves");
         };
-        assert_eq!(g.unsent() & 1 << to, 0, "not until it is signed");
+        assert!(!g.unsent().contains(to), "not until it is signed");
         g.sign_own(&key(high));
         assert!(g.me().verify(to));
-        assert_ne!(g.unsent() & 1 << to, 0);
+        assert!(g.unsent().contains(to));
     }
 
     #[test]

@@ -693,7 +693,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         // The stored state may still wait on an older key for a member removed since, as
         // earlier builds left it.
         if let Some(group) = &group {
-            rekey.wait_only_for(group.ids());
+            rekey.wait_only_for(group.ids().bits());
         }
         match &group {
             Some(group) => info!(
@@ -1113,7 +1113,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             self.unsaved.everything();
         }
         if let Some(group) = &mut self.group
-            && self.removals.rekey.changed(group.take_changed())
+            && self.removals.rekey.changed(group.take_changed().bits())
         {
             self.unsaved.rekey();
         }
@@ -1210,7 +1210,8 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             self.post_keys(time).await;
         }
         // A member this device removed again once its record is back.
-        let again = self.removals.rekey.again() & self.group.as_ref().map_or(0, Group::ids);
+        let again =
+            self.removals.rekey.again() & self.group.as_ref().map_or(0, |group| group.ids().bits());
         if again != 0 && self.removals.rekey.pending().is_none() {
             // One that does not start is tried again at the next step.
             _ = self.remove(again.trailing_zeros() as u8).await;
@@ -1257,7 +1258,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         }
         self.after = start + 1;
         let sending = self.table.wants_to_send(round)
-            || self.requests.pending() != 0
+            || !self.requests.pending().is_empty()
             || self.group.as_ref().is_some_and(Group::has_unsent)
             || self.messages.has_unsent()
             || self.summary.is_some();
@@ -1533,7 +1534,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         let Some(group) = &self.group else {
             return 0;
         };
-        (group.ids() | self.table.neighbours(round)) & !(1 << group.own())
+        (group.ids().bits() | self.table.neighbours(round)) & !(1 << group.own())
     }
 
     /// Takes the packet `DIO0` reported. Returns whether it moved the node to its timebase, or
@@ -1962,7 +1963,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                     .clone();
                 // The member added is one more id that declining the last removal forgets, and
                 // this write may stand in for a switch's not yet stored.
-                if self.removals.rekey.changed(group.take_changed()) {
+                if self.removals.rekey.changed(group.take_changed().bits()) {
                     self.unsaved.rekey();
                 }
                 let rekey = self
@@ -2140,7 +2141,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         if id == group.own() || group.member(id).is_none() {
             return Err(Unremovable::Changed);
         }
-        let remaining = group.ids() & !(1 << id) & !(1 << group.own());
+        let remaining = group.ids().bits() & !(1 << id) & !(1 << group.own());
         // Every key message has its number before the removal starts, so none is left behind.
         if !self.reserve(remaining.count_ones(), time).await {
             return Err(Unremovable::Unsaved);
@@ -2184,7 +2185,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             return;
         }
         let new = pending.new.clone();
-        let remaining = group.ids() & !(1 << new.removed) & !(1 << group.own());
+        let remaining = group.ids().bits() & !(1 << new.removed) & !(1 << group.own());
         if !self.reserve(remaining.count_ones(), time).await {
             return;
         }

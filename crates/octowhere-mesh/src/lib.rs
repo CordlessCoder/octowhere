@@ -12,6 +12,7 @@ pub mod bits;
 pub mod clock;
 pub mod compose;
 pub mod identity;
+pub mod ids;
 pub mod members;
 pub mod messages;
 pub mod packet;
@@ -23,9 +24,10 @@ pub mod table;
 
 /// All zeroes is a valid value of a type that has it, which lets a large one be made in place.
 pub use bytemuck::Zeroable;
+pub use ids::Ids;
 
 /// The number of ids, and of slots in a round. Ids are five bits on the air, and sets of them
-/// are `u32`.
+/// are [`Ids`], a `u32` underneath.
 pub const IDS: u8 = 32;
 /// How far ahead of a node's clock a member or gone record, a position or a message may be
 /// stamped: one stamped later would win every merge until then, a clock's error kept for ever.
