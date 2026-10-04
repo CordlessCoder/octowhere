@@ -66,6 +66,12 @@ layout. Step 1 starts from the workspace commit.
 | `Group::clone` | 5,136 |
 | Flash image, plain build | 1,848,064 bytes (`espflash save-image`, `AGENTS.md`'s options); 1,846,768 after the move |
 
+Steps 1 to 3 left the log identical (`0a25c3d`, `7381762`, `2e21c2c`; the radio task's poll took
+16,352 bytes from step 1). The UI and firmware review's bug fixes came next and changed behaviour
+on purpose. Their one log change is a new scenario, `refreshes_count_on_across_leaving_and_founding`.
+From step 4 on, compare with the log at `4caeca0`: 15,699 lines, identical across runs. The image
+there is 1,846,480 bytes, and the frames are as after step 1.
+
 ## Step 0: the boards (whenever they are connected)
 
 Not a refactor, and independent of the steps. The 2026-10-04 security fixes changed what goes

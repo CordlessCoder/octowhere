@@ -268,8 +268,8 @@ until the feature set is complete, because profiling an incomplete firmware pric
     2026-10-04), which no member can grind but which the lowest ids win every time; the
     removal screens let each user decline the rival they do not want (the protocol's "Open").
 - Act on the 2026-10-04 code-quality review of the UI crate and the firmware,
-  [`ui-firmware-review/README.md`](ui-firmware-review/README.md): eight bugs, verified, and 112
-  findings in all, with the ones to take first. Nothing is fixed yet; the owner picks the order.
+  [`ui-firmware-review/README.md`](ui-firmware-review/README.md): 112 findings, with the ones to
+  take first. Its eight bugs are fixed (2026-10-04); the rest are open.
 - Simplify the node (`octowhere-node`'s `node.rs`, moved from `src/mesh.rs`) and the mesh crate's surface, from the 2026-10-03 code-quality review
   of `337717f`. What is left is planned step by step in `MESH-CLEANUP-PLAN.md` (2026-10-04):
   follow that, and strike lines here as its steps land. The order the owner agreed on 2026-10-04: the radio and the save flags first,

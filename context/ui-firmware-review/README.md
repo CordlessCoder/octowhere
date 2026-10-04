@@ -5,9 +5,10 @@ told: partition, rules, categories, format). Their findings are `ui-runtime.md`,
 and `firmware.md`, with line numbers at `b8ab7ca`. The mesh and node had the same review on
 2026-10-03 (`MESH-CLEANUP-PLAN.md`).
 
-112 findings: ui-runtime 36, ui-faces 39, firmware 37. Nothing was changed by the review.
+112 findings: ui-runtime 36, ui-faces 39, firmware 37. The eight bugs are fixed, each with a
+regression test that fails without its fix; the other findings are open.
 
-## Verified
+## Verified, and fixed
 
 The eight bugs were checked against the code at `b8ab7ca` by reading it, beside the reviewers'
 own reproductions. The reproductions ran in scratch crates outside the repository; their
@@ -17,26 +18,30 @@ frame figures in them are the reviewers' (list sizes on wasm32, frames from thei
 
 1. **Power key on a dimming screen** (`ui/stage.rs` `wake_by_key`): a short press while
    `Dimmed` or `Darkening` sets `Awake` without `restart(now)`, so the timeout check later in
-   the same step dims again. One line.
+   the same step dims again. Fixed in `3995e0d`.
 2. **Drawer over the always-on face** (`ui/stage.rs` `step_rest`, `draw`): the timeout's move to
    `AlwaysOn` does not close the drawer (only `sleep()` does), and `draw` checks the drawer
-   first, so the drawer stays lit at the always-on level.
+   first, so the drawer stays lit at the always-on level. Fixed in `64d3b45`: the timeout's
+   rest clears what the key's does.
 3. **Refresh sessions renumbered** (`octowhere-node` `node.rs`, `self.refresh = None` on leave
    and on join, numbering `map_or(1, ..)`; `view.rs` documents "since boot"): after a leave or
    a join, a new refresh makes no event and its end is not told (`ui/events.rs`,
    `ui/group/mod.rs` compare `session >` the last seen). `ui/group/sim.rs` copies the reset.
+   Fixed in `e0732c0`: both count refreshes since boot; a simulator scenario covers it.
 4. **Refresh screen shows 00:00** until the mesh takes the request up (`ui/group/mod.rs`
-   `refresh`). Low.
+   `refresh`). Low. Fixed in `f53410f`.
 5. **Identity title held after a skip** (`ui/identity.rs` static `TITLE`, freed only by
    `draw_card`): a skipped start-up never draws the card, so 36,660 bytes stay on the internal
-   heap for the run.
+   heap for the run. Fixed in `67848e0`: the start-up owns the title (`identity::TitleSlot`);
+   `tests/startup_heap.rs` counts the heap.
 6. **Outline example mislabelled** (`examples/outline.rs`): tiles labelled HOLLOW draw outlines.
-   Low.
+   Low. Fixed in `93cd6cc`.
 7. **Touch queue drops a lift or cover when full** (`firmware/src/main.rs` `put_touch_read`):
    `|| reads.is_full()` lets a new report overwrite a waiting lift or cover, against its doc
-   and `AGENTS.md`.
+   and `AGENTS.md`. Fixed in `e642ad2`: the rule is `util::place_touch`, tested in `host-tests`,
+   and a full queue drops the newer read.
 8. **Corrupt RTC year reads as 2255** (`octowhere-peripherals` `rtc.rs`): `is_valid` never
-   checks the year, so `bcd_to_dec_checked`'s 0xFF sentinel passes. Low.
+   checks the year, so `bcd_to_dec_checked`'s 0xFF sentinel passes. Low. Fixed in `4caeca0`.
 
 ## Worth acting on first, besides the bugs
 
