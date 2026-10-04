@@ -11,6 +11,11 @@ use octowhere_ui::ui::{
     clock::{ClockState, DateTime, ZoneMode, ZoneState},
     compass::CompassView,
     gesture::Micros,
+    group::{
+        keyboard::{Mode, taps},
+        sim::{self, Arrival, Sim},
+        view::{Carriage, MessagesView, Name},
+    },
     panel::Cell,
     rest::{AlwaysOn, Timeout},
     screens::PeripheralState,
@@ -144,6 +149,30 @@ pub const SCENES: &[Scene] = &[
         about: "a 15 s timeout dims the clock, the power key opens the confirmation over the dim, and a cancel lets it dim and go dark",
         run: power_off_dim_cancel,
         captioned: false,
+    },
+    Scene {
+        name: "drawer",
+        about: "the Events drawer opened over the clock, a whole 10 s breathing cycle at rest, its list scrolled, Messages beside it, and closed",
+        run: drawer,
+        captioned: true,
+    },
+    Scene {
+        name: "member-face",
+        about: "the member face reached from the clock, turning with the heading, and a member selected",
+        run: member_face,
+        captioned: true,
+    },
+    Scene {
+        name: "messages",
+        about: "a private message arriving over the clock, read in its conversation, and a reply written, reviewed, sent and delivered",
+        run: messages,
+        captioned: true,
+    },
+    Scene {
+        name: "removal",
+        about: "removing a member with the slide and its countdown, then another member's request declined with the slide",
+        run: removal,
+        captioned: true,
     },
     Scene {
         name: "tour",
@@ -1061,4 +1090,151 @@ fn rest_always_on(driver: &mut Driver) {
 
 fn rest_off(driver: &mut Driver) {
     rest(driver, Screen::Compass, false);
+}
+
+/// The clock in Dublin, awake, in a group with Ridge, Cove and Moss, and with their
+/// conversations if `conversations`.
+fn in_group(driver: &mut Driver, conversations: bool) {
+    driver.stage = Stage::new(PeripheralState {
+        firmware: "0.1.0",
+        timeout: Timeout::Never,
+        ..PeripheralState::default()
+    });
+    driver.stage.use_messages(Box::leak(MessagesView::boxed()));
+    start(driver, Screen::Clock);
+    let now = driver.now();
+    let mut group = sim::group(4, now);
+    for (id, name) in [(1, "Ridge"), (2, "Cove"), (3, "Moss")] {
+        if let Some(member) = &mut group.members[id] {
+            member.name = Name::new(name.as_bytes()).expect("a fixture name");
+        }
+    }
+    let mut mesh = Sim::new(Some(group));
+    if conversations {
+        mesh.conversations(now);
+    }
+    driver.mesh = Some(mesh);
+    driver.wait(ms(6_000));
+}
+
+fn mesh<'a>(driver: &'a mut Driver<'_>) -> &'a mut Sim {
+    driver.mesh.as_mut().expect("a scripted mesh")
+}
+
+fn open_drawer(driver: &mut Driver) {
+    driver.swipe(Point::new(233, 430), Point::new(233, 120), ms(300));
+    driver.settle();
+}
+
+fn drawer(driver: &mut Driver) {
+    in_group(driver, true);
+    let now = driver.now();
+    mesh(driver).request_removal(2, 1, 402_000_000, now);
+    driver.wait(ms(6_000));
+    say("AN UPWARD DRAG OPENS EVENTS OVER THE FACE.");
+    open_drawer(driver);
+    say("AT REST FOR A WHOLE 10 S BREATHING CYCLE: ONLY THE HALFTONE CHANGES.");
+    driver.wait(ms(10_000));
+    say("THE LIST SCROLLS, AND ROWS SHRINK A LITTLE NEAR ITS EDGES.");
+    driver.swipe(Point::new(233, 380), Point::new(233, 200), ms(700));
+    driver.wait(ms(1_200));
+    driver.swipe(Point::new(233, 200), Point::new(233, 380), ms(700));
+    driver.wait(ms(1_200));
+    say("A SIDEWAYS DRAG MOVES TO MESSAGES, AND BACK.");
+    driver.swipe(Point::new(380, 260), Point::new(80, 260), ms(400));
+    driver.wait(ms(2_500));
+    driver.swipe(Point::new(80, 260), Point::new(380, 260), ms(400));
+    driver.wait(ms(2_000));
+    say("A PULL DOWN FROM THE TOP OF THE LIST CLOSES IT.");
+    driver.swipe(Point::new(233, 160), Point::new(233, 440), ms(400));
+    driver.settle();
+    driver.wait(ms(1_500));
+}
+
+fn member_face(driver: &mut Driver) {
+    in_group(driver, false);
+    say("THE MEMBER FACE IS THE THIRD, AFTER THE COMPASS.");
+    page_left(driver, ms(400));
+    driver.wait(ms(1_000));
+    page_left(driver, ms(400));
+    driver.wait(ms(2_000));
+    say("THE GRID AND THE BEARINGS TURN WITH THE TRUE HEADING.");
+    driver.motion_over(ms(4_000), |t| facing(37.0 + 60.0 * swing(t)));
+    driver.wait(ms(1_000));
+    say("A TAP IN THE MIDDLE SELECTS THE NEXT MEMBER.");
+    slow_tap(driver, 233, 233);
+    driver.wait(ms(1_500));
+    slow_tap(driver, 233, 233);
+    driver.wait(ms(2_000));
+}
+
+fn messages(driver: &mut Driver) {
+    in_group(driver, true);
+    let now = driver.now();
+    let own = mesh(driver)
+        .view()
+        .group
+        .as_ref()
+        .map_or(0, |group| group.own);
+    say("A PRIVATE MESSAGE ARRIVES. THE TOAST NAMES ITS SENDER, NOT ITS WORDS.");
+    mesh(driver).arrive(
+        Arrival {
+            from: 1,
+            to: Some(own),
+            text: "Where are you?",
+            ago: 0,
+            carriage: Carriage::Received,
+            unread: true,
+        },
+        now,
+    );
+    driver.wait(ms(1_500));
+    say("A TAP ON THE TOAST OPENS THE CONVERSATION. A SECOND IN VIEW READS IT.");
+    slow_tap(driver, 233, 360);
+    driver.wait(ms(2_500));
+    say("WRITE OPENS THE KEYBOARD.");
+    slow_tap(driver, 233, 426);
+    driver.wait(ms(800));
+    for point in taps("at the bridge", Mode::Lower) {
+        driver.tap(point);
+        driver.wait(ms(120));
+    }
+    driver.wait(ms(800));
+    say("REVIEW READS IT THROUGH BEFORE SEND.");
+    slow_tap(driver, 333, 131);
+    driver.wait(ms(1_500));
+    say("SENT, IT GOES FROM QUEUED TO DELIVERED ONCE RIDGE ACKNOWLEDGES IT.");
+    slow_tap(driver, 306, 391);
+    driver.wait(ms(12_000));
+}
+
+fn removal(driver: &mut Driver) {
+    in_group(driver, false);
+    say("REMOVE ON A MEMBER OPENS A SLIDE.");
+    open_settings(driver);
+    page_left(driver, ms(400));
+    slow_tap(driver, 233, 190);
+    slow_tap(driver, 159, 353);
+    slow_tap(driver, 233, 380);
+    driver.wait(ms(800));
+    slow_tap(driver, 233, 353);
+    driver.wait(ms(1_200));
+    say("A SLIDE SHORT OF THE END EASES BACK AND ASKS NOTHING.");
+    driver.swipe(Point::new(110, 372), Point::new(230, 372), ms(500));
+    driver.wait(ms(800));
+    say("TO THE END, IT STARTS THE GROUP CHANGE AND COUNTS DOWN TO THE SWITCH.");
+    driver.swipe(Point::new(110, 372), Point::new(350, 372), ms(700));
+    driver.wait(ms(5_000));
+    say("ANOTHER MEMBER'S REQUEST, ON ANOTHER DEVICE: ITS TOAST OPENS IT.");
+    in_group(driver, false);
+    let now = driver.now();
+    mesh(driver).request_removal(2, 1, 402_000_000, now);
+    driver.wait(ms(1_000));
+    slow_tap(driver, 233, 360);
+    driver.wait(ms(2_500));
+    say("DECLINE ASKS FOR A SLIDE OF ITS OWN.");
+    slow_tap(driver, 306, 391);
+    driver.wait(ms(2_000));
+    driver.swipe(Point::new(110, 372), Point::new(350, 372), ms(700));
+    driver.wait(ms(3_000));
 }
