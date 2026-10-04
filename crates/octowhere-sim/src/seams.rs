@@ -19,6 +19,11 @@ use crate::{
     world::{Micros, Mode, World},
 };
 
+/// How long a wait already over still takes: about a turn of a loop on the board. Time stands
+/// still while a node runs, so without it a loop waiting on a deadline it has passed would never
+/// see that deadline's effects, as the board's does a moment later.
+const BUSY_US: Micros = 100;
+
 /// Waits until virtual time `at`.
 pub struct Sleep {
     world: Rc<World>,
@@ -40,12 +45,15 @@ impl Future for Sleep {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<()> {
-        if self.world.now() >= self.at {
-            return Poll::Ready(());
-        }
+        let now = self.world.now();
         if !self.waiting {
-            self.world.wake_at(self.at, cx.waker());
             self.waiting = true;
+            self.at = self.at.max(now + BUSY_US);
+            self.world.wake_at(self.at, cx.waker());
+            return Poll::Pending;
+        }
+        if now >= self.at {
+            return Poll::Ready(());
         }
         Poll::Pending
     }
@@ -111,22 +119,23 @@ impl Radio for SimRadio {
     }
 
     async fn wait_received(&mut self, deadline: i64) -> bool {
-        let mut waiting = false;
+        let mut until = None;
         poll_fn(|cx| {
             let mut nodes = self.world.nodes.borrow_mut();
             let node = &mut nodes[self.node];
             if node.radio.received.is_some() {
                 return Poll::Ready(true);
             }
-            let at = node.global(deadline);
-            if self.world.now() >= at {
+            let now = self.world.now();
+            let at = *until.get_or_insert_with(|| {
+                let at = node.global(deadline).max(now + BUSY_US);
+                self.world.wake_at(at, cx.waker());
+                at
+            });
+            if now >= at {
                 return Poll::Ready(false);
             }
             node.radio.waker = Some(cx.waker().clone());
-            if !waiting {
-                self.world.wake_at(at, cx.waker());
-                waiting = true;
-            }
             Poll::Pending
         })
         .await

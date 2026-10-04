@@ -16,5 +16,5 @@ mod store;
 mod world;
 
 pub use logs::Line;
-pub use sim::{Config, Sim, UTC0_S, grouped};
+pub use sim::{Config, Sim, UTC0_S, alone, grouped};
 pub use world::{CAPTURE_DB, Link};

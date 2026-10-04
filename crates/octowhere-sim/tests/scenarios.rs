@@ -2,7 +2,7 @@
 
 use octowhere_mesh::members::Name;
 use octowhere_node::Command;
-use octowhere_sim::{Config, Link, Sim, UTC0_S, grouped};
+use octowhere_sim::{Config, Link, Sim, UTC0_S, alone, grouped};
 
 /// Two nodes of one group, both with RTC time, in reach of each other.
 fn pair(seed: u64) -> Sim {
@@ -175,4 +175,37 @@ fn a_restart_during_a_removal_still_switches() {
             && sim.count(1, "switched to generation 1") == 1
     });
     assert!(switched, "after {} s", sim.now_s());
+}
+
+/// A device in no group joins one of two through pairing, and the member that did not pair
+/// learns of it over the mesh.
+#[test]
+fn a_device_joins_through_pairing() {
+    let mut sim = pair(9);
+    let joiner = sim.add(alone(2), Config::default());
+    sim.link_all(Link::default());
+    sim.run_while_not(30 * 60, |sim| {
+        sim.count(0, "heard id=1") >= 1 && sim.count(1, "heard id=0") >= 1
+    });
+    sim.command(0, Command::Add);
+    sim.command(joiner, Command::Join);
+    let found = sim.run_while_not(5 * 60, |sim| sim.count(0, "[PAIR] found 0") >= 1);
+    assert!(found, "node 0 found the joining device");
+    sim.command(0, Command::Choose(0));
+    let compared = sim.run_while_not(5 * 60, |sim| {
+        sim.count(0, "[PAIR] code") == 1 && sim.count(joiner, "[PAIR] code") == 1
+    });
+    assert!(compared, "both show a code");
+    sim.command(0, Command::Accept);
+    sim.command(joiner, Command::Accept);
+    let done = sim.run_while_not(5 * 60, |sim| {
+        sim.count(0, "Done(Added") == 1 && sim.count(joiner, "Done(Joined") == 1
+    });
+    assert!(done, "the pairing finished");
+    let learned = sim.run_while_not(60 * 60, |sim| sim.count(1, "member 2 is OW-0002 now") == 1);
+    assert!(
+        learned,
+        "node 1 learned of the new member after {} s",
+        sim.now_s()
+    );
 }

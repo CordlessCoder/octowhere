@@ -300,6 +300,17 @@ impl Sim {
     }
 }
 
+/// What device `n` starts with in no group.
+pub fn alone(n: u8) -> Start {
+    let mac = [0x02, 0, 0, 0, 0, n];
+    Start {
+        me: Identity::new([n + 1; 32], mac, Name::from_mac(&mac)),
+        group: None,
+        sequence: None,
+        rekey: None,
+    }
+}
+
 /// What `count` devices start with in one group, device `n` at id `n`, joined at UTC `utc`.
 pub fn grouped(count: u8, utc: u32) -> Vec<Start> {
     let key = Key::new([7; 32]);
