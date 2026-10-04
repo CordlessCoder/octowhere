@@ -235,7 +235,10 @@ mod tests {
     use super::*;
     use crate::{
         Zeroable,
-        members::tests::{key, member, signed},
+        members::{
+            MISMATCHES,
+            tests::{key, member, signed},
+        },
         messages::kind,
         packet::{Builder, Header, MAX_PLAIN, Plain, Source, Timebase},
         seal::Key,
@@ -339,6 +342,29 @@ mod tests {
             builder.member(1, &record).unwrap();
         });
         assert_eq!(node.group.unsent() & 1 << 1, 0);
+    }
+
+    #[test]
+    fn only_a_full_account_of_its_sender_makes_a_summary_due() {
+        for members_digest in [true, false] {
+            let mut node = Node::new();
+            let held = Message::to_group(1, 1, 0, NOW - 5, &[kind::TEXT, b'h', b'i']).unwrap();
+            node.messages.insert(held, NOW);
+            let digest = node.group.digest();
+            // Their messages digest, absent, differs from this node's.
+            for _ in 0..MISMATCHES {
+                node.absorb(|builder| {
+                    if members_digest {
+                        builder.members_digest(digest).unwrap();
+                    }
+                });
+            }
+            assert_eq!(
+                node.summaries.pending(),
+                members_digest,
+                "members digest: {members_digest}"
+            );
+        }
     }
 
     #[test]

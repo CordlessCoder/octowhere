@@ -205,8 +205,6 @@ until the feature set is complete, because profiling an incomplete firmware pric
   `refresh` in place of the view's, which only copies them now, and `send()`'s packet filling
   and `take()`'s records loop as the mesh crate's tested `compose` and `absorb`. Left:
   - In the node, which has no tests but `unsaved`'s:
-    - Test `absorb`'s rule that a packet with no members digest gets no summary answer: it is
-      in the crate now, but nothing checks it.
     - Gather the ten removal fields (`rekey`, `kept`, `catch_up`, `caught_up`,
       `removal_notice`, `notify`, `remove_again`, `keys_posted`, `beacon_round`, `refill`) into
       one type with named resets; `forget_messages`, `switch_key`, `keep` and `take` reset
