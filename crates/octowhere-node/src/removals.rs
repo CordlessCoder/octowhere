@@ -8,7 +8,7 @@ use core::alloc::Allocator;
 #[cfg(feature = "defmt")]
 use defmt::info;
 use octowhere_mesh::{
-    IDS,
+    IDS, Ids,
     members::Group,
     messages::{Message, To},
     pair::Identity,
@@ -282,17 +282,17 @@ impl<A: Allocator> Removals<A> {
     }
 
     /// A packet under an old key went out in `round` with the messages of the members in
-    /// `caught`, as sets; those in `lost` had none left to send.
-    pub fn sent_old(&mut self, caught: u32, lost: u32, round: i64) {
-        self.catch_up.retain(|up| (caught | lost) & 1 << up.id == 0);
-        for id in (0..IDS).filter(|&id| caught & 1 << id != 0) {
+    /// `caught`; those in `lost` had none left to send.
+    pub fn sent_old(&mut self, caught: Ids, lost: Ids, round: i64) {
+        self.catch_up.retain(|up| !(caught | lost).contains(up.id));
+        for id in caught.iter() {
             let (sends, last) = &mut self.caught_up[usize::from(id)];
             *sends = sends.saturating_add(1);
             *last = round;
         }
         if let Some(notice) = &mut self.removal_notice
             && let To::Member(id) = notice.message.to()
-            && caught & 1 << id != 0
+            && caught.contains(id)
         {
             notice.left -= 1;
             if notice.left == 0 {

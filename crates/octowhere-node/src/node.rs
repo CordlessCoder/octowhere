@@ -1367,13 +1367,13 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         };
         let mut packet = [0u8; MAX_PACKET];
         let mut builder = Builder::new(&mut packet[SIV_LEN..], &header);
-        let (mut caught, mut lost) = (0u32, 0u32);
+        let (mut caught, mut lost) = (Ids::EMPTY, Ids::EMPTY);
         for &(id, catches_up_with) in &ids {
             match self.removals.message_for(id, catches_up_with) {
-                Some(message) if builder.message(message).is_ok() => caught |= 1 << id,
+                Some(message) if builder.message(message).is_ok() => caught.insert(id),
                 Some(_) => {}
                 // Gone since it was queued, as a rival's switch drops the losing key's.
-                None => lost |= 1 << id,
+                None => lost.insert(id),
             }
         }
         let plain_len = builder.finish();
@@ -1384,7 +1384,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             "[REKEY] sent under generation {} round={} caught={:#010x} len={} done={}",
             generation,
             round,
-            caught,
+            caught.bits(),
             len,
             sent.is_some_and(|done| done)
         );
@@ -2143,9 +2143,9 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         if id == group.own() || group.member(id).is_none() {
             return Err(Unremovable::Changed);
         }
-        let remaining = group.ids().bits() & !(1 << id) & !(1 << group.own());
+        let remaining = group.ids().without(id).without(group.own());
         // Every key message has its number before the removal starts, so none is left behind.
-        if !self.reserve(remaining.count_ones(), time).await {
+        if !self.reserve(remaining.count(), time).await {
             return Err(Unremovable::Unsaved);
         }
         let Some(key) = self.random.bytes::<32>() else {
@@ -2166,7 +2166,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             new.generation,
             new.switch,
             round,
-            remaining.count_ones()
+            remaining.count()
         );
         self.removals.started();
         self.save_rekey();
@@ -2187,12 +2187,12 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             return;
         }
         let new = pending.new.clone();
-        let remaining = group.ids().bits() & !(1 << new.removed) & !(1 << group.own());
-        if !self.reserve(remaining.count_ones(), time).await {
+        let remaining = group.ids().without(new.removed).without(group.own());
+        if !self.reserve(remaining.count(), time).await {
             return;
         }
         let body = new.encode();
-        for member in (0..IDS).filter(|&member| remaining & 1 << member != 0) {
+        for member in remaining.iter() {
             self.post(
                 &Outgoing::new(To::Member(member), Some(new.generation), &body),
                 time,

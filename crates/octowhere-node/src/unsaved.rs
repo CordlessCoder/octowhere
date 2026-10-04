@@ -1,6 +1,8 @@
 //! What changed in the group and its removals that the flash does not hold yet, and the order
 //! it goes there in.
 
+use octowhere_mesh::Ids;
+
 /// A write the flash is due, in the order [`Unsaved::due`] gives them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Due {
@@ -15,8 +17,8 @@ pub enum Due {
 
 #[derive(Default)]
 pub struct Unsaved {
-    /// The ids whose member records changed, as a set.
-    slots: u32,
+    /// The ids whose member records changed.
+    slots: Ids,
     /// The group's key or this node's id changed, so the whole group is to be stored.
     group: bool,
     rekey: bool,
@@ -24,7 +26,7 @@ pub struct Unsaved {
 
 impl Unsaved {
     pub fn slot(&mut self, id: u8) {
-        self.slots |= 1 << id;
+        self.slots.insert(id);
     }
 
     pub fn group(&mut self) {
@@ -45,7 +47,7 @@ impl Unsaved {
     /// The group was stored whole elsewhere, or is gone, so its slots need no write. The
     /// removals keep their own.
     pub fn group_replaced(&mut self) {
-        self.slots = 0;
+        self.slots = Ids::EMPTY;
         self.group = false;
     }
 
@@ -66,7 +68,7 @@ impl Unsaved {
         if self.rekey {
             return Some(Due::Rekey);
         }
-        (has_group && self.slots != 0).then(|| Due::Slot(self.slots.trailing_zeros() as u8))
+        self.slots.first().filter(|_| has_group).map(Due::Slot)
     }
 
     /// `due` was queued.
@@ -74,7 +76,7 @@ impl Unsaved {
         match due {
             Due::Group { .. } => *self = Self::default(),
             Due::Rekey => self.rekey = false,
-            Due::Slot(id) => self.slots &= !(1 << id),
+            Due::Slot(id) => self.slots.remove(id),
         }
     }
 }
