@@ -83,8 +83,11 @@ until the feature set is complete, because profiling an incomplete firmware pric
     - The read rule (a whole row shown for a second), one event per conversation, MARK ALL READ
       reading events only, RECOVERED, and keeping one draft are engineering choices without a
       render. Take them to the next design round.
-    - A private conversation is keyed by the member's id. An id another device takes after a
-      removal joins its conversation to the old member's for as long as the store holds it.
+    - Messages name their sender by member id. After a removal, a device paired in at the freed
+      id is shown as the writer of the removed member's messages, private and to the group, for
+      as long as the store holds them, and WRITE in that private conversation sends to the new
+      device (`tests/messages.rs`'s ignored
+      `a_removed_members_messages_are_not_shown_as_a_newcomers`). Options are with the owner.
     - The draft's title cuts a long name short, and the draft shows no id.
     - Every step rebuilds an open conversation's rows, wrapping each message: measure it with a
       full store on a board.
@@ -244,19 +247,33 @@ until the feature set is complete, because profiling an incomplete firmware pric
   power budget is two days on about 1,000 mAh (owner, 2026-10-03; its "Open"). Then step 7.
 - Close what the 2026-10-03 security review of the mesh left open. It found seven defects,
   confirmed by host tests, and the fixes since are in the history from `0999a8a` to `6750e8d`.
-  Still open:
-  - The oscillator-stop gate is not built. A node with no RTC time and no fix that hears nobody
-    roots its clock at its boot, near 1970, and then refuses every record and position stamped
-    in 2026 as too far ahead (`clock.rs`'s `tick`, `members.rs`'s `is_ahead`, `table.rs`'s
-    `merge`). The lowest root wins, so a group with no fix can converge on that clock, and switch
-    rounds counted in 2026 never come due on it. The protocol says a node with the flag set
-    skips the check.
-  - Header sender ids are unauthenticated within the group. Any member can send under another
-    member's id: under the new key that takes the member off the waiting set
-    (`Rekey::heard`), and replaying a member's old packets in sweep rounds spends the three
-    catch-ups a node sends it (`caught_up`).
-  - A packet whose timebase ranks above the node's own is adopted at any time, in or out of a
-    sweep, and a replayed one moves the clock anywhere (the protocol's "Open").
+  Still open, each staged by an ignored scenario in `crates/octowhere-sim/tests/security.rs`
+  that fails today, beside a control that runs the same stage without the fault (2026-10-04;
+  the same at six seeds). Options for each are with the owner.
+  - A clock started without UTC. A node with no RTC time and no fix that hears nobody roots its
+    clock at its boot, near 1970 (`clock.rs`'s `tick`), and the lowest root wins. With the
+    lowest id's RTC empty, a group of three moved to its clock, and a rename that another
+    member's RTC stamped in 2026 never arrived: every node judges records by its timebase, so
+    the members whose RTCs hold the time refused it as ahead too
+    (`a_rename_reaches_a_group_whose_lowest_id_lost_its_rtc_time`). The protocol's gate, which
+    skips the check on the node whose RTC stopped, would not cover them. A device that restarts
+    with its RTC empty while a removal is pending never switches: the switch round it stored is
+    counted in 2026. The other node sends it its key message three times and stops, so the two
+    stay apart (`a_removal_switches_across_a_restart_that_lost_the_rtc_time`). A device without
+    UTC also stamps its own records 0 (`utc_seconds`), so its rename loses every merge.
+  - Header sender ids are unauthenticated. A member sending one empty packet under the new key
+    with an absent member's id makes every node stop waiting for it and drop the old key, and
+    the absent member is never caught up (`a_member_cannot_end_the_wait_for_another`). Replaying
+    one packet the absent member sent under the old key, which needs no key, in sweep rounds
+    spends every node's three catch-ups for it, with the same result
+    (`replayed_packets_do_not_spend_a_members_catch_ups`).
+  - A packet whose timebase ranks above the node's own is adopted at any time, and a replayed
+    one moves the clock anywhere (the protocol's "Open"). Replayed an hour on to a node that had
+    become its own root, it set that node's clock an hour back, and the node kept it as a root
+    (`a_replayed_packet_from_a_higher_root_does_not_move_a_clock`). Replayed in a sweep round to
+    a node still timing from the sender, it moved the clock an hour back, and the node lost the
+    sender for about 340 s, until a later sweep round
+    (`a_replayed_packet_in_a_sweep_does_not_set_a_clock`). A replayed notice forces a sweep.
   - Rival removals of one generation are settled by the lower remover's id (owner,
     2026-10-04), which no member can grind but which the lowest ids win every time; the
     removal screens let each user decline the rival they do not want (the protocol's "Open").
