@@ -71,6 +71,8 @@ pub struct Sim {
     pub refresh_learns: bool,
     /// When a founding's wait ends.
     recovery_until: Option<Micros>,
+    /// The refreshes started, which number them, as the node's do.
+    refreshes: u32,
     next: Option<(Micros, Next)>,
     changed: bool,
     messages: alloc::boxed::Box<MessagesView>,
@@ -224,6 +226,7 @@ impl Sim {
             joiner_heard_after: Some(215 * SECOND),
             refresh_learns: false,
             recovery_until: None,
+            refreshes: 0,
             next: None,
             changed: true,
             messages: MessagesView::boxed(),
@@ -576,9 +579,9 @@ impl Sim {
                         .refresh
                         .is_some_and(|refresh| refresh.is_listening()) =>
             {
-                let session = self.view.refresh.map_or(1, |refresh| refresh.session + 1);
+                self.refreshes += 1;
                 self.view.refresh = Some(RefreshView {
-                    session,
+                    session: self.refreshes,
                     phase: RefreshPhase::Listening {
                         until: (now + REFRESH) as At,
                     },

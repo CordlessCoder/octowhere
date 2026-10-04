@@ -654,6 +654,9 @@ pub struct Mesh<R, T, G, D, S, A: Allocator> {
     heard: [Option<i64>; IDS as usize],
     /// The refresh under way, or the last, while the group stays this device's.
     refresh: Option<RefreshView>,
+    /// The refreshes started since boot, which number them: the screens take a session no
+    /// higher than the last they saw for one already told.
+    refreshes: u32,
     /// What the screens are shown.
     shown: Shown,
     /// The view [`publish`] fills.
@@ -733,6 +736,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             timebase_shown: None,
             heard: [None; IDS as usize],
             refresh: None,
+            refreshes: 0,
             shown: Shown::new(true),
             view: blank_view(),
             notice: None,
@@ -2926,8 +2930,9 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         self.refresh_known = Some(Box::new(core::array::from_fn(|id| {
             group.member(id as u8).map(|member| member.mac)
         })));
+        self.refreshes += 1;
         self.refresh = Some(RefreshView {
-            session: self.refresh.map_or(1, |refresh| refresh.session + 1),
+            session: self.refreshes,
             phase: RefreshPhase::Listening {
                 until: now + SWEEP_US,
             },
