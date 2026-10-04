@@ -5,7 +5,7 @@
 use octowhere_mesh::{
     members::Name,
     packet::{Builder, Header, MAX_PACKET, Source, Timebase},
-    schedule::{GUARD_US, ROUND_US, SWEEP_EVERY, Schedule, base_of, round_at},
+    schedule::{GUARD_US, ROUND_US, SWEEP_EVERY, Schedule, round_at, second_at},
     seal::{self, Key, SIV_LEN},
 };
 use octowhere_node::Command;
@@ -121,7 +121,7 @@ fn forged(key: &Key, sender: u8, start: i64) -> Vec<u8> {
             source: Source::Node(0),
             hops: Timebase::MAX_HOPS,
         },
-        base: base_of(start),
+        base: second_at(start),
         phase: 0,
         notice: false,
     };

@@ -321,7 +321,7 @@ impl Clock {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schedule::{SLOT_US, base_of};
+    use crate::schedule::{SLOT_US, second_at};
 
     /// A slot's start in an order that does not shuffle, which the clock does not need.
     fn slot_start(round: i64, id: u8) -> i64 {
@@ -336,7 +336,7 @@ mod tests {
         Header {
             sender,
             timebase: Timebase { source, hops },
-            base: base_of(start),
+            base: second_at(start),
             phase: 0,
             notice: false,
         }

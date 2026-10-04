@@ -25,7 +25,8 @@ use octowhere_mesh::{
     pair::{End, Identity, MAX_FRAME, Pairing, Phase, Role},
     rekey::{Learned, NewKey, Rekey, key_fingerprint},
     schedule::{
-        GUARD_US, ROUND_US, SWEEP_EVERY, Schedule, airtime_us, base_of, is_sweep_round, round_at,
+        GUARD_US, ROUND_US, SWEEP_EVERY, Schedule, airtime_us, is_sweep_round, round_at,
+        round_start_s, second_at, stored_round_at,
     },
     seal::{self, Key, SIV_LEN},
     table::Table,
@@ -236,11 +237,6 @@ impl Next {
         }
         Self::Own
     }
-}
-
-/// The timebase second the round holding timebase time `time` starts at.
-fn round_start_s(time: i64) -> u32 {
-    (round_at(time) * (ROUND_US / 1_000_000)) as u32
 }
 
 impl From<Request> for Command {
@@ -1193,11 +1189,11 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             self.listen(end).await;
             return;
         };
-        if self.removals.rekey.is_due(round_at(time) as u32) {
+        if self.removals.rekey.is_due(stored_round_at(time)) {
             self.switch_key();
             return;
         }
-        if self.removals.rekey.expire(round_at(time) as u32) {
+        if self.removals.rekey.expire(stored_round_at(time)) {
             info!("[REKEY] a day since the switch; the key before it is dropped");
             self.save_rekey();
             if let Some(current) = &mut self.shown.removals.current
@@ -1304,7 +1300,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         let header = Header {
             sender: own,
             timebase,
-            base: base_of(start),
+            base: second_at(start),
             phase: 0,
             notice: false,
         };
@@ -1362,7 +1358,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         let header = Header {
             sender: own,
             timebase,
-            base: base_of(time),
+            base: second_at(time),
             phase: 0,
             notice: false,
         };
@@ -1412,7 +1408,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         let header = Header {
             sender: own,
             timebase,
-            base: base_of(time),
+            base: second_at(time),
             phase: 0,
             notice: true,
         };
@@ -1438,7 +1434,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             }
         }
         if let Some((time, _)) = self.clock.at(self.time.now()) {
-            self.table.expire((time / 1_000_000) as u32);
+            self.table.expire(second_at(time));
         }
     }
 
@@ -1663,7 +1659,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             .clock
             .at(done)
             .filter(|(_, timebase)| timebase.source.is_utc())
-            .map(|(time, _)| (time / 1_000_000) as u32);
+            .map(|(time, _)| second_at(time));
         // Messages are judged by this node's clock: the header's own time is the sender's word.
         let round_s = self
             .clock
@@ -1815,7 +1811,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         let Some(group) = &mut self.group else {
             return;
         };
-        let base = base_of(start);
+        let base = second_at(start);
         let header = Header {
             sender: group.own(),
             timebase,
@@ -2153,7 +2149,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             warn!("[REKEY] no random source for a key");
             return Err(Unremovable::NoRandom);
         };
-        let round = round_at(time) as u32;
+        let round = stored_round_at(time);
         let Some(group) = &self.group else {
             return Err(Unremovable::NoTime);
         };
@@ -2208,7 +2204,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
     /// Stores a block holding at least `count` more sequence numbers, if the one held has fewer,
     /// at timebase time `time`. Returns whether they are there to take.
     async fn reserve(&mut self, count: u32, time: i64) -> bool {
-        let Some(block) = self.sequence.to_reserve(count, (time / 1_000_000) as u32) else {
+        let Some(block) = self.sequence.to_reserve(count, second_at(time)) else {
             return true;
         };
         if !self.store.save(GroupWrite::Sequence(block.1)).await {
@@ -2226,7 +2222,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         let (Some(group), Some((time, _))) = (&self.group, self.clock.at(now)) else {
             return None;
         };
-        let round = round_at(time) as u32;
+        let round = stored_round_at(time);
         let (removed, generation) = (new.removed, new.generation);
         let rival = self
             .removals
@@ -2424,7 +2420,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         let Some(reverted) = self
             .removals
             .rekey
-            .undo(group, round_at(time) as u32, removed)
+            .undo(group, stored_round_at(time), removed)
         else {
             warn!("[REKEY] no removal of {} to decline", removed);
             return;
@@ -2589,7 +2585,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         };
         let own = group.own();
         let plain = &outgoing.plain[..usize::from(outgoing.len)];
-        let stamp = (time / 1_000_000) as u32;
+        let stamp = second_at(time);
         let made = match outgoing.to {
             To::Group => self
                 .sequence

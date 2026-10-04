@@ -9,7 +9,7 @@ use crate::IDS;
 use crate::identity::{Identity, SIGNATURE_LEN, verify};
 use crate::members::{Group, Member, PUBLIC_LEN, RECORD_MAX_LEN, fingerprint};
 use crate::messages::{Message, To, kind};
-use crate::schedule::ROUND_US;
+use crate::schedule::ROUND_S;
 use crate::seal::Key;
 
 /// A key message's plaintext: its kind, the key, its generation, the switch round, the id and
@@ -25,7 +25,6 @@ pub const OLD_KEYS: usize = 4;
 /// The rounds a device that learns of a removal has to decline it, however late it learns.
 pub const DECLINE_ROUNDS: u32 = 3;
 /// A round's length in seconds.
-const ROUND_S: u32 = (ROUND_US / 1_000_000) as u32;
 /// The declined keys remembered, so a key sent again does not ask again.
 pub const DECLINED: usize = 4;
 /// How long after its switch a removal can still be declined: the key before it is kept that
