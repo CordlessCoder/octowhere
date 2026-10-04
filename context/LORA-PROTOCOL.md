@@ -567,8 +567,9 @@ Owner, 2026-10-03, except where it says otherwise.
   message again.
 - **The new key.** The remover makes a random group key and sends it to each remaining member as
   a private message, a key message, with its generation, one past the current key's, the round
-  the group switches at, counted on its timebase, and the id and SHA-256 fingerprint of the
-  member removed. The remover signs each (see "Signatures") and sends one a packet, so the
+  the group switches at, counted on its timebase, the id and SHA-256 fingerprint of the
+  member removed, and the fingerprint of the key it replaces (owner, 2026-10-04). The remover
+  signs each (see "Signatures") and sends one a packet, so the
   switch is as many rounds away as its key messages and the removal message take, and four more:
   the round it is in, and three for hops. That is about 8 minutes for 8 members, 27 for 32.
   Until then the removed device still reads everything. The remover reserves every sequence
@@ -577,15 +578,22 @@ Owner, 2026-10-03, except where it says otherwise.
   get the key the group is leaving. A node ignores a key message whose switch round is further
   off than a removal from a group of 32 needs, which would leave the removal pending for good,
   or whose member removed is neither a member nor a gone record it holds (owner, 2026-10-03).
+  A node takes a key only on the key it names as replaced. It keeps one that names another
+  unread, and tries it again once it has switched: a member that missed several switches takes
+  them in order, and one still on a key a rival won over waits for the winner (owner,
+  2026-10-04).
 - **The switch.** Before it nodes send under the old key, and from it under the new one, in the
   order the new key gives (see "Shuffled slots"). Every node tries both keys on receive, but
-  after the switch merges nothing that arrives under the old key. Such a packet only shows that
-  its sender missed the change. Before its own switch a node takes nothing from a packet under
+  after the switch merges nothing that arrives under the old key but the key messages of its
+  own generation, rivals of its key. Anything else in such a packet only shows that its sender
+  missed the change. Before its own switch a node takes nothing from a packet under
   the new key either: it still sends under the old key, which the removed device reads, and
   its slot order is still the old key's, so the packet's timing says nothing about its clock.
   A node holding the key message of the generation after the one a member is on sends it
-  again, in a packet under that member's key, when the member next listens for its slot there,
-  so a member that missed several switches takes them one at a time. The removed device can
+  again, in a packet under that member's key, in its own slot of that key's order in the next
+  sweep round. Every member listens throughout a sweep round, whichever key it is on, and one
+  that switched to a rival key listens in that order in no other (owner, 2026-10-04). A member
+  on a key a rival won over is sent the winner's key message instead, of the same generation. The removed device can
   see that packet but cannot open the key inside. Key messages are kept for this past the
   message horizon while the old key is, but are left out of the digest after it. A member that
   missed the switch sends in the old order; nodes on the new key hear it in a sweep round,
@@ -601,24 +609,27 @@ Owner, 2026-10-03, except where it says otherwise.
 - **The removed device** is sent a private message saying it was removed and by whom. Its
   screen shows that, and it does not leave the group by itself, so a stolen device that removes
   everyone else cannot take them out of their group. The remover sends it only after the
-  switch, under the old key, at its own slot in that key's order, where the removed device
-  still listens, and again when it hears the device under the old key, three times in all.
+  switch, under the old key, at its own slot in that key's order in a sweep round, where the
+  removed device still listens, and again when it hears the device under the old key, three
+  times in all.
   Told before the switch, the device could answer by removing its remover, and the two keys
-  would be rivals that the lower hash settles.
+  would be rivals, and it would win with a lower id than its remover's.
 - **Its record.** At the switch every node replaces the removed member's record with a gone
   record, as of the start of the switch round, so every node's is the same. Its id is free
   for the next pairing at once.
 - **Two at once.** Two removals made apart at the same time make two keys of one generation.
-  The one whose key has the lower SHA-256 wins wherever both are known, even after a switch
-  to the other, and the other remover makes its removal again under it once the member it
-  removed is back (proposed, 2026-10-03). A node that switched to the losing key gives that
-  member its id back, and its record returns from the nodes that never took that key. A key
-  one generation ahead is taken as a removal to show. One further ahead is taken only by a
-  node that has heard no member on its key for seven rounds, as a member that missed two
-  switches has not; otherwise a member could skip past every other removal with a key of a
-  generation nobody else holds. One of an earlier generation is stale.
+  The one whose remover has the lower id wins wherever both are known, and of one remover's
+  two, the one with the lower SHA-256 (owner, 2026-10-04; the lower hash alone before). It
+  wins even after a switch to the other: a node takes a rival from a packet under the key both
+  replace, and the nodes that switched to the winner send it to the members on the loser. The
+  other remover makes its removal again under the winner once the member it removed is back.
+  A node that switched to the losing key puts back the record of the member that key removed,
+  as the node held it before that switch (owner, 2026-10-04). One of an earlier generation is
+  stale. The simulator's rival scenarios stage these (`crates/octowhere-sim`).
 - **What is kept across a restart.** A pending removal, the old keys and which members each
-  still waits for, and the key kept to decline the last removal after its switch. The key messages themselves are in the message store, so a restarted node
+  still waits for, and the key kept to decline the last removal after its switch; the record of
+  the member the last switch removed, the key the group's key replaced, and the removals this
+  device makes again after a rival won over them. The key messages themselves are in the message store, so a restarted node
   gets them back from its neighbours within the horizon.
 
 ## Time and freshness
@@ -925,13 +936,16 @@ protocol does not need this.
   does more harm more easily, so it waits.
 - A member being removed can still see that a removal is under way before the switch: key
   messages are marked as such, and none comes to it. Firmware changed to act on that can
-  remove its remover first, and the lower of the two keys' hashes then decides which removal
-  holds. Each device's user is shown both and can decline the one they do not want. A member
-  can grind its key's hash, about 2^16 tries to beat a given key, so it can always win that
-  race. Bounding a key message's switch round and refusing a key that names no member stop its
-  cheapest uses (owner, 2026-10-03). The lower hash stays for now: the removal screens show
-  both rivals, and each user declines the one they do not want. The rule is revisited once
-  the multi-board simulator can stage rival removals (owner, 2026-10-03).
+  remove its remover first. The lower remover's id decides which removal holds (owner,
+  2026-10-04, once the simulator staged rivals): it cannot be ground, as the lower hash could
+  in about 2^16 tries, but the lowest ids, the founder's first, win every race. Each device's
+  user is shown both and can decline the one they do not want. Bounding a key message's switch
+  round and refusing a key that names no member stop the cheapest uses (owner, 2026-10-03).
+- Two parts of a group apart, one of which removes twice while the other removes once, stay on
+  different keys when the other's removal wins over the first part's first. A node does not go
+  back past a switch it made, which would undo the removals after it, as declining after a
+  switch does. The simulator's `parts_apart_through_two_removals_settle_once_they_meet`,
+  ignored for now, stages it.
 - For step 5: the power budget is two days on a cell of about 1,000 mAh (owner, 2026-10-03),
   which sets the floor, the sweeps and how far CAD has to go. CAD's two measurements need both
   boards with a GPS fix at once, which will not be possible for a while, so step 5 waits

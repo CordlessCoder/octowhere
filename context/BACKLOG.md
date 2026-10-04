@@ -31,8 +31,12 @@ until the feature set is complete, because profiling an incomplete firmware pric
     seed, members enrolled while records are asked for, the two missed switches, a removal
     declined after its switch and kept across a restart, a restart mid-removal, and pairing a
     device in. The pairing scenario found the pairing loop spinning once its write was saved
-    (fixed in `8b312ef`). Left: rival removals, which the owner revisits with these
-    (`LORA-PROTOCOL.md`, "Open"), and more nodes than two with links that come and go.
+    (fixed in `8b312ef`). Then rival removals: in reach, through a relay, in two parts apart
+    that each switch before they meet, and a restart before the losing remover removes again.
+    Parts apart never settled on one key, in none of 30 seeds; they settle in all of 60 now,
+    28 to 69 minutes after they meet. The fixes and the owner's choices of 2026-10-04 are in
+    `LORA-PROTOCOL.md`, "Two at once". Left as the protocol's "Open" item, with an ignored
+    scenario: parts apart where one part removes twice.
   - Step 4, several boards in `tools/ui-sim`, side by side, input to the panel clicked, the
     matrix editable live; the web simulator too (its build already compiles the mesh's crypto).
   - Board tests stay for RF (CRC overload up close), the radio's DIO0 quirk, I2C bus contention
@@ -57,8 +61,8 @@ until the feature set is complete, because profiling an incomplete firmware pric
     "Show GNSS as faulted" below).
   - Where outlined text belongs, which the owner named; the primitive is built and unused.
   - What the BOOT key does: it is wired and does nothing.
-  Not the design agent's: the rule that settles rival removals, which stays the lower hash
-  for now (`LORA-PROTOCOL.md`, "Open").
+  Not the design agent's: the rule that settles rival removals, now the lower remover's id
+  (owner, 2026-10-04; `LORA-PROTOCOL.md`, "Two at once").
 - Build the 2026-09-26 design, [`design/`](design/README.md), which the owner approved in full
   (`design/DECISIONS.md`). One piece at a time, each compared against the hand-off's renders
   (`tools/design-compare.py`), reviewed by the owner in `ui-sim`, and measured on the board
@@ -197,9 +201,9 @@ until the feature set is complete, because profiling an incomplete firmware pric
     catch-ups a node sends it (`caught_up`).
   - A packet whose timebase ranks above the node's own is adopted at any time, in or out of a
     sweep, and a replayed one moves the clock anywhere (the protocol's "Open").
-  - Rival removals of one generation are settled by a hash a member can grind (the protocol's
-    "Open"). The owner keeps it for now, with the removal screens letting each user decline
-    the rival they do not want, and revisits it once the simulator can stage rivals.
+  - Rival removals of one generation are settled by the lower remover's id (owner,
+    2026-10-04), which no member can grind but which the lowest ids win every time; the
+    removal screens let each user decline the rival they do not want (the protocol's "Open").
 - Simplify the node (`octowhere-node`'s `node.rs`, moved from `src/mesh.rs`) and the mesh crate's surface, from the 2026-10-03 code-quality review
   of `337717f`, in the order the owner agreed on 2026-10-04: the radio and the save flags first,
   as they shrink the simulator's seams, then the seams (the entry above), then `send()` and
@@ -210,9 +214,9 @@ until the feature set is complete, because profiling an incomplete firmware pric
   `refresh` in place of the view's, which only copies them now, and `send()`'s packet filling
   and `take()`'s records loop as the mesh crate's tested `compose` and `absorb`. Left:
   - In the node, which has no tests but `unsaved`'s:
-    - Gather the ten removal fields (`rekey`, `kept`, `catch_up`, `caught_up`,
-      `removal_notice`, `notify`, `remove_again`, `keys_posted`, `beacon_round`, `refill`) into
-      one type with named resets; `forget_messages`, `switch_key`, `keep` and `take` reset
+    - Gather the nine removal fields (`rekey`, `kept`, `catch_up`, `caught_up`,
+      `removal_notice`, `notify`, `keys_posted`, `beacon_round`, `refill`) into one type with
+      named resets; `forget_messages`, `switch_key`, `keep` and `take` reset
       overlapping subsets of them today.
     - Split `step()`'s choice of what goes out next into a plain function returning an enum;
       make `listen` reset `after` itself rather than its three callers; `send`, `send_old` and
@@ -248,8 +252,8 @@ until the feature set is complete, because profiling an incomplete firmware pric
     shims, while its comment says a later layout can tell itself apart; `pair.rs` has two
     stacked docs, the first stale.
   - Tests: `messages.rs` builds a `lacking` store it never asserts on, and `a.sent((30, 1))`
-    changes nothing asserted; the rekey tests repeat the rival search loop three times and
-    define their `group(own, ids)` helper three ways.
+    changes nothing asserted; the rekey tests define their `group(own, ids)` helper three
+    ways.
   - Work and stack: `start_transfer` in `pair.rs` clones the 2.6 KB group on the receive path
     though its only failure comes before any change; `old_slot_at` rebuilds a 1 KB `Schedule`,
     an HKDF and 32 AES blocks, every step while catching a member up; check the remaining
