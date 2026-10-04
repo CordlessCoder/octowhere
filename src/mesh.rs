@@ -11,7 +11,7 @@ pub use octowhere_node::{Fix, Mesh, Start};
 
 pub use self::device::{
     BoardCommands, BoardDevice, BoardGroupStore, FIX, RTC_TIME, VIEW_CHANGED, lend_messages,
-    quality, request, view_since,
+    messages_since, quality, request, view_since,
 };
 pub use self::radio::BoardRadio;
 pub use self::random::{BoardRandom, random};

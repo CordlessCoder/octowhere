@@ -1,13 +1,14 @@
 //! The runtime events the drawer lists, from the 2026-10-04 hand-off: what happened, whether it
 //! is still going on, and whether the user has opened it. An event keeps one identity through its
 //! life: a GNSS incident from the receiver stopping to its answering again, a refresh from its
-//! start to its result. Events live in RAM, and a restart loses them.
+//! start to its result, a conversation's messages while it has unread ones. Events live in RAM,
+//! and a restart loses them.
 
 use heapless::Vec;
 
 use super::{
     gesture::Micros,
-    group::view::{RefreshPhase, RefreshView},
+    group::view::{MessagesView, RefreshPhase, RefreshView, Thread},
     screens::GnssHealth,
 };
 
@@ -25,6 +26,13 @@ pub type Id = u32;
 pub enum Kind {
     Gnss(Gnss),
     Refresh(RefreshView),
+    /// A conversation's new messages: how many are unread, the newest told of, and its sender.
+    Messages {
+        thread: Thread,
+        unread: u16,
+        newest: u32,
+        from: u8,
+    },
 }
 
 /// Where a GNSS incident is.
@@ -63,7 +71,7 @@ impl Event {
         match self.kind {
             Kind::Gnss(Gnss::Recovering { .. } | Gnss::Fault { .. }) => Some(Protected::Unresolved),
             Kind::Refresh(refresh) if refresh.is_listening() => Some(Protected::Unfinished),
-            Kind::Gnss(Gnss::Responding) | Kind::Refresh(_) => None,
+            Kind::Gnss(Gnss::Responding) | Kind::Refresh(_) | Kind::Messages { .. } => None,
         }
     }
 
@@ -299,6 +307,73 @@ impl Events {
                 self.change(id, Kind::Refresh(*refresh), ends, now)
             }
         }
+    }
+}
+
+impl Events {
+    /// Follows the messages of member `own`'s device: a conversation with unread messages has an
+    /// event, told of when a newer message arrives than it was last, unread until the user opens
+    /// it or reads its messages. A message taken back after a restart is never news. Returns an
+    /// event the user should be told of.
+    pub fn messages(&mut self, messages: &MessagesView, own: u8, now: Micros) -> Option<Id> {
+        let mut told = None;
+        let mut threads: Vec<Thread, 33> = Vec::new();
+        for message in messages.iter() {
+            let thread = message.thread(own);
+            if !threads.contains(&thread) {
+                _ = threads.push(thread);
+            }
+        }
+        for thread in threads {
+            let unread = messages
+                .thread(thread, own)
+                .filter(|message| message.unread)
+                .count() as u16;
+            let newest = messages
+                .thread(thread, own)
+                .rfind(|message| message.unread && !message.recovered)
+                .map(|message| (message.id, message.from));
+            let held = self.list.iter().find_map(|event| match event.kind {
+                Kind::Messages {
+                    thread: held,
+                    newest,
+                    ..
+                } if held == thread => Some((event.id, newest)),
+                _ => None,
+            });
+            match (held, newest) {
+                (None, Some((newest, from))) => {
+                    let kind = Kind::Messages {
+                        thread,
+                        unread,
+                        newest,
+                        from,
+                    };
+                    told = self.add(kind, true, now).or(told);
+                }
+                (None, None) => {}
+                (Some((id, was)), Some((newest, from))) => {
+                    let kind = Kind::Messages {
+                        thread,
+                        unread,
+                        newest,
+                        from,
+                    };
+                    told = self.change(id, kind, newest != was, now).or(told);
+                }
+                (Some((id, _)), None) => {
+                    if let Some(event) = self.get_mut(id)
+                        && let Kind::Messages { unread: held, .. } = &mut event.kind
+                        && (*held != unread || event.unread)
+                    {
+                        *held = unread;
+                        event.unread &= unread > 0;
+                        self.version += 1;
+                    }
+                }
+            }
+        }
+        told
     }
 }
 

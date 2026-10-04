@@ -8,7 +8,10 @@ use minifb::Key;
 use octowhere_ui::ui::{
     clock::{ClockState, ZoneMode, ZoneState},
     compass::CompassView,
-    group::{sim::Sim as Scripted, view::Request},
+    group::{
+        sim::Sim as Scripted,
+        view::{MessagesView, Request},
+    },
     screens::{Battery, Gnss, GnssHealth, PeripheralState},
     stage::{Input, Key as PowerKey, Motion, Sensors, Stage, Store, Touch, TouchGesture, Update},
     startup::Report,
@@ -302,6 +305,9 @@ pub struct Device {
     scripted: Option<Scripted>,
     /// How many views the device's node had published when its stage last took one.
     pub seen: u32,
+    /// How many times the device's node had published its messages when its stage last took
+    /// them.
+    pub messages_seen: u32,
     next_motion: u64,
     next_sensors: u64,
     samples_fast: bool,
@@ -334,13 +340,16 @@ fn peripherals() -> PeripheralState {
 
 impl Device {
     pub fn new(masked: bool, readings: Readings, label: String, scripted: bool) -> Self {
+        let mut stage = Stage::new(peripherals());
+        stage.use_messages(Box::leak(MessagesView::boxed()));
         Self {
-            stage: Stage::new(peripherals()),
+            stage,
             readings,
             panel: Panel::new(masked),
             label,
             scripted: scripted.then(|| Scripted::new(None)),
             seen: 0,
+            messages_seen: 0,
             next_motion: 0,
             next_sensors: 0,
             samples_fast: false,
@@ -371,9 +380,19 @@ impl Device {
     /// Starts the device again from power-on, as a reset does, keeping its readings but the
     /// zone the settings chose.
     pub fn reset(&mut self) {
+        let messages = self.stage.take_messages();
         self.stage = Stage::starting(peripherals());
-        if let Some(scripted) = &self.scripted {
+        if let Some(messages) = messages {
+            messages.clear();
+            self.stage.use_messages(messages);
+        }
+        self.messages_seen = 0;
+        if let Some(scripted) = &mut self.scripted {
             self.stage.set_mesh(scripted.view().clone());
+            self.stage.update_messages(|messages| {
+                messages.copy_from(scripted.messages());
+                true
+            });
         }
         self.readings.chosen = None;
         self.reports = scenes::ANSWERING
@@ -466,10 +485,16 @@ impl Device {
             }
             _ => None,
         };
-        if let Some(scripted) = &mut self.scripted
-            && scripted.step(now)
-        {
-            self.stage.set_mesh(scripted.view().clone());
+        if let Some(scripted) = &mut self.scripted {
+            if scripted.step(now) {
+                self.stage.set_mesh(scripted.view().clone());
+            }
+            if scripted.messages_changed() {
+                self.stage.update_messages(|messages| {
+                    messages.copy_from(scripted.messages());
+                    true
+                });
+            }
         }
         let update: Update = self.stage.step(Input {
             now,

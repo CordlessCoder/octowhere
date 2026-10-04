@@ -10,7 +10,7 @@ use super::{
     gesture::Micros,
     group::{
         sim::Sim,
-        view::{MeshView, Request},
+        view::{MeshView, MessagesView, Request},
     },
     screens::{PeripheralState, Screen},
     stage::{Input, Key, Motion, Sensors, Stage, Touch, TouchGesture, Update},
@@ -29,6 +29,11 @@ type Observer<'a> = Box<dyn FnMut(&Stage, Micros) + 'a>;
 pub trait MeshLink {
     /// The view the node published since the last call, once it has run to `now`.
     fn view(&mut self, now: Micros) -> Option<MeshView>;
+    /// Copies the messages the node published since the last call into `into`. Returns whether
+    /// it did.
+    fn messages(&mut self, _into: &mut MessagesView) -> bool {
+        false
+    }
     fn request(&mut self, request: Request, now: Micros);
 }
 
@@ -130,13 +135,23 @@ impl<'a> Driver<'a> {
                 input.sensors = Some(advanced);
             }
         }
-        if let Some(mesh) = &mut self.mesh
-            && mesh.step(self.now)
-        {
-            self.stage.set_mesh(mesh.view().clone());
+        if let Some(mesh) = &mut self.mesh {
+            if mesh.step(self.now) {
+                self.stage.set_mesh(mesh.view().clone());
+            }
+            if mesh.messages_changed() {
+                self.stage.update_messages(|messages| {
+                    messages.copy_from(mesh.messages());
+                    true
+                });
+            }
         }
-        if let Some(view) = self.link.as_mut().and_then(|link| link.view(self.now)) {
-            self.stage.set_mesh(view);
+        if let Some(link) = &mut self.link {
+            if let Some(view) = link.view(self.now) {
+                self.stage.set_mesh(view);
+            }
+            self.stage
+                .update_messages(|messages| link.messages(messages));
         }
         let update = self.stage.step(input);
         if let (Some(mesh), Some(request)) = (&mut self.mesh, update.mesh) {

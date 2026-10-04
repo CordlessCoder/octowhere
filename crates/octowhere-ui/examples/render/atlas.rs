@@ -228,6 +228,24 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
             ("members-swiping", "MEMBERS / SWIPING"),
         ],
     ),
+    (
+        "MESSAGES",
+        &[
+            ("messages-01-inbox", "MESSAGES / INBOX"),
+            ("messages-02-group", "MESSAGES / GROUP"),
+            ("messages-03-private", "MESSAGES / PRIVATE"),
+            ("messages-04-write", "MESSAGES / WRITE"),
+            ("messages-05-review", "MESSAGES / REVIEW"),
+            ("messages-sent-queued", "MESSAGES / QUEUED"),
+            ("messages-sent-delivered", "MESSAGES / DELIVERED"),
+            ("messages-06-arrival", "MESSAGES / ARRIVAL"),
+            ("messages-07-recipient", "MESSAGES / SEND TO"),
+            ("messages-empty", "MESSAGES / EMPTY"),
+            ("messages-write-empty", "MESSAGES / NEW DRAFT"),
+            ("messages-write-long", "MESSAGES / LONG DRAFT"),
+            ("messages-review-long", "MESSAGES / LONG REVIEW"),
+        ],
+    ),
 ];
 
 const COLUMNS: usize = 7;

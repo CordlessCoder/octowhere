@@ -5,8 +5,9 @@
 use heapless::Vec;
 
 use super::view::{
-    Answer, At, Done, End, GroupView, IDS, Mac, MemberView, MeshView, Name, PairingView, Phase,
-    Position, Reason, RecoveryPhase, RecoveryView, RefreshPhase, RefreshView, Request, Role,
+    Answer, At, Carriage, Done, End, GroupView, IDS, Mac, MemberView, MeshView, MessageView,
+    MessagesView, Name, PairingView, Phase, Position, Reason, RecoveryPhase, RecoveryView,
+    RefreshPhase, RefreshView, Request, Role,
 };
 use crate::ui::gesture::Micros;
 
@@ -72,7 +73,39 @@ pub struct Sim {
     recovery_until: Option<Micros>,
     next: Option<(Micros, Next)>,
     changed: bool,
+    messages: alloc::boxed::Box<MessagesView>,
+    /// The number the next message shown takes.
+    next_message: u32,
+    /// What happens to a message next, and when: it goes further, or its destination replies.
+    carried: Vec<(Micros, u32, Carried), 16>,
+    messages_changed: bool,
 }
+
+/// A message as [`Sim::arrive`] adds it: from `from` to `to`, sent `ago` before now.
+#[derive(Clone, Copy, Debug)]
+pub struct Arrival<'t> {
+    pub from: u8,
+    pub to: Option<u8>,
+    pub text: &'t str,
+    pub ago: Micros,
+    pub carriage: Carriage,
+    pub unread: bool,
+}
+
+/// What happens to a message sent from here.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Carried {
+    Goes(Carriage),
+    /// The member it went to privately answers.
+    Answered,
+}
+
+/// How long after it is queued a message goes out, is heard relayed, and for a private one is
+/// acknowledged, and its destination answers.
+const SENT_AFTER: Micros = 2 * SECOND;
+const RELAYED_AFTER: Micros = 6 * SECOND;
+const DELIVERED_AFTER: Micros = 10 * SECOND;
+const ANSWERED_AFTER: Micros = 20 * SECOND;
 
 pub const PEER_MAC: Mac = [0x48, 0xa1, 0xb2, 0xc3, 0x8c, 0x91];
 pub const OWN_MAC: Mac = [0x48, 0xa1, 0xb2, 0xc3, 0x7a, 0x2f];
@@ -175,7 +208,126 @@ impl Sim {
             recovery_until: None,
             next: None,
             changed: true,
+            messages: MessagesView::boxed(),
+            next_message: 1,
+            carried: Vec::new(),
+            messages_changed: true,
         }
+    }
+
+    #[must_use]
+    pub fn messages(&self) -> &MessagesView {
+        &self.messages
+    }
+
+    /// Whether the messages changed since the last call.
+    pub fn messages_changed(&mut self) -> bool {
+        core::mem::take(&mut self.messages_changed)
+    }
+
+    /// Adds a message as though it had come, at `now`.
+    pub fn arrive(&mut self, arrival: Arrival, now: Micros) -> u32 {
+        let id = self.next_message;
+        self.next_message += 1;
+        let Arrival {
+            from,
+            to,
+            text,
+            ago,
+            carriage,
+            unread,
+        } = arrival;
+        let mut message = MessageView::new(id, now as At - ago as At, from, to, text.as_bytes());
+        message.seq = id;
+        message.carriage = carriage;
+        message.unread = unread;
+        self.messages.push(message);
+        self.messages_changed = true;
+        id
+    }
+
+    /// The design's conversations, with the members at ids 1 and 2: the group's and one with
+    /// each, some unread, at `now`.
+    pub fn conversations(&mut self, now: Micros) {
+        let own = self.view.group.as_ref().map_or(0, |group| group.own);
+        let minute = 60 * SECOND;
+        self.arrive(
+            Arrival {
+                from: 2,
+                to: None,
+                text: "Meet at the bridge.",
+                ago: minute,
+                carriage: Carriage::Received,
+                unread: true,
+            },
+            now,
+        );
+        self.arrive(
+            Arrival {
+                from: own,
+                to: None,
+                text: "I will bring the spare cells.",
+                ago: 2 * minute,
+                carriage: Carriage::Relayed,
+                unread: false,
+            },
+            now,
+        );
+        self.arrive(
+            Arrival {
+                from: 1,
+                to: None,
+                text: "North path is clear.",
+                ago: 4 * minute,
+                carriage: Carriage::Received,
+                unread: false,
+            },
+            now,
+        );
+        self.arrive(
+            Arrival {
+                from: 1,
+                to: Some(own),
+                text: "Take the north path. I will wait at the turn.",
+                ago: 2 * minute,
+                carriage: Carriage::Received,
+                unread: true,
+            },
+            now,
+        );
+        self.arrive(
+            Arrival {
+                from: own,
+                to: Some(1),
+                text: "On my way.",
+                ago: 3 * minute,
+                carriage: Carriage::Delivered,
+                unread: false,
+            },
+            now,
+        );
+        self.arrive(
+            Arrival {
+                from: 1,
+                to: Some(own),
+                text: "See you there.",
+                ago: 8 * minute,
+                carriage: Carriage::Received,
+                unread: false,
+            },
+            now,
+        );
+        self.arrive(
+            Arrival {
+                from: own,
+                to: Some(2),
+                text: "On my way.",
+                ago: 8 * minute,
+                carriage: Carriage::Delivered,
+                unread: false,
+            },
+            now,
+        );
     }
 
     #[must_use]
@@ -311,6 +463,35 @@ impl Sim {
                 });
                 self.next = Some((now + 20 * SECOND, Next::RefreshHears(1)));
             }
+            Request::Send { to, text } => {
+                let own = self.view.group.as_ref().map_or(0, |group| group.own);
+                let id = self.arrive(
+                    Arrival {
+                        from: own,
+                        to,
+                        text: text.as_str(),
+                        ago: 0,
+                        carriage: Carriage::Queued,
+                        unread: false,
+                    },
+                    now,
+                );
+                let mut later = [
+                    Some((SENT_AFTER, Carried::Goes(Carriage::Sent))),
+                    Some((RELAYED_AFTER, Carried::Goes(Carriage::Relayed))),
+                    to.map(|_| (DELIVERED_AFTER, Carried::Goes(Carriage::Delivered))),
+                    to.map(|_| (ANSWERED_AFTER, Carried::Answered)),
+                ];
+                for (after, carried) in later.iter_mut().flatten() {
+                    _ = self.carried.push((now + *after, id, *carried));
+                }
+            }
+            Request::Read(id) => {
+                if let Some(message) = self.messages.get_mut(id) {
+                    message.unread = false;
+                    self.messages_changed = true;
+                }
+            }
             Request::Rename(name) => {
                 let ok = !self.store_fails;
                 if ok {
@@ -377,6 +558,35 @@ impl Sim {
             self.next = None;
             self.changed = true;
             self.advance(next, at);
+        }
+        while let Some(at) = self.carried.iter().position(|&(due, ..)| now >= due) {
+            let (_, id, carried) = self.carried.remove(at);
+            let Some(message) = self.messages.get(id).copied() else {
+                continue;
+            };
+            match carried {
+                Carried::Goes(carriage) => {
+                    if let Some(message) = self.messages.get_mut(id) {
+                        message.carriage = carriage;
+                    }
+                }
+                Carried::Answered => {
+                    if let Some(to) = message.to {
+                        self.arrive(
+                            Arrival {
+                                from: to,
+                                to: Some(message.from),
+                                text: "Got it.",
+                                ago: 0,
+                                carriage: Carriage::Received,
+                                unread: true,
+                            },
+                            now,
+                        );
+                    }
+                }
+            }
+            self.messages_changed = true;
         }
         core::mem::take(&mut self.changed)
     }

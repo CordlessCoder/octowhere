@@ -15,7 +15,7 @@ use crate::{
         gesture::Micros,
         group::{
             layout::{Align, Face, Line, List, format, rect},
-            view::{RefreshPhase, RefreshView},
+            view::{RefreshPhase, RefreshView, Thread},
         },
     },
 };
@@ -41,7 +41,7 @@ pub struct Look {
     /// The state over the title, and its colour.
     pub state: &'static str,
     pub state_color: Color,
-    pub title: &'static str,
+    pub title: Line,
     pub color: Color,
     pub symbol: Symbol,
     pub lines: [Line; 2],
@@ -63,7 +63,7 @@ pub fn look(event: &Event, context: &Context) -> Look {
         Kind::Gnss(Gnss::Recovering { attempt }) => Look {
             state: "RECOVERING",
             state_color: chrome::ORANGE,
-            title: "GNSS RECOVERING",
+            title: format(format_args!("GNSS RECOVERING")),
             color: chrome::ORANGE,
             symbol: Symbol::Exchange,
             lines: [
@@ -77,7 +77,7 @@ pub fn look(event: &Event, context: &Context) -> Look {
         Kind::Gnss(Gnss::Fault { failed }) => Look {
             state: "ACTIVE",
             state_color: chrome::RED,
-            title: "GNSS FAULT",
+            title: format(format_args!("GNSS FAULT")),
             color: chrome::RED,
             symbol: Symbol::Alert,
             lines: [
@@ -91,7 +91,7 @@ pub fn look(event: &Event, context: &Context) -> Look {
         Kind::Gnss(Gnss::Responding) => Look {
             state: "RESOLVED",
             state_color: chrome::GRAY,
-            title: "GNSS RESPONDING",
+            title: format(format_args!("GNSS RESPONDING")),
             color: chrome::WHITE,
             symbol: Symbol::Done,
             lines: [
@@ -117,6 +117,42 @@ pub fn look(event: &Event, context: &Context) -> Look {
             rail: None,
         },
         Kind::Refresh(refresh) => refresh_look(&refresh, context.now),
+        Kind::Messages {
+            thread,
+            unread,
+            from,
+            ..
+        } => {
+            let mail = context.mail();
+            let sender = mail.name(Thread::Member(from));
+            let private = matches!(thread, Thread::Member(_));
+            Look {
+                state: if unread > 0 { "NEW" } else { "READ" },
+                state_color: chrome::VIOLET,
+                title: mail.name(thread),
+                color: chrome::WHITE,
+                symbol: Symbol::Envelope,
+                lines: [
+                    match unread {
+                        0 => format(format_args!("No unread messages.")),
+                        1 => format(format_args!("1 unread message.")),
+                        unread => format(format_args!("{unread} unread messages.")),
+                    },
+                    if private {
+                        format(format_args!("Private conversation."))
+                    } else {
+                        format(format_args!("Latest from {sender}."))
+                    },
+                ],
+                toast: if private {
+                    format(format_args!("New private message."))
+                } else {
+                    format(format_args!("New message from {sender}."))
+                },
+                hint: "OPEN CONVERSATION",
+                rail: None,
+            }
+        }
     }
 }
 
@@ -183,7 +219,7 @@ fn refresh_look(refresh: &RefreshView, now: Micros) -> Look {
     Look {
         state,
         state_color: chrome::GRAY,
-        title,
+        title: format(format_args!("{title}")),
         color: chrome::WHITE,
         symbol: Symbol::Exchange,
         lines,
@@ -238,13 +274,13 @@ fn row_time(event: &Event, look: &Look, now: Micros, list: &mut List) -> Line {
 }
 
 /// Maps a row's coordinates to the screen, shrunk about its centre by where it lies.
-struct Scaled {
+pub(super) struct Scaled {
     middle: f32,
     scale: f32,
 }
 
 impl Scaled {
-    fn new(top: i32, height: i32) -> Self {
+    pub(super) fn new(top: i32, height: i32) -> Self {
         let middle = top as f32 + height as f32 / 2.0;
         let q = (((middle - MIDDLE).abs() - SCALE_NEAR) / SCALE_OVER).clamp(0.0, 1.0);
         let q = q * q * (3.0 - 2.0 * q);
@@ -254,26 +290,26 @@ impl Scaled {
         }
     }
 
-    fn x(&self, x: f32) -> f32 {
+    pub(super) fn x(&self, x: f32) -> f32 {
         parts::CENTRE as f32 + (x - parts::CENTRE as f32) * self.scale
     }
 
-    fn y(&self, y: f32) -> f32 {
+    pub(super) fn y(&self, y: f32) -> f32 {
         self.middle + (y - self.middle) * self.scale
     }
 
-    fn point(&self, x: i32, y: i32) -> (i32, i32) {
+    pub(super) fn point(&self, x: i32, y: i32) -> (i32, i32) {
         (
             libm::roundf(self.x(x as f32)) as i32,
             libm::roundf(self.y(y as f32)) as i32,
         )
     }
 
-    fn size(&self, size: u8) -> u8 {
+    pub(super) fn size(&self, size: u8) -> u8 {
         libm::roundf(f32::from(size) * self.scale).max(1.0) as u8
     }
 
-    fn rect(&self, area: Rectangle) -> Rectangle {
+    pub(super) fn rect(&self, area: Rectangle) -> Rectangle {
         let (x0, y0) = self.point(area.top_left.x, area.top_left.y);
         let corner = area.top_left + area.size;
         let (x1, y1) = self.point(corner.x, corner.y);
@@ -281,14 +317,14 @@ impl Scaled {
     }
 
     /// A point given in quarter pixels.
-    fn quarter(&self, (x, y): (i16, i16)) -> (i16, i16) {
+    pub(super) fn quarter(&self, (x, y): (i16, i16)) -> (i16, i16) {
         (
             libm::roundf(self.x(f32::from(x) / 4.0) * 4.0) as i16,
             libm::roundf(self.y(f32::from(y) / 4.0) * 4.0) as i16,
         )
     }
 
-    fn text(
+    pub(super) fn text(
         &self,
         list: &mut List,
         content: &str,
@@ -302,7 +338,7 @@ impl Scaled {
     }
 
     /// A path through points in quarter pixels from `origin`, in whole pixels.
-    fn path(
+    pub(super) fn path(
         &self,
         list: &mut List,
         origin: (i32, i32),
@@ -387,7 +423,7 @@ pub fn row(list: &mut List, event: &Event, top: i32, height: i32, context: &Cont
         list.fill(scaled.rect(rect(70, top + 33, 76, top + 39)), chrome::WHITE);
     }
     square(list, &scaled, (82, top + 24), 24, look.symbol, look.color);
-    scaled.text(list, look.title, (118, top + 25), Face::Kh, 23, look.color);
+    scaled.text(list, &look.title, (118, top + 25), Face::Kh, 23, look.color);
     for (i, line) in look.lines.iter().enumerate() {
         scaled.text(
             list,
@@ -451,7 +487,7 @@ pub fn toast(list: &mut List, event: &Event, context: &Context, compact: bool) {
     if compact {
         list.boxed(TOAST_COMPACT, look.color, chrome::BLACK);
         square(list, &flat, (151, 31), 18, look.symbol, look.color);
-        list.text(parts::text(look.title, 180, 32, Face::Kh, 16, look.color));
+        list.text(parts::text(&look.title, 180, 32, Face::Kh, 16, look.color));
         list.text(parts::text(
             look.hint,
             180,
@@ -460,6 +496,10 @@ pub fn toast(list: &mut List, event: &Event, context: &Context, compact: bool) {
             10,
             chrome::GRAY,
         ));
+        return;
+    }
+    if let Kind::Messages { .. } = event.kind {
+        message_toast(list, &look);
         return;
     }
     list.boxed(TOAST, look.color, chrome::BLACK);
@@ -480,7 +520,7 @@ pub fn toast(list: &mut List, event: &Event, context: &Context, compact: bool) {
     ));
     list.text(parts::text(&time, 354, 323, Face::Mono, 10, chrome::GRAY).align(Align::Right));
     square(list, &flat, (112, 343), 22, look.symbol, look.color);
-    list.text(parts::text(look.title, 146, 345, Face::Kh, 21, look.color));
+    list.text(parts::text(&look.title, 146, 345, Face::Kh, 21, look.color));
     list.text(parts::text(
         &look.toast,
         112,
@@ -499,13 +539,55 @@ pub fn toast(list: &mut List, event: &Event, context: &Context, compact: bool) {
     ));
 }
 
+/// A message's arrival: an envelope, whose conversation, and for a private one no more, so that
+/// its words do not show over the face.
+fn message_toast(list: &mut List, look: &Look) {
+    list.boxed(TOAST, chrome::WHITE, chrome::BLACK);
+    list.path(
+        &[
+            (446, 1306),
+            (522, 1306),
+            (522, 1382),
+            (446, 1382),
+            (446, 1306),
+        ],
+        4,
+        chrome::WHITE,
+    );
+    list.path(&[(446, 1306), (484, 1340), (522, 1306)], 4, chrome::WHITE);
+    list.text(parts::text(
+        &format(format_args!("MESSAGE / {}", look.title)),
+        143,
+        327,
+        Face::Kh,
+        15,
+        chrome::WHITE,
+    ));
+    list.text(parts::text(
+        &look.toast,
+        111,
+        357,
+        Face::Sans,
+        16,
+        chrome::WHITE,
+    ));
+    list.text(parts::text(
+        "TAP TO OPEN CONVERSATION",
+        111,
+        387,
+        Face::Mono,
+        11,
+        chrome::GRAY,
+    ));
+}
+
 /// Where an event's detail puts VIEW MEMBERS, if it has it, and DISMISS.
 #[must_use]
 pub fn detail_buttons(event: &Event) -> (Option<Rectangle>, Rectangle) {
     match event.kind {
         Kind::Refresh(_) => (Some(PAIR[0]), PAIR[1]),
         Kind::Gnss(_) if event.protected().is_some() => (None, FOOTER_HIGH),
-        Kind::Gnss(_) => (None, FOOTER),
+        Kind::Gnss(_) | Kind::Messages { .. } => (None, FOOTER),
     }
 }
 
@@ -527,11 +609,12 @@ pub fn detail(list: &mut List, event: &Event, context: &Context) {
                 RefreshPhase::Interrupted { .. } => "EVENT / STOPPED",
             },
         ),
+        Kind::Messages { .. } => ("MESSAGES", "EVENT / NEW"),
     };
     parts::title(list, category, context.font);
     parts::meta(list, state);
     list.text(parts::centred(
-        look.title,
+        &look.title,
         parts::CENTRE,
         145,
         Face::Kh,
@@ -605,6 +688,12 @@ pub fn detail(list: &mut List, event: &Event, context: &Context) {
             if let Some(at) = health.last_response.or(health.last_fix) {
                 list.changes_at(now + age_due(now.saturating_sub(at)));
             }
+        }
+        // Opening a messages event opens its conversation instead; this stands in only should
+        // a detail ever be asked of one.
+        Kind::Messages { .. } => {
+            parts::prose(list, &[&look.lines[0], &look.lines[1]], 199);
+            parts::button(list, FOOTER, "DISMISS", true);
         }
         Kind::Refresh(refresh) => {
             let heard = refresh.heard.count_ones();

@@ -2025,6 +2025,7 @@ async fn async_main(spawner: Spawner) {
         ..PeripheralState::default()
     });
     stage.use_raster(raster);
+    stage.use_messages(psram_messages());
     mesh::lend_messages(psram_messages());
     let parts = Parts {
         i2c: peripherals.I2C0,
@@ -2630,8 +2631,9 @@ async fn frame_loop(
     // Swaps left until the frame that switched the panel off has reached core 1, and the board
     // can power off.
     let mut power_off_after: Option<u8> = None;
-    // The count of the mesh's views the stage has.
+    // The count of the mesh's views the stage has, and of its messages.
     let mut mesh_seen = 0;
+    let mut messages_seen = 0;
     #[cfg(feature = "touch-inject")]
     let mut injector = touch_inject::Injector::default();
     loop {
@@ -2703,6 +2705,15 @@ async fn frame_loop(
             if let Some(seen) = stage.update_mesh(|view| mesh::view_since(mesh_seen, view)) {
                 mesh_seen = seen;
             }
+            stage.update_messages(
+                |messages| match mesh::messages_since(messages_seen, messages) {
+                    Some(seen) => {
+                        messages_seen = seen;
+                        true
+                    }
+                    None => false,
+                },
+            );
             match touch_read {
                 Some(Ok(_)) => last_touch_poll = Instant::now(),
                 Some(Err(())) => warn!("[TOUCH] read failed"),

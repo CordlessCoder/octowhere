@@ -25,7 +25,7 @@ use octowhere_ui::{
         compass::CompassView,
         drawer::{Child, Root},
         group::sim::Sim as Mesh,
-        group::view::Request,
+        group::view::{MessagesView, Request},
         rest::Rest,
         screens::{Battery, Gnss, GnssHealth, PeripheralState, Screen},
         second::Page,
@@ -383,23 +383,37 @@ struct Device {
     /// A mesh with no radio behind it, whose other device pairs with whatever this one asks,
     /// for a device with no air around it.
     scripted: Option<Mesh>,
-    /// How many views the device's node had published when its stage last took one.
+    /// How many views the device's node had published when its stage last took one, and how
+    /// many times its messages.
     seen: u32,
+    messages_seen: u32,
     /// When the GNSS receiver last answered, on the device's clock.
     answered: Option<u64>,
 }
 
+/// Memory for a device's messages, kept for the page's life: a stage borrows it for good.
+fn messages() -> &'static mut MessagesView {
+    Box::leak(MessagesView::boxed())
+}
+
 impl Device {
-    fn new(start_up: bool, readings: Readings, scripted: bool) -> Self {
+    fn new(
+        start_up: bool,
+        readings: Readings,
+        scripted: bool,
+        messages: &'static mut MessagesView,
+    ) -> Self {
         let peripherals = PeripheralState {
             firmware: "0.1.0",
             ..PeripheralState::default()
         };
-        let stage = if start_up {
+        let mut stage = if start_up {
             Stage::starting(peripherals)
         } else {
             Stage::new(peripherals)
         };
+        messages.clear();
+        stage.use_messages(messages);
         Self {
             stage,
             fb: FB::boxed(),
@@ -427,6 +441,7 @@ impl Device {
             power_on_since: None,
             scripted: scripted.then(|| Mesh::new(None)),
             seen: 0,
+            messages_seen: 0,
             answered: None,
         }
     }
@@ -439,7 +454,8 @@ impl Device {
             ..self.readings
         };
         let seen = self.seen;
-        *self = Self::new(start_up, readings, self.scripted.is_some());
+        let messages = self.stage.take_messages().unwrap_or_else(messages);
+        *self = Self::new(start_up, readings, self.scripted.is_some(), messages);
         self.seen = seen;
     }
 
@@ -526,10 +542,16 @@ impl Device {
             self.pressed_at = None;
             Some(Touch::Contacts([contact, None]))
         };
-        if let Some(scripted) = &mut self.scripted
-            && scripted.step(now)
-        {
-            self.stage.set_mesh(scripted.view().clone());
+        if let Some(scripted) = &mut self.scripted {
+            if scripted.step(now) {
+                self.stage.set_mesh(scripted.view().clone());
+            }
+            if scripted.messages_changed() {
+                self.stage.update_messages(|messages| {
+                    messages.copy_from(scripted.messages());
+                    true
+                });
+            }
         }
         let update = self.stage.step(Input {
             now,
@@ -637,6 +659,10 @@ impl Device {
             match (drawer.child(), drawer.root()) {
                 (Some(Child::Event(_)), _) => 13,
                 (Some(Child::Manage), _) => 14,
+                (Some(Child::Thread(_)), _) => 15,
+                (Some(Child::Recipients), _) => 16,
+                (Some(Child::Draft), _) => 17,
+                (Some(Child::Review), _) => 18,
                 (None, Root::Events) => 11,
                 (None, Root::Messages) => 12,
             }
@@ -658,7 +684,7 @@ impl Device {
             | rest << 1
             | u32::from(self.powered_off) << 4
             | view << 5
-            | screen << 9
+            | screen << 10
     }
 }
 
@@ -732,7 +758,7 @@ pub extern "C" fn start(start_up: u32) {
     WORLD.with_borrow_mut(|world| {
         let readings = readings_from(world.as_ref(), 0);
         *world = Some(World {
-            devices: vec![Device::new(start_up != 0, readings, true)],
+            devices: vec![Device::new(start_up != 0, readings, true, messages())],
             air: None,
             selected: 0,
             text: String::new(),
@@ -749,7 +775,7 @@ pub extern "C" fn start_devices(count: u32, in_group: u32, utc: f64) {
     let count = (count as usize).clamp(2, MOST);
     WORLD.with_borrow_mut(|world| {
         let devices = (0..count)
-            .map(|n| Device::new(false, readings_from(world.as_ref(), n), false))
+            .map(|n| Device::new(false, readings_from(world.as_ref(), n), false, messages()))
             .collect();
         *world = Some(World {
             devices,
@@ -822,6 +848,15 @@ pub extern "C" fn step(page_ms: f64, utc: f64, x: f64, y: f64, down: u32, contro
                 if let Some((view, seen)) = air.paced.sim.view_since(n, device.seen) {
                     device.seen = seen;
                     device.stage.set_mesh(view);
+                }
+                let (seen, sim) = (device.messages_seen, &air.paced.sim);
+                let mut taken = None;
+                device.stage.update_messages(|messages| {
+                    taken = sim.messages_since(n, seen, messages);
+                    taken.is_some()
+                });
+                if let Some(seen) = taken {
+                    device.messages_seen = seen;
                 }
                 air.paced.sim.clock(n) as u64
             });
@@ -994,11 +1029,12 @@ pub extern "C" fn light() -> f32 {
 }
 
 /// Where the device is: bit 0 while it starts up, bits 1–2 its rest (awake, dimming, on the
-/// always-on face, dark), bit 4 once powered off, bits 5–8 what shows over the faces, and bits
-/// 9–10 the face (0 clock, 1 compass, 2 members). Over the faces: nothing (0), the settings
+/// always-on face, dark), bit 4 once powered off, bits 5–9 what shows over the faces, and bits
+/// 10–11 the face (0 clock, 1 compass, 2 members). Over the faces: nothing (0), the settings
 /// panel (1), a screen it opened (2 brightness, 3 device, 4 clear, 5 zone picker, 6 replay,
 /// 7 timeout, 8 always on, 10 group), the power-off confirmation (9), or the drawer (11
-/// events, 12 messages, 13 an event, 14 managing history).
+/// events, 12 messages, 13 an event, 14 managing history, 15 a conversation, 16 SEND TO, 17
+/// a draft, 18 its review).
 #[unsafe(no_mangle)]
 pub extern "C" fn status() -> u32 {
     with(|device| device.status())

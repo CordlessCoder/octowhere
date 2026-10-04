@@ -47,6 +47,18 @@ pub fn lend_messages(buffer: &'static mut MessagesView) {
     MESSAGES.lock(|held| *held.borrow_mut() = Some(buffer));
 }
 
+/// Copies the messages as last published into `into`, if they changed after the time counted
+/// `seen`, and returns that count. The copy holds a critical section for as long as the
+/// messages held take to copy, a millisecond or two when the store is full.
+pub fn messages_since(seen: u32, into: &mut MessagesView) -> Option<u32> {
+    let count = MESSAGE_VIEWS.load(Ordering::Acquire);
+    if count == seen {
+        return None;
+    }
+    MESSAGES.lock(|held| held.borrow().as_deref().map(|held| into.copy_from(held)))?;
+    Some(count)
+}
+
 /// How the protocol grades a fix the GNSS module made.
 #[must_use]
 pub fn quality(fix: FixQuality) -> Quality {

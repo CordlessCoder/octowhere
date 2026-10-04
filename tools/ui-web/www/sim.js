@@ -399,7 +399,8 @@ function showReadings() {
 // What shows and how it rests, by the status's bits, for the state strip.
 const VIEW_NAMES = [
   null, "SETTINGS", "BRIGHTNESS", "DEVICE", "CLEAR", "TIME ZONE", "REPLAY", "TIMEOUT", "ALWAYS ON",
-  "POWER OFF", "GROUP", "EVENTS", "MESSAGES", "EVENT", "MANAGE HISTORY",
+  "POWER OFF", "GROUP", "EVENTS", "MESSAGES", "EVENT", "MANAGE HISTORY", "CONVERSATION",
+  "SEND TO", "DRAFT", "REVIEW",
 ];
 const RESTS = ["AWAKE", "DIMMING", "ALWAYS ON", "DARK"];
 const FACES = ["CLOCK", "COMPASS", "MEMBERS"];
@@ -408,7 +409,7 @@ function showState(status) {
   let screen;
   if (status & 16) screen = "--";
   else if (status & 1) screen = "START-UP";
-  else screen = VIEW_NAMES[(status >> 5) & 15] ?? FACES[(status >> 9) & 3];
+  else screen = VIEW_NAMES[(status >> 5) & 31] ?? FACES[(status >> 10) & 3];
   document.getElementById("state-screen").textContent = screen;
   document.getElementById("state-rest").textContent = status & 16 ? "POWERED OFF" : RESTS[(status >> 1) & 3];
 }
@@ -826,7 +827,7 @@ const HINTS = {
   members: "Where the group's members are, on a ring that turns with the heading. Tap the middle for the next member.",
 };
 
-// What shows over the faces, by the status's bits 5–8.
+// What shows over the faces, by the status's bits 5–9.
 const VIEWS = [
   null,
   "Settings. Tap a cell to change it, swipe sideways for the second page, or drag up to close.",
@@ -840,9 +841,13 @@ const VIEWS = [
   "Power off. Slide the handle into the target to power off, or tap CANCEL. It cancels after 10 s.",
   "Group and name. The other device is simulated: after START it appears, shows the same code and confirms it.",
   "Events. Tap one for its detail, swipe left for messages, or drag down from the top to close.",
-  "Messages. Their screens are still to come. Swipe right for events.",
+  "Messages. Tap a conversation, or NEW MESSAGE to write one. Swipe right for events.",
   "An event. DISMISS removes it once it has settled; the arrow at the top goes back.",
   "Manage history. Mark every event read, or clear the read ones that have settled.",
+  "A conversation, newest first. A message counts read once it has shown whole for a second. WRITE answers.",
+  "Send to. Choose the group or one member.",
+  "A draft. Type with the keys on the screen, then REVIEW. CANCEL keeps it for later.",
+  "Review. Read it through, then SEND, or EDIT to go back to it.",
 ];
 const GROUP_SEVERAL =
   "Group and name. The other devices run real nodes: ADD on one and JOIN on another, then confirm the same code on both.";
@@ -851,7 +856,7 @@ function showStatus(status) {
   if (status === lastStatus) return;
   lastStatus = status;
   const rest = (status >> 1) & 3;
-  const viewIndex = (status >> 5) & 15;
+  const viewIndex = (status >> 5) & 31;
   const view = several && viewIndex === 10 ? GROUP_SEVERAL : VIEWS[viewIndex];
   let text;
   if (status & 16) text = HINTS.powered;
@@ -860,7 +865,7 @@ function showStatus(status) {
   else if (rest === 2) text = HINTS.alwaysOn;
   else if (rest === 3) text = HINTS.dark;
   else if (view) text = view;
-  else text = [HINTS.clock, HINTS.compass, HINTS.members][(status >> 9) & 3];
+  else text = [HINTS.clock, HINTS.compass, HINTS.members][(status >> 10) & 3];
   hint.textContent = several ? `Device ${selected + 1}. ${text}` : text;
   showState(status);
 }

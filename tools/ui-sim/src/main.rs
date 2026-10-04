@@ -727,6 +727,16 @@ fn interact(mut window: Window, layout: Layout, options: Options) {
                     device.seen = seen;
                     device.stage.set_mesh(view);
                 }
+                let seen = device.messages_seen;
+                let sim = &air.paced.sim;
+                let mut taken = None;
+                device.stage.update_messages(|messages| {
+                    taken = sim.messages_since(n, seen, messages);
+                    taken.is_some()
+                });
+                if let Some(seen) = taken {
+                    device.messages_seen = seen;
+                }
             }
             let stepped = device.step(now, utc_s, contact, held);
             if let Some(air) = &mut air {

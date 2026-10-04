@@ -847,12 +847,12 @@ fontdue_macros::fontdue_font_from_file!(
 );
 
 // The large readings and the labels the design sets in it take capitals, digits and their
-// punctuation.
+// punctuation; members' names, set in capitals, take the rest of printable ASCII.
 fontdue_macros::fontdue_font_from_file!(
     InterferenceBoldFont,
     "../../../assets/KH Interference TRIAL/OTF/KHInterferenceTRIAL-Bold.otf",
     scale: 24.0,
-    chars: " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_"
+    chars: " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`{|}~"
 );
 
 // Only the identity's subtitle is set in it.

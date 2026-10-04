@@ -448,9 +448,21 @@ fn line(text: &str) -> Line {
 /// Formats into a [`Line`], cut off at its length.
 #[must_use]
 pub fn format(args: core::fmt::Arguments<'_>) -> Line {
-    let mut line = Line::new();
-    _ = line.write_fmt(args);
-    line
+    /// Takes what fits of each piece: a `Line` refuses a whole piece that does not fit.
+    struct Cut(Line);
+    impl core::fmt::Write for Cut {
+        fn write_str(&mut self, text: &str) -> core::fmt::Result {
+            for c in text.chars() {
+                if self.0.push(c).is_err() {
+                    break;
+                }
+            }
+            Ok(())
+        }
+    }
+    let mut cut = Cut(Line::new());
+    _ = cut.write_fmt(args);
+    cut.0
 }
 
 fn bounds(item: &Item, font: &FontdueRenderer<'static, Color>) -> Rectangle {

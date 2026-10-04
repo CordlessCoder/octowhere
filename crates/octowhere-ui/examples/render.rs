@@ -18,6 +18,8 @@ mod events;
 mod group;
 #[path = "render/members.rs"]
 mod members;
+#[path = "render/messages.rs"]
+mod messages;
 
 use std::{collections::HashMap, fs::File, io::BufWriter, path::PathBuf};
 
@@ -262,7 +264,11 @@ fn main() {
         println!("{}", path.display());
         drawn.insert(name, fb);
     }
-    for (name, fb) in events::frames().into_iter().chain(members::frames()) {
+    for (name, fb) in events::frames()
+        .into_iter()
+        .chain(members::frames())
+        .chain(messages::frames())
+    {
         let path = out.join(format!("{name}.png"));
         write_png(&fb, &path);
         println!("{}", path.display());

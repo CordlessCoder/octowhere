@@ -18,7 +18,7 @@ use super::{
     group::{
         self, Flow,
         layout::{Backdrop, List},
-        view::{MeshView, Request},
+        view::{MeshView, MessagesView, Request, Thread},
     },
     identity,
     members::{self, Tap},
@@ -446,6 +446,13 @@ pub struct Stage {
     /// turns by.
     declination: Option<f32>,
     true_heading: Option<u16>,
+    /// The messages this device can read, in memory the firmware lends: tens of kilobytes.
+    /// `None` until it does, which leaves the Messages root empty.
+    messages: Option<&'static mut MessagesView>,
+    /// The messages changed since the events last followed them.
+    messages_changed: bool,
+    /// A draft kept while the drawer is closed.
+    kept_draft: Option<drawer::Draft>,
 }
 
 impl Stage {
@@ -535,6 +542,9 @@ impl Stage {
             member: None,
             declination: None,
             true_heading: None,
+            messages: None,
+            messages_changed: false,
+            kept_draft: None,
             peripherals,
         }
     }
@@ -601,6 +611,32 @@ impl Stage {
         &self.mesh
     }
 
+    /// Keeps the messages in `messages` from now on, which the firmware makes where there is
+    /// room for them.
+    pub fn use_messages(&mut self, messages: &'static mut MessagesView) {
+        self.messages = Some(messages);
+        self.messages_changed = true;
+    }
+
+    /// Lets `write` change the messages where the stage keeps them; it returns whether it did.
+    /// Nothing happens without [`use_messages`](Self::use_messages).
+    pub fn update_messages(&mut self, write: impl FnOnce(&mut MessagesView) -> bool) {
+        if let Some(messages) = self.messages.as_deref_mut() {
+            self.messages_changed |= write(messages);
+        }
+    }
+
+    #[must_use]
+    pub fn messages(&self) -> Option<&MessagesView> {
+        self.messages.as_deref()
+    }
+
+    /// Hands back the memory [`use_messages`](Self::use_messages) lent, for a stage that
+    /// replaces this one.
+    pub fn take_messages(&mut self) -> Option<&'static mut MessagesView> {
+        self.messages.take()
+    }
+
     /// Draws every glyph into `buffer` from now on: one [`chrome::raster_buffer`] made before the
     /// heap fills, so that it never has to grow.
     pub fn use_raster(&mut self, buffer: alloc::vec::Vec<f32>) {
@@ -638,7 +674,13 @@ impl Stage {
         let page = self.page.as_ref().and_then(|(page, _)| page.next_change());
         let group = self.page.as_ref().and(self.group_due);
         let toast = self.toast.map(|toast| toast.since + TOAST_FOR);
-        let drawer = self.drawer_list.as_ref().and_then(|list| list.due());
+        let drawer = self
+            .drawer_list
+            .as_ref()
+            .and_then(|list| list.due())
+            .into_iter()
+            .chain(self.drawer.as_ref().and_then(Drawer::read_due))
+            .min();
         let overlay = self.overlay.as_ref().and_then(|(list, _)| list.due());
         let members = self.members_list.as_ref().and_then(|list| list.due());
         [
@@ -892,6 +934,16 @@ impl Stage {
         if let Some(id) = self.events.refresh(self.mesh.refresh.as_ref(), now) {
             self.announce(id, now, &mut update);
         }
+        if core::mem::take(&mut self.messages_changed)
+            && let Some(messages) = self.messages.as_deref()
+            && let Some(id) = self.events.messages(
+                messages,
+                self.mesh.group.as_ref().map_or(0, |group| group.own),
+                now,
+            )
+        {
+            self.announce(id, now, &mut update);
+        }
 
         // A finger that has gone quiet stands in for the lift report the controller never sent.
         let touch = touch.or_else(|| {
@@ -969,8 +1021,28 @@ impl Stage {
         self.pager.step(now);
         self.drawer_sheet.step(now);
         if let Some(drawer) = &mut self.drawer {
-            drawer.step(&self.events, now);
+            let mail = drawer::Mail {
+                messages: self.messages.as_deref(),
+                group: self.mesh.group.as_ref(),
+                font: &self.renderer,
+            };
+            drawer.step(&self.events, &mail, now);
+            if let Some(id) = drawer.read(&mail, now) {
+                if update.mesh.is_none() {
+                    update.mesh = Some(Request::Read(id));
+                }
+                // Shown read at once; the mesh's next view says the same.
+                if let Some(message) = self
+                    .messages
+                    .as_deref_mut()
+                    .and_then(|messages| messages.get_mut(id))
+                {
+                    message.unread = false;
+                    self.messages_changed = true;
+                }
+            }
             if self.drawer_sheet.is_closed() {
+                self.kept_draft = drawer.take_draft();
                 self.drawer = None;
                 self.drawer_list = None;
             }
@@ -1187,7 +1259,9 @@ impl Stage {
         }
         self.toast = None;
         self.events.read(toast.event);
-        self.drawer = Some(Drawer::at_event(toast.event));
+        let mut drawer = Drawer::at_event(toast.event, &self.events);
+        drawer.keep_draft(self.kept_draft.take());
+        self.drawer = Some(drawer);
         self.drawer_sheet.go(true, now);
         true
     }
@@ -1214,7 +1288,12 @@ impl Stage {
         let Some(drawer) = &mut self.drawer else {
             return;
         };
-        match drawer.handle(event, &mut self.events, now) {
+        let mail = drawer::Mail {
+            messages: self.messages.as_deref(),
+            group: self.mesh.group.as_ref(),
+            font: &self.renderer,
+        };
+        match drawer.handle(event, &mut self.events, &mail, now) {
             drawer::Exit::Stay => {}
             drawer::Exit::Close => self.drawer_sheet.go(false, now),
             drawer::Exit::Pull => {
@@ -1234,12 +1313,20 @@ impl Stage {
                 self.sheet.set(true);
                 self.page = Some((Page::Group(Flow::members()), now));
             }
+            drawer::Exit::Send { to, text } => {
+                let to = match to {
+                    Thread::Group => None,
+                    Thread::Member(id) => Some(id),
+                };
+                effects.mesh = Some(Request::Send { to, text });
+            }
         }
     }
 
     /// Shuts the drawer at once.
     fn close_drawer(&mut self) {
-        if self.drawer.take().is_some() {
+        if let Some(mut drawer) = self.drawer.take() {
+            self.kept_draft = drawer.take_draft();
             self.drawer_list = None;
             self.drawer_sheet.set(false);
             self.changed.make_full();
@@ -1260,6 +1347,7 @@ impl Stage {
                 events: &self.events,
                 gnss: &self.peripherals.gnss,
                 mesh: &self.mesh,
+                messages: self.messages.as_deref(),
                 now,
                 breath: self.breath,
                 font: &self.renderer,
@@ -1330,7 +1418,12 @@ impl Stage {
         let mut list = self.overlay_spare.take().unwrap_or_else(new_list);
         list.clear();
         list.set_backdrop(Backdrop::None);
-        let arc = !covered && self.events.unread() > 0;
+        let arc = !covered
+            && (self.events.unread() > 0
+                || self
+                    .messages
+                    .as_deref()
+                    .is_some_and(|messages| messages.unread() > 0));
         if !covered
             && let Some(toast) = self.toast
             && let Some(event) = self.events.get(toast.event)
@@ -1342,6 +1435,7 @@ impl Stage {
                     events: &self.events,
                     gnss: &self.peripherals.gnss,
                     mesh: &self.mesh,
+                    messages: self.messages.as_deref(),
                     now,
                     breath: self.breath,
                     font: &self.renderer,
@@ -2024,7 +2118,7 @@ impl Stage {
             match next {
                 Next::Stay => {}
                 Next::Panel => self.page = None,
-                Next::Open(page) => self.page = Some((page, now)),
+                Next::Open(page) => self.page = Some((*page, now)),
                 Next::ReplayStartUp(replay) => self.replay_startup(replay, now),
             }
             return;
@@ -2044,7 +2138,9 @@ impl Stage {
                 match route {
                     Route::Pager => self.pager.handle(event, now),
                     Route::Drawer => {
-                        self.drawer = Some(Drawer::new());
+                        let mut drawer = Drawer::new();
+                        drawer.keep_draft(self.kept_draft.take());
+                        self.drawer = Some(drawer);
                         self.drawer_sheet.grab(&mirrored(&drag));
                     }
                     Route::Sheet => self.sheet.grab(&drag),

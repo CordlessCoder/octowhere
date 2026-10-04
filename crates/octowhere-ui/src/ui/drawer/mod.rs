@@ -3,22 +3,25 @@
 //! and the drawer returns to the face it opened over when it closes. It builds a [`List`] from
 //! its state and the events each step; the stage draws it.
 
+pub mod messages;
 pub mod parts;
 mod rows;
 
+pub use messages::Mail;
 pub use rows::{TOAST, TOAST_COMPACT, age, age_due, toast};
 
 use embedded_graphics::{prelude::Point, primitives::Rectangle};
 use heapless::Vec;
 
-use self::parts::{FOOTER, TOP_HIT};
+use self::parts::{FOOTER, PAIR, TOP_HIT};
 use super::{
     ease::Ease,
     events::{self, Events, Id},
     gesture::{Drag, GestureEvent, Micros},
     group::{
+        keyboard::{Keyboard, Outcome},
         layout::{Arc, Backdrop, Face, List, format, rect},
-        view::MeshView,
+        view::{MeshView, MessagesView, Text, Thread},
     },
     screens::Gnss,
 };
@@ -39,6 +42,8 @@ const FLICK: f32 = 600.0;
 /// The management page's two choices.
 const MARK_ALL_READ: Rectangle = rect(82, 135, 384, 229);
 const CLEAR_READ: Rectangle = rect(82, 255, 384, 349);
+/// How long an unread message's row must show whole for it to count as read.
+const READ_AFTER: Micros = 1_000_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Root {
@@ -52,6 +57,21 @@ pub enum Child {
     Event(Id),
     /// MARK ALL READ and CLEAR READ HISTORY.
     Manage,
+    /// One conversation.
+    Thread(Thread),
+    /// SEND TO: the group or one member.
+    Recipients,
+    /// The draft, on the keyboard.
+    Draft,
+    /// The draft, read through before it is sent.
+    Review,
+}
+
+/// A message being written, and to whom. It outlives the drawer, until it is sent.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Draft {
+    pub to: Thread,
+    pub keyboard: Keyboard,
 }
 
 /// What a gesture asks of the stage.
@@ -64,6 +84,11 @@ pub enum Exit {
     Pull,
     /// VIEW MEMBERS: the group's members, over the faces.
     Members,
+    /// SEND: the draft goes to the mesh, once.
+    Send {
+        to: Thread,
+        text: Text,
+    },
 }
 
 /// What a drag in progress moves.
@@ -92,7 +117,16 @@ pub struct Drawer {
     settle: Option<Ease>,
     scroll: [Scroll; 2],
     child: Option<Child>,
+    /// A child's list, scrolled, and in a conversation the message it keeps in place as
+    /// messages come: its id and its top below the viewport's.
+    child_scroll: i32,
+    thread_anchor: Option<(u32, i32)>,
     grab: Grab,
+    draft: Option<Draft>,
+    /// What REVIEW took from the draft, to send.
+    reviewing: Option<Text>,
+    /// The unread messages showing whole, and since when.
+    reading: Vec<(u32, Micros), 8>,
 }
 
 /// What the drawer's screens show.
@@ -100,9 +134,21 @@ pub struct Context<'a> {
     pub events: &'a Events,
     pub gnss: &'a Gnss,
     pub mesh: &'a MeshView,
+    pub messages: Option<&'a MessagesView>,
     pub now: Micros,
     pub breath: u8,
     pub font: &'a FontdueRenderer<'static, Color>,
+}
+
+impl Context<'_> {
+    #[must_use]
+    pub fn mail(&self) -> Mail<'_> {
+        Mail {
+            messages: self.messages,
+            group: self.mesh.group.as_ref(),
+            font: self.font,
+        }
+    }
 }
 
 /// An event's row in the Events list: its id, its top from the list's, and its height.
@@ -140,17 +186,52 @@ impl Drawer {
             settle: None,
             scroll: [Scroll::default(); 2],
             child: None,
+            child_scroll: 0,
+            thread_anchor: None,
             grab: Grab::None,
+            draft: None,
+            reviewing: None,
+            reading: Vec::new(),
         }
     }
 
-    /// Open on an event's detail, as tapping its toast does.
+    /// Open on what an event shows, as tapping its toast does: its detail, or for messages
+    /// their conversation, on the Messages root.
     #[must_use]
-    pub fn at_event(id: Id) -> Self {
+    pub fn at_event(id: Id, events: &Events) -> Self {
+        match events.get(id).map(|event| event.kind) {
+            Some(events::Kind::Messages { thread, .. }) => Self::at_thread(thread),
+            _ => Self {
+                child: Some(Child::Event(id)),
+                ..Self::new()
+            },
+        }
+    }
+
+    /// Open on a conversation, over the Messages root.
+    #[must_use]
+    pub fn at_thread(thread: Thread) -> Self {
         Self {
-            child: Some(Child::Event(id)),
+            slide: WIDTH,
+            child: Some(Child::Thread(thread)),
             ..Self::new()
         }
+    }
+
+    /// Takes up a draft kept from before the drawer last closed.
+    pub fn keep_draft(&mut self, draft: Option<Draft>) {
+        self.draft = draft;
+    }
+
+    /// The draft, to keep while the drawer is closed.
+    pub fn take_draft(&mut self) -> Option<Draft> {
+        self.draft.take()
+    }
+
+    /// Whether the keyboard shows, which a toast keeps clear of.
+    #[must_use]
+    pub fn typing(&self) -> bool {
+        self.child == Some(Child::Draft)
     }
 
     /// The root that shows, or that the roots are nearest.
@@ -181,14 +262,26 @@ impl Drawer {
     }
 
     /// Acts on a gesture, and returns what the stage should do.
-    pub fn handle(&mut self, event: &GestureEvent, events: &mut Events, now: Micros) -> Exit {
+    pub fn handle(
+        &mut self,
+        event: &GestureEvent,
+        events: &mut Events,
+        mail: &Mail,
+        now: Micros,
+    ) -> Exit {
         match self.child {
-            Some(child) => self.handle_child(child, event, events),
-            None => self.handle_root(event, events, now),
+            Some(child) => self.handle_child(child, event, events, mail),
+            None => self.handle_root(event, events, mail, now),
         }
     }
 
-    fn handle_root(&mut self, event: &GestureEvent, events: &mut Events, now: Micros) -> Exit {
+    fn handle_root(
+        &mut self,
+        event: &GestureEvent,
+        events: &mut Events,
+        mail: &Mail,
+        now: Micros,
+    ) -> Exit {
         let root = self.root_index();
         match *event {
             GestureEvent::Down(_) => {
@@ -208,11 +301,11 @@ impl Drawer {
                 } else {
                     Grab::Ignore
                 };
-                self.follow(&drag, events);
+                self.follow(&drag, events, mail);
             }
-            GestureEvent::DragMove(drag) => self.follow(&drag, events),
+            GestureEvent::DragMove(drag) => self.follow(&drag, events, mail),
             GestureEvent::DragEnd(drag) => {
-                self.follow(&drag, events);
+                self.follow(&drag, events, mail);
                 if let Grab::Slide(from) = self.grab {
                     self.release_slide(from, &drag, now);
                 }
@@ -222,12 +315,23 @@ impl Drawer {
                 if TOP_HIT.contains(point) {
                     return Exit::Close;
                 }
-                if self.root() == Root::Events {
-                    if FOOTER.contains(point) {
-                        self.child = Some(Child::Manage);
-                    } else if let Some(id) = self.row_at(point, events) {
-                        events.read(id);
-                        self.child = Some(Child::Event(id));
+                match self.root() {
+                    Root::Events => {
+                        if FOOTER.contains(point) {
+                            self.child = Some(Child::Manage);
+                        } else if let Some(id) = self.row_at(point, events) {
+                            events.read(id);
+                            self.open(&Self::at_event(id, events));
+                        }
+                    }
+                    Root::Messages => {
+                        if FOOTER.contains(point) && mail.group.is_some() {
+                            self.open_child(Child::Recipients);
+                        } else if let Some(thread) =
+                            messages::inbox_row_at(point, self.scroll[1].offset, mail)
+                        {
+                            self.open_child(Child::Thread(thread));
+                        }
                     }
                 }
             }
@@ -236,17 +340,49 @@ impl Drawer {
         Exit::Stay
     }
 
-    fn follow(&mut self, drag: &Drag, events: &Events) {
+    fn follow(&mut self, drag: &Drag, events: &Events, mail: &Mail) {
         let root = self.root_index();
         match self.grab {
             Grab::Slide(from) => self.slide = (from - drag.offset().x).clamp(0, WIDTH),
-            Grab::Scroll(from) if root == 0 => {
-                let max = (content_height(&rows(events)) - VIEWPORT_HEIGHT).max(0);
-                self.scroll[0].offset = (from - drag.offset().y).clamp(0, max);
-                self.scroll[0].anchor = None;
+            Grab::Scroll(from) => {
+                let content = if root == 0 {
+                    content_height(&rows(events))
+                } else {
+                    messages::inbox_height(&messages::conversations(mail))
+                };
+                let max = (content - VIEWPORT_HEIGHT).max(0);
+                self.scroll[root].offset = (from - drag.offset().y).clamp(0, max);
+                self.scroll[root].anchor = None;
             }
             _ => {}
         }
+    }
+
+    /// Shows `child`, at the top of its list.
+    fn open_child(&mut self, child: Child) {
+        self.child = Some(child);
+        self.child_scroll = 0;
+        self.thread_anchor = None;
+        self.reading.clear();
+    }
+
+    /// Shows what `drawer`, a drawer opened at an event, shows.
+    fn open(&mut self, drawer: &Self) {
+        self.slide = drawer.slide;
+        if let Some(child) = drawer.child {
+            self.open_child(child);
+        }
+    }
+
+    /// The draft to `to`: the one kept, if it goes there, or a new one.
+    fn write(&mut self, to: Thread) {
+        if self.draft.as_ref().is_none_or(|draft| draft.to != to) {
+            self.draft = Some(Draft {
+                to,
+                keyboard: Keyboard::message(),
+            });
+        }
+        self.open_child(Child::Draft);
     }
 
     fn release_slide(&mut self, from: i32, drag: &Drag, now: Micros) {
@@ -278,12 +414,54 @@ impl Drawer {
             .map(|&(id, ..)| id)
     }
 
-    fn handle_child(&mut self, child: Child, event: &GestureEvent, events: &mut Events) -> Exit {
+    fn handle_child(
+        &mut self,
+        child: Child,
+        event: &GestureEvent,
+        events: &mut Events,
+        mail: &Mail,
+    ) -> Exit {
+        if child == Child::Draft {
+            return self.handle_draft(event, mail);
+        }
+        let content = match child {
+            Child::Thread(thread) => Some(messages::thread_height(thread, mail)),
+            Child::Recipients => Some(messages::picker_height(mail)),
+            Child::Review => self
+                .reviewing
+                .map(|text| messages::review_scroll(text.as_str(), mail) + VIEWPORT_HEIGHT),
+            _ => None,
+        };
+        if let Some(content) = content {
+            let max = (content - VIEWPORT_HEIGHT).max(0);
+            match *event {
+                GestureEvent::DragStart(drag) => {
+                    self.grab = if drag.offset().y.abs() >= drag.offset().x.abs() {
+                        Grab::Scroll(self.child_scroll)
+                    } else {
+                        Grab::Ignore
+                    };
+                }
+                GestureEvent::DragMove(drag) | GestureEvent::DragEnd(drag) => {
+                    if let Grab::Scroll(from) = self.grab {
+                        self.child_scroll = (from - drag.offset().y).clamp(0, max);
+                        self.thread_anchor = None;
+                    }
+                    if matches!(event, GestureEvent::DragEnd(_)) {
+                        self.grab = Grab::None;
+                    }
+                }
+                _ => {}
+            }
+        }
         let GestureEvent::Tap(point) = *event else {
             return Exit::Stay;
         };
         if TOP_HIT.contains(point) {
-            self.child = None;
+            match child {
+                Child::Review => self.open_child(Child::Draft),
+                _ => self.child = None,
+            }
             return Exit::Stay;
         }
         match child {
@@ -311,12 +489,88 @@ impl Drawer {
                     self.child = None;
                 }
             }
+            Child::Thread(thread) => {
+                if FOOTER.contains(point) && mail.writable(thread) {
+                    self.write(thread);
+                }
+            }
+            Child::Recipients => {
+                if FOOTER.contains(point) {
+                    self.child = None;
+                } else if let Some(thread) = messages::picker_row_at(point, self.child_scroll, mail)
+                {
+                    self.write(thread);
+                }
+            }
+            Child::Review => {
+                if PAIR[0].contains(point) {
+                    self.open_child(Child::Draft);
+                } else if PAIR[1].contains(point)
+                    && let (Some(text), Some(draft)) = (self.reviewing, &self.draft)
+                    && mail.writable(draft.to)
+                {
+                    let to = draft.to;
+                    // Sent once: the draft and the review go with it.
+                    self.draft = None;
+                    self.reviewing = None;
+                    self.open_child(Child::Thread(to));
+                    return Exit::Send { to, text };
+                }
+            }
+            Child::Draft => {}
         }
         Exit::Stay
     }
 
-    /// Settles the roots, follows the events' changes, and says whether anything still moves.
-    pub fn step(&mut self, events: &Events, now: Micros) -> bool {
+    fn handle_draft(&mut self, event: &GestureEvent, mail: &Mail) -> Exit {
+        let Some(draft) = &mut self.draft else {
+            self.child = None;
+            return Exit::Stay;
+        };
+        match draft.keyboard.handle(event, mail.font) {
+            Outcome::Cancel => {
+                let to = draft.to;
+                let messages = mail.messages.is_some_and(|messages| {
+                    messages
+                        .thread(to, mail.group.map_or(0, |group| group.own))
+                        .next()
+                        .is_some()
+                });
+                if messages {
+                    self.open_child(Child::Thread(to));
+                } else {
+                    self.child = None;
+                }
+            }
+            Outcome::Review(text) => {
+                self.reviewing = Some(text);
+                self.open_child(Child::Review);
+            }
+            Outcome::Stay | Outcome::Save(_) | Outcome::Unchanged => {}
+        }
+        Exit::Stay
+    }
+
+    /// Settles the roots, follows the events' and messages' changes, and says whether anything
+    /// still moves.
+    pub fn step(&mut self, events: &Events, mail: &Mail, now: Micros) -> bool {
+        // A conversation keeps the message at the top of its list in place as newer ones come.
+        if let Some(Child::Thread(thread)) = self.child {
+            if let Some((id, below)) = self.thread_anchor
+                && let Some(top) = messages::message_top(thread, id, mail)
+            {
+                self.child_scroll = top - below;
+            }
+            let max = (messages::thread_height(thread, mail) - VIEWPORT_HEIGHT).max(0);
+            self.child_scroll = self.child_scroll.clamp(0, max);
+            self.thread_anchor = (self.child_scroll > 0)
+                .then(|| messages::thread_anchor(thread, self.child_scroll, mail))
+                .flatten();
+        }
+        let inbox = messages::inbox_height(&messages::conversations(mail));
+        self.scroll[1].offset = self.scroll[1]
+            .offset
+            .clamp(0, (inbox - VIEWPORT_HEIGHT).max(0));
         if let Some(ease) = self.settle {
             let (slide, arrived) = ease.at(now);
             self.slide = libm::roundf(slide) as i32;
@@ -347,9 +601,40 @@ impl Drawer {
         self.settle.is_some()
     }
 
+    /// The unread message of the conversation showing whose row has shown whole for long
+    /// enough to count as read, if one has. A row only partly in view does not count.
+    pub fn read(&mut self, mail: &Mail, now: Micros) -> Option<u32> {
+        let Some(Child::Thread(thread)) = self.child else {
+            self.reading.clear();
+            return None;
+        };
+        let shown = messages::shown_unread(thread, self.child_scroll, mail);
+        self.reading.retain(|(id, _)| shown.contains(id));
+        for id in shown {
+            if !self.reading.iter().any(|&(held, _)| held == id) {
+                _ = self.reading.push((id, now));
+            }
+        }
+        let at = self
+            .reading
+            .iter()
+            .position(|&(_, since)| now.saturating_sub(since) >= READ_AFTER)?;
+        Some(self.reading.remove(at).0)
+    }
+
+    /// When an unread message showing will count as read, if one is showing.
+    #[must_use]
+    pub fn read_due(&self) -> Option<Micros> {
+        self.reading
+            .iter()
+            .map(|&(_, since)| since + READ_AFTER)
+            .min()
+    }
+
     /// Builds what shows into `list`.
     pub fn view(&self, list: &mut List, context: &Context) {
         list.set_backdrop(Backdrop::Breathing(context.breath));
+        let mail = context.mail();
         match self.child {
             Some(Child::Event(id)) => {
                 if let Some(event) = context.events.get(id) {
@@ -357,6 +642,24 @@ impl Drawer {
                 }
             }
             Some(Child::Manage) => manage(list, context),
+            Some(Child::Thread(thread)) => {
+                messages::conversation(list, thread, self.child_scroll, &mail, context.now);
+            }
+            Some(Child::Recipients) => messages::picker(list, self.child_scroll, &mail),
+            Some(Child::Draft) => {
+                if let Some(draft) = &self.draft {
+                    draft.keyboard.draw(
+                        context.font,
+                        list,
+                        &messages::draft_title(draft.to, &mail),
+                    );
+                }
+            }
+            Some(Child::Review) => {
+                if let (Some(text), Some(draft)) = (self.reviewing, &self.draft) {
+                    messages::review(list, draft.to, text.as_str(), self.child_scroll, &mail);
+                }
+            }
             None => {
                 if self.slide < WIDTH {
                     let start = list.items().len();
@@ -365,7 +668,7 @@ impl Drawer {
                 }
                 if self.slide > 0 {
                     let start = list.items().len();
-                    messages_root(list, context);
+                    messages::inbox(list, self.scroll[1].offset, &mail, context.now);
                     list.shift_from(start, WIDTH - self.slide);
                 }
             }
@@ -420,15 +723,7 @@ pub const UNREAD_ARC: Arc = Arc {
     color: chrome::WHITE,
 };
 
-/// The Messages root, until messages have their screens: no thread to show.
-fn messages_root(list: &mut List, context: &Context) {
-    parts::root_top(list, 1);
-    parts::title(list, "MESSAGES", context.font);
-    parts::meta(list, "00 UNREAD / 00 THREADS");
-    empty(list, "NO MESSAGES", "Messages will appear here.");
-}
-
-/// A root with nothing in its list: a hollow square, what is missing, and what comes next.
+/// A list with nothing in it: a hollow square, what is missing, and what comes next.
 fn empty(list: &mut List, title: &str, line: &str) {
     list.outline(rect(219, 178, 247, 206), chrome::GRAY);
     list.fill(rect(230, 189, 236, 195), chrome::GRAY);
@@ -460,7 +755,7 @@ fn manage(list: &mut List, context: &Context) {
         (
             MARK_ALL_READ,
             "MARK ALL READ",
-            "Keep all events in the drawer.",
+            "Events only. Messages stay unread.",
             events.can_mark_all_read(),
         ),
         (

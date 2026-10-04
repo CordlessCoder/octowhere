@@ -128,6 +128,23 @@ pub fn button(list: &mut List, area: Rectangle, label: &str, enabled: bool) {
     );
 }
 
+/// A button that writes or sends, outlined and labelled in `LIME`, or dimmed while it cannot be
+/// used.
+pub fn action(list: &mut List, area: Rectangle, label: &str, enabled: bool) {
+    let color = if enabled {
+        chrome::LIME
+    } else {
+        chrome::DISABLED
+    };
+    list.outline(area, color);
+    let middle = area.center();
+    list.text(
+        Text::new(label, Face::Mono, 12, color)
+            .at(middle.x, middle.y)
+            .vertical(Vertical::Middle),
+    );
+}
+
 /// Why the control above cannot be used yet.
 pub fn reason(list: &mut List, content: &str) {
     list.text(centred(
@@ -205,6 +222,8 @@ pub enum Symbol {
     Exchange,
     /// A tick: settled well.
     Done,
+    /// An envelope: a message.
+    Envelope,
 }
 
 /// A symbol in a 24 px square: filled boxes and paths, in quarter pixels from its corner, and
@@ -238,6 +257,14 @@ impl Symbol {
                 boxes: &[],
                 paths: &[&[(26, 50), (40, 64), (70, 32)]],
                 width: 8,
+            },
+            Symbol::Envelope => Parts {
+                boxes: &[],
+                paths: &[
+                    &[(22, 30), (74, 30), (74, 66), (22, 66), (22, 30)],
+                    &[(22, 30), (48, 50), (74, 30)],
+                ],
+                width: 4,
             },
         }
     }
