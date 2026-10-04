@@ -2,7 +2,7 @@
 
 use std::{
     alloc::Global,
-    cell::RefCell,
+    cell::{RefCell, RefMut},
     collections::VecDeque,
     future::Future,
     pin::Pin,
@@ -72,6 +72,18 @@ struct Task {
     waker: Waker,
 }
 
+impl Task {
+    /// A node powered off: nothing to poll, ever.
+    fn off() -> Self {
+        let flag = Arc::new(Flag(AtomicBool::new(false)));
+        Self {
+            future: Box::pin(std::future::pending()),
+            waker: Waker::from(flag.clone()),
+            flag,
+        }
+    }
+}
+
 pub struct Sim {
     world: Rc<World>,
     tasks: Vec<Task>,
@@ -81,8 +93,13 @@ pub struct Sim {
 
 impl Sim {
     pub fn new(seed: u64) -> Self {
+        Self::starting_at(seed, UTC0_S)
+    }
+
+    /// A simulation whose virtual time starts at UTC second `utc_s`.
+    pub fn starting_at(seed: u64, utc_s: i64) -> Self {
         Self {
-            world: Rc::new(World::new(seed, UTC0_S * 1_000_000)),
+            world: Rc::new(World::new(seed, utc_s * 1_000_000)),
             tasks: Vec::new(),
             seed,
             starts: 0,
@@ -160,28 +177,44 @@ impl Sim {
         }
     }
 
-    /// Restarts `node` from what it stored, as a reset does: it loses everything else.
+    /// Restarts `node` from what it stored, as a reset does: it loses everything else. A node
+    /// powered off starts again.
     pub fn restart(&mut self, node: usize) {
-        let start = {
-            let mut nodes = self.world.nodes.borrow_mut();
-            let state = &mut nodes[node];
-            state.boot = self.world.now();
-            state.radio = Radio {
-                channel: (0, 0),
-                mode: Mode::Sleep,
-                received: None,
-                waker: None,
-            };
-            state.view = None;
-            state.commands.clear();
-            state.stored.start()
-        };
+        let start = self.stop(node).stored.start();
         self.tasks[node] = self.task(node, start);
+    }
+
+    /// Powers `node` off until [`restart`](Self::restart): it neither sends nor hears, and
+    /// keeps only what it stored.
+    pub fn power_off(&mut self, node: usize) {
+        self.stop(node);
+        self.tasks[node] = Task::off();
+    }
+
+    /// Clears what `node` holds outside its store, and returns it, from now on its clock's boot.
+    fn stop(&self, node: usize) -> RefMut<'_, Node> {
+        let mut nodes = self.world.nodes.borrow_mut();
+        let state = &mut nodes[node];
+        state.boot = self.world.now();
+        state.radio = Radio {
+            channel: (0, 0),
+            mode: Mode::Sleep,
+            received: None,
+            waker: None,
+        };
+        state.view = None;
+        state.commands.clear();
+        RefMut::map(nodes, |nodes| &mut nodes[node])
     }
 
     /// Sets how a packet from `from` reaches `to`, or that it does not.
     pub fn link(&self, from: usize, to: usize, link: Option<Link>) {
         self.world.link(from, to, link);
+    }
+
+    /// How a packet from `from` reaches `to`, if it does.
+    pub fn link_of(&self, from: usize, to: usize) -> Option<Link> {
+        self.world.link_of(from, to)
     }
 
     /// Links every pair of nodes both ways by `link`.
@@ -205,6 +238,11 @@ impl Sim {
         nodes[node].gps = gps;
     }
 
+    /// Sets how far `node`'s RTC is off UTC, or that it has no time.
+    pub fn set_rtc(&self, node: usize, error_us: Option<i64>) {
+        self.world.nodes.borrow_mut()[node].rtc_error_us = error_us;
+    }
+
     /// Gives `node` a command, as its screens would.
     pub fn command(&self, node: usize, command: Command) {
         let mut nodes = self.world.nodes.borrow_mut();
@@ -218,6 +256,26 @@ impl Sim {
     /// Virtual time, in seconds.
     pub fn now_s(&self) -> f64 {
         self.world.now() as f64 / 1e6
+    }
+
+    /// Virtual time, in microseconds.
+    pub fn now_us(&self) -> u64 {
+        self.world.now()
+    }
+
+    /// UTC now, in microseconds.
+    pub fn utc_us(&self) -> i64 {
+        self.world.utc0 + self.world.now() as i64
+    }
+
+    /// What `node`'s clock reads now, in microseconds since it started.
+    pub fn clock(&self, node: usize) -> i64 {
+        self.world.nodes.borrow()[node].local(self.world.now())
+    }
+
+    /// Runs until virtual time `at`, in microseconds.
+    pub fn run_to(&mut self, at: u64) {
+        self.run_until(at.max(self.world.now()), |_| false);
     }
 
     /// Runs for `seconds` of virtual time.
@@ -284,6 +342,18 @@ impl Sim {
             .collect()
     }
 
+    /// Keeps only the latest `most` lines, so that a long run holds a bounded log.
+    pub fn keep_lines(&self, most: usize) {
+        self.world.lines.borrow_mut().keep(most);
+    }
+
+    /// Every node's lines from line number `from` on, of those kept, and the number the next
+    /// line will take.
+    pub fn lines_since(&self, from: usize) -> (Vec<Line>, usize) {
+        let lines = self.world.lines.borrow();
+        (lines.since(from).cloned().collect(), lines.total())
+    }
+
     /// How many of `node`'s lines hold `needle`.
     pub fn count(&self, node: usize, needle: &str) -> usize {
         self.world
@@ -307,6 +377,17 @@ impl Sim {
     /// What `node` shows its screens.
     pub fn view(&self, node: usize) -> Option<MeshView> {
         self.world.nodes.borrow()[node].view.as_deref().cloned()
+    }
+
+    /// What `node` shows its screens, if it published a view after the one it counted `seen`,
+    /// and that view's count.
+    pub fn view_since(&self, node: usize, seen: u32) -> Option<(MeshView, u32)> {
+        let nodes = self.world.nodes.borrow();
+        let state = &nodes[node];
+        if state.views == seen {
+            return None;
+        }
+        Some((state.view.as_deref()?.clone(), state.views))
     }
 }
 

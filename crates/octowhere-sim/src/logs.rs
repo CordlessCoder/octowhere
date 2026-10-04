@@ -1,7 +1,7 @@
 //! The nodes' log lines, each with the node that wrote it and when. The executor names the node
 //! it polls, so the node's own logging, through `log`, needs no change.
 
-use std::{cell::RefCell, rc::Rc, sync::Once};
+use std::{cell::RefCell, collections::VecDeque, rc::Rc, sync::Once};
 
 /// One line a node logged.
 #[derive(Clone, Debug)]
@@ -13,7 +13,49 @@ pub struct Line {
     pub text: String,
 }
 
-pub type Lines = Rc<RefCell<Vec<Line>>>;
+/// What the nodes logged, oldest first. A long interactive run keeps only the latest lines.
+#[derive(Default)]
+pub struct Log {
+    lines: VecDeque<Line>,
+    /// How many lines were dropped from the front.
+    dropped: usize,
+    /// The most lines kept, or `None` to keep every one.
+    most: Option<usize>,
+}
+
+impl Log {
+    fn push(&mut self, line: Line) {
+        self.lines.push_back(line);
+        if self.most.is_some_and(|most| self.lines.len() > most) {
+            self.lines.pop_front();
+            self.dropped += 1;
+        }
+    }
+
+    pub fn keep(&mut self, most: usize) {
+        self.most = Some(most);
+        while self.lines.len() > most {
+            self.lines.pop_front();
+            self.dropped += 1;
+        }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &Line> {
+        self.lines.iter()
+    }
+
+    /// How many lines were ever logged.
+    pub fn total(&self) -> usize {
+        self.dropped + self.lines.len()
+    }
+
+    /// The lines kept from line number `from` on, counting every line ever logged.
+    pub fn since(&self, from: usize) -> impl Iterator<Item = &Line> {
+        self.lines.iter().skip(from.saturating_sub(self.dropped))
+    }
+}
+
+pub type Lines = Rc<RefCell<Log>>;
 
 thread_local! {
     /// The node being polled, the time, and where its lines go.

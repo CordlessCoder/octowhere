@@ -176,6 +176,10 @@ impl World {
         };
     }
 
+    pub fn link_of(&self, from: usize, to: usize) -> Option<Link> {
+        self.links.borrow().get(&(from, to)).copied()
+    }
+
     /// Starts `node`'s transmission of `bytes` now, and returns when it ends.
     pub fn send(&self, node: usize, bytes: &[u8]) -> Micros {
         let now = self.now();
