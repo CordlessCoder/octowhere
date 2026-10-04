@@ -13,7 +13,8 @@ use alloc::boxed::Box;
 
 use self::device::publish;
 pub use self::device::{
-    BoardDevice, COMMANDS, FIX, RTC_TIME, VIEW_CHANGED, quality, request, view_since,
+    BoardDevice, BoardGroupStore, COMMANDS, FIX, RTC_TIME, VIEW_CHANGED, quality, request,
+    view_since,
 };
 pub use self::radio::BoardRadio;
 pub use self::random::{BoardRandom, random};
@@ -460,11 +461,11 @@ fn refused(session: u32, role: Role, refused: Refused) -> PairingView {
 
 /// Forgets the group, once that is stored, and hands it back to be told of the leaving. A node
 /// in no group has nothing to forget.
-async fn leave(group: &mut Option<Group>) -> (bool, Option<Group>) {
+async fn leave(group: &mut Option<Group>, store: &impl GroupStore) -> (bool, Option<Group>) {
     if group.is_none() {
         return (true, None);
     }
-    if !super::save_group(GroupWrite::Leave).await {
+    if !store.save(GroupWrite::Leave).await {
         return (false, None);
     }
     (true, group.take())
@@ -472,8 +473,14 @@ async fn leave(group: &mut Option<Group>) -> (bool, Option<Group>) {
 
 /// Stores `name` as this device's, and only then takes it up, so a failed write leaves the
 /// name that is stored.
-async fn rename(me: &mut Identity, group: Option<&mut Group>, name: Name, utc: u32) -> bool {
-    if !super::save_group(GroupWrite::Name(name)).await {
+async fn rename(
+    me: &mut Identity,
+    group: Option<&mut Group>,
+    name: Name,
+    utc: u32,
+    store: &impl GroupStore,
+) -> bool {
+    if !store.save(GroupWrite::Name(name)).await {
         return false;
     }
     me.name = name;
@@ -594,11 +601,33 @@ pub trait Commands {
     async fn receive(&self) -> Command;
 }
 
-pub struct Mesh<R, T, G, D> {
+/// Where a node's group and its removals are kept across restarts, a write at a time in the
+/// order they were queued. A write can fail.
+pub trait GroupStore {
+    /// Queues `write` without waiting, and returns its number for [`GroupStore::result`], or `None`
+    /// when the queue is full.
+    fn queue(&self, write: GroupWrite) -> Option<u32>;
+    /// Queues `write`, waiting for room, and returns its number for [`GroupStore::saved`].
+    async fn send(&self, write: GroupWrite) -> u32;
+    /// Whether the write numbered `number` was stored, once it is done.
+    fn result(&self, number: u32) -> Option<bool>;
+    /// Waits for the write numbered `number`, and says whether it was stored.
+    async fn saved(&self, number: u32) -> bool;
+
+    /// Stores `write`, and says whether it was. It waits however long the writes ahead of it
+    /// take: one that gave up early would report a write as failed that may still land.
+    async fn save(&self, write: GroupWrite) -> bool {
+        let number = self.send(write).await;
+        self.saved(number).await
+    }
+}
+
+pub struct Mesh<R, T, G, D, S> {
     radio: R,
     time: T,
     random: G,
     device: D,
+    store: S,
     me: Identity,
     group: Option<Group>,
     /// A group this device founded in a pairing whose last acknowledgement it never heard.
@@ -661,8 +690,8 @@ pub struct Mesh<R, T, G, D> {
     summary: Option<Box<(heapless::Vec<u8, SUMMARY_MAX>, u8)>>,
 }
 
-impl<R: Radio, T: Time, G: Random, D: Device> Mesh<R, T, G, D> {
-    pub async fn new(radio: R, time: T, random: G, device: D, start: Start) -> Self {
+impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore> Mesh<R, T, G, D, S> {
+    pub async fn new(radio: R, time: T, random: G, device: D, store: S, start: Start) -> Self {
         let group = start.group.map(|group| *group);
         let own = group.as_ref().map_or(0, Group::own);
         let mut rekey = start.rekey.unwrap_or_default();
@@ -690,6 +719,7 @@ impl<R: Radio, T: Time, G: Random, D: Device> Mesh<R, T, G, D> {
             time,
             random,
             device,
+            store,
             me: start.me,
             group,
             founding: None,
@@ -838,7 +868,7 @@ impl<R: Radio, T: Time, G: Random, D: Device> Mesh<R, T, G, D> {
                 self.founding = None;
                 self.shown.recovery = None;
                 let now = self.time.now();
-                let (left, group) = leave(&mut self.group).await;
+                let (left, group) = leave(&mut self.group, &self.store).await;
                 if let Some(group) = group {
                     let gone = group.leaving(utc_seconds(&self.device, now), &self.me);
                     self.leaving = Some(Box::new(Leaving {
@@ -869,6 +899,7 @@ impl<R: Radio, T: Time, G: Random, D: Device> Mesh<R, T, G, D> {
                     group,
                     name,
                     utc_seconds(&self.device, self.time.now()),
+                    &self.store,
                 )
                 .await;
                 info!("[MESH] renamed {} saved={}", name, saved);
@@ -921,7 +952,7 @@ impl<R: Radio, T: Time, G: Random, D: Device> Mesh<R, T, G, D> {
     fn queue_unsaved(&mut self) {
         let mut failed = false;
         self.writes
-            .retain(|&number| match super::group_result(number) {
+            .retain(|&number| match self.store.result(number) {
                 Some(saved) => {
                     failed |= !saved;
                     false
@@ -966,7 +997,7 @@ impl<R: Radio, T: Time, G: Random, D: Device> Mesh<R, T, G, D> {
     /// Queues a write to the flash without waiting, and keeps its number to check its result.
     /// Returns false when the queue is full.
     fn queue_write(&mut self, write: GroupWrite) -> bool {
-        let Some(number) = super::queue_group_write(write) else {
+        let Some(number) = self.store.queue(write) else {
             return false;
         };
         if self.writes.push(number).is_err() {
@@ -1871,8 +1902,10 @@ impl<R: Radio, T: Time, G: Random, D: Device> Mesh<R, T, G, D> {
                     self.unsaved.rekey();
                 }
                 let rekey = self.unsaved.rekey_due().then(|| self.rekey.clone());
-                let number =
-                    super::send_group_write(GroupWrite::Group(Box::new(group), rekey)).await;
+                let number = self
+                    .store
+                    .send(GroupWrite::Group(Box::new(group), rekey))
+                    .await;
                 saving = Some((self.time.now(), number));
                 continue;
             }
@@ -1890,9 +1923,10 @@ impl<R: Radio, T: Time, G: Random, D: Device> Mesh<R, T, G, D> {
                 listening = true;
             }
             let wake = pairing.wake_at().min(now + PAIR_LISTEN_US);
+            let store = &self.store;
             let saved = async {
                 match saving {
-                    Some((_, number)) => super::group_saved(number).await,
+                    Some((_, number)) => store.saved(number).await,
                     None => core::future::pending().await,
                 }
             };
@@ -2105,7 +2139,7 @@ impl<R: Radio, T: Time, G: Random, D: Device> Mesh<R, T, G, D> {
         let Some(block) = self.sequence.to_reserve(count, (time / 1_000_000) as u32) else {
             return true;
         };
-        if !super::save_group(GroupWrite::Sequence(block.1)).await {
+        if !self.store.save(GroupWrite::Sequence(block.1)).await {
             warn!("[MSG] no sequence numbers: their block was not stored");
             return false;
         }
@@ -2651,7 +2685,11 @@ impl<R: Radio, T: Time, G: Random, D: Device> Mesh<R, T, G, D> {
         let (group, until) = (founding.group.clone(), founding.until);
         self.set_recovery(RecoveryPhase::Storing);
         self.publish();
-        if !super::save_group(GroupWrite::Group(Box::new(group), None)).await {
+        if !self
+            .store
+            .save(GroupWrite::Group(Box::new(group), None))
+            .await
+        {
             warn!("[MESH] storing the founded group failed; trying again");
             self.set_recovery(RecoveryPhase::SaveFailed { until });
             return;
@@ -2817,7 +2855,7 @@ pub async fn offline(start: Start) {
         match COMMANDS.receive().await {
             Command::Leave => {
                 // With no radio there is nobody to tell.
-                let (left, _) = leave(&mut group).await;
+                let (left, _) = leave(&mut group, &BoardGroupStore).await;
                 shown.answer(Answer::Left(left));
             }
             Command::Rename(name) => {
@@ -2826,11 +2864,12 @@ pub async fn offline(start: Start) {
                     group.as_mut(),
                     name,
                     utc_seconds(&BoardDevice, local()),
+                    &BoardGroupStore,
                 )
                 .await;
                 if saved && let Some(group) = &group {
                     let id = group.own();
-                    super::queue_group_write(GroupWrite::Slot {
+                    BoardGroupStore.queue(GroupWrite::Slot {
                         id,
                         slot: group.slot(id).copied(),
                     });

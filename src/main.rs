@@ -951,14 +951,6 @@ async fn group_saved(number: u32) -> bool {
     }
 }
 
-/// Saves a change to the mesh's state, and says whether it reached the flash. It waits however
-/// long the writes ahead of it take: one that gave up early would report a write as failed that
-/// may still land.
-async fn save_group(write: settings::GroupWrite) -> bool {
-    let number = send_group_write(write).await;
-    group_saved(number).await
-}
-
 #[embassy_executor::task]
 async fn sensor_task(task: SensorTask) {
     let SensorTask {
@@ -1620,6 +1612,7 @@ async fn radio_task(task: RadioTask) {
         mesh::BoardTime,
         mesh::BoardRandom,
         mesh::BoardDevice,
+        mesh::BoardGroupStore,
         mesh,
     )
     .await
