@@ -58,3 +58,31 @@ fn a_run_repeats_from_its_seed() {
     };
     assert_eq!(run(4), run(4));
 }
+
+/// A restart before a change was stored leaves two nodes' member digests apart, so each asks
+/// the other for every record. Members enrolled meanwhile still reach the other node. (The
+/// boards once starved one this way, records going lowest id first; this run's timing does not
+/// reproduce that, which `compose`'s own test does.)
+#[test]
+fn members_enrolled_while_records_are_asked_for_reach_the_other_node() {
+    let mut sim = pair(5);
+    sim.run_while_not(30 * 60, |sim| sim.count(0, "heard id=1") >= 1);
+    sim.command(1, Command::Rename(Name::new(b"Roger Saved").unwrap()));
+    sim.run_while_not(15 * 60, |sim| {
+        sim.count(0, "member 1 is Roger Saved now") == 1
+    });
+    sim.restart(0);
+    let asked = sim.count(0, "asked=0xffffffff");
+    let asking = sim.run_while_not(30 * 60, |sim| sim.count(0, "asked=0xffffffff") > asked);
+    assert!(asking, "the restart left the digests apart");
+    for _ in 0..3 {
+        sim.command(0, Command::Phantom);
+    }
+    let learned = sim.run_while_not(30 * 60, |sim| sim.count(1, "is Phantom now") == 3);
+    assert!(
+        learned,
+        "{} of 3 after {} s",
+        sim.count(1, "is Phantom now"),
+        sim.now_s()
+    );
+}
