@@ -41,7 +41,11 @@ initialization or peripheral mappings.
   collisions and half-duplex radios; clocks with their own drift; stores that can fail a write
   and restart a node from what they hold; and seeded random sources, so that a run repeats.
   Scenarios are its tests (`tests/scenarios.rs`), which read each node's log lines;
-  `OCTOWHERE_SIM_LOG=1` prints them as they come. Needs nightly, as the node does.
+  `OCTOWHERE_SIM_LOG=1` prints them as they come. `tests/screens.rs` drives devices through
+  their screens instead, each stage on `octowhere-ui`'s script driver linked to its node
+  (`script::MeshLink`). It also runs open-ended for the simulators: at a UTC the host gives,
+  to a virtual time the caller paces, with a bounded log, links read and changed live, and
+  nodes powered off and on. Needs nightly, as the node does.
 - `crates/octowhere-ui/` owns screen state, drawing and touch handling. It has no board dependency,
   so it also builds for the host. `src/ui/` there owns dirty tracking, geometry,
   gestures and paging, the clock and compass screens with
@@ -88,8 +92,11 @@ initialization or peripheral mappings.
 - `crates/` also holds the local `lc76g`, `sx127x-lora` and `sx127x-common` crates.
 - `host-tests/` is the std test harness for the board-side modules.
 - `tools/ui-sim/` runs the stage in a desktop window. `tools/ui-web/` builds it to
-  WebAssembly with a page that runs it in a browser, controls in place of the desktop's keys;
-  its `build.sh` writes the static site to `dist/`, `deploy.sh` copies it to a server over SSH,
+  WebAssembly with a page that runs it in a browser, controls in place of the desktop's keys.
+  Both run several devices side by side too, each a stage on the firmware's own mesh node on
+  `octowhere-sim`'s air, with the link matrix and the air's speed editable while they run;
+  one device alone keeps the scripted mesh (`ui::group::sim`). The web simulator's
+  `build.sh` writes the static site to `dist/`, `deploy.sh` copies it to a server over SSH,
   and `.github/workflows/ui-web.yml` publishes it to GitHub Pages. `tools/design-compare.py`
   puts screens beside the design's renders. `tools/` also holds the bench scripts.
 - `docs/` holds hardware reference: the topology notes, the datasheet pack, and captured GNSS,
@@ -196,15 +203,16 @@ cargo +stable test --manifest-path crates/tz/Cargo.toml --target x86_64-unknown-
   --no-default-features
 cargo +stable clippy --manifest-path crates/tz/Cargo.toml \
   --target x86_64-unknown-linux-gnu --all-targets --no-default-features -- -D warnings
-cargo +stable clippy --release --manifest-path tools/ui-sim/Cargo.toml \
-  --target x86_64-unknown-linux-gnu --locked -- -D warnings
-cargo +stable clippy --release --manifest-path tools/ui-web/Cargo.toml \
+env -C /tmp cargo +nightly clippy --release --manifest-path $PWD/tools/ui-sim/Cargo.toml \
+  --locked -- -D warnings
+env -C /tmp cargo +nightly clippy --release --manifest-path $PWD/tools/ui-web/Cargo.toml \
   --target wasm32-unknown-unknown --locked -- -D warnings
 ```
 
-The node's and the simulator's nightly lines start in `/tmp` because the root's `.cargo/config.toml` builds `core`
+The nightly lines start in `/tmp` because the root's `.cargo/config.toml` builds `core`
 and `alloc` from source for the board, and nightly applies that to any build started inside
-the repository, which then fails on a second `core`.
+the repository, which then fails on a second `core`. `tools/ui-sim` and `tools/ui-web` run
+`octowhere-sim`, and so need nightly too.
 
 `--all` takes `cargo fmt` into the local path crates, so the root's line covers every crate
 under `crates/` but `octowhere-sim`, which the firmware does not build; `host-tests`, `tools/ui-sim` and `tools/ui-web` are outside the firmware's

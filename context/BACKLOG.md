@@ -37,8 +37,14 @@ until the feature set is complete, because profiling an incomplete firmware pric
     28 to 69 minutes after they meet. The fixes and the owner's choices of 2026-10-04 are in
     `LORA-PROTOCOL.md`, "Two at once". Left as the protocol's "Open" item, with an ignored
     scenario: parts apart where one part removes twice.
-  - Step 4, several boards in `tools/ui-sim`, side by side, input to the panel clicked, the
-    matrix editable live; the web simulator too (its build already compiles the mesh's crypto).
+  - Step 4 is built (2026-10-04): `tools/ui-sim --boards <n>` (up to six) and the web
+    simulator's MESH module (up to four) run devices side by side, each a stage stepped on its
+    node's clock, taking the node's views and passing its screens' requests on. A click on a
+    panel touches it and gives it the keyboard; the link matrix steps each direction through in
+    reach, lossy and out of reach; the air runs 1 to 120 times the host's clock; reset and
+    power restart a node from what it stored. `tests/screens.rs` pairs two devices through
+    their screens on the real nodes. Both tools now build on nightly. The web module grew from
+    871,785 B to 1,381,084 B (gzip 518 KB, brotli 389 KB): the nodes and their crypto.
   - Board tests stay for RF (CRC overload up close), the radio's DIO0 quirk, I2C bus contention
     and slot latency, interrupt timing, flash stalls, and the GNSS module sticking.
 - Build the design agent's next round once its hand-off comes back. The owner handed it off on
