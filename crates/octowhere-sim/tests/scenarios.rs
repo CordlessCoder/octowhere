@@ -114,3 +114,38 @@ fn a_member_that_missed_two_switches_is_caught_up() {
     assert!(caught, "node 1 caught up after {} s", sim.now_s() - start);
     println!("caught up in {:.0} s", sim.now_s() - start);
 }
+
+/// A member that declines a removal after its switch goes back to the old key, stays there
+/// however often the remover's key comes, and keeps that across a restart. It forgets the
+/// records that changed since, the removed member's gone record among them, until a device
+/// still on the old key sends them again: here there is none.
+#[test]
+fn a_removal_declined_after_its_switch_takes_the_decliner_back() {
+    let mut sim = pair(7);
+    sim.run_while_not(30 * 60, |sim| {
+        sim.count(0, "heard id=1") >= 1 && sim.count(1, "heard id=0") >= 1
+    });
+    sim.command(0, Command::Phantom);
+    sim.run_while_not(30 * 60, |sim| sim.count(1, "is Phantom now") == 1);
+    sim.command(0, Command::Remove(2));
+    let switched = sim.run_while_not(60 * 60, |sim| sim.count(1, "switched to generation 1") == 1);
+    assert!(switched, "node 1 switched with node 0");
+    sim.command(1, Command::Keep(2));
+    let declined = sim.run_while_not(60, |sim| {
+        sim.count(1, "declined after the switch: back on generation 0") == 1
+    });
+    assert!(declined);
+    sim.run_for(30 * 60);
+    assert_eq!(
+        sim.count(1, "switched to generation"),
+        1,
+        "node 1 stayed back"
+    );
+    sim.restart(1);
+    sim.run_for(1);
+    assert_eq!(
+        sim.count(1, "generation=0 removal pending=false"),
+        2,
+        "the decline was stored"
+    );
+}
