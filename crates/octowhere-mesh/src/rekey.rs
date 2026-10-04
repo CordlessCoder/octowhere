@@ -859,11 +859,11 @@ impl Rekey {
         if count > OLD_KEYS {
             return None;
         }
-        for at in 0..count {
+        for old in rekey.old.iter_mut().take(count) {
             let key = Key::new(take(32)?.try_into().ok()?);
             let generation = u16::from_be_bytes(take(2)?.try_into().ok()?);
             let waiting = u32::from_be_bytes(take(4)?.try_into().ok()?);
-            rekey.old[at] = Some(Old {
+            *old = Some(Old {
                 key,
                 generation,
                 waiting,
@@ -874,8 +874,8 @@ impl Rekey {
         if count > DECLINED {
             return None;
         }
-        for at in 0..count {
-            rekey.declined[at] = Some(take(8)?.try_into().ok()?);
+        for declined in rekey.declined.iter_mut().take(count) {
+            *declined = Some(take(8)?.try_into().ok()?);
         }
         let removing = take(4)?;
         if removing[0] == 1 {
@@ -907,9 +907,9 @@ impl Rekey {
             if count > OLD_KEYS {
                 return None;
             }
-            for at in 0..count {
+            for remover in rekey.removers.iter_mut().take(count) {
                 let generation = u16::from_be_bytes(take(2)?.try_into().ok()?);
-                rekey.removers[at] = Some((generation, take(1)?[0]));
+                *remover = Some((generation, take(1)?[0]));
             }
         }
         // Missing, as the rest after it, from what was stored before rivals were ranked by
@@ -1694,19 +1694,19 @@ mod tests {
             }),
             ..Rekey::default()
         };
-        for at in 0..OLD_KEYS {
-            rekey.old[at] = Some(Old {
+        for (at, old) in rekey.old.iter_mut().enumerate() {
+            *old = Some(Old {
                 key: Key::new([at as u8; 32]),
                 generation: at as u16,
                 waiting: u32::MAX,
                 lost: at % 2 == 1,
             });
         }
-        for at in 0..DECLINED {
-            rekey.declined[at] = Some([at as u8; 8]);
+        for (at, declined) in rekey.declined.iter_mut().enumerate() {
+            *declined = Some([at as u8; 8]);
         }
-        for at in 0..OLD_KEYS {
-            rekey.removers[at] = Some((at as u16, at as u8));
+        for (at, remover) in rekey.removers.iter_mut().enumerate() {
+            *remover = Some((at as u16, at as u8));
         }
         let mut out = [0; STORED_MAX];
         assert_eq!(rekey.encode(&mut out), STORED_MAX);
