@@ -62,10 +62,12 @@ initialization or peripheral mappings.
   face the screen rests on, `power_off`, the power key's confirmation, `group`, the group,
   name and pairing screens, drawn from a list of what each shows (`layout`), with the mesh's
   published state and the requests they make of it in `view`, from `octowhere-node`, and a
-  simulated mesh for the host in `sim`, `events`, what happened at run time (GNSS incidents
-  and refreshes), each one entry through its life, `drawer`, the Events and Messages drawer an
-  upward drag opens, its details, the conversations, drafts and their review (`messages`), the
-  toasts that tell of an event and the unread arc, drawn
+  simulated mesh for the host in `sim`, `events`, what happened at run time (GNSS incidents,
+  refreshes and removals), each one entry through its life, `drawer`, the Events and Messages
+  drawer an upward drag opens, its details, the conversations, drafts and their review
+  (`messages`), a removal's request, its decline and two that compete (`removals`), the
+  toasts that tell of an event and the unread arc, `slide`, the deliberate slide that confirms
+  leaving, removing and declining, drawn
   from lists as the group screens are and from the shared parts of the 2026-10-04 hand-off's
   consistency rules (`parts`), `members`, the member face: the members' bearings round a ring
   turned to the true heading over a grid that keeps to true north, `stroke`, antialiased paths,
@@ -275,8 +277,8 @@ Weigh that cost before adding one.
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 1,683,648 bytes, 10.75% of the 15,663,104-byte app partition that
-`partitions.csv` gives it (the inject features' build at `bb50a21`). `b06d686` alone added
+The image is currently 1,837,792 bytes, 11.73% of the 15,663,104-byte app partition that
+`partitions.csv` gives it (the inject features' build at `58ea45c`; 1,835,136 without them). `b06d686` alone added
 36.8 KB to it while its functions grew by about 1 KB, so most of that is likely padding the
 image crossed into. Measure with `espflash save-image --chip esp32s3 --flash-size 16mb
 --partition-table partitions.csv <elf> <out>`; without those two options it assumes 4 MB of flash
@@ -589,15 +591,17 @@ device's Ed25519 signature, which a node checks before taking them (the protocol
 "Signatures"); a check takes about 32 ms on the board, and a signature about 35. A node in no group sends nothing and keeps the
 radio asleep. Without a fix a node has no position of its own. Commands reach the mesh through
 `COMMANDS` in `src/mesh/device.rs`: start a pairing to add or join, choose a device found, answer the code, cancel,
-leave the group, rename, refresh, send text, remove a member, keep one another member removes.
+leave the group, rename, refresh, send text, remove a member while its id still holds the
+device named, and decline a removal, named by its new key.
 A refresh listens throughout for three rounds and keeps sending; a pairing stops it. A device
 that leaves sends its gone record in its next two slots before it forgets the key. Every node
 holds every message for 24 hours in a store in PSRAM, lost at a restart, and the summaries
 bring back what a neighbour lacks. A removal sends the new key to each remaining member, and
 the group switches to it at the round the key names; a node keeps the old key for any member
 not yet heard on the new one, and in a sweep round sends that member its key message under the
-old key. Messages have their screens (`context/SCREEN-DESIGN-BRIEF.md`, "Messages as built";
-two boards in `docs/logs/lora/messages-2026-10-04/`); removals do not yet. A pairing takes the radio to band O's upper channel at +2 dBm until it
+old key. Messages and removals have their screens (`context/SCREEN-DESIGN-BRIEF.md`,
+"Messages as built" and "Removal as built"; two boards in `docs/logs/lora/messages-2026-10-04/`
+and `docs/logs/lora/removal-2026-10-04/`). A pairing takes the radio to band O's upper channel at +2 dBm until it
 ends; the protocol's "The exchange as built" has the frames and their order, and
 `docs/logs/lora/pairing-2026-10-02/` the first pairings between the two boards. The group
 screens send the commands, and `pair-inject` lets `tools/pair-inject.py` send them over the USB
@@ -649,7 +653,9 @@ errata workaround, are in [`docs/hardware-notes.md`](docs/hardware-notes.md).
   and a pairing's welcome now live on the heap: the radio task's poll takes 11,808 bytes,
   `Mesh::pair` 6,448 and `Mesh::run` 2,608, and the largest frames left are leaves,
   `Group::restore` 6,000, Ed25519's `verify` 5,392 and `Group::clone` 5,136. The watermark
-  figures predate signing; remeasure before relying on them.
+  figures predate signing; remeasure before relying on them. With the member face, messages
+  and removals (2026-10-04) the radio task's poll takes 14,576 bytes and `Stage::advance`
+  3,200, and core 0's stack is 107,068 bytes.
   Each function's frame is the `entry a1, N` that opens it in `xtensa-esp-elf-objdump -d`, in
   hex once it is large. The dump names code with no symbol of its own after the symbol before
   it, so a large frame can carry an unlikely name.

@@ -63,8 +63,7 @@ until the feature set is complete, because profiling an incomplete firmware pric
       calibrated compass, or a synthetic heading on a `bench/` branch, before judging it.
     - Its step adds stack: `members::build` takes 4,576 bytes on the frame loop's path,
       `Stage::advance` grew 768 bytes and the radio task's poll 768 (the coordinates in the
-      view). Rerun `bench/stack-watermark` once messages and removal are built, which add
-      more.
+      view). The watermark is due with removals' (below).
     - The merged nodes for crowded rings, the 5-minute freshness glyph and tap-to-select are
       engineering choices without a render. Take them to the next design round.
     - WMM2025 holds until 2030.0; after that the face stays north up until the model's
@@ -84,8 +83,26 @@ until the feature set is complete, because profiling an incomplete firmware pric
       full store on a board.
     - Copying the messages to the screens holds a critical section for as long as the copy,
       a millisecond or two with the store full; it happens only when they change.
-  - Removing a member: request snapshots, deadlines, eligibility and rivals in the view, and the
-    confirmation, pending, prompt, decline and notice screens.
+  - Removing a member, done (2026-10-04): each removal in the view by its new key, with its
+    target's device, its stage and until when it can be declined, a rival that lost, and the
+    notice to the device removed; the node answers each request; REMOVE's slide, the countdown,
+    the request before and after the switch, DETAILS, both declines, TWO REQUESTS, the removed
+    notice and a member awaiting its switch (`SCREEN-DESIGN-BRIEF.md`, "Removal as built"; two
+    boards in `docs/logs/lora/removal-2026-10-04/`). Open:
+    - DETAILS, DECLINED HERE, a losing rival's detail, REMOVE UNAVAILABLE, and the removal
+      events' rows and toasts have no render. Take them to the next design round.
+    - Adding while a member is being removed is refused, and the refusal does not yet link to
+      the request, which the hand-off asks for where the data allows.
+    - A removal a later one replaced can no longer be declined from the screens. If this device
+      then declines the later one before its switch, the node could decline the earlier again,
+      but no screen offers it.
+    - The members list shows nothing of a removal under way; only the member's detail does.
+    - The view takes every member's fingerprint, a SHA-256 each, at every publish (`PERF:` in
+      `node.rs`).
+    - The plain image grew 54,432 bytes over messages and removals, to 1,835,136. Check whether
+      it crossed into padding before blaming the code ("Binary size" in `AGENTS.md`).
+    - Rerun `bench/stack-watermark`: the radio task's poll is 14,576 bytes and core 0's stack
+      107,068.
   - The consistency rules across the new screens, and their cost on a board.
   BOOT and outlined text stay deferred (the hand-off). Not the design agent's: the rule that
   settles rival removals, now the lower remover's id (owner, 2026-10-04; `LORA-PROTOCOL.md`,

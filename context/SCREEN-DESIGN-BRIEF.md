@@ -163,8 +163,8 @@ the panel. Touch targets are no smaller than about 10 mm.
 Captures drawn by the firmware's own code come from `crates/octowhere-ui/examples/render.rs`,
 which also lays a frame of each state out in `screen-atlas.png`, kept in
 `context/screen-captures/`, by section like the design's screen family board.
-It draws the faces' stills, the member face's and the messages' states (`members-*`,
-`messages-*`), and `panel-rest`, `settings-always-on`, `panel-end`,
+It draws the faces' stills, the member face's, the messages' and the removals' states
+(`members-*`, `messages-*`, `removal-*`), and `panel-rest`, `settings-always-on`, `panel-end`,
 `panel-scrolling`, `panel-pulling`, `panel-device`, `panel-device-end`, `settings-brightness`,
 `settings-timeout`, `settings-clear`, `picker-offset`,
 `picker-zone`, `power-off`, `power-off-sliding` and `power-off-confirmed`, and the start-up's `startup-selftest-*`, `startup-frame-*` and `startup-fault-*`;
@@ -465,6 +465,64 @@ open:
 - **Names.** In capitals, in KH Interference Bold and Fraktion Mono. A title too wide at 26 px
   is cut with an ellipsis; the caption under it gives the member's id. The draft has no
   caption, so a long name there shows only its start.
+
+## Removal as built
+
+The 2026-10-04 hand-off's removal and rekey screens are `crates/octowhere-ui/src/ui/drawer/removals.rs`,
+in the drawer, and in the group screens (`ui/group/mod.rs`): REMOVE's confirmation, this device's
+request under way, a member awaiting its switch, and why REMOVE cannot go ahead. They follow the
+hand-off's geometry, taken from its renderer (`examples/render/removals.rs` renders them, named
+after the targets). The node shows the removals as `RemovalsView` in `octowhere-node`'s `view`:
+the removal under way, or the last this device switched to or declined; a rival of it that
+lost; and the notice that this device was removed. Where the build chose what the hand-off left
+open:
+
+- **Identity.** A request is named by its new key's fingerprint, and its target by its device's:
+  the first eight bytes of SHA-256 over the device's public key, which the key message carries.
+  REMOVE asks to remove the device at an id, and the node refuses if the id holds another device
+  by then. A decline names its request by the key.
+- **REMOVE.** Opens the slide, or says why it cannot: no radio, or another removal under way,
+  with VIEW REQUEST to it. The node answers every request: started, or why not (no timebase, a
+  removal under way, the id holds another device, its key messages' sequence numbers not
+  stored, no random source). Once the slide is done, back and CANCEL do nothing until the answer
+  comes. Started, the screen is REMOVING, which counts down.
+- **Countdown.** The switch's time on the node's timebase. Without one it reads UNAVAILABLE, and
+  nothing estimates it. The rail under this device's own countdown is the time since the request
+  out of the time to its switch.
+- **Events.** One event per request, by its key, from the request to its outcome. Another
+  member's request is told of when it comes and when this device switches to it; the countdown
+  changes quietly. This device's own begins read. An event cannot be dismissed or cleared while
+  its request waits for its switch, or while it can be declined. Being removed is an event of its
+  own, told once.
+- **Declining.** Before the switch, until it. After it, until a day after this device's switch,
+  from the undo the node stores; the node marks it ended when the day is up. Never this device's
+  own request. A later removal replacing it ends it too, and says so. After a restart, a switch
+  that can still be declined shows again once the node has a timebase, as a new event, since
+  events live in RAM.
+- **The decline's slide.** Revalidated every step against the request as it is. A switch under
+  the confirmation starts the slide again and changes the text to what declining costs after
+  it, so a slide begun before the switch cannot finish after it. A request that can no longer be
+  declined goes back to its detail. Both slides keep the leave slider's rules: a drag that
+  starts on the handle, 90 % of the travel, and a 160 ms ease back.
+- **Rivals.** While the node shows a losing rival beside the winner, either one's event opens
+  TWO REQUESTS, the winner first and the one opened selected. A tap selects a row, and VIEW
+  REQUEST opens it.
+- **Removed.** CLOSE goes back to the Events list, and LEAVE GROUP opens the group screens' leave
+  confirmation. Nothing leaves on its own.
+- **Pending member.** A member a removal under way will remove shows the 08 layout in place of
+  its detail, and VIEW REQUEST opens the drawer at the request. Other members keep the detail
+  the pairing round designed, with REMOVE in orange.
+- **Without renders.** DETAILS (the device's and the request's fingerprints in full, and the
+  switch), DECLINED HERE, a losing rival's detail, REMOVE UNAVAILABLE, and the removal events'
+  rows and toasts. They are in the same style; the atlas's REMOVAL AND REKEY row has them.
+- **Long names.** A sentence that a long name would run off the glass names nobody instead
+  ("The member was removed from this group."). Titles, captions and the events' rows and
+  toasts are cut with an ellipsis, and the removed member's name in large type drops from
+  35 px to 28 px before it is cut.
+- **Captions.** The drawer's 12 px caption under every title, where the removal renders set it
+  at 11 px.
+- **Host.** The scripted mesh (`group::sim`) runs a removal with an eight-minute switch and a day
+  to decline.
 
 ## Member face as built
 
@@ -829,6 +887,8 @@ velocity. It sees a second contact but no gesture uses one.
 | Drawer root | A vertical drag in the list | Scrolls it, a pixel at a time; a downward pull with the list at its top closes the drawer |
 | Drawer root | A tap on the chevron, a row, OPTIONS | Closes the drawer, opens the event, opens the management page |
 | Drawer child | A tap on the back arrow or a button | Goes back, or acts |
+| REMOVE, DECLINE | A drag that starts on the handle and lets go past 90 % of the track | Asks the mesh to remove the member, or to decline the request; anything short eases back |
+| TWO REQUESTS | A tap on a row | Selects that request |
 | Messages root, SEND TO | A tap on a row | Opens the conversation, or a draft to that destination |
 | Conversation, SEND TO, review | A vertical drag | Scrolls it, a pixel at a time |
 | Draft | A tap on a key, or in the field | Types, or moves the caret to the nearest place in the two lines showing |
@@ -884,15 +944,17 @@ plumbing it is firmware work. There are three grades.
    - From the mesh: this device's name and hardware address, and whether the radio answered
      at boot; the stored group's members with their ids, names, addresses and join times, when
      each was last heard directly and where and when its newest position was observed; the
-     messages this device can read, with how far each has gone and whether it is unread; how the last
-     leave or rename went; and the pairing under way, with its role, phase, deadline, the
+     messages this device can read, with how far each has gone and whether it is unread; the
+     removals: who asked to remove which device, by its fingerprint, the switch's time, whether
+     this device switched, declined or can still decline and until when, a rival that lost, and
+     who removed this device; how the last leave, rename or removal asked for went; and the
+     pairing under way, with its role, phase, deadline, the
      devices found, the other device's address and its name once sent, the code, and the
      group's size and this device's id once the pairing holds them.
 2. **Known to the firmware, not passed to the screens:** GNSS time to the millisecond, fix
    quality, and when the clock was last set from GNSS. Also the compass calibration's internals.
    From the mesh: the timebase, and the packets' signal; other members' private messages,
-   which it cannot read; and removals: who asked to remove whom, when
-   the group switches, and the day left to decline one.
+   which it cannot read; and which members have been heard on a removal's new key.
 3. **Does not exist:** raise to wake, or any wake but a double tap or the power key (the
    IMU's wake-on-motion and the BOOT key are unused); a 12-hour clock (ruled out by the clock
    spec); units, languages, sounds or vibration; Wi-Fi or Bluetooth; alarms, timers, step
