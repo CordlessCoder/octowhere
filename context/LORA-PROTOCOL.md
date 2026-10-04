@@ -417,6 +417,7 @@ header still is one.
 | request | 32-bit set of the ids whose member records the sender asks for |
 | member | id, X25519 public key, join time, change time, hardware address, then a name of 1 to 16 printable ASCII characters; 47 to 63 bytes |
 | gone | id, X25519 public key and change time of a member that left or was removed; 37 bytes |
+| on key | id, generation and the member's signature that it is on that generation's key; 67 bytes |
 | message | see "Messages" |
 | messages digest | 32 bits of a hash of the messages the sender holds (see "Messages") |
 | summary | the messages the sender holds from each origin, to be sent what it lacks (see "Messages") |
@@ -624,10 +625,22 @@ Owner, 2026-10-03, except where it says otherwise.
   message horizon while the old key is, but are left out of the digest after it. A member that
   missed the switch sends in the old order; nodes on the new key hear it in a sweep round,
   where they listen throughout, within about 10 minutes. A node sends a member its key
-  message this way at most three times for each old key: one that declined never takes it,
-  and is not acknowledged, so that it would otherwise draw one every sweep round.
-- **The old key** is kept with no time limit, until every remaining member has been heard
-  under the new one; a member a later removal takes, or that leaves, is no longer waited for. A
+  message this way again only after a gap of sweep rounds that doubles with each send, up to
+  64 sweep rounds, about ten hours, and never stops while it keeps the old key (owner,
+  2026-10-04): one that declined never takes it, and is not acknowledged, so that it would
+  otherwise draw one every sweep round. A node sent it three times at most before, so that
+  anyone replaying one packet the member sent under the old key, which needs no key, spent
+  every send before the member was back. A packet under an old key whose base timestamp is
+  more than 5 minutes from the node's clock sends nothing at all, its key message or the
+  removal notice, when both clocks are UTC.
+- **The old key** is kept with no time limit, until every remaining member has said it is on
+  the new one; a member a later removal takes, or that leaves, is no longer waited for. A
+  member says so in an on-key record it signs over its id, the generation and the new key
+  itself, which it sends in its first three packets after the switch, and again at start-up,
+  and in its sweep rounds' packets for a day after either (owner, 2026-10-04). A node checks
+  one only while it waits for that member, about 32 ms on the board. A packet's sender id
+  proved nothing: any member could send one empty packet under the new key with an absent
+  member's id, and every node stopped waiting for it and dropped the key its catch-up needed. A
   node keeps the four newest such keys. A member can be away for any length of time and come
   back without pairing again. While some are not heard, a node sends a header under the old key
   in its slot of each sweep round, so parts of the group that switched to different keys still

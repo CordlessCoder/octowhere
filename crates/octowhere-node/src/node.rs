@@ -12,7 +12,7 @@ use embassy_futures::select::{Either, Either3, select, select3};
 use octowhere_mesh::{
     IDS, Zeroable,
     absorb::{Event, State, When, absorb},
-    clock::{Clock, SWEEP_US, Taken},
+    clock::{Clock, SWEEP_US, Taken, UTC_BOUND_US},
     compose::{Sources, compose},
     members::{Gone, Group, Member, Name, Requests, fingerprint},
     messages::{
@@ -23,7 +23,7 @@ use octowhere_mesh::{
         Timebase,
     },
     pair::{End, Identity, MAX_FRAME, Pairing, Phase, Role},
-    rekey::{Kept, Learned, NewKey, Rekey, key_fingerprint},
+    rekey::{Kept, Learned, NewKey, OnKey, Rekey, key_fingerprint},
     schedule::{
         GUARD_US, ROUND_US, SWEEP_EVERY, Schedule, airtime_us, base_of, is_sweep_round, round_at,
     },
@@ -196,6 +196,15 @@ struct CatchUp {
     catches_up_with: u16,
 }
 
+/// This node's signed word that it is on the group's key, while it is to send it.
+struct OnKeySend {
+    record: OnKey,
+    /// The packets left to carry it whatever the round.
+    first: u8,
+    /// Until when, on the local timer, sweep rounds' packets carry it.
+    until: i64,
+}
+
 /// The members one packet under an old key catches up, each with the generation of the key
 /// message it is sent.
 type Catching = heapless::Vec<(u8, u16), 4>;
@@ -212,9 +221,16 @@ struct RemovalNotice {
 
 /// How many times a removal notice is sent.
 const NOTICE_SENDS: u8 = 3;
-/// How many times a member waiting for its key message is sent it under an old key: one that
-/// declined the removal never takes it.
-const CATCH_UPS: u8 = 3;
+/// A member waiting for its key message is sent it under an old key again only after a gap of
+/// sweep rounds that doubles with each send, up to 2 to this power, about ten hours: one that
+/// declined the removal never takes it, and replays of one of its packets would otherwise spend
+/// every send before it is back (owner, 2026-10-04).
+const CATCH_UP_DOUBLINGS: u32 = 6;
+/// The packets after a switch that carry this node's word that it is on the new key, beside
+/// those in sweep rounds.
+const ON_KEY_FIRST: u8 = 3;
+/// How long after a switch its sweep rounds' packets carry that word.
+const ON_KEY_US: i64 = 24 * 3_600 * 1_000_000;
 /// The most a summary takes of a packet, so that it leaves room for messages.
 const SUMMARY_MAX: usize = 120;
 
@@ -228,7 +244,7 @@ enum Opened {
     /// One the group switched away from, which its sender has not: the key, its generation, and
     /// that of the key message that catches its sender up.
     Old {
-        sender: u8,
+        header: Header,
         old: (Key, u16, u16),
     },
     Not,
@@ -680,8 +696,10 @@ pub struct Mesh<R, T, G, D, S, A: Allocator> {
     /// The member this device removed at the last switch, to tell, with the old key and its
     /// generation.
     notify: Option<(u8, Key, u16)>,
-    /// How many times each member has been sent its key message under the newest old key.
-    caught_up: [u8; IDS as usize],
+    /// How many times each member has been sent its key message under the newest old key, and
+    /// the round of the last.
+    caught_up: [(u8, i64); IDS as usize],
+    on_key: Option<OnKeySend>,
     /// Private messages to this device it could not act on yet: its sender's record or a
     /// timebase was missing.
     /// The numbers of the writes queued without waiting, whose results are yet to be checked.
@@ -763,11 +781,20 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             beacon_round: i64::MIN,
             keys_posted: false,
             notify: None,
-            caught_up: [0; IDS as usize],
+            caught_up: [(0, 0); IDS as usize],
+            on_key: None,
             writes: heapless::Vec::new(),
             refill: None,
             summary: None,
         };
+        // A switch just before a restart may not have told the others yet, who wait for it.
+        if let Some(group) = mesh.group.as_ref().filter(|group| group.generation() > 0) {
+            mesh.on_key = Some(OnKeySend {
+                record: OnKey::new(group.own(), group.generation(), group.key(), &mesh.me),
+                first: ON_KEY_FIRST,
+                until: now + ON_KEY_US,
+            });
+        }
         let tuned = mesh.radio.tune(FREQUENCY_HZ, SYNC_WORD, POWER_DBM).await;
         info!("[MESH] tuned={}", tuned);
         mesh.sync_schedule();
@@ -1427,8 +1454,9 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         let sent = self.radio.transmit(&packet[..len], Some(at)).await;
         self.catch_up.retain(|up| (caught | lost) & 1 << up.id == 0);
         for id in (0..IDS).filter(|&id| caught & 1 << id != 0) {
-            let sent = &mut self.caught_up[usize::from(id)];
-            *sent = sent.saturating_add(1);
+            let (sends, last) = &mut self.caught_up[usize::from(id)];
+            *sends = sends.saturating_add(1);
+            *last = round;
         }
         if let Some(notice) = &mut self.removal_notice
             && let To::Member(id) = notice.message.to()
@@ -1632,7 +1660,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                 && let Ok(plain) = Plain::parse(plain)
             {
                 return Opened::Old {
-                    sender: plain.header.sender,
+                    header: plain.header,
                     old: (old.key.clone(), old.generation, old.catches_up_with()),
                 };
             }
@@ -1656,8 +1684,8 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                 }
                 return self.adopt_pending(&header, len, done);
             }
-            Opened::Old { sender, old } => {
-                self.heard_on_old(sender, old);
+            Opened::Old { header, old } => {
+                self.heard_on_old(&header, old, done);
                 self.take_rivals(&bytes[SIV_LEN..len]);
                 return false;
             }
@@ -1904,10 +1932,20 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                     .summary
                     .as_deref()
                     .map(|(summary, _)| summary.as_slice()),
+                on_key: self
+                    .on_key
+                    .as_ref()
+                    .filter(|on| on.first > 0 || (is_sweep_round(round) && send_at < on.until))
+                    .map(|on| &on.record),
             },
         );
         let plain_len = builder.finish();
         let len = seal::seal(group.key(), &mut packet, plain_len);
+        if carried.on_key
+            && let Some(on) = &mut self.on_key
+        {
+            on.first = on.first.saturating_sub(1);
+        }
 
         let Some(done) = self.radio.transmit(&packet[..len], Some(send_at)).await else {
             return;
@@ -2181,7 +2219,8 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         self.keys_posted = false;
         self.notify = None;
         self.shown.removals = RemovalsView::default();
-        self.caught_up = [0; IDS as usize];
+        self.caught_up = [(0, 0); IDS as usize];
+        self.on_key = None;
         self.summary = None;
     }
 
@@ -2365,7 +2404,13 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
 
         self.kept.keep_only(group.generation(), switched.remover);
         self.refill = Some((group.generation(), switched.remover));
-        self.caught_up = [0; IDS as usize];
+        self.caught_up = [(0, 0); IDS as usize];
+        // Signed once a switch: about 35 ms on the board.
+        self.on_key = Some(OnKeySend {
+            record: OnKey::new(group.own(), group.generation(), group.key(), &self.me),
+            first: ON_KEY_FIRST,
+            until: self.time.now() + ON_KEY_US,
+        });
         self.keys_posted = false;
         self.save_switch();
         self.sync_schedule();
@@ -2501,7 +2546,8 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         self.summary = None;
         self.kept.clear();
         self.catch_up.clear();
-        self.caught_up = [0; IDS as usize];
+        self.caught_up = [(0, 0); IDS as usize];
+        self.on_key = None;
         self.save_switch();
         self.sync_schedule();
         let at = self.time.now();
@@ -2565,7 +2611,27 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             .map_or(0, |utc| utc.clamp(0, i64::from(u32::MAX)) as u32)
     }
 
-    fn heard_on_old(&mut self, sender: u8, (key, generation, catches_up_with): (Key, u16, u16)) {
+    fn heard_on_old(
+        &mut self,
+        header: &Header,
+        (key, generation, catches_up_with): (Key, u16, u16),
+        done: i64,
+    ) {
+        let sender = header.sender;
+        let Some((time, ours)) = self.clock.at(done) else {
+            return;
+        };
+        // A packet replayed long after it was sent must not spend what goes to its sender.
+        if ours.source.is_utc()
+            && header.timebase.source.is_utc()
+            && (i64::from(header.base) * 1_000_000 - time).abs() > UTC_BOUND_US
+        {
+            info!(
+                "[REKEY] {} on generation {}, but its packet is far from this clock: nothing goes to it",
+                sender, generation
+            );
+            return;
+        }
         if let Some(notice) = &self.removal_notice
             && notice.message.to() == To::Member(sender)
             && notice.generation == generation
@@ -2584,10 +2650,13 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             info!("[REKEY] heard {} on generation {}", sender, generation);
             return;
         }
-        if self.caught_up[usize::from(sender)] >= CATCH_UPS {
+        let (sends, last) = self.caught_up[usize::from(sender)];
+        let due =
+            last + SWEEP_EVERY * (1 << u32::from(sends.saturating_sub(1)).min(CATCH_UP_DOUBLINGS));
+        if sends > 0 && round_at(time) < due {
             info!(
-                "[REKEY] {} is on generation {}, and has been sent its key message {} times",
-                sender, generation, CATCH_UPS
+                "[REKEY] {} is on generation {}; sent its key message {} times, again from round {}",
+                sender, generation, sends, due
             );
             return;
         }

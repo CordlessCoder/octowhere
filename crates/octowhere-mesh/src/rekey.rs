@@ -6,7 +6,8 @@ use bytemuck::Zeroable;
 use sha2::{Digest, Sha256};
 
 use crate::IDS;
-use crate::members::{Group, Member, RECORD_MAX_LEN, fingerprint};
+use crate::identity::{Identity, SIGNATURE_LEN, verify};
+use crate::members::{Group, Member, PUBLIC_LEN, RECORD_MAX_LEN, fingerprint};
 use crate::messages::{Message, To, kind};
 use crate::schedule::ROUND_US;
 use crate::seal::Key;
@@ -30,6 +31,63 @@ pub const DECLINED: usize = 4;
 /// How long after its switch a removal can still be declined: the key before it is kept that
 /// long.
 pub const UNDO_ROUNDS: u32 = 24 * 3_600 / ROUND_S;
+
+const ON_KEY_DOMAIN: &[u8] = b"octowhere on key";
+/// An [`OnKey`] record's body: id, generation, signature.
+pub const ON_KEY_LEN: usize = 1 + 2 + SIGNATURE_LEN;
+
+/// A member's signed word that it is on the key of a generation. It alone ends the wait for the
+/// member under older keys: a header's sender id proves nothing, since any member can send
+/// under another's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OnKey {
+    pub id: u8,
+    pub generation: u16,
+    pub signature: [u8; SIGNATURE_LEN],
+}
+
+impl OnKey {
+    /// `me`'s word, at `id`, that it is on `key`, of `generation`.
+    #[must_use]
+    pub fn new(id: u8, generation: u16, key: &Key, me: &Identity) -> Self {
+        Self {
+            id,
+            generation,
+            signature: me.sign(&[ON_KEY_DOMAIN, &[id], &generation.to_be_bytes(), key.bytes()]),
+        }
+    }
+
+    /// Whether the device with `public` signed it for `key`, the key of its generation.
+    #[must_use]
+    pub fn verify(&self, public: &[u8; PUBLIC_LEN], key: &Key) -> bool {
+        verify(
+            public,
+            &[
+                ON_KEY_DOMAIN,
+                &[self.id],
+                &self.generation.to_be_bytes(),
+                key.bytes(),
+            ],
+            &self.signature,
+        )
+    }
+
+    pub fn encode(&self, out: &mut [u8; ON_KEY_LEN]) {
+        out[0] = self.id;
+        out[1..3].copy_from_slice(&self.generation.to_be_bytes());
+        out[3..].copy_from_slice(&self.signature);
+    }
+
+    #[must_use]
+    pub fn decode(body: &[u8]) -> Option<Self> {
+        let body: &[u8; ON_KEY_LEN] = body.get(..ON_KEY_LEN)?.try_into().ok()?;
+        Some(Self {
+            id: body[0],
+            generation: u16::from_be_bytes([body[1], body[2]]),
+            signature: body[3..].try_into().ok()?,
+        })
+    }
+}
 
 /// A new group key, as a key message carries it.
 #[derive(Clone, PartialEq, Eq)]
@@ -568,10 +626,26 @@ impl Rekey {
         })
     }
 
-    /// Takes a packet from `sender` under the newest key: it needs no older one. Returns
-    /// whether that changed what is kept.
-    pub fn heard(&mut self, sender: u8) -> bool {
-        self.wait_only_for(!(1 << sender))
+    /// Takes a member's word, checked, that it is on the key of `generation`: it needs no key
+    /// older. Returns whether that changed what is kept.
+    pub fn on_key(&mut self, id: u8, generation: u16) -> bool {
+        let mut changed = false;
+        for old in self.old.iter_mut() {
+            if let Some(held) = old
+                && held.generation < generation
+                && held.waiting & 1 << id != 0
+            {
+                changed = true;
+                held.waiting &= !(1 << id);
+                if held.waiting == 0 {
+                    *old = None;
+                }
+            }
+        }
+        if changed {
+            self.compact();
+        }
+        changed
     }
 
     /// Stops waiting for anyone outside `members`, a set of ids: a member removed or gone is
@@ -614,6 +688,13 @@ impl Rekey {
             .any(|old| old.generation == generation && old.waiting & 1 << sender != 0)
     }
 
+    /// Whether `id` is a member still waited for under a key older than `generation`'s.
+    #[must_use]
+    pub fn is_waiting_for_under_older(&self, id: u8, generation: u16) -> bool {
+        self.old()
+            .any(|old| old.generation < generation && old.waiting & 1 << id != 0)
+    }
+
     /// The id this device removed last, if a rival key could still undo it.
     #[must_use]
     pub fn removing(&self) -> Option<u8> {
@@ -628,7 +709,7 @@ impl Rekey {
     /// Drops a member that went from the members waited for. Returns whether that changed
     /// what is kept.
     pub fn went(&mut self, id: u8) -> bool {
-        self.heard(id)
+        self.wait_only_for(!(1 << id))
     }
 }
 
@@ -1048,9 +1129,9 @@ mod tests {
         assert!(old.key == Key::new([5; 32]));
         assert_eq!(old.waiting, 1 << 1 | 1 << 3);
         assert!(rekey.is_waiting_for(3, 3));
-        rekey.heard(1);
+        rekey.on_key(1, 4);
         assert!(rekey.is_waiting());
-        rekey.heard(3);
+        rekey.on_key(3, 4);
         assert!(
             !rekey.is_waiting(),
             "dropped once everyone is heard on the new key"
@@ -1071,8 +1152,38 @@ mod tests {
             rekey.old().all(|old| old.waiting == 1 << 1),
             "the second removal's member is waited for on neither key"
         );
-        rekey.heard(1);
+        rekey.on_key(1, 4);
+        assert!(
+            rekey.is_waiting_for(4, 1),
+            "on the first new key, it still needs the second"
+        );
+        rekey.on_key(1, 5);
         assert!(!rekey.is_waiting());
+    }
+
+    #[test]
+    fn a_word_on_a_key_reads_back_and_holds_only_for_its_signer_and_key() {
+        let me = crate::members::tests::key(2);
+        let key = Key::new([9; 32]);
+        let on_key = OnKey::new(1, 4, &key, &me);
+        let mut body = [0; ON_KEY_LEN];
+        on_key.encode(&mut body);
+        assert_eq!(OnKey::decode(&body), Some(on_key));
+        assert_eq!(OnKey::decode(&body[..ON_KEY_LEN - 1]), None);
+        assert!(on_key.verify(&me.public(), &key));
+        assert!(
+            !on_key.verify(&me.public(), &Key::new([8; 32])),
+            "another key"
+        );
+        assert!(!on_key.verify(&crate::members::tests::key(3).public(), &key));
+        assert!(!OnKey { id: 2, ..on_key }.verify(&me.public(), &key));
+        assert!(
+            !OnKey {
+                generation: 5,
+                ..on_key
+            }
+            .verify(&me.public(), &key)
+        );
     }
 
     #[test]

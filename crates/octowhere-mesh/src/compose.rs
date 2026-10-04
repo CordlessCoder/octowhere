@@ -7,6 +7,7 @@ use crate::{
     members::{GONE_LEN, Group, Requests},
     messages::{Name, Store},
     packet::{Builder, Entry, Hdop, Quality, positions_len},
+    rekey::OnKey,
     table::Table,
 };
 
@@ -26,6 +27,8 @@ pub struct Sources<'a> {
     pub requests: &'a Requests,
     /// A summary of the messages, made for this packet.
     pub summary: Option<&'a [u8]>,
+    /// This node's word that it is on the group's key, while it is to send it.
+    pub on_key: Option<&'a OnKey>,
 }
 
 /// What a packet carried, to count as sent once it has gone.
@@ -38,6 +41,8 @@ pub struct Carried {
     /// The places of the former members' gone records that went, as a set.
     pub former: u8,
     pub summary: bool,
+    /// Whether the node's word that it is on the key went.
+    pub on_key: bool,
     entries: [Entry; MAX_ENTRIES],
     positions: usize,
     messages: [Name; MAX_MESSAGES],
@@ -88,6 +93,7 @@ pub fn compose(builder: &mut Builder, round: i64, base: u32, from: Sources) -> C
         messages,
         requests,
         summary,
+        on_key,
     } = from;
     let mut carried = Carried {
         neighbours: table.neighbours(round),
@@ -95,6 +101,7 @@ pub fn compose(builder: &mut Builder, round: i64, base: u32, from: Sources) -> C
         records: 0,
         former: 0,
         summary: false,
+        on_key: false,
         entries: [Entry {
             id: 0,
             latitude: 0,
@@ -115,6 +122,7 @@ pub fn compose(builder: &mut Builder, round: i64, base: u32, from: Sources) -> C
     if carried.requests != 0 {
         let _ = builder.request(carried.requests);
     }
+    carried.on_key = on_key.is_some_and(|on_key| builder.on_key(on_key).is_ok());
     let own_room = if table.entry(group.own()).is_some() {
         positions_len(1)
     } else {
@@ -256,6 +264,7 @@ mod tests {
                 Record::Request(_) => "request",
                 Record::Member(..) => "member",
                 Record::Gone(..) => "gone",
+                Record::OnKey(_) => "on key",
                 Record::Message(_) => "message",
                 Record::Messages(_) => "messages digest",
                 Record::Summary(_) => "summary",
@@ -263,6 +272,25 @@ mod tests {
             })
             .collect();
         (carried, kinds)
+    }
+
+    #[test]
+    fn a_word_on_the_key_goes_ahead_of_the_records() {
+        let (table, group, store) = (table(&[2, 3]), group(6), store(2));
+        let on_key = OnKey::new(0, 1, group.key(), &crate::members::tests::key(1));
+        let (carried, kinds) = compose_kinds(Sources {
+            table: &table,
+            group: &group,
+            messages: &store,
+            requests: &Requests::default(),
+            summary: None,
+            on_key: Some(&on_key),
+        });
+        assert!(carried.on_key);
+        assert_eq!(
+            kinds[..4],
+            ["neighbours", "members digest", "messages digest", "on key"]
+        );
     }
 
     #[test]
@@ -274,6 +302,7 @@ mod tests {
             messages: &store,
             requests: &Requests::default(),
             summary: Some(&[1, 2, 3]),
+            on_key: None,
         });
         // A signed member record takes over half a packet, so one goes.
         assert_eq!(
@@ -303,6 +332,7 @@ mod tests {
             messages: &store,
             requests: &Requests::default(),
             summary: None,
+            on_key: None,
         });
         assert_eq!(carried.messages(), [(3, 4), (3, 3), (3, 2), (3, 1)]);
     }
@@ -316,6 +346,7 @@ mod tests {
             messages: &store,
             requests: &Requests::default(),
             summary: None,
+            on_key: None,
         });
         assert!(carried.messages().len() < 40);
         assert_eq!(kinds.last(), Some(&"positions"));
@@ -344,6 +375,7 @@ mod tests {
                 messages: &store,
                 requests: &Requests::default(),
                 summary: Some(&summary),
+                on_key: None,
             });
             assert_eq!(carried.summary, carries, "own position: {own_position}");
         }
@@ -361,6 +393,7 @@ mod tests {
                 messages: &store,
                 requests: &requests,
                 summary: None,
+                on_key: None,
             });
             carried.sent(&mut table, &mut requests, &mut store, &mut group);
             went |= carried.records;
@@ -383,6 +416,7 @@ mod tests {
             messages: &store,
             requests: &requests,
             summary: None,
+            on_key: None,
         });
         let unsent = group.unsent();
         carried.sent(&mut table, &mut requests, &mut store, &mut group);
@@ -394,6 +428,7 @@ mod tests {
             messages: &store,
             requests: &requests,
             summary: None,
+            on_key: None,
         });
         assert_eq!(again.records & carried.records, 0);
         assert!(again.messages().is_empty());

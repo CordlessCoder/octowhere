@@ -4,6 +4,7 @@
 use crate::bits::{BitReader, BitWriter, Full};
 use crate::members::{GONE_LEN, Gone, Member, RECORD_MAX_LEN, Slot};
 use crate::messages::{BODY_MAX, FIXED_LEN, Message};
+use crate::rekey::{ON_KEY_LEN, OnKey};
 use crate::seal::SIV_LEN;
 
 pub const VERSION: u8 = 1;
@@ -30,6 +31,8 @@ pub mod record {
     pub const SUMMARY: u8 = 9;
     /// A member that left or was removed.
     pub const GONE: u8 = 10;
+    /// A member's signed word that it is on the key of a generation.
+    pub const ON_KEY: u8 = 11;
 }
 
 /// Where a node's clock comes from.
@@ -460,6 +463,20 @@ impl<'a> Builder<'a> {
         Ok(())
     }
 
+    pub fn on_key(&mut self, on_key: &OnKey) -> Result<(), Full> {
+        if 2 + ON_KEY_LEN > self.room() {
+            return Err(Full);
+        }
+        let mut body = [0; ON_KEY_LEN];
+        on_key.encode(&mut body);
+        let at = self.len;
+        self.buf[at] = record::ON_KEY;
+        self.buf[at + 1] = ON_KEY_LEN as u8;
+        self.buf[at + 2..at + 2 + ON_KEY_LEN].copy_from_slice(&body);
+        self.len += 2 + ON_KEY_LEN;
+        Ok(())
+    }
+
     /// Writes what the slot at `id` holds: a member record or a gone record.
     pub fn slot(&mut self, id: u8, slot: &Slot) -> Result<(), Full> {
         match slot {
@@ -521,6 +538,7 @@ pub enum Record<'a> {
     Request(u32),
     Member(u8, Member),
     Gone(u8, Gone),
+    OnKey(OnKey),
     Message(Message),
     /// A digest of the messages the sender holds.
     Messages(u32),
@@ -571,6 +589,10 @@ impl<'a> Iterator for Records<'a> {
             },
             record::GONE => match Gone::decode(body) {
                 Some((id, gone)) => Record::Gone(id, gone),
+                None => Record::Other(kind, body),
+            },
+            record::ON_KEY => match OnKey::decode(body) {
+                Some(on_key) => Record::OnKey(on_key),
                 None => Record::Other(kind, body),
             },
             _ => Record::Other(kind, body),

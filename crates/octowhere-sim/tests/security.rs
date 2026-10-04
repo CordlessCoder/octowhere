@@ -1,6 +1,6 @@
-//! The open items of the 2026-10-03 security review, staged on simulated nodes. Each ignored
-//! scenario fails today; the one beside it runs the same stage without the fault or the attack,
-//! so that a failure is the defect's and not the stage's.
+//! The open items of the 2026-10-03 security review, staged on simulated nodes. Each scenario
+//! failed before its fix. A control beside it runs the same stage without the fault or the
+//! attack, so that a failure is the defect's and not the stage's.
 
 use octowhere_mesh::{
     members::Name,
@@ -201,6 +201,8 @@ enum Absence {
     Quiet,
     /// Someone replays a packet node 2 sent before it went, which needs no key.
     Replayed,
+    /// Someone near node 2 replays its latest packet within minutes, as a relay would.
+    Relayed,
     /// A member sends under the new key with node 2's id.
     Forged,
 }
@@ -232,6 +234,7 @@ fn catch_up_after(absence: Absence) {
             run_to_free_slot(&mut sim, &key, round);
             let bytes = match absence {
                 Absence::Replayed => recorded.bytes.clone(),
+                Absence::Relayed => last_sent(&sim, 2).bytes,
                 _ => forged(&key, 2, round * ROUND_US),
             };
             sim.transmit(radio, &bytes, recorded.channel);
@@ -251,8 +254,9 @@ fn catch_up_after(absence: Absence) {
     let gave_up = (0..2)
         .map(|node| {
             format!(
-                "\n  node {node}: gave up sending {} times, dropped the old key {} times",
-                sim.count(node, "has been sent its key message 3 times"),
+                "\n  node {node}: held back {} times, refused {} replays, dropped the old key {} times",
+                sim.count(node, "again from round"),
+                sim.count(node, "far from this clock"),
                 sim.count(node, "the old one is dropped"),
             )
         })
@@ -269,19 +273,25 @@ fn a_member_back_after_a_removal_is_caught_up() {
     catch_up_after(Absence::Quiet);
 }
 
-/// A replayed packet of node 2's, under the old key, makes each node send node 2 its key message
-/// in a sweep round. A node sends it three times at most, so the replays spend every one before
-/// node 2 is back.
+/// A replayed packet of node 2's, under the old key, made each node send node 2 its key message
+/// in a sweep round. A node sent it three times at most, so the replays spent every one before
+/// node 2 was back. Now a packet sent long before it is heard sends nothing.
 #[test]
-#[ignore = "replayed packets spend a member's catch-ups"]
 fn replayed_packets_do_not_spend_a_members_catch_ups() {
     catch_up_after(Absence::Replayed);
 }
 
-/// A packet under the new key from node 2's id tells each node node 2 switched, so they stop
-/// waiting for it and drop the old key, which node 2's key message would have gone under.
+/// Replayed within minutes, node 2's packets fit the clock and do send its key message, but at
+/// gaps that double, and never for the last time while the old key is kept.
 #[test]
-#[ignore = "header sender ids are not authenticated within the group"]
+fn relayed_packets_do_not_spend_a_members_catch_ups() {
+    catch_up_after(Absence::Relayed);
+}
+
+/// A packet under the new key from node 2's id told each node node 2 switched, so they stopped
+/// waiting for it and dropped the old key, which node 2's key message would have gone under. Now
+/// only node 2's own signed word does.
+#[test]
 fn a_member_cannot_end_the_wait_for_another() {
     catch_up_after(Absence::Forged);
 }

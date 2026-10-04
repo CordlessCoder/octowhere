@@ -118,7 +118,7 @@ pub fn absorb<'p>(
         neighbours: 0,
         changed: 0,
         renumbered: None,
-        rekey_changed: rekey.heard(sender),
+        rekey_changed: false,
         late_key: None,
         summary: false,
         carried: 0,
@@ -186,6 +186,17 @@ pub fn absorb<'p>(
                     absorbed.rekey_changed |= rekey.went(at);
                 }
             }
+            // Checked only while it is waited for: a check takes about 32 ms on the board.
+            Record::OnKey(on_key)
+                if on_key.generation == group.generation()
+                    && rekey.is_waiting_for_under_older(on_key.id, on_key.generation)
+                    && group
+                        .member(on_key.id)
+                        .is_some_and(|member| on_key.verify(&member.public, group.key())) =>
+            {
+                absorbed.rekey_changed |= rekey.on_key(on_key.id, on_key.generation);
+            }
+            Record::OnKey(_) => {}
             Record::Message(message) => {
                 if let Some(slot) = absorbed.carried_names.get_mut(absorbed.carried) {
                     *slot = message.name();
@@ -248,6 +259,7 @@ mod tests {
         },
         messages::kind,
         packet::{Builder, Header, MAX_PLAIN, Plain, Source, Timebase},
+        rekey::OnKey,
         seal::Key,
     };
 
@@ -383,5 +395,41 @@ mod tests {
         assert_eq!(absorbed.carried, 1);
         let again = node.absorb(|builder| builder.message(&message).unwrap());
         assert!(again.arrivals().is_empty());
+    }
+
+    /// This node, at id 0, removed the member at id 2 and switched, and waits for id 1.
+    fn waiting() -> Node {
+        let mut node = Node::new();
+        let mut members = [None; IDS as usize];
+        members[0] = Some(member(1, NOW - 100));
+        members[1] = Some(member(2, NOW - 100));
+        members[2] = Some(member(3, NOW - 100));
+        node.group = Group::new(Key::new([5; 32]), 0, members).unwrap();
+        node.rekey
+            .start(&node.group, 2, Key::new([9; 32]), (NOW / 45) + 10)
+            .unwrap();
+        node.rekey.switch(&mut node.group).unwrap();
+        assert!(node.rekey.is_waiting_for(0, 1));
+        node
+    }
+
+    #[test]
+    fn only_a_members_own_word_ends_the_wait_for_it() {
+        let mut node = waiting();
+        let generation = node.group.generation();
+        let key = node.group.key().clone();
+        let bare = node.absorb(|_| {});
+        assert!(!bare.rekey_changed, "a packet with its id proves nothing");
+        let forged = OnKey::new(1, generation, &key, &key_of(3));
+        assert!(!node.absorb(|b| b.on_key(&forged).unwrap()).rekey_changed);
+        let stale = OnKey::new(1, generation - 1, &Key::new([5; 32]), &key_of(2));
+        assert!(!node.absorb(|b| b.on_key(&stale).unwrap()).rekey_changed);
+        let own = OnKey::new(1, generation, &key, &key_of(2));
+        assert!(node.absorb(|b| b.on_key(&own).unwrap()).rekey_changed);
+        assert!(!node.rekey.is_waiting());
+    }
+
+    fn key_of(n: u8) -> Identity {
+        key(n)
     }
 }
