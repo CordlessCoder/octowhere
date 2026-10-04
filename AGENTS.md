@@ -158,6 +158,9 @@ initialization or peripheral mappings.
 - [`context/MESH-CLEANUP-PLAN.md`](context/MESH-CLEANUP-PLAN.md) is the plan, step by step,
   for what the 2026-10-03 code-quality review of the mesh and node left open, with the base
   commit, the gates and the baseline each step is checked against. Follow it in order.
+- [`context/ui-firmware-review/`](context/ui-firmware-review/README.md) is the 2026-10-04
+  code-quality review of the UI crate and the firmware at `b8ab7ca`: its brief, each
+  reviewer's findings, and in the README the bugs verified and the findings to take first.
 - [`context/POWER-INVESTIGATION.md`](context/POWER-INVESTIGATION.md) holds what the device's
   power was found to depend on (2026-10-04), from datasheets and sources, none of it measured:
   the parts' draw, esp-rtos's light sleep and what it would break, and contention against slots

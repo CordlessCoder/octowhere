@@ -267,6 +267,9 @@ until the feature set is complete, because profiling an incomplete firmware pric
   - Rival removals of one generation are settled by the lower remover's id (owner,
     2026-10-04), which no member can grind but which the lowest ids win every time; the
     removal screens let each user decline the rival they do not want (the protocol's "Open").
+- Act on the 2026-10-04 code-quality review of the UI crate and the firmware,
+  [`ui-firmware-review/README.md`](ui-firmware-review/README.md): eight bugs, verified, and 112
+  findings in all, with the ones to take first. Nothing is fixed yet; the owner picks the order.
 - Simplify the node (`octowhere-node`'s `node.rs`, moved from `src/mesh.rs`) and the mesh crate's surface, from the 2026-10-03 code-quality review
   of `337717f`. What is left is planned step by step in `MESH-CLEANUP-PLAN.md` (2026-10-04):
   follow that, and strike lines here as its steps land. The order the owner agreed on 2026-10-04: the radio and the save flags first,
@@ -276,15 +279,10 @@ until the feature set is complete, because profiling an incomplete firmware pric
   quick wins (`96b6d81`), the radio's fields and methods as `mesh::Radio` (`471e8f7`), and the `unsaved`,
   `unsaved_group` and `rekey_unsaved` flags as `Unsaved`, and the node's own `heard` and
   `refresh` in place of the view's, which only copies them now, and `send()`'s packet filling
-  and `take()`'s records loop as the mesh crate's tested `compose` and `absorb`. Left:
-  - In the node, which has no tests but `unsaved`'s:
-    - Gather the ten removal fields (`rekey`, `kept`, `catch_up`, `caught_up`,
-      `removal_notice`, `notify`, `keys_posted`, `beacon_round`, `refill`, `on_key`) into one type with
-      named resets; `forget_messages`, `switch_key`, `keep` and `take` reset
-      overlapping subsets of them today.
-    - Split `step()`'s choice of what goes out next into a plain function returning an enum;
-      make `listen` reset `after` itself rather than its three callers; `send`, `send_old` and
-      `send_notice` take a `Timebase`, not an `Option` whose `None` cannot happen.
+  and `take()`'s records loop as the mesh crate's tested `compose` and `absorb`, and the ten
+  removal fields as `Removals` (`0a25c3d`, plan step 1), and `step()`'s choice of what goes
+  out as the tested `Next::choose` (`7381762`, step 2), and one group fixture for the member and
+  rekey tests (`2e21c2c`, step 3; the `messages.rs` half was done in `96b6d81`). Left:
   - Duplication in the crate and `settings.rs`:
     - One slot encoding: `Builder::slot`, the pairing's `welcome` and `read_welcome`, and
       `settings`' `write_member` and `read_slot` each have their own, and the decoders tell a
@@ -315,9 +313,6 @@ until the feature set is complete, because profiling an incomplete firmware pric
     `unsent` without a comment; `MESH_VERSION` is still 1 though the layouts grew through
     shims, while its comment says a later layout can tell itself apart; `pair.rs` has two
     stacked docs, the first stale.
-  - Tests: `messages.rs` builds a `lacking` store it never asserts on, and `a.sent((30, 1))`
-    changes nothing asserted; the rekey tests define their `group(own, ids)` helper three
-    ways.
   - Work and stack: `start_transfer` in `pair.rs` clones the 2.6 KB group on the receive path
     though its only failure comes before any change; `old_slot_at` rebuilds a 1 KB `Schedule`,
     an HKDF and 32 AES blocks, every step while catching a member up; check the remaining
