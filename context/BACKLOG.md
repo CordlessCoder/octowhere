@@ -8,22 +8,16 @@ until the feature set is complete, because profiling an incomplete firmware pric
 - Simulate several boards on the host, the next step (owner, 2026-10-03). The plan is the
   owner's doc "Simulating several boards"
   (https://claude.ai/code/artifact/a4ba14e7-4007-415c-ad9c-e42dd61cc83b); its essentials:
-  - The protocol's rules already build on the host (`crates/octowhere-mesh`), but the node that
-    applies them over time, `src/mesh.rs` (3,058 lines, no tests), reaches the board through
-    the SX127x driver, DIO0 and the RF switch (about 22 calls, already behind its own
-    `transmit`, `listen` and `read_packet`), embassy time (about 45 places), the hardware
-    random source, firmware statics (`FIX`, `RTC_TIME`, `GPS_TIME`, `COMMANDS`, `VIEW`,
-    `GROUP_WRITES` and `GROUP_SAVED` in `main.rs`) and defmt.
-  - Step 1, seams: move the node into a new crate that builds on the host, `octowhere-node`,
-    depending on `octowhere-mesh`, which stays rules alone (owner, 2026-10-03); generic over a
-    `Radio` (send at a time, listen until
-    a time and return what arrived with RSSI and SNR, tune channel and power), a clock (local
-    time, sleep until a local deadline), a store for group writes that can fail, and a random
-    source; the fix, RTC and GPS time and commands come in as inputs; logging through a macro
-    that is defmt on the board and text on the host. Keep the node async; no state-machine
-    rewrite. Small commits, each confirmed on the boards with the scripts in
-    `~/.claude/projects/-home-me-Projects-Rust-octowhere/board-scripts/`. This overlaps the
-    code-quality review's entry below (extract the radio, stop reading statics).
+  - Step 1, seams, is built (2026-10-04, `471e8f7` on). The node is `octowhere-node`'s `Mesh`,
+    behind the crate's nightly `run` feature, generic over a `Radio`, a `Time`, a `Random`
+    source, a `Device` (the fix, GPS and RTC time, and the screens it publishes its view to), a
+    `GroupStore` whose writes can fail, a source of `Commands`, and the allocator its two large
+    stores are made in. It logs through defmt on the board and `log` on the host. The view and
+    `GroupWrite` moved into the crate with it, and the UI re-exports the view where it was.
+    `src/mesh.rs` holds the board's side. Not yet confirmed on the boards: run
+    `board-scripts/check.sh` on a build at or after the move. It was blocked on 2026-10-04 by
+    the boards overloading each other's receivers up close (every packet one way failed its
+    CRC at −6 dBm). The node keeps its async code; there was no state-machine rewrite.
   - Step 2, the air: a discrete-event loop on virtual time. A packet occupies its channel for
     its airtime (`schedule::airtime_us`); a node hears it only if it listened on that channel
     throughout and nothing overlapped it there, unless the stronger signal wins by a margin; a
@@ -146,7 +140,9 @@ until the feature set is complete, because profiling an incomplete firmware pric
 - Let the UI crate take an allocator for its large buffers, so the firmware can place an
   atomic-free one in `PSRAM_HEAP` explicitly. The firmware already uses the allocator API on the
   `esp` toolchain, for the framebuffers (`FB::alloc`, behind `octowhere-ui`'s `allocator-api`
-  feature) and the mesh's PSRAM stores (`zeroed_in_psram`). The host crates build on stable,
+  feature) and the mesh's PSRAM stores (the node's `zeroed_in`, handed `&PSRAM_HEAP`). The
+  node is generic over that allocator already, under `octowhere-node`'s nightly `run` feature.
+  The other host crates build on stable,
   which lacks it until 1.100.0, by mid-November 2026. The owner accepts nightly on the host
   (2026-10-03), so this need not wait: the UI crate's lines in "Build and test" in `AGENTS.md`
   would move from `+stable` to `+nightly`, and with them `tools/ui-sim` and `tools/ui-web`,
@@ -199,14 +195,14 @@ until the feature set is complete, because profiling an incomplete firmware pric
   - Rival removals of one generation are settled by a hash a member can grind (the protocol's
     "Open"). The owner keeps it for now, with the removal screens letting each user decline
     the rival they do not want, and revisits it once the simulator can stage rivals.
-- Simplify `src/mesh.rs` and the mesh crate's surface, from the 2026-10-03 code-quality review
+- Simplify the node (`octowhere-node`'s `node.rs`, moved from `src/mesh.rs`) and the mesh crate's surface, from the 2026-10-03 code-quality review
   of `337717f`, in the order the owner agreed on 2026-10-04: the radio and the save flags first,
   as they shrink the simulator's seams, then the seams (the entry above), then `send()` and
   `take()` into the crate before the simulator's scenarios. Leave the slot encoding and the
   flash header until tests cover them, since they touch the stored format. Done: the review's
   quick wins (`96b6d81`), the radio's fields and methods as `mesh::Radio` (`471e8f7`), and the `unsaved`,
   `unsaved_group` and `rekey_unsaved` flags as `mesh::unsaved::Unsaved`. Left:
-  - In `src/mesh.rs`, which has no tests:
+  - In the node, which has no tests but `unsaved`'s:
     - Move `send()`'s packet-filling policy into the crate as a tested `compose()`: a summary
       only with room for the own position, slot and former records sharing `MAX_RECORDS`,
       messages oldest first, positions last.

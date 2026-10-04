@@ -14,13 +14,9 @@ use embassy_sync::{
 };
 use embassy_time::Instant;
 use lc76g::FixQuality;
-use octowhere::{
-    settings::GroupWrite,
-    ui::group::view::{MeshView, Request},
-};
+use octowhere::ui::group::view::{MeshView, Request};
 use octowhere_mesh::packet::Quality;
-
-use super::{Command, Commands, Device, Fix, GpsTime, GroupStore, blank_view};
+use octowhere_node::{Command, Commands, Device, Fix, GpsTime, GroupStore, GroupWrite, blank_view};
 
 /// The latest fix and the UTC second it was made in, from `gnss_task`.
 pub static FIX: BlockingMutex<CriticalSectionRawMutex, Cell<Option<Fix>>> =
@@ -109,9 +105,12 @@ impl Device for BoardDevice {
     }
 }
 
-impl Commands for Channel<CriticalSectionRawMutex, Command, 4> {
+/// The commands the screens and the debugger queue in [`COMMANDS`].
+pub struct BoardCommands;
+
+impl Commands for BoardCommands {
     async fn receive(&self) -> Command {
-        Channel::receive(self).await
+        COMMANDS.receive().await
     }
 }
 

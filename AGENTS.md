@@ -27,11 +27,15 @@ initialization or peripheral mappings.
   without a radio, messages and the store every node holds them in (`messages`), removing
   a member by moving the group to a new key (`rekey`), and a device's Ed25519 identity, with
   its X25519 key derived from it, which signs its records (`identity`). It has no radio or
-  board dependency and builds for the host. `src/mesh.rs` runs it on the radio.
-- `crates/octowhere-node/` owns what a node of the mesh shows the screens and takes from
-  them (`view`), and the changes to its state it stores (`GroupWrite`). It builds for the host,
-  and is where `src/mesh.rs`'s node is moving, behind the seams it now runs on, for the
-  simulator of several boards (`context/BACKLOG.md`).
+  board dependency and builds for the host. `octowhere-node` runs it over time.
+- `crates/octowhere-node/` owns the node that runs the mesh over time (`node`): it sends in
+  its slot, listens, keeps the timebase, pairs, passes messages on and carries removals out, on
+  whatever radio, clock, random source, device and group store it is given (`Radio`, `Time`,
+  `Random`, `Device`, `GroupStore`, `Commands`). Beside it are what it shows the screens and
+  takes from them (`view`), and the changes it stores (`GroupWrite`). The node is the crate's
+  `run` feature, which needs nightly for the allocator its large stores are made in; without
+  it the crate holds the view and the writes alone, on stable. It logs through defmt on the
+  board and `log` on the host (`fmt`). `src/mesh.rs` and its modules give it the board's seams.
 - `crates/octowhere-ui/` owns screen state, drawing and touch handling. It has no board dependency,
   so it also builds for the host. `src/ui/` there owns dirty tracking, geometry,
   gestures and paging, the clock and compass screens with
@@ -163,6 +167,10 @@ cargo +stable test --manifest-path crates/octowhere-node/Cargo.toml \
   --target x86_64-unknown-linux-gnu --locked
 cargo +stable clippy --manifest-path crates/octowhere-node/Cargo.toml \
   --target x86_64-unknown-linux-gnu --locked --all-targets -- -D warnings
+env -C /tmp cargo +nightly test --manifest-path $PWD/crates/octowhere-node/Cargo.toml \
+  --locked --features phantom
+env -C /tmp cargo +nightly clippy --manifest-path $PWD/crates/octowhere-node/Cargo.toml \
+  --locked --all-targets --features phantom,log -- -D warnings
 cargo +stable test --manifest-path crates/octowhere-mesh/Cargo.toml \
   --target x86_64-unknown-linux-gnu --locked
 cargo +stable clippy --manifest-path crates/octowhere-mesh/Cargo.toml \
@@ -183,6 +191,10 @@ cargo +stable clippy --release --manifest-path tools/ui-sim/Cargo.toml \
 cargo +stable clippy --release --manifest-path tools/ui-web/Cargo.toml \
   --target wasm32-unknown-unknown --locked -- -D warnings
 ```
+
+The node's nightly lines start in `/tmp` because the root's `.cargo/config.toml` builds `core`
+and `alloc` from source for the board, and nightly applies that to any build started inside
+the repository, which then fails on a second `core`.
 
 `--all` takes `cargo fmt` into the local path crates, so the root's line covers every crate
 under `crates/`; `host-tests`, `tools/ui-sim` and `tools/ui-web` are outside the firmware's
@@ -398,13 +410,13 @@ Core 1 owns the display SPI/DMA path.
   reports only the gestures it recognises; a double tap wakes the screen, and a reset takes the
   controller out of it again.
 - `radio_task`, on `BUS_EXECUTOR`, owns the LoRa radio, its `DIO0` line and the RF switch. It
-  runs the link test when a `lora-link-*` feature is on, and otherwise the mesh (`src/mesh.rs`),
-  which takes the latest fix from `mesh::FIX`, set by `gnss_task`, the RTC's time from
+  runs the link test when a `lora-link-*` feature is on, and otherwise the mesh's node on the
+  board's seams (`src/mesh.rs`), which takes the latest fix from `mesh::FIX`, set by `gnss_task`, the RTC's time from
   `mesh::RTC_TIME`, set by `sensor_task`, and GPS time from `GPS_TIME`. It is spawned only when
   the radio answered at boot; otherwise `mesh::offline`, in thread mode, keeps the name and can
   leave the group, and tells the screens there is no radio. Either publishes what the screens
   show of the mesh, which the frame loop takes on `mesh::VIEW_CHANGED`, and the frame loop
-  passes the stage's requests to `mesh::COMMANDS`.
+  passes the stage's requests on through `mesh::request`.
 - `zone_task`, in thread mode, looks the zone up again whenever a fix moves about a kilometre
   in automatic mode, a zone at a time with a yield between, takes the settings panel's choice
   from `ZONE_CHOICE`, publishes the zone through `ZONE_STATE`, and queues a new zone for
@@ -528,7 +540,8 @@ switch positions, and both are TCA9554 outputs rather than radio pins, so `LoraP
 loudly; it transmits or listens through the wrong path. That also couples the radio to the shared
 I2C bus, so any timing the protocol depends on includes an I2C transaction and waiting for the bus.
 
-`radio_task` runs the mesh, `src/mesh.rs` on `crates/octowhere-mesh`: slots, in an order the
+`radio_task` runs the mesh, `octowhere-node`'s node on `crates/octowhere-mesh` with the
+board's seams in `src/mesh.rs`: slots, in an order the
 group's key shuffles each round, carrying neighbours, a digest of the member table, the member
 and gone records asked for or changed, a digest of the messages held, a summary of them when
 a neighbour's differs, messages, and positions, with a timebase taken from other nodes without
@@ -536,7 +549,7 @@ a fix, under the group key pairing gave the node. Member, gone and key records c
 device's Ed25519 signature, which a node checks before taking them (the protocol's
 "Signatures"); a check takes about 32 ms on the board, and a signature about 35. A node in no group sends nothing and keeps the
 radio asleep. Without a fix a node has no position of its own. Commands reach the mesh through
-`mesh::COMMANDS`: start a pairing to add or join, choose a device found, answer the code, cancel,
+`COMMANDS` in `src/mesh/device.rs`: start a pairing to add or join, choose a device found, answer the code, cancel,
 leave the group, rename, refresh, send text, remove a member, keep one another member removes.
 A refresh listens throughout for three rounds and keeps sending; a pairing stops it. A device
 that leaves sends its gone record in its next two slots before it forgets the key. Every node
@@ -608,7 +621,8 @@ errata workaround, are in [`docs/hardware-notes.md`](docs/hardware-notes.md).
 - PSRAM is registered in the separate `PSRAM_HEAP` static. Framebuffers must be allocated with
   `FB::alloc(&PSRAM_HEAP)` rather than the global allocator. The mesh's message store, about
   49 KB, and the key messages it keeps for catch-up, about 25 KB, are made in place there by
-  `zeroed_in_psram` in `src/mesh.rs`, from types whose all-zero value is valid (`Zeroable`).
+  the node's `zeroed_in`, in the allocator the firmware hands it, from types whose all-zero
+  value is valid (`Zeroable`).
   Never add PSRAM to the global allocator, even as a fallback after the internal regions: a value
   holding an atomic could land there, and atomics in PSRAM break (owner).
 - esp-alloc serves the internal heap's two regions first fit, the 72 KiB one first, and grows a

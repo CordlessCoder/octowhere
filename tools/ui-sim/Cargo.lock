@@ -340,6 +340,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "embassy-futures"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc2d050bdc5c21e0862a89256ed8029ae6c290a93aecefc73084b3002cdebb01"
+
+[[package]]
 name = "embassy-sync"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -896,6 +902,7 @@ dependencies = [
 name = "octowhere-node"
 version = "0.1.0"
 dependencies = [
+ "embassy-futures",
  "heapless",
  "octowhere-mesh",
 ]

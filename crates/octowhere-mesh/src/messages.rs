@@ -99,6 +99,19 @@ impl defmt::Format for Message {
     }
 }
 
+impl core::fmt::Display for Message {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        write!(
+            f,
+            "{}/{} to {:?} len={}",
+            self.origin,
+            self.seq,
+            self.to(),
+            self.len
+        )
+    }
+}
+
 /// What a node knows of a message by: its origin and sequence number.
 pub type Name = (u8, u32);
 

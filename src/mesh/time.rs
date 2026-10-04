@@ -2,7 +2,7 @@
 
 use embassy_time::{Instant, Timer};
 
-use super::Time;
+use octowhere_node::Time;
 
 pub fn local() -> i64 {
     Instant::now().as_micros() as i64

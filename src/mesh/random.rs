@@ -1,7 +1,7 @@
 //! The board's random source: the hardware's true random source, which `async_main` enables
 //! with the ADC's noise at boot.
 
-use super::Random;
+use octowhere_node::Random;
 
 pub struct BoardRandom;
 

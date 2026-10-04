@@ -81,6 +81,8 @@ impl Unsaved {
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec::Vec;
+
     use super::*;
 
     /// Queues every write due until none is, and returns them in order.

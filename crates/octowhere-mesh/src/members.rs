@@ -84,6 +84,12 @@ impl defmt::Format for Name {
     }
 }
 
+impl core::fmt::Display for Name {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Member {

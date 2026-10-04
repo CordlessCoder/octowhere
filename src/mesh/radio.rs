@@ -13,10 +13,9 @@ use sx127xlora::{
     types::{DeviceMode, OCP, PowerRamp, RxDone, TxConfig, TxDone},
 };
 
-use super::{
-    Radio, Received,
-    time::{local, until},
-};
+use octowhere_node::{Radio, Received};
+
+use super::time::{local, until};
 use crate::{LoraPath, SensorLora};
 
 /// The longest a transmission can take, with margin for `DIO0`.
@@ -148,6 +147,11 @@ impl Radio for BoardRadio {
         let flags = self.lora.read(IRQ_FLAGS).await.ok();
         let _ = self.lora.clear_all_interrupts().await;
         match packet {
+            #[cfg(feature = "pair-inject")]
+            Ok(packet) if super::inject::is_deaf() => {
+                defmt::info!("[RADIO] deaf to len={}", packet.length);
+                None
+            }
             Ok(packet) => Some((
                 Received {
                     payload: packet.payload,

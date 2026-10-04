@@ -1613,10 +1613,11 @@ async fn radio_task(task: RadioTask) {
         mesh::BoardRandom,
         mesh::BoardDevice,
         mesh::BoardGroupStore,
+        &PSRAM_HEAP,
         mesh,
     )
     .await
-    .run(&mesh::COMMANDS)
+    .run(&mesh::BoardCommands)
     .await;
 }
 
