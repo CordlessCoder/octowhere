@@ -479,6 +479,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "log"
+version = "0.4.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
+
+[[package]]
 name = "micromath"
 version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -521,7 +527,17 @@ version = "0.1.0"
 dependencies = [
  "embassy-futures",
  "heapless",
+ "log",
  "octowhere-mesh",
+]
+
+[[package]]
+name = "octowhere-sim"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "octowhere-mesh",
+ "octowhere-node",
 ]
 
 [[package]]
@@ -657,6 +673,10 @@ version = "0.1.0"
 dependencies = [
  "critical-section",
  "embedded-graphics",
+ "log",
+ "octowhere-mesh",
+ "octowhere-node",
+ "octowhere-sim",
  "octowhere-ui",
 ]
 

@@ -14,7 +14,8 @@
   <p class="tag">SIMULATOR</p>
   <p class="intro">The firmware's screens, drawn by its own code and running in your browser.
     Touch the round screen as you would the device. The controls stand in for its keys and
-    sensors, and every reading is synthetic.</p>
+    sensors, and every reading is synthetic. Run several devices to see them find each other
+    over a simulated radio, each on the firmware's own mesh code.</p>
 </header>
 
 <main>
@@ -24,36 +25,42 @@
       <span class="mark tr" aria-hidden="true"></span>
       <span class="mark bl" aria-hidden="true"></span>
       <span class="mark br" aria-hidden="true"></span>
-      <div class="bezel" id="bezel">
-        <canvas id="panel" width="466" height="466" aria-label="The device's touchscreen"></canvas>
-        <canvas id="damage" width="466" height="466" aria-hidden="true"></canvas>
-        <svg class="keys" id="keys" viewBox="-300 -300 600 600">
-          <circle class="rim" r="246"></circle>
-          <g class="key" data-key="power" role="button" tabindex="0" aria-label="PWR key: press to rest the screen, hold a second to power off">
-            <path class="hit"></path>
-            <path class="arc"></path>
-            <path class="fill"></path>
-            <text>PWR</text>
-          </g>
-          <g class="key" data-key="boot" role="button" tabindex="0" aria-label="BOOT key: nothing uses it yet">
-            <path class="hit"></path>
-            <path class="arc"></path>
-            <path class="fill"></path>
-            <text>BOOT</text>
-          </g>
-        </svg>
-        <div class="off" id="off" hidden>
-          <p class="off-title">POWERED OFF</p>
-          <p>Hold PWR to power it on</p>
-          <button id="power-on" type="button">Power on</button>
-        </div>
-        <div class="loading" id="loading">
-          <p>LOADING</p>
-          <div class="cells" id="loading-cells" aria-hidden="true"></div>
-          <p class="loaded" id="loading-bytes">The firmware's drawing code</p>
-        </div>
+      <div class="units" id="units"></div>
+      <div class="loading" id="loading">
+        <p>LOADING</p>
+        <div class="cells" id="loading-cells" aria-hidden="true"></div>
+        <p class="loaded" id="loading-bytes">The firmware's drawing code</p>
       </div>
     </div>
+    <template id="unit-template">
+      <div class="unit">
+        <div class="bezel">
+          <canvas class="panel" width="466" height="466" aria-label="The device's touchscreen"></canvas>
+          <canvas class="damage" width="466" height="466" aria-hidden="true" hidden></canvas>
+          <svg class="keys" viewBox="-300 -300 600 600">
+            <circle class="rim" r="246"></circle>
+            <g class="key" data-key="power" role="button" tabindex="0" aria-label="PWR key: press to rest the screen, hold a second to power off">
+              <path class="hit"></path>
+              <path class="arc"></path>
+              <path class="fill"></path>
+              <text>PWR</text>
+            </g>
+            <g class="key" data-key="boot" role="button" tabindex="0" aria-label="BOOT key: nothing uses it yet">
+              <path class="hit"></path>
+              <path class="arc"></path>
+              <path class="fill"></path>
+              <text>BOOT</text>
+            </g>
+          </svg>
+          <div class="off" hidden>
+            <p class="off-title">POWERED OFF</p>
+            <p>Hold PWR to power it on</p>
+            <button class="power-on" type="button">Power on</button>
+          </div>
+        </div>
+        <p class="unit-label"><b class="unit-number"></b><span class="unit-name">--</span><span class="unit-group">--</span></p>
+      </div>
+    </template>
     <p class="hint" id="hint" aria-live="polite">Loading the firmware.</p>
     <dl class="state" aria-label="What the device is doing">
       <div><dt>SCREEN</dt><dd id="state-screen">--</dd></div>
@@ -84,6 +91,40 @@
       <div class="row">
         <button type="button" id="replay">Replay the start-up</button>
         <button type="button" id="skip">Start on the clock</button>
+      </div>
+    </section>
+
+    <section class="module" aria-labelledby="mesh-title">
+      <header>
+        <svg class="sigil" data-glyph="mesh" id="mesh-sigil" aria-hidden="true"></svg>
+        <h2 id="mesh-title">MESH</h2>
+        <output class="reading meta" id="mesh-reading">SCRIPTED</output>
+      </header>
+      <div class="segmented" role="radiogroup" aria-labelledby="devices-name" id="device-count">
+        <span class="name" id="devices-name">Devices</span>
+        <div class="rail">
+          <button type="button" data-value="1" title="One device, whose pairings a scripted device answers">1</button>
+          <button type="button" data-value="2">2</button>
+          <button type="button" data-value="3">3</button>
+          <button type="button" data-value="4">4</button>
+        </div>
+      </div>
+      <label class="check"><input type="checkbox" id="in-group" checked><span>Several devices start in one group, or else each alone, to pair through the screens</span></label>
+      <p class="note" id="scripted-note">With one device the mesh is scripted. After START, the other device appears, shows the same code and confirms it.</p>
+      <div class="air" id="air" hidden>
+        <p class="note">Each device runs the firmware's own mesh node on a simulated radio, and its screens show what that node holds. Click a device to touch it and give it the controls.</p>
+        <div class="segmented" role="radiogroup" aria-labelledby="speed-name" id="speed">
+          <span class="name" id="speed-name">Speed of the radio's time</span>
+          <div class="rail"></div>
+        </div>
+        <div class="links">
+          <span class="name" id="links-name">Links</span>
+          <div class="matrix" id="matrix" role="grid" aria-labelledby="links-name"></div>
+          <p class="note">A row's device sends, a column's hears. Click a link to put it out of reach, make it lossy, or bring it back.</p>
+        </div>
+        <div class="row">
+          <button type="button" id="reset-device">Reset the selected device</button>
+        </div>
       </div>
     </section>
 
@@ -197,6 +238,16 @@
       </div>
     </section>
 
+    <section class="module log-module" id="log-module" aria-labelledby="log-title" hidden>
+      <header>
+        <svg class="sigil" data-glyph="log" aria-hidden="true"></svg>
+        <h2 id="log-title">NODE LOG</h2>
+        <output class="reading meta" id="log-reading">--</output>
+      </header>
+      <label class="check"><input type="checkbox" id="log-selected"><span>Only the selected device's lines</span></label>
+      <pre class="log" id="log"></pre>
+    </section>
+
     <details class="module keyboard">
       <summary><h2>GESTURES AND KEYS</h2></summary>
       <dl>
@@ -204,6 +255,7 @@
         <dt>Drag down</dt><dd>From the top for settings; drag up to close them</dd>
         <dt>Tap</dt><dd>A setting, to open it</dd>
         <dt>Double-tap</dt><dd>A resting screen, to wake it</dd>
+        <dt>Click a device</dt><dd>With several, gives it the controls</dd>
       </dl>
       <dl>
         <dt>← →</dt><dd>Heading, 5° a press, 1° with Shift</dd>
@@ -225,6 +277,9 @@
         <dt>F</dt><dd>Outline what each frame sends</dd>
         <dt>M</dt><dd>Show the corners</dd>
         <dt>P</dt><dd>Save a screenshot</dd>
+        <dt>1 2 3 4</dt><dd>Select a device</dd>
+        <dt>[ ]</dt><dd>Run the radio's time slower or faster</dd>
+        <dt>X</dt><dd>Reset the selected device</dd>
       </dl>
     </details>
   </section>

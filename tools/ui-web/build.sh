@@ -6,12 +6,14 @@
 #
 # dist/index.html also opens straight from disk.
 #
-# It needs a stable Rust with the wasm32-unknown-unknown target, which rust-toolchain.toml
+# It needs a nightly Rust with the wasm32-unknown-unknown target, which rust-toolchain.toml
 # here asks rustup for. wasm-opt from binaryen shrinks the module further when it is on the path.
 set -euo pipefail
 cd "$(dirname "$0")"
 
-cargo build --release --locked
+# From outside the repository, whose cargo configuration has nightly build `core` for the board.
+env -C "${TMPDIR:-/tmp}" cargo +nightly build --release --locked \
+    --manifest-path "$PWD/Cargo.toml" --target wasm32-unknown-unknown
 rm -rf dist
 mkdir dist
 module=target/wasm32-unknown-unknown/release/ui_web.wasm
