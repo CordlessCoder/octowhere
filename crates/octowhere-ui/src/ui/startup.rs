@@ -198,6 +198,7 @@ pub struct Startup {
     identity_from: Option<Micros>,
     /// A demonstration: its outcomes are scripted, not reported, and it says so.
     demo: bool,
+    title: identity::TitleSlot,
 }
 
 /// Where the sequence is.
@@ -272,6 +273,7 @@ impl Startup {
             skipped: false,
             identity_from: Some(now),
             demo: false,
+            title: identity::TitleSlot::default(),
         }
     }
 
@@ -293,7 +295,13 @@ impl Startup {
             skipped: false,
             identity_from: None,
             demo: true,
+            title: identity::TitleSlot::default(),
         }
+    }
+
+    /// Lets the identity's title go, for a sequence that is over but kept.
+    pub fn forget_title(&self) {
+        self.title.forget();
     }
 
     /// Whether this is the boot itself, rather than a replay or a demonstration.
@@ -525,10 +533,15 @@ where
             };
             draw_self_test(&cells, scroll, &version, font, target)
         }
-        View::Identity(frame) => {
-            identity::draw_identity(frame, startup.answered(), context, font, target)
-        }
-        View::Card(frame) => identity::draw_card(frame, target),
+        View::Identity(frame) => identity::draw_identity(
+            frame,
+            startup.answered(),
+            context,
+            font,
+            &startup.title,
+            target,
+        ),
+        View::Card(frame) => identity::draw_card(frame, &startup.title, target),
         View::Fault(frame) if frame < FAULT_FRAMES => {
             draw_fault(frame, startup, context.firmware, font, true, target)
         }

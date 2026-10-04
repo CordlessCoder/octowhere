@@ -1893,6 +1893,7 @@ impl Stage {
             Phase::Done { entry, after_card } => {
                 // A replay or a demonstration leaves the boot's own record.
                 if let Some(finished) = self.startup.take().filter(Startup::is_boot) {
+                    finished.forget_title();
                     self.last_boot = Some(finished);
                 }
                 self.startup_view = None;

@@ -300,6 +300,7 @@ pub fn draw_identity<D: CoverageTarget<Color = Color>>(
     answered: usize,
     context: &Context<'_>,
     font: &FontdueRenderer<'static, Color>,
+    title: &TitleSlot,
     target: &mut D,
 ) -> Result<(), D::Error> {
     screens::clear(target)?;
@@ -307,13 +308,13 @@ pub fn draw_identity<D: CoverageTarget<Color = Color>>(
         // The opening costs little, so it builds the title a few pieces a frame for the frames
         // after it.
         let pieces = (frame as usize + 1) * TITLE_PIECES / OPEN_FRAMES as usize;
-        Title::take(pieces, font).keep();
+        title.built(pieces, font);
         return draw_opening(frame, font, target);
     }
     scatter().draw(&looks(frame), target)?;
     let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
     draw_marks(frame, field)?;
-    draw_title(frame, font, field)?;
+    draw_title(frame, font, title, field)?;
     draw_row(frame, answered, context, font, field)?;
 
     let lime = |lit: Lit| match lit {
@@ -578,10 +579,43 @@ const TITLE_PIECES: usize = 2 * WORD.len();
 /// its old and new blocks at once, and the start-up's heap may not hold both.
 const TITLE_BYTES: usize = 36_660;
 
-static TITLE: embassy_sync::blocking_mutex::Mutex<
-    embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex,
-    core::cell::RefCell<Option<Box<Title>>>,
-> = embassy_sync::blocking_mutex::Mutex::new(core::cell::RefCell::new(None));
+/// Holds the title between the frames that build and draw it. The start-up owns it, so one cut
+/// short lets the title go with the rest of its state.
+#[derive(Default)]
+pub struct TitleSlot(core::cell::RefCell<Option<Box<Title>>>);
+
+impl TitleSlot {
+    /// Lets the title's coverage go, once the identity is over.
+    pub fn forget(&self) {
+        self.0.borrow_mut().take();
+    }
+
+    /// The title, begun if it was not, built to `pieces`.
+    fn built(
+        &self,
+        pieces: usize,
+        font: &FontdueRenderer<'static, Color>,
+    ) -> core::cell::RefMut<'_, Title> {
+        core::cell::RefMut::map(self.0.borrow_mut(), |slot| {
+            let title = slot.get_or_insert_with(|| Box::new(Title::new(font)));
+            title.build(pieces, font);
+            &mut **title
+        })
+    }
+}
+
+/// A copy starts without the title, which the frames that draw it build again.
+impl Clone for TitleSlot {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl core::fmt::Debug for TitleSlot {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("TitleSlot").finish_non_exhaustive()
+    }
+}
 
 impl Title {
     fn new(font: &FontdueRenderer<'static, Color>) -> Self {
@@ -620,20 +654,6 @@ impl Title {
         );
     }
 
-    /// Takes the title out of its slot, begun if there was none, and builds it to `pieces`. Put
-    /// it back with [`Title::keep`].
-    fn take(pieces: usize, font: &FontdueRenderer<'static, Color>) -> Box<Self> {
-        let mut title = TITLE
-            .lock(|title| title.borrow_mut().take())
-            .unwrap_or_else(|| Box::new(Self::new(font)));
-        title.build(pieces, font);
-        title
-    }
-
-    fn keep(self: Box<Self>) {
-        TITLE.lock(|slot| *slot.borrow_mut() = Some(self));
-    }
-
     fn filled(&self) -> &[Part] {
         &self.pieces[..WORD.len()]
     }
@@ -656,18 +676,13 @@ impl Title {
     }
 }
 
-/// Lets the title's coverage go, once the identity is over.
-fn forget_title() {
-    TITLE.lock(|title| title.borrow_mut().take());
-}
-
 fn draw_title<D: CoverageTarget<Color = Color>>(
     frame: u32,
     font: &FontdueRenderer<'static, Color>,
+    title: &TitleSlot,
     target: &mut D,
 ) -> Result<(), D::Error> {
-    // Out of the lock while it draws, so drawing holds no critical section.
-    let title = Title::take(TITLE_PIECES, font);
+    let title = title.built(TITLE_PIECES, font);
     let all = i32::MIN..i32::MAX;
     match lit(frame, FLICKER_FROM) {
         Lit::Before => {
@@ -701,7 +716,6 @@ fn draw_title<D: CoverageTarget<Color = Color>>(
             }
         }
     }
-    title.keep();
     Ok(())
 }
 
@@ -890,11 +904,12 @@ impl<T: CoverageTarget> CoverageTarget for Stripes<'_, T> {
 
 pub fn draw_card<D: CoverageTarget<Color = Color>>(
     frame: u32,
+    title: &TitleSlot,
     target: &mut D,
 ) -> Result<(), D::Error> {
     // The lime frames clear to the page's colour rather than painting it over black.
     let page = matches!(frame, 0..9 | 17);
-    forget_title();
+    title.forget();
     screens::clear_to(target, if page { chrome::LIME } else { chrome::BLACK })?;
     let (pin, scaled) = (Pin::impact(1.0), Pin::impact(CARD_SCALE));
     match frame {
