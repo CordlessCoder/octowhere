@@ -236,6 +236,20 @@ node, those whose RTCs held the time too, refused records stamped in 2026 as an 
   at its own id takes it back as its root: it is the node's own clock, kept by the others while
   it restarted. Without that, it would follow its own clock through them as a ghost root, until
   each found the root lost.
+- **Replays.** A packet's timing says where its sender's clock stood when it was sent, so a
+  recording replayed later moves a clock by its age (owner, 2026-10-04):
+  - A node whose RTC holds the time refuses a timebase more than 5 minutes from it, and one
+    started from a boot. An RTC drifts a couple of seconds a day, so the bound holds for months
+    without a fix.
+  - A packet that would move a clock the node already has by more than a slot's guard waits,
+    held, for a second that agrees within the guard: from another sender, or from the same in a
+    later round, within four rounds, past a lone neighbour's floor round. The node listens
+    throughout those four rounds, since on a clock apart from the sender's its windows need not
+    meet the next packet. A replay of two recorded packets still gets through, within the
+    bound where the node has one.
+  - A node's first timebase is no move of a clock it has, so only the bound guards it.
+  Replayed an hour on, a packet had set a node's clock an hour back, which the node then kept as
+  its own root; in a sweep round it lost the sender for about 340 s.
 - **Arrival timing.** A sender starts its packet at its slot's start, and its id and the header's
   base timestamp name the slot. The receiver takes the time `DIO0` signals RxDone, subtracts the
   packet's airtime, and has that slot's start on its own timer. The latencies on both sides, the
@@ -937,15 +951,10 @@ protocol does not need this.
   packet of the other, since a notice brings the lower one over: up to about 30 minutes for
   idle nodes (`docs/logs/lora/founding-and-listening-2026-10-02/`). A node that hears nobody
   sends every round, which leaves it one sweep.
-- The clock takes every packet whose timebase ranks above its own (`Clock::arrival`), with no
-  check that the packet fits, since there is nothing to compare it with. Outside a sweep, one
-  closer to its root refines it only if it arrived within the guard of its slot (owner,
-  2026-10-03). Before that, a packet heard in another slot's window, or replayed, moved it by
-  any amount: a review's replayed packet moved a clock by a day, and on the boards a late
-  learner moved its own by 32 s. In a sweep, a replayed packet can still set the clock
-  anywhere, and the node recovers only at its lost sweep, about 10 rounds later; a replayed
-  notice forces a sweep. Adopting only on two packets that agree would close that. Jamming
-  does more harm more easily, so it waits.
+- A replay of two recorded packets still moves a clock, within 5 minutes where the node's RTC
+  holds the time and anywhere where it does not ("Replays" above). A replayed notice forces a
+  three-round sweep, and a replayed packet a four-round one while it is held; neither moves the
+  clock. Jamming does more harm more easily.
 - A member being removed can still see that a removal is under way before the switch: key
   messages are marked as such, and none comes to it. Firmware changed to act on that can
   remove its remover first. The lower remover's id decides which removal holds (owner,

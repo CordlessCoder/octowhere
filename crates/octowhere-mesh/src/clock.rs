@@ -3,7 +3,7 @@
 //! timer, the timebase's since 1970.
 
 use crate::packet::{Header, Source, Timebase};
-use crate::schedule::{GUARD_US, ROUND_US, SWEEP_EVERY, is_sweep_round, round_at};
+use crate::schedule::{FLOOR_EVERY, GUARD_US, ROUND_US, SWEEP_EVERY, is_sweep_round, round_at};
 use crate::table::NEIGHBOUR_ROUNDS;
 
 /// A node's first sweep, and one after it lost its timebase's root, listen this long, which spans
@@ -14,6 +14,13 @@ pub const SWEEP_US: i64 = 3 * ROUND_US;
 pub const LOST_US: i64 = NEIGHBOUR_ROUNDS * ROUND_US;
 /// The node's own GPS time counts as GPS this long after a fix last refined it.
 pub const GPS_STALE_US: i64 = 30 * 60 * 1_000_000;
+/// A node whose RTC holds the time refuses a timebase further than this from it (owner,
+/// 2026-10-04). An RTC drifts a couple of seconds a day, so it holds for months without a fix.
+pub const UTC_BOUND_US: i64 = 5 * 60 * 1_000_000;
+/// How long a packet that would move the clock further than a guard waits for a second that
+/// agrees, the node listening throughout: past a floor round, so that a lone neighbour's next
+/// packet comes within it.
+pub const AGREE_US: i64 = (FLOOR_EVERY + 1) * ROUND_US;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -22,6 +29,12 @@ pub enum Taken {
     Adopted,
     /// The packet was closer to the node's timebase's root, and set its clock.
     Refined,
+    /// The packet would have moved the clock further than a guard, and waits for a second, from
+    /// another sender or a later round, that agrees.
+    Held,
+    /// The packet's timebase is further than [`UTC_BOUND_US`] from the node's RTC, or started
+    /// from a boot while the RTC holds the time.
+    Refused,
     Ignored,
 }
 
@@ -44,6 +57,22 @@ pub struct Clock {
     sweep_until: Option<i64>,
     /// When a packet closer to the timebase's root was last taken.
     upstream: i64,
+    /// Local time minus UTC, from the RTC, while it holds the time.
+    rtc: Option<i64>,
+    /// A packet that would have moved the clock further than a guard.
+    held: Option<Held>,
+}
+
+/// A packet that would move the clock further than a guard, until a second agrees.
+#[derive(Clone, Copy)]
+struct Held {
+    /// Local time minus timebase time, as the packet put it.
+    offset: i64,
+    source: Source,
+    sender: u8,
+    round: i64,
+    /// The local time it stops waiting.
+    until: i64,
 }
 
 impl Clock {
@@ -56,6 +85,8 @@ impl Clock {
             gps: None,
             sweep_until: Some(now + SWEEP_US),
             upstream: now,
+            rtc: None,
+            held: None,
         }
     }
 
@@ -104,6 +135,7 @@ impl Clock {
     /// `now`, which a node that heard nobody starts its own clock from. Call it before reading
     /// the clock.
     pub fn tick(&mut self, now: i64, rtc: Option<i64>) {
+        self.rtc = rtc.map(|utc| now - utc);
         if let Some(offset) = self.live_gps(now) {
             self.clock = Some((
                 offset,
@@ -153,7 +185,7 @@ impl Clock {
             .filter(|(_, timebase)| timebase.source == header.timebase.source)
             .map(|(mine, _)| offset - mine);
         let theirs = header.timebase;
-        let taken = if self.live_gps(now).is_some() {
+        let mut taken = if self.live_gps(now).is_some() {
             Taken::Ignored
         } else {
             match self.clock {
@@ -169,7 +201,30 @@ impl Clock {
                 Some(_) => Taken::Ignored,
             }
         };
-        if taken != Taken::Ignored {
+        if taken != Taken::Ignored
+            && let Some(rtc) = self.rtc
+            && (!theirs.source.is_utc() || (offset - rtc).abs() > UTC_BOUND_US)
+        {
+            taken = Taken::Refused;
+        }
+        if matches!(taken, Taken::Adopted | Taken::Refined)
+            && let Some((mine, _)) = self.clock
+            && (offset - mine).abs() > GUARD_US
+            && !self.agrees(header, offset, round_at(slot), now)
+        {
+            self.held = Some(Held {
+                offset,
+                source: theirs.source,
+                sender: header.sender,
+                round: round_at(slot),
+                until: now + AGREE_US,
+            });
+            // On a clock apart from the sender's, the node's windows need not meet its next
+            // packet.
+            self.sweep_to(now + AGREE_US);
+            taken = Taken::Held;
+        }
+        if matches!(taken, Taken::Adopted | Taken::Refined) {
             // A clock rooted at this node's id is its own, kept by others while it restarted.
             let timebase = if theirs.source.root() == Some(self.own) {
                 Timebase {
@@ -181,11 +236,24 @@ impl Clock {
             };
             self.clock = Some((offset, timebase));
             self.upstream = now;
+            self.held = None;
         }
         if taken == Taken::Adopted {
             self.sweep_until = None;
         }
         Arrival { taken, late_us }
+    }
+
+    /// Whether a packet held earlier agrees with this one, which puts the timebase at `offset`
+    /// and was sent in `round`: on the same source, within a guard, from another sender or a
+    /// later round, and in time.
+    fn agrees(&self, header: &Header, offset: i64, round: i64, now: i64) -> bool {
+        self.held.is_some_and(|held| {
+            held.source == header.timebase.source
+                && (offset - held.offset).abs() <= GUARD_US
+                && (held.sender != header.sender || round > held.round)
+                && now <= held.until
+        })
     }
 
     /// The timebase's time at local time `local`, and the timebase.
@@ -322,7 +390,14 @@ mod tests {
         let mut clock = Clock::new(0, 0);
         clock.tick(SWEEP_US, None);
         let now = SWEEP_US + SECOND;
-        let arrival = sent(&mut clock, 3, Source::Node(0), 1, UTC, now);
+        let arrival = sent(&mut clock, 3, Source::Node(0), 1, -UTC, now);
+        assert_eq!(
+            arrival.taken,
+            Taken::Held,
+            "a move of decades waits for a second"
+        );
+        assert!(clock.is_sweeping(now + AGREE_US - 1), "listening for it");
+        let arrival = sent(&mut clock, 4, Source::Node(0), 1, -UTC, now + SECOND);
         assert_eq!(arrival.taken, Taken::Adopted);
         assert_eq!(
             clock.at(0).unwrap().1,
@@ -341,7 +416,8 @@ mod tests {
         clock.sweep_to(now + 2 * ROUND_US);
         clock.sweep_to(now + ROUND_US);
         assert_eq!(clock.sweep_ends(now), Some(now + 2 * ROUND_US));
-        sent(&mut clock, 0, Source::Node(0), 0, 7, now);
+        let mine = SWEEP_US - (UTC + ROUND_US);
+        sent(&mut clock, 0, Source::Node(0), 0, mine + 7, now);
         assert!(!clock.is_sweeping(now + ROUND_US + 2 * SECOND));
     }
 
@@ -406,10 +482,27 @@ mod tests {
             Taken::Ignored
         );
         let arrival = sent(&mut clock, 3, Source::Node(3), 0, 7 * SECOND, 3 * SECOND);
+        assert_eq!(
+            arrival.taken,
+            Taken::Held,
+            "two seconds' move waits for a second"
+        );
+        let arrival = sent(
+            &mut clock,
+            4,
+            Source::Node(3),
+            1,
+            7 * SECOND,
+            3 * SECOND + 1,
+        );
         assert_eq!(arrival.taken, Taken::Adopted);
         assert_eq!(clock.local(UTC), Some(UTC + 7 * SECOND));
         assert_eq!(
             sent(&mut clock, 9, Source::Gps, 4, 0, 4 * SECOND).taken,
+            Taken::Held
+        );
+        assert_eq!(
+            sent(&mut clock, 10, Source::Gps, 4, 0, 4 * SECOND + 1).taken,
             Taken::Adopted
         );
     }
@@ -460,8 +553,81 @@ mod tests {
         assert!(clock.is_sweeping(sweep));
         assert_eq!(
             sent(&mut clock, 10, Source::Gps, 0, 30 * SECOND, sweep).taken,
-            Taken::Refined,
-            "a sweep takes any"
+            Taken::Held,
+            "a sweep takes one far off only once a second agrees"
+        );
+        assert_eq!(
+            sent(&mut clock, 10, Source::Gps, 0, 30 * SECOND, sweep + SECOND).taken,
+            Taken::Held,
+            "the same sender in the same round is the same packet again"
+        );
+        assert_eq!(
+            sent(
+                &mut clock,
+                12,
+                Source::Gps,
+                0,
+                30 * SECOND,
+                sweep + 2 * SECOND
+            )
+            .taken,
+            Taken::Refined
+        );
+        assert_eq!(clock.local(UTC), Some(UTC + 30 * SECOND));
+    }
+
+    #[test]
+    fn a_held_packet_stops_waiting_for_agreement() {
+        let mut clock = Clock::new(28, 0);
+        sent(&mut clock, 9, Source::Gps, 2, 0, SECOND);
+        let sweep = SWEEP_EVERY * ROUND_US + SECOND;
+        assert_eq!(
+            sent(&mut clock, 10, Source::Gps, 0, 30 * SECOND, sweep).taken,
+            Taken::Held
+        );
+        let next = sweep + SWEEP_EVERY * ROUND_US;
+        assert!(next > sweep + AGREE_US);
+        assert_eq!(
+            sent(&mut clock, 11, Source::Gps, 0, 30 * SECOND, next).taken,
+            Taken::Held,
+            "too late to agree, it is held in turn"
+        );
+        assert_eq!(clock.local(UTC), Some(UTC));
+    }
+
+    #[test]
+    fn a_node_whose_rtc_holds_the_time_refuses_a_timebase_beyond_the_bound() {
+        let mut clock = Clock::new(1, 0);
+        clock.tick(SECOND, Some(UTC));
+        assert_eq!(
+            sent(&mut clock, 0, Source::Boot(0), 0, 0, 2 * SECOND).taken,
+            Taken::Refused,
+            "a clock from a boot, though the node has none yet"
+        );
+        clock.tick(SWEEP_US, Some(UTC + SWEEP_US - SECOND));
+        let mine = SECOND - UTC;
+        assert_eq!(clock.at(0).unwrap().1.source, Source::Node(1));
+        let far = sent(
+            &mut clock,
+            0,
+            Source::Node(0),
+            0,
+            mine + UTC_BOUND_US + 1,
+            SWEEP_US + 1,
+        );
+        assert_eq!(far.taken, Taken::Refused);
+        let near = sent(
+            &mut clock,
+            0,
+            Source::Node(0),
+            0,
+            mine + UTC_BOUND_US,
+            SWEEP_US + 2,
+        );
+        assert_eq!(
+            near.taken,
+            Taken::Held,
+            "within the bound, it waits for a second"
         );
     }
 
@@ -497,7 +663,7 @@ mod tests {
             )
         );
         assert_eq!(
-            sent(&mut clock, 0, Source::Node(0), 0, 0, GPS_STALE_US + 2).taken,
+            sent(&mut clock, 0, Source::Node(0), 0, -UTC, GPS_STALE_US + 2).taken,
             Taken::Adopted
         );
     }

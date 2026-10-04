@@ -293,13 +293,21 @@ enum Replay {
     ToARoot,
     /// In a sweep round, while node 1 still times from node 0.
     InASweep,
+    /// As `InASweep`, of node 0's last packet before the sweep round, minutes old.
+    RecentInASweep,
 }
 
-/// Node 0, the root, sends a packet that is recorded; an hour later it is replayed to node 1,
-/// as `replay` says. Node 1's clock stays on UTC, which every node's RTC holds.
-fn clock_after_replay(replay: Replay) {
-    let mut sim = group(2, 81, |_| Config::default());
-    let recorded = last_sent(&sim, 0);
+/// Node 0, the root, sends a packet that is recorded; later it is replayed to node 1, as
+/// `replay` says. Node 1's RTC holds the time if `rtc`. Node 1's clock stays on UTC, which node
+/// 0's RTC holds.
+fn clock_after_replay(replay: Replay, rtc: bool) {
+    let mut sim = group(2, 81, |node| Config {
+        rtc_error_us: (node == 0 || rtc).then_some(0),
+        ..Config::default()
+    });
+    let on_node_0 = sim.run_while_not(60 * 60, |sim| sim.count(1, "timebase root=0 hops=1") >= 1);
+    assert!(on_node_0, "node 1 took node 0's clock");
+    let mut recorded = last_sent(&sim, 0);
     let radio = sim.add_radio();
     sim.link(radio, 1, Some(Link::default()));
     let (key, _) = sim.key(1).expect("node 1 is in the group");
@@ -317,10 +325,13 @@ fn clock_after_replay(replay: Replay) {
             let start = Schedule::new(&key).slot_start(round, 0) + 100_000;
             sim.run_to((start - UTC0_S * 1_000_000) as u64);
         }
-        Replay::InASweep => {
+        Replay::InASweep | Replay::RecentInASweep => {
             sim.run_for(60 * 60);
             let round = next_sweep(&sim);
             run_to_free_slot(&mut sim, &key, round);
+            if matches!(replay, Replay::RecentInASweep) {
+                recorded = last_sent(&sim, 0);
+            }
         }
     }
     let at = sim.now_us();
@@ -332,30 +343,34 @@ fn clock_after_replay(replay: Replay) {
     assert!(
         moved.is_empty() && on_utc(&sim, 1),
         "{:.0} s after the packet was recorded:{}{moved}",
-        sim.now_s() - recorded.start as f64 / 1e6,
+        at as f64 / 1e6 - recorded.start as f64 / 1e6,
         clocks(&sim, 2)
     );
 }
 
 #[test]
 fn a_clock_keeps_to_utc() {
-    clock_after_replay(Replay::None);
+    clock_after_replay(Replay::None, true);
+    clock_after_replay(Replay::None, false);
 }
 
-/// A packet from a timebase ranked above the node's own is adopted whenever it comes, with no
-/// check that it fits. Node 1 then loses node 0 again, sweeps, and becomes its own root on the
-/// clock the replay gave it, an hour behind.
+/// A packet from a timebase ranked above the node's own was adopted whenever it came, with no
+/// check that it fit. Node 1 then lost node 0 again, swept, and became its own root on the
+/// clock the replay gave it, an hour behind. Now node 1's RTC refuses a clock an hour off it,
+/// and without RTC time a move that large waits for a second packet, which never comes.
 #[test]
-#[ignore = "a replayed packet from a higher root moves a clock at any time"]
 fn a_replayed_packet_from_a_higher_root_does_not_move_a_clock() {
-    clock_after_replay(Replay::ToARoot);
+    clock_after_replay(Replay::ToARoot, true);
+    clock_after_replay(Replay::ToARoot, false);
 }
 
-/// In a sweep round, a packet closer to the node's root refines its clock however far off it
-/// is, so the replay moves node 1's clock an hour back. It hears node 0 again only in a later
-/// sweep round, which moves it back.
+/// In a sweep round, a packet closer to the node's root refined its clock however far off it
+/// was, and node 1 lost node 0 until a later sweep round. Now the RTC refuses it, and without
+/// RTC time, or for a replay minutes old that the RTC lets by, it waits for a second packet
+/// that agrees: node 0's own live packets do not.
 #[test]
-#[ignore = "a replayed packet in a sweep round sets a clock anywhere"]
 fn a_replayed_packet_in_a_sweep_does_not_set_a_clock() {
-    clock_after_replay(Replay::InASweep);
+    clock_after_replay(Replay::InASweep, true);
+    clock_after_replay(Replay::InASweep, false);
+    clock_after_replay(Replay::RecentInASweep, true);
 }
