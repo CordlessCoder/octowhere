@@ -47,10 +47,13 @@ until the feature set is complete, because profiling an incomplete firmware pric
     871,785 B to 1,381,084 B (gzip 518 KB, brotli 389 KB): the nodes and their crypto.
   - Board tests stay for RF (CRC overload up close), the radio's DIO0 quirk, I2C bus contention
     and slot latency, interrupt timing, flash stalls, and the GNSS module sticking.
-- Build the design agent's 2026-10-04 hand-off, which the owner approved:
-  `octowhere-mesh-runtime-handoff-2026-10-04/` (local, like the design files; start at its
-  `IMPLEMENTATION-HANDOFF.md`). It answers the round the owner handed off on 2026-10-03
-  (`design/handoffs/MESH-FEATURES-ROUND-BRIEF-2026-10-03.md`), in its section 7's order:
+- The design agent's 2026-10-04 hand-off, which the owner approved, is built (2026-10-04, up
+  to `9d7311d`): `octowhere-mesh-runtime-handoff-2026-10-04/` (local, like the design files;
+  start at its `IMPLEMENTATION-HANDOFF.md`). It answers the round the owner handed off on
+  2026-10-03 (`design/handoffs/MESH-FEATURES-ROUND-BRIEF-2026-10-03.md`). What it asks back,
+  the captures and the report on glyphs, costs, choices and departures from the renders, is
+  `context/design-captures-2026-10-04.7z` (local, ignored by git), not yet sent. What is left
+  of each part is under it, in its section 7's order:
   - Events, done (`66dc772`): the drawer, its details and management, dismissal, toasts that
     wake a resting screen, the unread arc, and the GNSS module's health from its task
     (`SCREEN-DESIGN-BRIEF.md`, "Events as built"; on a board in
