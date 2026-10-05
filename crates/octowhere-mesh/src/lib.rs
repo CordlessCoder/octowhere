@@ -1,7 +1,7 @@
-//! The location mesh in `context/LORA-PROTOCOL.md`: the slot schedule, the packet's header and
-//! records, its sealing under the group key, the table of positions, the timebase a node places
-//! its slots on, the group's members, pairing, messages, and removing a member. It has no radio
-//! or board dependency, so it builds and tests on the host.
+//! The location mesh in `context/LORA-PROTOCOL.md`: its rounds, the packet's header and records,
+//! its sealing under the group key, the table of positions, the timebase a node keeps UTC on,
+//! the group's members, pairing, messages, what neighbours are to pass on (`relays`), and
+//! removing a member. It has no radio or board dependency, so it builds and tests on the host.
 
 #![no_std]
 
@@ -18,6 +18,7 @@ pub mod messages;
 pub mod packet;
 pub mod pair;
 pub mod rekey;
+pub mod relays;
 pub mod schedule;
 pub mod seal;
 pub mod table;

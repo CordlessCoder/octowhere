@@ -1802,6 +1802,7 @@ dependencies = [
  "bytemuck",
  "defmt 1.1.1",
  "ed25519-dalek",
+ "heapless 0.9.3",
  "hkdf",
  "hmac",
  "libm",

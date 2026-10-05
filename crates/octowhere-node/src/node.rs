@@ -17,11 +17,13 @@ use octowhere_mesh::{
     compose::{Sources, compose},
     members::{Gone, Group, Member, Name, Requests, fingerprint},
     messages::{
-        self, BODY_MAX, Insert, Message, Pairwise, Sequence, Store, Summaries, TEXT_MAX, To, kind,
+        self, BODY_MAX, Insert, Message, Pairwise, SETTLE_US, Sequence, Store, Summaries, TEXT_MAX,
+        To, kind,
     },
     packet::{Entry, Hdop, Header, MAX_PACKET, Plain, Quality, Record, Sealing, Source, Timebase},
     pair::{Done, End, Identity, MAX_FRAME, Pairing, Phase, Role},
     rekey::{Learned, NewKey, Rekey, key_fingerprint},
+    relays::Relays,
     schedule::{
         ROUND_US, airtime_us, is_sweep_round, round_at, round_start_s, second_at, stored_round_at,
     },
@@ -651,6 +653,9 @@ pub struct Mesh<R, T, G, D, S, A: Allocator> {
     /// The messages the screens are shown.
     inbox: Inbox<A>,
     summaries: Summaries,
+    /// When no message new to this node has arrived for [`SETTLE_US`], on the local timer.
+    settle: Option<i64>,
+    relays: Box<Relays>,
     pairwise: Box<Pairwise>,
     sequence: Sequence,
     outbox: Box<heapless::Deque<Outgoing, OUTBOX>>,
@@ -722,6 +727,8 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             messages: zeroed_in(alloc.clone()),
             inbox: Inbox::new(zeroed_in(alloc.clone())),
             summaries: Summaries::default(),
+            settle: None,
+            relays: Box::default(),
             pairwise: Box::default(),
             sequence: Sequence::new(start.sequence),
             outbox: Box::default(),
@@ -1204,6 +1211,23 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         if !self.outbox.is_empty() {
             self.post_outbox(time).await;
         }
+        if self.settle.is_some_and(|at| at <= now) {
+            self.settle = None;
+            if self.summaries.settled() {
+                info!("[MESH] a neighbour held more than it gave; a summary goes");
+            }
+        }
+        while let Some(name) = self.relays.due(now) {
+            if self.messages.get(name).is_some() {
+                info!(
+                    "[MSG] {}/{} not heard passed on; it goes again",
+                    name.0, name.1
+                );
+                self.messages.mark(name);
+            } else {
+                self.relays.forget(name);
+            }
+        }
         self.prepare_summary();
         let round = round_at(time);
         let round_ends = now + (round + 1) * ROUND_US - time;
@@ -1216,8 +1240,13 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             _ => (own_at, false),
         };
         if at > now {
-            // A packet heard, or a new round, can change what is due.
-            self.listen(at.min(round_ends)).await;
+            // A packet heard, a new round, a flood settling or a relay unheard can change what
+            // is due.
+            let wake = [self.settle, self.relays.next()]
+                .into_iter()
+                .flatten()
+                .fold(at.min(round_ends), i64::min);
+            self.listen(wake).await;
             return;
         }
         let wait = self.draw(i64::from(STEPS), own) * STEP_US;
@@ -1562,6 +1591,15 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                 self.inbox.relayed(name);
             }
         }
+        self.relays.heard(
+            own,
+            header.sender,
+            absorbed.neighbours,
+            absorbed.carried_names(),
+        );
+        if !absorbed.arrivals().is_empty() {
+            self.settle = Some(done + SETTLE_US);
+        }
         for event in absorbed.events() {
             match event {
                 Event::Changed(id, name) => info!("[MESH] member {} is {} now", id, name),
@@ -1702,6 +1740,8 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         };
         let spread = self.draw(SPREAD_US, own);
         self.access.sent(now, len, Some(spread));
+        self.relays
+            .sent(own, carried.neighbours, carried.messages(), now);
         if carried.on_key {
             self.removals.carried_on_key();
         }
@@ -1977,6 +2017,8 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         *self.messages = Store::zeroed();
         self.inbox.clear();
         self.summaries = Summaries::default();
+        self.settle = None;
+        *self.relays = Relays::default();
         self.outbox.clear();
         self.removals.forget();
         self.shown.removals = RemovalsView::default();

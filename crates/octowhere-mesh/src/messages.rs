@@ -719,10 +719,18 @@ fn lacks(entry: Option<&[u8]>, seq: u32) -> bool {
     })
 }
 
+/// Once no message new to a node has arrived for this long, a neighbour whose last packet that
+/// brought one still held more is asked for the rest: a flood's messages come a relay's rest
+/// apart, a few seconds.
+pub const SETTLE_US: i64 = 10_000_000;
+
 /// Which neighbours' messages differ from this node's, and whether a summary is to go out.
 #[derive(Clone, Debug, Default)]
 pub struct Summaries {
     mismatched: Mismatches,
+    /// The neighbours whose last packet brought this node a message and left the stores
+    /// differing: they held more than they gave.
+    owed: Ids,
     pending: bool,
     /// The origin the next summary starts from.
     next: u8,
@@ -742,6 +750,11 @@ impl Summaries {
         (at, fed): (i64, bool),
     ) {
         let ours = store.digest();
+        if theirs == ours {
+            self.owed.remove(sender);
+        } else if fed {
+            self.owed.insert(sender);
+        }
         if self.mismatched.count(sender, theirs == ours || fed, at) {
             self.pending = true;
         }
@@ -760,6 +773,17 @@ impl Summaries {
     /// names, it does not hold.
     pub fn lacking(&mut self) {
         self.pending = true;
+    }
+
+    /// Takes it that no message new to this node has arrived for [`SETTLE_US`]: a summary is due
+    /// if a neighbour still owes it. Returns whether one is.
+    pub fn settled(&mut self) -> bool {
+        if self.owed.is_empty() {
+            return false;
+        }
+        self.owed = Ids::EMPTY;
+        self.pending = true;
+        true
     }
 
     #[must_use]

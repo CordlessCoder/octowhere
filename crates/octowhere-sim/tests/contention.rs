@@ -8,6 +8,11 @@ use octowhere_sim::{Config, Link, Sim, UTC0_S, grouped};
 /// `count` nodes of one group, all in reach of each other or each only of the next in a `line`,
 /// recording the air, once each has heard every node in its reach.
 fn group(count: u8, seed: u64, line: bool) -> Sim {
+    group_over(count, seed, line, Link::default())
+}
+
+/// As [`group`], every pair in reach by `link`.
+fn group_over(count: u8, seed: u64, line: bool, link: Link) -> Sim {
     let mut sim = Sim::new(seed);
     sim.record(true);
     for start in grouped(count, UTC0_S as u32 - 3_600) {
@@ -16,11 +21,11 @@ fn group(count: u8, seed: u64, line: bool) -> Sim {
     let nodes = usize::from(count);
     if line {
         for n in 1..nodes {
-            sim.link(n - 1, n, Some(Link::default()));
-            sim.link(n, n - 1, Some(Link::default()));
+            sim.link(n - 1, n, Some(link));
+            sim.link(n, n - 1, Some(link));
         }
     } else {
-        sim.link_all(Link::default());
+        sim.link_all(link);
     }
     let met = sim.run_while_not(60 * 60, |sim| {
         (0..nodes).all(|node| {
@@ -93,4 +98,42 @@ fn idle_nodes_in_reach_lose_few_packets_to_collisions() {
         100.0 * lost,
         sent * 31
     );
+}
+
+/// A chain of twelve whose every link loses a packet in five. A relay that does not hear its
+/// neighbour pass a message on sends it again, so a loss costs seconds rather than a floor.
+#[test]
+fn a_message_crosses_a_lossy_chain_within_two_minutes() {
+    let lossy = Link {
+        loss: 0.2,
+        ..Link::default()
+    };
+    let mut sim = group_over(12, 1, true, lossy);
+    let took = flood(&mut sim, 12).expect("every node has the message");
+    assert!(took < 120.0, "{took} s for 11 hops");
+}
+
+/// A removal along a chain of twelve: every key message reaches the far end before the switch,
+/// though a relay's collisions with a node two hops away lose some on the way.
+#[test]
+fn a_removal_reaches_the_far_end_of_a_chain_before_its_switch() {
+    let mut sim = group(12, 1, true);
+    sim.command(0, Command::Remove(11));
+    let switched = sim.run_while_not(30 * 60, |sim| {
+        (0..11).all(|node| sim.count(node, "switched to generation 1") >= 1)
+    });
+    assert!(switched, "after {} s", sim.now_s());
+    let at = |node: usize| {
+        sim.lines(node)
+            .into_iter()
+            .find(|line| line.text.contains("switched to generation 1"))
+            .map(|line| line.at)
+    };
+    let first = (0..11).filter_map(at).min().unwrap();
+    for node in 0..11 {
+        assert!(
+            at(node).unwrap() < first + 5_000_000,
+            "node {node} switched late"
+        );
+    }
 }
