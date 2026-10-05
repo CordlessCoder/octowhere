@@ -8,7 +8,7 @@ use octowhere_mesh::{
     rekey::Rekey,
     seal::Key,
 };
-use octowhere_node::{GroupWrite, Start};
+use octowhere_node::{GroupWrite, KeptRow, Start};
 
 #[derive(Clone)]
 pub struct Stored {
@@ -20,6 +20,7 @@ pub struct Stored {
     group: Option<(Key, u16, u8)>,
     slots: [Option<Slot>; IDS as usize],
     rekey: Option<Box<Rekey>>,
+    kept: [Option<Box<KeptRow>>; IDS as usize],
 }
 
 impl Stored {
@@ -32,6 +33,7 @@ impl Stored {
             group: None,
             slots: [None; IDS as usize],
             rekey: start.rekey.clone(),
+            kept: start.kept.clone(),
         };
         if let Some(group) = &start.group {
             stored.take_group(group);
@@ -63,10 +65,16 @@ impl Stored {
                     *held = *slot;
                 }
             }
+            GroupWrite::Kept { id, row } => {
+                if let Some(held) = self.kept.get_mut(usize::from(*id)) {
+                    held.clone_from(row);
+                }
+            }
             GroupWrite::Leave => {
                 self.group = None;
                 self.slots = [None; IDS as usize];
                 self.rekey = None;
+                self.kept = Default::default();
             }
         }
     }
@@ -94,6 +102,7 @@ impl Stored {
             }),
             sequence: self.sequence,
             rekey: self.rekey.clone(),
+            kept: self.kept.clone(),
         }
     }
 }

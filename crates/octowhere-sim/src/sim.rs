@@ -482,6 +482,7 @@ pub fn alone(n: u8) -> Start {
         group: None,
         sequence: None,
         rekey: None,
+        kept: Default::default(),
     }
 }
 
@@ -515,6 +516,7 @@ pub fn grouped(count: u8, utc: u32) -> Vec<Start> {
             group: Group::restore(key.clone(), 0, id as u8, slots).map(Box::new),
             sequence: None,
             rekey: None,
+            kept: Default::default(),
         })
         .collect()
 }

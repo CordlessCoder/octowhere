@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 
 use crate::identity::{Identity, SIGNATURE_LEN, verify};
 use crate::members::{Group, Member, PUBLIC_LEN, RECORD_MAX_LEN, fingerprint};
-use crate::messages::{Message, To, kind};
+use crate::messages::{BODY_MAX, FIXED_LEN, Message, To, kind};
 use crate::schedule::ROUND_S;
 use crate::seal::Key;
 use crate::{IDS, Ids};
@@ -959,6 +959,9 @@ impl Rekey {
     }
 }
 
+/// The most bytes [`Kept::encode_row`] writes: a count, then each message's length and record.
+pub const KEPT_ROW_MAX: usize = 1 + OLD_KEYS * (1 + FIXED_LEN + BODY_MAX);
+
 /// The key messages kept to catch up a member that missed switches, past the message horizon:
 /// for each member, the newest of each of the last [`OLD_KEYS`] generations. All zeroes is none
 /// kept.
@@ -972,13 +975,13 @@ impl Kept {
     /// Keeps `message`, a key message whose signature the caller checked, in place of an older
     /// one of its generation, or of the oldest generation held. Of two members' for one
     /// generation, the one from `remover` stays, when the caller knows who removed for it, and
-    /// otherwise the first.
-    pub fn keep(&mut self, message: &Message, remover: Option<u8>) {
+    /// otherwise the first. Returns whether that changed what is kept.
+    pub fn keep(&mut self, message: &Message, remover: Option<u8>) -> bool {
         let (To::Member(dest), Some(generation)) = (message.to(), message.generation()) else {
-            return;
+            return false;
         };
         let Some(held) = self.messages.get_mut(usize::from(dest)) else {
-            return;
+            return false;
         };
         let behind = |kept: &Message| {
             kept.generation()
@@ -994,7 +997,7 @@ impl Kept {
                     .filter(|&at| (1..=u16::MAX / 2).contains(&behind(&held[at])))
                     .max_by_key(|&at| behind(&held[at]))
             });
-        let Some(at) = at else { return };
+        let Some(at) = at else { return false };
         let kept = &held[at];
         let replace = if kept.seq == 0 || kept.generation() != Some(generation) {
             true
@@ -1003,9 +1006,11 @@ impl Kept {
         } else {
             remover == Some(message.origin)
         };
+        let changed = replace && kept.name() != message.name();
         if replace {
             held[at] = *message;
         }
+        changed
     }
 
     /// Drops the key messages of `generation` from any member but `remover`, once a switch has
@@ -1029,6 +1034,67 @@ impl Kept {
 
     pub fn clear(&mut self) {
         *self = Self::zeroed();
+    }
+
+    /// Whether any key message is kept for the member `id`.
+    #[must_use]
+    pub fn holds(&self, id: u8) -> bool {
+        self.messages
+            .get(usize::from(id))
+            .is_some_and(|held| held.iter().any(|kept| kept.seq != 0))
+    }
+
+    /// Writes the key messages kept for the member `id`, to store, and returns their length.
+    pub fn encode_row(&self, id: u8, out: &mut [u8; KEPT_ROW_MAX]) -> usize {
+        let mut at = 1;
+        let mut count = 0;
+        for kept in self.messages[usize::from(id)]
+            .iter()
+            .filter(|kept| kept.seq != 0)
+        {
+            let len = kept.encode(&mut out[at + 1..]);
+            out[at] = len as u8;
+            at += 1 + len;
+            count += 1;
+        }
+        out[0] = count;
+        at
+    }
+
+    /// Keeps the key messages of a row [`encode_row`](Self::encode_row) wrote for the member
+    /// `id`. Returns false, keeping none, when `row` is not one: a message in it to another
+    /// member, or not a key message.
+    pub fn restore_row(&mut self, id: u8, row: &[u8]) -> bool {
+        let Some((&count, mut rest)) = row.split_first() else {
+            return false;
+        };
+        let mut read = [Message::zeroed(); OLD_KEYS];
+        if usize::from(count) > OLD_KEYS {
+            return false;
+        }
+        for slot in &mut read[..usize::from(count)] {
+            let Some((&len, after)) = rest.split_first() else {
+                return false;
+            };
+            let Some((record, after)) = after.split_at_checked(usize::from(len)) else {
+                return false;
+            };
+            match Message::decode(record) {
+                Some(message)
+                    if message.is_key()
+                        && message.to() == To::Member(id)
+                        && message.generation().is_some() =>
+                {
+                    *slot = message;
+                }
+                _ => return false,
+            }
+            rest = after;
+        }
+        for message in &read[..usize::from(count)] {
+            self.keep(message, None);
+        }
+        true
     }
 }
 
@@ -1816,6 +1882,64 @@ mod tests {
         before.undo = None;
         let len = before.encode(&mut out);
         assert!(Rekey::decode(&out[..len - 9]).is_some_and(|read| read.undo_until().is_none()));
+    }
+
+    #[test]
+    fn a_members_kept_row_comes_back_from_its_bytes() {
+        extern crate std;
+        let key = Key::new([1; 32]);
+        let remover = crate::members::tests::key(1);
+        let to = |dest, generation, seq| {
+            Message::key(
+                1,
+                dest,
+                seq,
+                0,
+                100,
+                generation,
+                &[kind::KEY],
+                &key,
+                &remover,
+            )
+            .unwrap()
+        };
+        let mut kept = std::boxed::Box::new(Kept::zeroed());
+        assert!(!kept.holds(4));
+        for (generation, seq) in [(4, 5), (5, 6), (6, 7), (7, 8)] {
+            kept.keep(&to(4, generation, seq), None);
+        }
+        kept.keep(&to(9, 4, 20), None);
+        let mut row = [0; KEPT_ROW_MAX];
+        let len = kept.encode_row(4, &mut row);
+        let mut back = std::boxed::Box::new(Kept::zeroed());
+        assert!(back.restore_row(4, &row[..len]));
+        for generation in 4..8 {
+            assert_eq!(
+                back.get(4, generation).map(|message| message.name()),
+                kept.get(4, generation).map(|message| message.name()),
+            );
+        }
+        assert!(!back.holds(9), "only the row's own member");
+        let mut empty = [0; KEPT_ROW_MAX];
+        assert_eq!(kept.encode_row(3, &mut empty), 1);
+        assert!(back.restore_row(3, &empty[..1]));
+        assert!(!back.holds(3));
+    }
+
+    #[test]
+    fn a_kept_row_for_another_member_or_cut_short_is_refused() {
+        extern crate std;
+        let key = Key::new([1; 32]);
+        let remover = crate::members::tests::key(1);
+        let message = Message::key(1, 4, 5, 0, 100, 4, &[kind::KEY], &key, &remover).unwrap();
+        let mut kept = std::boxed::Box::new(Kept::zeroed());
+        kept.keep(&message, None);
+        let mut row = [0; KEPT_ROW_MAX];
+        let len = kept.encode_row(4, &mut row);
+        let mut back = std::boxed::Box::new(Kept::zeroed());
+        assert!(!back.restore_row(5, &row[..len]), "another member's");
+        assert!(!back.restore_row(4, &row[..len - 1]), "cut short");
+        assert!(!back.holds(4) && !back.holds(5));
     }
 
     #[test]

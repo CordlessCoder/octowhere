@@ -5,14 +5,16 @@
 use alloc::boxed::Box;
 use core::alloc::Allocator;
 
+use crate::write::KeptRow;
+
 #[cfg(feature = "defmt")]
-use defmt::info;
+use defmt::{info, warn};
 use octowhere_mesh::{
     IDS, Ids,
     members::Group,
     messages::{Message, To},
     pair::Identity,
-    rekey::{Kept, OnKey, Rekey, Switched},
+    rekey::{KEPT_ROW_MAX, Kept, OnKey, Rekey, Switched},
     schedule::{SWEEP_EVERY, is_sweep_round},
     seal::Key,
 };
@@ -84,6 +86,12 @@ pub struct Removals<A: Allocator> {
     on_key: Option<OnKeySend>,
     /// A switch's generation and remover, whose key messages are to be kept for catch-up.
     refill: Option<(u16, u8)>,
+    /// The members whose kept key messages the flash holds, and those changed since.
+    stored_kept: Ids,
+    changed_kept: Ids,
+    /// The round of the last switch since the start, and the round now.
+    switch_round: Option<u32>,
+    round: u32,
 }
 
 impl<A: Allocator> Removals<A> {
@@ -99,7 +107,92 @@ impl<A: Allocator> Removals<A> {
             caught_up: [(0, 0); IDS as usize],
             on_key: None,
             refill: None,
+            stored_kept: Ids::EMPTY,
+            changed_kept: Ids::EMPTY,
+            switch_round: None,
+            round: 0,
         }
+    }
+
+    /// Takes back the key messages kept for the member `id` from the flash, at the start.
+    pub fn restore_kept(&mut self, id: u8, row: &[u8]) {
+        // Kept or not, the row is in the flash, and goes once it is not wanted.
+        self.stored_kept.insert(id);
+        if self.kept.restore_row(id, row) {
+            info!(
+                "[REKEY] the key messages for {} are back from the flash",
+                id
+            );
+        } else {
+            warn!("[REKEY] the key messages stored for {} are unreadable", id);
+        }
+    }
+
+    /// The round now, which holds a member's key messages off the flash until it has had a
+    /// round after the switch to say it is on the new key.
+    pub fn at_round(&mut self, round: u32) {
+        self.round = round;
+    }
+
+    /// Whether key messages are kept for the member `id` and it is still waited for.
+    fn kept_wanted(&self, id: u8) -> bool {
+        self.kept.holds(id) && self.rekey.old().any(|old| old.waiting.contains(id))
+    }
+
+    /// Whether the round after the last switch has passed, by which a member there has said it
+    /// is on the new key: one still waited for missed it.
+    fn past_switch(&self) -> bool {
+        self.switch_round
+            .is_none_or(|switched| self.round > switched.saturating_add(1))
+    }
+
+    /// The next member whose kept key messages the flash is due: wanted there and not stored
+    /// as they are, or stored and no longer wanted. Until the round after a switch, what is
+    /// stored stays as it was, while the store refills what the switch dropped.
+    pub fn kept_due(&self) -> Option<u8> {
+        if !self.past_switch() {
+            return None;
+        }
+        (0..IDS).find(|&id| {
+            let stored = self.stored_kept.contains(id);
+            if self.kept_wanted(id) {
+                !stored || self.changed_kept.contains(id)
+            } else {
+                stored
+            }
+        })
+    }
+
+    /// What the flash is to hold for the member `id`: its kept key messages, or `None` to delete
+    /// them. Apart from the step, since a row is about as long as a page of stack.
+    #[inline(never)]
+    pub fn kept_row(&self, id: u8) -> Option<Box<KeptRow>> {
+        if !self.kept_wanted(id) {
+            return None;
+        }
+        let mut row = Box::new(KeptRow::new());
+        row.resize(KEPT_ROW_MAX, 0).expect("the row's own size");
+        let len = self
+            .kept
+            .encode_row(id, (&mut row[..]).try_into().expect("a whole row"));
+        row.truncate(len);
+        Some(row)
+    }
+
+    /// The row of the member `id` went to the flash: stored, or with `stores` false, deleted.
+    pub fn kept_queued(&mut self, id: u8, stores: bool) {
+        info!("[REKEY] the key messages for {} stored={}", id, stores);
+        self.changed_kept.remove(id);
+        if stores {
+            self.stored_kept.insert(id);
+        } else {
+            self.stored_kept.remove(id);
+        }
+    }
+
+    /// A write to the flash was lost, so every row it may have held is written again.
+    pub fn kept_lost(&mut self) {
+        self.changed_kept = Ids::ALL;
     }
 
     /// Forgets the removals of a group this device no longer belongs to.
@@ -151,6 +244,8 @@ impl<A: Allocator> Removals<A> {
             self.notify = Some((removed, old.0, old.1));
         }
         self.kept.keep_only(group.generation(), switched.remover);
+        self.changed_kept = Ids::ALL;
+        self.switch_round = Some(self.round);
         self.refill = Some((group.generation(), switched.remover));
         self.caught_up = [(0, 0); IDS as usize];
         // Signed once a switch: about 35 ms on the board.
@@ -366,7 +461,11 @@ impl<A: Allocator> Removals<A> {
 
     /// Keeps `message`, a key message whose signature the caller checked, for catch-up.
     pub fn keep(&mut self, message: &Message, remover: Option<u8>) {
-        self.kept.keep(message, remover);
+        if self.kept.keep(message, remover)
+            && let To::Member(dest) = message.to()
+        {
+            self.changed_kept.insert(dest);
+        }
     }
 
     /// The key message of `generation` kept for the member `id`.

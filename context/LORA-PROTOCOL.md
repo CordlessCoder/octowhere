@@ -637,8 +637,10 @@ Owner, 2026-10-03, except where it says otherwise.
   the new one; a member a later removal takes, or that leaves, is no longer waited for. A
   member says so in an on-key record it signs over its id, the generation and the new key
   itself, which it sends in its first three packets after the switch, and again at start-up,
-  and in its sweep rounds' packets for a day after either (owner, 2026-10-04). A node checks
-  one only while it waits for that member, about 32 ms on the board. A packet's sender id
+  and in its sweep rounds' packets for a day after either (owner, 2026-10-04). A device that
+  adds the member again in a pairing stops waiting for it there, since it has just handed it
+  the key (owner, 2026-10-05). A node checks one only while it waits for that member, about
+  32 ms on the board. A packet's sender id
   proved nothing: any member could send one empty packet under the new key with an absent
   member's id, and every node stopped waiting for it and dropped the key its catch-up needed. A
   node keeps the four newest such keys. A member can be away for any length of time and come
@@ -669,7 +671,12 @@ Owner, 2026-10-03, except where it says otherwise.
   still waits for, and the key kept to decline the last removal after its switch; the record of
   the member the last switch removed, the key the group's key replaced, and the removals this
   device makes again after a rival won over them. The key messages themselves are in the message store, so a restarted node
-  gets them back from its neighbours within the horizon.
+  gets them back from its neighbours within the horizon. A node also keeps in flash the key
+  messages for each member still waited for once the round after the switch has passed, and
+  deletes them once it waits for that member no more (owner, 2026-10-05): in a group of two,
+  the member waiting is the only neighbour, and could never hand its own key message back. A
+  member at the switch says it is on the new key within that round, so only the ones that
+  missed it cost a write.
 
 ## Time and freshness
 

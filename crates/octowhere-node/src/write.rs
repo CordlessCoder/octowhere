@@ -4,8 +4,11 @@ use alloc::boxed::Box;
 
 use octowhere_mesh::{
     members::{Group, Name, Slot},
-    rekey::Rekey,
+    rekey::{KEPT_ROW_MAX, Rekey},
 };
+
+/// The key messages kept for one member, as `Kept::encode_row` writes them.
+pub type KeptRow = heapless::Vec<u8, KEPT_ROW_MAX>;
 
 /// One change to the mesh's state to save.
 pub enum GroupWrite {
@@ -22,7 +25,13 @@ pub enum GroupWrite {
         id: u8,
         slot: Option<Slot>,
     },
-    /// Forget the group: its key, the members and this device's id.
+    /// The key messages kept for the member `id`, to catch it up after a restart, or with
+    /// none, nothing kept for it.
+    Kept {
+        id: u8,
+        row: Option<Box<KeptRow>>,
+    },
+    /// Forget the group: its key, the members and this device's id, and the key messages kept.
     Leave,
 }
 
@@ -52,6 +61,14 @@ impl defmt::Format for GroupWrite {
                 Some(Slot::Gone(_)) => defmt::write!(f, "Gone({})", id),
                 None => defmt::write!(f, "Empty({})", id),
             },
+            Self::Kept { id, row } => {
+                defmt::write!(
+                    f,
+                    "Kept({}, {=usize} bytes)",
+                    id,
+                    row.as_ref().map_or(0, |row| row.len())
+                )
+            }
             Self::Leave => defmt::write!(f, "Leave"),
         }
     }

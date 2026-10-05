@@ -18,8 +18,9 @@ use esp_storage::{FlashStorage, FlashStorageError};
 use octowhere_mesh::{
     IDS,
     members::{Group, Name, RECORD_MAX_LEN, STORED_HEADER_LEN, Slot, decode_stored_header},
-    rekey::{self, Rekey},
+    rekey::{self, KEPT_ROW_MAX, Rekey},
 };
+use octowhere_node::KeptRow;
 use octowhere_ui::{
     tz::DATABASE,
     ui::{
@@ -112,6 +113,7 @@ pub struct MeshSaved {
     pub group: Option<Box<Group>>,
     pub sequence: Option<u32>,
     pub rekey: Option<Box<Rekey>>,
+    pub kept: [Option<Box<KeptRow>>; IDS as usize],
 }
 
 pub use octowhere_node::GroupWrite;
@@ -151,6 +153,15 @@ async fn write_member(
 fn read_slot(id: u8, value: &[u8]) -> Option<Slot> {
     let (at, slot) = Slot::decode(value)?;
     (at == id).then_some(slot)
+}
+
+/// The key of what is kept for a member to catch it up: `group.kept.` and its id in two digits,
+/// which sorts after `group` and before the members' keys.
+fn kept_key(id: u8) -> [u8; 13] {
+    let mut key = *b"group.kept.00";
+    key[11] = b'0' + id / 10;
+    key[12] = b'0' + id % 10;
+    key
 }
 
 /// A member's key: `group.member.` and its id in two digits, which sorts after `group`.
@@ -401,6 +412,24 @@ impl Store {
                 }),
                 None => None,
             };
+            // A row is longer than the other values, so it is read on the heap.
+            let mut kept: [Option<Box<KeptRow>>; IDS as usize] = Default::default();
+            if group.is_some() {
+                let mut row = alloc::vec![0; 1 + KEPT_ROW_MAX];
+                for id in 0..IDS {
+                    match transaction.read(&kept_key(id), &mut row).await {
+                        Ok(length) => match row[..length].split_first() {
+                            Some((&MESH_VERSION, rest)) => {
+                                kept[usize::from(id)] =
+                                    KeptRow::from_slice(rest).ok().map(Box::new);
+                            }
+                            _ => warn!("[SETTINGS] kept {} has another layout", id),
+                        },
+                        Err(ReadError::KeyNotFound) => {}
+                        Err(_) => warn!("[SETTINGS] kept {} unreadable", id),
+                    }
+                }
+            }
             self.stored_members = stored_members;
             MeshSaved {
                 seed,
@@ -408,6 +437,7 @@ impl Store {
                 group: group.map(Box::new),
                 sequence,
                 rekey,
+                kept,
             }
         })
     }
@@ -468,8 +498,20 @@ impl Store {
                 GroupWrite::Slot { id, slot } => {
                     write_member(&mut transaction, &mut stored, *id, slot.as_ref()).await
                 }
+                GroupWrite::Kept { id, row: Some(row) } => {
+                    let mut value = alloc::vec::Vec::with_capacity(1 + row.len());
+                    value.push(MESH_VERSION);
+                    value.extend_from_slice(row);
+                    transaction.write(&kept_key(*id), &value).await
+                }
+                GroupWrite::Kept { id, row: None } => transaction.delete(&kept_key(*id)).await,
                 GroupWrite::Leave => {
                     let mut written = transaction.delete(KEY_GROUP).await;
+                    for id in 0..IDS {
+                        if written.is_ok() {
+                            written = transaction.delete(&kept_key(id)).await;
+                        }
+                    }
                     for id in 0..IDS {
                         if written.is_ok() {
                             written = write_member(&mut transaction, &mut stored, id, None).await;

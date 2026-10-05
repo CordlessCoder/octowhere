@@ -2087,6 +2087,7 @@ fn mesh_start(saved: settings::MeshSaved) -> mesh::Start {
         group: saved.group,
         sequence: saved.sequence,
         rekey: saved.rekey,
+        kept: saved.kept,
     }
 }
 

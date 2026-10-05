@@ -33,7 +33,7 @@ use octowhere_mesh::{
 };
 
 use crate::{
-    GroupWrite,
+    GroupWrite, KeptRow,
     fmt::{Ascii, Mac},
     inbox::Inbox,
     removals::Removals,
@@ -268,6 +268,8 @@ pub struct Start {
     pub sequence: Option<u32>,
     /// The group's removals, as stored.
     pub rekey: Option<Box<Rekey>>,
+    /// The key messages stored for each member that missed a switch.
+    pub kept: [Option<Box<KeptRow>>; IDS as usize],
 }
 
 /// A view to fill, on the heap. A view is a couple of kilobytes, and the radio's task runs on
@@ -746,6 +748,11 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             writes: heapless::Vec::new(),
             summary: None,
         };
+        for (id, row) in (0..IDS).zip(&start.kept) {
+            if let Some(row) = row {
+                mesh.removals.restore_kept(id, row);
+            }
+        }
         // A switch just before a restart may not have told the others yet, who wait for it.
         if let Some(group) = mesh.group.as_ref().filter(|group| group.generation() > 0) {
             mesh.removals.carry_on_key(group, &mesh.me, now);
@@ -1112,6 +1119,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         if failed {
             warn!("[MESH] a write to the flash failed; the group is stored again");
             self.unsaved.everything();
+            self.removals.kept_lost();
         }
         if let Some(group) = &mut self.group
             && self.removals.rekey.changed(group.take_changed())
@@ -1141,6 +1149,15 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                 return;
             }
             self.unsaved.queued(due);
+        }
+        // After the removals, which say who is still waited for.
+        while let Some(id) = self.removals.kept_due() {
+            let row = self.removals.kept_row(id);
+            let stores = row.is_some();
+            if !self.queue_write(GroupWrite::Kept { id, row }) {
+                return;
+            }
+            self.removals.kept_queued(id, stores);
         }
     }
 
@@ -1190,6 +1207,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             self.listen(end).await;
             return;
         };
+        self.removals.at_round(stored_round_at(time));
         if self.removals.rekey.is_due(stored_round_at(time)) {
             self.switch_key();
             return;

@@ -115,6 +115,33 @@ fn a_member_that_missed_two_switches_is_caught_up() {
     println!("caught up in {:.0} s", sim.now_s() - start);
 }
 
+/// Node 0 removes a phantom while node 1 is out of reach, and restarts before node 1 is back:
+/// the key message node 1 needs comes back from node 0's flash, the only place left that holds
+/// it, as the two boards needed in `docs/logs/lora/board-checks-2026-10-05/`.
+#[test]
+fn a_member_out_of_reach_is_caught_up_after_the_remover_restarts() {
+    let mut sim = pair(10);
+    sim.run_while_not(30 * 60, |sim| {
+        sim.count(0, "heard id=1") >= 1 && sim.count(1, "heard id=0") >= 1
+    });
+    sim.command(0, Command::Phantom);
+    let learned = sim.run_while_not(30 * 60, |sim| sim.count(1, "is Phantom now") == 1);
+    assert!(learned, "the phantom reached node 1");
+    sim.link(0, 1, None);
+    sim.link(1, 0, None);
+    sim.command(0, Command::Remove(2));
+    let switched = sim.run_while_not(60 * 60, |sim| sim.count(0, "switched to generation 1") == 1);
+    assert!(switched, "node 0 removed the phantom");
+    sim.run_for(5 * 60);
+    sim.restart(0);
+    let start = sim.now_s();
+    sim.link_all(Link::default());
+    let caught = sim.run_while_not(60 * 60, |sim| sim.count(1, "switched to generation 1") == 1);
+    assert!(caught, "node 1 caught up after {} s", sim.now_s() - start);
+    let dropped = sim.run_while_not(30 * 60, |sim| sim.count(0, "old one is dropped") == 1);
+    assert!(dropped, "node 0 dropped the old key");
+}
+
 /// Node 1 misses a switch, leaves, and node 0 pairs it back in: node 0 handed it the key, so it
 /// stops waiting for it on the old one at once rather than for a day.
 #[test]
