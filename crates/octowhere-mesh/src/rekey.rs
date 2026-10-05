@@ -1038,7 +1038,7 @@ mod tests {
 
     /// Holds the device `of` as gone from id `id`: a key that names it removes nobody.
     fn left(g: &mut Group, id: u8, of: u8) {
-        g.merge_gone(id, crate::members::tests::left(id, of, 50), 0);
+        g.merge_gone(id, crate::members::tests::left(id, of, 50), None);
     }
 
     /// A key of generation `generation` removing the device `of` at id `removed`, following the
@@ -1435,7 +1435,7 @@ mod tests {
         let until = 1_010 + UNDO_ROUNDS;
         assert_eq!(rekey.undo_until(), Some(until));
         // A member renamed after the switch, under the new key.
-        g.merge(3, signed(3, 4, 2_000), 0);
+        g.merge(3, signed(3, 4, 2_000), None);
         assert!(rekey.changed(g.take_changed()));
         assert_eq!(
             rekey.undo(&mut g, until, 3),
@@ -1750,7 +1750,7 @@ mod tests {
         let mut rekey = Rekey::default();
         rekey.learned(&g, 1, new(9, 4, 1_010, 2, 3), 1_000);
         rekey.switch(&mut g).unwrap();
-        g.merge(1, signed(1, 2, 2_000), 0);
+        g.merge(1, signed(1, 2, 2_000), None);
         rekey.changed(g.take_changed());
         let len = rekey.encode(&mut out);
         let mut read = Rekey::decode(&out[..len]).unwrap();

@@ -472,7 +472,7 @@ async fn rename(
     me: &mut Identity,
     group: Option<&mut Group>,
     name: Name,
-    utc: u32,
+    utc: Option<u32>,
     store: &impl GroupStore,
 ) -> bool {
     if !store.save(GroupWrite::Name(name)).await {
@@ -485,9 +485,9 @@ async fn rename(
     true
 }
 
-/// UTC seconds at local time `now`, from GNSS or the RTC, or 0 with neither.
-fn utc_seconds(device: &impl Device, now: i64) -> u32 {
-    utc_now(device, now).map_or(0, |utc| utc.clamp(0, i64::from(u32::MAX)) as u32)
+/// UTC seconds at local time `now`, from GNSS or the RTC.
+fn utc_seconds(device: &impl Device, now: i64) -> Option<u32> {
+    utc_now(device, now).map(|utc| utc.clamp(0, i64::from(u32::MAX)) as u32)
 }
 
 /// UTC seconds at local time `now`, from GNSS or the RTC.
@@ -1073,8 +1073,8 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                         Identity::new(seed, mac, Name::new(b"Phantom").expect("printable"));
                     let mut record = octowhere_mesh::members::Member {
                         public: phantom.public(),
-                        joined: now,
-                        changed: now,
+                        joined: octowhere_mesh::members::stamp(now),
+                        changed: octowhere_mesh::members::stamp(now),
                         mac,
                         name: phantom.name,
                         signature: [0; octowhere_mesh::identity::SIGNATURE_LEN],
@@ -2467,10 +2467,10 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         })
     }
 
-    /// As [`utc`](Self::utc), or 0 without UTC.
-    fn utc_seconds(&self, now: i64) -> u32 {
+    /// As [`utc`](Self::utc), in seconds that a record or a pairing stamps.
+    fn utc_seconds(&self, now: i64) -> Option<u32> {
         self.utc(now)
-            .map_or(0, |utc| utc.clamp(0, i64::from(u32::MAX)) as u32)
+            .map(|utc| utc.clamp(0, i64::from(u32::MAX)) as u32)
     }
 
     /// Takes a packet from `sender` under the old key `key` of generation `generation`: it

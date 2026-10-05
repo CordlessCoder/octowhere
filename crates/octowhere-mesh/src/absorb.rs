@@ -35,7 +35,7 @@ pub struct When {
     /// UTC seconds on the node's own timebase, if it has one.
     pub now: Option<u32>,
     /// UTC seconds from GNSS or the RTC, for a record's merge without a timebase.
-    pub utc: u32,
+    pub utc: Option<u32>,
     /// The start of the round, in seconds, by which its messages are judged.
     pub round_s: u32,
 }
@@ -155,7 +155,7 @@ pub fn absorb<'p>(
             Record::Request(ids) => asked = Some(Ids::from_bits(ids)),
             Record::Member(id, member) => {
                 push(&mut heard_records, (id, Slot::Member(member)));
-                match group.merge(id, member, when.now.unwrap_or(when.utc)) {
+                match group.merge(id, member, when.now.or(when.utc)) {
                     Merged::Unchanged => {}
                     Merged::Changed { vacated } => {
                         event(&mut absorbed, Event::Changed(id, member.name));
@@ -178,9 +178,7 @@ pub fn absorb<'p>(
             }
             Record::Gone(id, gone) => {
                 push(&mut heard_records, (id, Slot::Gone(gone)));
-                if let Merged::Went { at } =
-                    group.merge_gone(id, gone, when.now.unwrap_or(when.utc))
-                {
+                if let Merged::Went { at } = group.merge_gone(id, gone, when.now.or(when.utc)) {
                     event(&mut absorbed, Event::Went(at));
                     absorbed.changed.insert(at);
                     absorbed.rekey_changed |= rekey.went(at);
@@ -268,7 +266,7 @@ mod tests {
     const WHEN: When = When {
         round: ROUND,
         now: Some(NOW),
-        utc: NOW,
+        utc: Some(NOW),
         round_s: NOW,
     };
 

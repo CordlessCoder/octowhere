@@ -22,7 +22,7 @@ use crate::IDS;
 pub use crate::identity::Identity;
 use crate::identity::{SIGNATURE_LEN, dh_public};
 use crate::members::{
-    GONE_LEN, Gone, Group, MAC_LEN, Member, Name, PUBLIC_LEN, RECORD_MAX_LEN, Slot,
+    GONE_LEN, Gone, Group, MAC_LEN, Member, Name, PUBLIC_LEN, RECORD_MAX_LEN, Slot, stamp,
 };
 use crate::seal::{self, Key, SIV_LEN};
 use alloc::boxed::Box;
@@ -249,7 +249,7 @@ pub struct Pairing {
     group: Option<Group>,
     new_id: u8,
     returning: bool,
-    utc: u32,
+    utc: Option<u32>,
     /// On the heap, for the stack's sake: a welcome for a full group is kilobytes.
     blob: Box<[u8; WELCOME_MAX]>,
     blob_len: usize,
@@ -286,7 +286,7 @@ impl Pairing {
             group: None,
             new_id: 0,
             returning: false,
-            utc: 0,
+            utc: None,
             blob: Box::new([0; WELCOME_MAX]),
             blob_len: 0,
             parts_done: 0,
@@ -303,11 +303,17 @@ impl Pairing {
         pairing
     }
 
-    /// Starts listening for a device to add to `group`, at UTC `utc`, which dates the new
-    /// member's record. A device in no group passes one [`Group::found`] gave it. `nonce` must be
+    /// Starts listening for a device to add to `group`, at UTC `utc` if known, which dates the
+    /// new member's record. A device in no group passes one [`Group::found`] gave it. `nonce` must be
     /// random. A full group ends at once, with nothing sent.
     #[must_use]
-    pub fn add(me: &Identity, group: Group, nonce: [u8; NONCE_LEN], now: i64, utc: u32) -> Self {
+    pub fn add(
+        me: &Identity,
+        group: Group,
+        nonce: [u8; NONCE_LEN],
+        now: i64,
+        utc: Option<u32>,
+    ) -> Self {
         let mut pairing = Self::new(Role::Add, me, nonce, now);
         pairing.utc = utc;
         if group.is_full() {
@@ -851,8 +857,8 @@ impl Pairing {
             id,
             Member {
                 public: peer.public,
-                joined: self.utc,
-                changed: self.utc,
+                joined: stamp(self.utc),
+                changed: stamp(self.utc),
                 mac: peer.mac,
                 name: self.their_name.unwrap_or_else(|| Name::from_mac(&peer.mac)),
                 signature: [0; SIGNATURE_LEN],
@@ -1083,7 +1089,7 @@ mod tests {
 
     /// A group founded by `adder`, with members at the other `ids`.
     fn group(adder: &Identity, ids: &[u8]) -> Group {
-        let mut group = Group::found(Key::new([9; 32]), adder, UTC - 100);
+        let mut group = Group::found(Key::new([9; 32]), adder, Some(UTC - 100));
         for &id in ids {
             group.enrol(id, member(100 + id, UTC - 50));
         }
@@ -1155,7 +1161,7 @@ mod tests {
     #[test]
     fn a_device_joins_an_existing_group() {
         let (a, j) = (identity(1), identity(2));
-        let mut adder = Pairing::add(&a, group(&a, &[1, 3]), [1; 16], 0, UTC);
+        let mut adder = Pairing::add(&a, group(&a, &[1, 3]), [1; 16], 0, Some(UTC));
         let mut joiner = Pairing::join(&j, [2; 16], 0);
         let mut codes = None;
         run(
@@ -1209,8 +1215,8 @@ mod tests {
     #[test]
     fn a_device_in_no_group_founds_one() {
         let (a, j) = (identity(1), identity(2));
-        let founded = Group::found(Key::new([4; 32]), &a, UTC - 100);
-        let mut adder = Pairing::add(&a, founded, [1; 16], 0, UTC);
+        let founded = Group::found(Key::new([4; 32]), &a, Some(UTC - 100));
+        let mut adder = Pairing::add(&a, founded, [1; 16], 0, Some(UTC));
         let mut joiner = Pairing::join(&j, [2; 16], 0);
         run(
             &mut adder,
@@ -1236,7 +1242,13 @@ mod tests {
     #[test]
     fn it_survives_losing_frames() {
         let (a, j) = (identity(1), identity(2));
-        let mut adder = Pairing::add(&a, group(&a, &[1, 2, 3, 4, 5, 6, 7, 8, 9]), [1; 16], 0, UTC);
+        let mut adder = Pairing::add(
+            &a,
+            group(&a, &[1, 2, 3, 4, 5, 6, 7, 8, 9]),
+            [1; 16],
+            0,
+            Some(UTC),
+        );
         let mut joiner = Pairing::join(&j, [2; 16], 0);
         let mut n = 0;
         let lose_every_third = |_: From, _: Phase, _: &[u8]| {
@@ -1268,7 +1280,7 @@ mod tests {
     fn a_full_group_is_spread_over_parts() {
         let (a, j) = (identity(1), identity(2));
         let ids: [u8; 30] = core::array::from_fn(|i| i as u8 + 1);
-        let mut adder = Pairing::add(&a, group(&a, &ids), [1; 16], 0, UTC);
+        let mut adder = Pairing::add(&a, group(&a, &ids), [1; 16], 0, Some(UTC));
         let mut joiner = Pairing::join(&j, [2; 16], 0);
         let mut most = 0;
         run(
@@ -1298,10 +1310,10 @@ mod tests {
     #[test]
     fn a_device_in_the_middle_shows_each_side_a_different_code() {
         let (a, j, m) = (identity(1), identity(2), identity(3));
-        let mut adder = Pairing::add(&a, group(&a, &[]), [1; 16], 0, UTC);
+        let mut adder = Pairing::add(&a, group(&a, &[]), [1; 16], 0, Some(UTC));
         let mut joiner = Pairing::join(&j, [2; 16], 0);
         // The device in the middle adds the joining device, and joins the adding one.
-        let mut m_add = Pairing::add(&m, group(&m, &[]), [3; 16], 0, UTC);
+        let mut m_add = Pairing::add(&m, group(&m, &[]), [3; 16], 0, Some(UTC));
         let mut m_join = Pairing::join(&m, [4; 16], 0);
         let mut out = [0; MAX_FRAME];
         for step in 0..3_000 {
@@ -1332,7 +1344,7 @@ mod tests {
     #[test]
     fn a_tampered_reveal_reaching_the_joining_device_is_refused() {
         let (a, j) = (identity(1), identity(2));
-        let mut adder = Pairing::add(&a, group(&a, &[]), [1; 16], 0, UTC);
+        let mut adder = Pairing::add(&a, group(&a, &[]), [1; 16], 0, Some(UTC));
         let mut joiner = Pairing::join(&j, [2; 16], 0);
         let mut out = [0; MAX_FRAME];
         for step in 0..1_000 {
@@ -1360,7 +1372,7 @@ mod tests {
             (false, End::Declined, End::Peer(Reason::Declined)),
         ] {
             let (a, j) = (identity(1), identity(2));
-            let mut adder = Pairing::add(&a, group(&a, &[]), [1; 16], 0, UTC);
+            let mut adder = Pairing::add(&a, group(&a, &[]), [1; 16], 0, Some(UTC));
             let mut joiner = Pairing::join(&j, [2; 16], 0);
             run(
                 &mut adder,
@@ -1388,7 +1400,7 @@ mod tests {
     #[test]
     fn nothing_found_ends_the_search() {
         let a = identity(1);
-        let mut adder = Pairing::add(&a, group(&a, &[]), [1; 16], 0, UTC);
+        let mut adder = Pairing::add(&a, group(&a, &[]), [1; 16], 0, Some(UTC));
         let mut out = [0; MAX_FRAME];
         assert_eq!(adder.poll(SEARCH_US - 1, &mut out), None);
         assert_eq!(adder.phase(), Phase::Searching);
@@ -1400,7 +1412,7 @@ mod tests {
     #[test]
     fn a_code_left_unconfirmed_times_out() {
         let (a, j) = (identity(1), identity(2));
-        let mut adder = Pairing::add(&a, group(&a, &[]), [1; 16], 0, UTC);
+        let mut adder = Pairing::add(&a, group(&a, &[]), [1; 16], 0, Some(UTC));
         let mut joiner = Pairing::join(&j, [2; 16], 0);
         let ended = run(
             &mut adder,
@@ -1427,7 +1439,7 @@ mod tests {
     fn a_full_group_sends_nothing() {
         let a = identity(1);
         let ids: [u8; 31] = core::array::from_fn(|i| i as u8 + 1);
-        let mut adder = Pairing::add(&a, group(&a, &ids), [1; 16], 0, UTC);
+        let mut adder = Pairing::add(&a, group(&a, &ids), [1; 16], 0, Some(UTC));
         assert_eq!(adder.phase(), Phase::Ended(End::Full));
         assert_eq!(adder.poll(0, &mut [0; MAX_FRAME]), None);
         assert!(adder.is_over(0));
@@ -1436,7 +1448,7 @@ mod tests {
     #[test]
     fn the_joining_device_signs_its_own_record() {
         let (a, j) = (identity(1), identity(2));
-        let mut adder = Pairing::add(&a, group(&a, &[1]), [1; 16], 0, UTC);
+        let mut adder = Pairing::add(&a, group(&a, &[1]), [1; 16], 0, Some(UTC));
         let mut joiner = Pairing::join(&j, [2; 16], 0);
         run(
             &mut adder,
@@ -1466,7 +1478,7 @@ mod tests {
                 ..member(55, UTC - 999)
             },
         );
-        let mut adder = Pairing::add(&a, old, [1; 16], 0, UTC);
+        let mut adder = Pairing::add(&a, old, [1; 16], 0, Some(UTC));
         let mut joiner = Pairing::join(&j, [2; 16], 0);
         run(
             &mut adder,
@@ -1497,7 +1509,7 @@ mod tests {
                 ..member(55, UTC - 999)
             },
         );
-        let mut adder = Pairing::add(&a, old, [1; 16], 0, UTC);
+        let mut adder = Pairing::add(&a, old, [1; 16], 0, Some(UTC));
         let mut joiner = Pairing::join(&j, [2; 16], 0);
         run(
             &mut adder,
@@ -1521,7 +1533,7 @@ mod tests {
     #[test]
     fn a_lost_last_acknowledgement_leaves_each_side_saying_so() {
         let (a, j) = (identity(1), identity(2));
-        let mut adder = Pairing::add(&a, group(&a, &[]), [1; 16], 0, UTC);
+        let mut adder = Pairing::add(&a, group(&a, &[]), [1; 16], 0, Some(UTC));
         let mut joiner = Pairing::join(&j, [2; 16], 0);
         run(
             &mut adder,
@@ -1545,7 +1557,7 @@ mod tests {
     #[test]
     fn a_store_that_fails_is_reported_to_the_other_device() {
         let (a, j) = (identity(1), identity(2));
-        let mut adder = Pairing::add(&a, group(&a, &[]), [1; 16], 0, UTC);
+        let mut adder = Pairing::add(&a, group(&a, &[]), [1; 16], 0, Some(UTC));
         let mut joiner = Pairing::join(&j, [2; 16], 0);
         run(
             &mut adder,
@@ -1563,7 +1575,7 @@ mod tests {
     fn a_cancel_during_the_transfer_reaches_the_other_device() {
         let (a, j) = (identity(1), identity(2));
         let ids: [u8; 20] = core::array::from_fn(|i| i as u8 + 1);
-        let mut adder = Pairing::add(&a, group(&a, &ids), [1; 16], 0, UTC);
+        let mut adder = Pairing::add(&a, group(&a, &ids), [1; 16], 0, Some(UTC));
         let mut joiner = Pairing::join(&j, [2; 16], 0);
         run(
             &mut adder,
@@ -1585,7 +1597,7 @@ mod tests {
     #[test]
     fn a_device_announcing_the_adders_own_mac_is_not_listed() {
         let a = identity(1);
-        let mut adder = Pairing::add(&a, group(&a, &[]), [1; 16], 0, UTC);
+        let mut adder = Pairing::add(&a, group(&a, &[]), [1; 16], 0, Some(UTC));
         let mut out = [0; MAX_FRAME];
         let mut twin = identity(2);
         twin.mac = a.mac;
@@ -1599,7 +1611,7 @@ mod tests {
     #[test]
     fn the_adding_device_lists_every_device_announcing() {
         let a = identity(1);
-        let mut adder = Pairing::add(&a, group(&a, &[]), [1; 16], 0, UTC);
+        let mut adder = Pairing::add(&a, group(&a, &[]), [1; 16], 0, Some(UTC));
         let mut out = [0; MAX_FRAME];
         for (n, at) in [(2, 0), (3, 500 * MS)] {
             let mut joiner = Pairing::join(&identity(n), [n; 16], at);

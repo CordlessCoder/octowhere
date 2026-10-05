@@ -330,8 +330,15 @@ pub enum Merged {
     },
 }
 
-fn is_ahead(changed: u32, now: u32) -> bool {
-    now != 0 && changed > now.saturating_add(AHEAD_S)
+fn is_ahead(changed: u32, now: Option<u32>) -> bool {
+    now.is_some_and(|now| changed > now.saturating_add(AHEAD_S))
+}
+
+/// The stamp of a record made at UTC `now`: 0 without UTC, which every record stamped with it
+/// outranks.
+#[must_use]
+pub fn stamp(now: Option<u32>) -> u32 {
+    now.unwrap_or(0)
 }
 
 /// The most gone records kept once new members have taken their ids.
@@ -372,11 +379,11 @@ pub struct Group {
 impl Group {
     /// A new group with `me` as its first member, id 0, joined at UTC `now`.
     #[must_use]
-    pub fn found(key: Key, me: &Identity, now: u32) -> Self {
+    pub fn found(key: Key, me: &Identity, now: Option<u32>) -> Self {
         let mut record = Member {
             public: me.public(),
-            joined: now,
-            changed: now,
+            joined: stamp(now),
+            changed: stamp(now),
             mac: me.mac,
             name: me.name,
             signature: [0; SIGNATURE_LEN],
@@ -637,10 +644,10 @@ impl Group {
     }
 
     /// Renames this node, at UTC `now`, signing its record as `me`.
-    pub fn rename(&mut self, name: Name, now: u32, me: &Identity) {
+    pub fn rename(&mut self, name: Name, now: Option<u32>, me: &Identity) {
         let mut record = *self.me();
         record.name = name;
-        record.changed = now.max(record.changed + 1);
+        record.changed = stamp(now).max(record.changed + 1);
         record.sign(self.own, me);
         self.set(self.own, Some(Slot::Member(record)));
     }
@@ -648,9 +655,9 @@ impl Group {
     /// The gone record this node sends as it leaves, at UTC `now`, signed as `me`. The group
     /// itself is about to be forgotten, so it is left as it is.
     #[must_use]
-    pub fn leaving(&self, now: u32, me: &Identity) -> Gone {
+    pub fn leaving(&self, now: Option<u32>, me: &Identity) -> Gone {
         let record = self.me();
-        let mut gone = Gone::unsigned(record.public, now.max(record.changed + 1));
+        let mut gone = Gone::unsigned(record.public, stamp(now).max(record.changed + 1));
         gone.sign(self.own, me);
         gone
     }
@@ -717,10 +724,10 @@ impl Group {
         forgotten
     }
 
-    /// Merges a member record heard from another node, at UTC `now`, 0 when unknown. A record
+    /// Merges a member record heard from another node, at UTC `now` if known. A record
     /// that would change anything must carry its device's signature. When this node moves to
     /// another id, its record waits to be signed again, by [`Group::sign_own`], before it is sent.
-    pub fn merge(&mut self, id: u8, record: Member, now: u32) -> Merged {
+    pub fn merge(&mut self, id: u8, record: Member, now: Option<u32>) -> Merged {
         if id >= IDS || record.same_device(self.me()) || is_ahead(record.changed, now) {
             // Nobody knows this node's record better than it does.
             return Merged::Unchanged;
@@ -787,7 +794,7 @@ impl Group {
         let outcome = match moving {
             Some(to) => {
                 let mut me = *self.me();
-                me.changed = now.max(me.changed + 1);
+                me.changed = stamp(now).max(me.changed + 1);
                 self.set(to, Some(Slot::Member(me)));
                 self.own = to;
                 self.unsigned_own = true;
@@ -817,8 +824,8 @@ impl Group {
         self.unsigned_own = false;
     }
 
-    /// Merges a gone record heard from another node, at UTC `now`, 0 when unknown.
-    pub fn merge_gone(&mut self, id: u8, gone: Gone, now: u32) -> Merged {
+    /// Merges a gone record heard from another node, at UTC `now` if known.
+    pub fn merge_gone(&mut self, id: u8, gone: Gone, now: Option<u32>) -> Merged {
         if id >= IDS
             || gone.public == self.me().public
             || is_ahead(gone.changed, now)
@@ -1111,11 +1118,11 @@ pub(crate) mod tests {
         let mut renamed = member(2, 200);
         renamed.name = Name::new(b"Bo").unwrap();
         renamed.sign(1, &key(2));
-        assert_eq!(g.merge(1, renamed, 0), Merged::Changed { vacated: None });
+        assert_eq!(g.merge(1, renamed, None), Merged::Changed { vacated: None });
         assert_eq!(g.member(1).unwrap().name.as_str(), "Bo");
-        assert_eq!(g.merge(1, signed(1, 2, 150), 0), Merged::Unchanged);
+        assert_eq!(g.merge(1, signed(1, 2, 150), None), Merged::Unchanged);
         assert_eq!(
-            g.merge(5, signed(5, 6, 1), 0),
+            g.merge(5, signed(5, 6, 1), None),
             Merged::Changed { vacated: None }
         );
     }
@@ -1123,8 +1130,8 @@ pub(crate) mod tests {
     #[test]
     fn a_record_about_this_node_is_never_taken() {
         let mut g = group(0, &[(0, 1)]);
-        assert_eq!(g.merge(0, signed(0, 1, 999), 0), Merged::Unchanged);
-        assert_eq!(g.merge(4, signed(4, 1, 999), 0), Merged::Unchanged);
+        assert_eq!(g.merge(0, signed(0, 1, 999), None), Merged::Unchanged);
+        assert_eq!(g.merge(4, signed(4, 1, 999), None), Merged::Unchanged);
         assert_eq!(g.me().changed, 100);
     }
 
@@ -1132,12 +1139,12 @@ pub(crate) mod tests {
     fn a_member_that_moved_is_dropped_from_its_old_id() {
         let mut g = group(0, &[(0, 1), (1, 2)]);
         assert_eq!(
-            g.merge(4, signed(4, 2, 101), 0),
+            g.merge(4, signed(4, 2, 101), None),
             Merged::Changed { vacated: Some(1) }
         );
         assert!(g.member(1).is_none());
         assert_eq!(
-            g.merge(1, signed(1, 2, 100), 0),
+            g.merge(1, signed(1, 2, 100), None),
             Merged::Unchanged,
             "the stale record"
         );
@@ -1152,11 +1159,11 @@ pub(crate) mod tests {
         };
         let mut g = group(0, &[(0, 1), (1, high)]);
         assert_eq!(
-            g.merge(1, signed(1, low, 100), 0),
+            g.merge(1, signed(1, low, 100), None),
             Merged::Changed { vacated: None }
         );
         assert_eq!(g.member(1).unwrap().public, member(low, 0).public);
-        assert_eq!(g.merge(1, signed(1, high, 500), 0), Merged::Unchanged);
+        assert_eq!(g.merge(1, signed(1, high, 500), None), Merged::Unchanged);
     }
 
     #[test]
@@ -1167,7 +1174,7 @@ pub(crate) mod tests {
         };
         let mut g = group(1, &[(0, 1), (1, high), (2, 7)]);
         assert_eq!(
-            g.merge(1, signed(1, low, 100), 1_000),
+            g.merge(1, signed(1, low, 100), Some(1_000)),
             Merged::Renumbered { from: 1, to: 3 }
         );
         assert_eq!(g.own(), 3);
@@ -1176,7 +1183,10 @@ pub(crate) mod tests {
         assert_eq!(g.member(1).unwrap().public, member(low, 0).public);
 
         let mut g = group(1, &[(0, 1), (1, low)]);
-        assert_eq!(g.merge(1, signed(1, high, 100), 1_000), Merged::Unchanged);
+        assert_eq!(
+            g.merge(1, signed(1, high, 100), Some(1_000)),
+            Merged::Unchanged
+        );
         assert_eq!(g.own(), 1);
     }
 
@@ -1184,9 +1194,9 @@ pub(crate) mod tests {
     fn a_changed_or_asked_for_record_is_sent_once() {
         let mut g = group(3, &[(0, 1), (3, 2), (31, 3)]);
         assert!(!g.has_unsent());
-        g.rename(Name::new(b"New").unwrap(), 50, &key(2));
+        g.rename(Name::new(b"New").unwrap(), Some(50), &key(2));
         assert_eq!(
-            g.merge(31, signed(31, 3, 200), 1_000),
+            g.merge(31, signed(31, 3, 200), Some(1_000)),
             Merged::Changed { vacated: None }
         );
         assert_eq!(g.unsent().bits(), 1 << 3 | 1 << 31);
@@ -1201,7 +1211,7 @@ pub(crate) mod tests {
         }
 
         assert_eq!(
-            g.merge(0, signed(0, 1, 300), 1_000),
+            g.merge(0, signed(0, 1, 300), Some(1_000)),
             Merged::Changed { vacated: None }
         );
         g.covered(0, &Slot::Member(signed(0, 1, 299)));
@@ -1216,7 +1226,7 @@ pub(crate) mod tests {
         let mut other = group(0, &[(0, 1), (3, 2), (31, 3)]);
         assert_eq!(g.digest(), other.digest(), "whichever node holds them");
         assert_eq!(
-            other.merge(3, signed(3, 2, 200), 1_000),
+            other.merge(3, signed(3, 2, 200), Some(1_000)),
             Merged::Changed { vacated: None }
         );
         assert_ne!(g.digest(), other.digest());
@@ -1270,7 +1280,7 @@ pub(crate) mod tests {
     #[test]
     fn a_rename_is_newer_than_the_record_it_replaces() {
         let mut g = group(0, &[(0, 1)]);
-        g.rename(Name::new(b"New").unwrap(), 50, &key(1));
+        g.rename(Name::new(b"New").unwrap(), Some(50), &key(1));
         assert_eq!(g.me().changed, 101);
         assert!(g.me().verify(0), "signed again");
         assert_eq!(g.me().joined, 1_790_000_000);
@@ -1291,16 +1301,19 @@ pub(crate) mod tests {
     fn a_record_stamped_far_ahead_is_refused() {
         let mut g = group(0, &[(0, 1), (1, 2)]);
         assert_eq!(
-            g.merge_gone(1, left(1, 2, 10_000), 1_000),
+            g.merge_gone(1, left(1, 2, 10_000), Some(1_000)),
             Merged::Unchanged
         );
-        assert_eq!(g.merge(1, signed(1, 2, 10_000), 1_000), Merged::Unchanged);
         assert_eq!(
-            g.merge(1, signed(1, 2, 1_000 + AHEAD_S), 1_000),
+            g.merge(1, signed(1, 2, 10_000), Some(1_000)),
+            Merged::Unchanged
+        );
+        assert_eq!(
+            g.merge(1, signed(1, 2, 1_000 + AHEAD_S), Some(1_000)),
             Merged::Changed { vacated: None }
         );
         assert_eq!(
-            g.merge_gone(1, left(1, 2, 5_000), 0),
+            g.merge_gone(1, left(1, 2, 5_000), None),
             Merged::Went { at: 1 },
             "no clock"
         );
@@ -1327,7 +1340,7 @@ pub(crate) mod tests {
         assert!(g.put_back(1, None, &fingerprint(&member(2, 0).public)));
         assert!(g.slot(1).is_none());
         assert_eq!(
-            g.merge(1, signed(1, 2, 100), 0),
+            g.merge(1, signed(1, 2, 100), None),
             Merged::Changed { vacated: None }
         );
     }
@@ -1346,7 +1359,10 @@ pub(crate) mod tests {
     fn a_member_that_went_frees_its_id() {
         let mut g = group(0, &[(0, 1), (1, 2), (2, 3)]);
         let before = g.digest();
-        assert_eq!(g.merge_gone(1, left(1, 2, 200), 0), Merged::Went { at: 1 });
+        assert_eq!(
+            g.merge_gone(1, left(1, 2, 200), None),
+            Merged::Went { at: 1 }
+        );
         assert!(g.member(1).is_none());
         assert_eq!(g.gone(1), Some(&left(1, 2, 200)));
         assert_eq!(g.lowest_free(), Some(1));
@@ -1354,20 +1370,23 @@ pub(crate) mod tests {
         assert_eq!(g.ids().bits(), 1 | 1 << 2);
         assert_eq!(g.unsent(), Ids::of(1), "it passes the news on");
         assert_ne!(g.digest(), before);
-        assert_eq!(g.merge_gone(1, left(1, 2, 200), 0), Merged::Unchanged);
+        assert_eq!(g.merge_gone(1, left(1, 2, 200), None), Merged::Unchanged);
     }
 
     #[test]
     fn a_gone_record_finds_its_member_at_another_id() {
         let mut g = group(0, &[(0, 1), (4, 2)]);
-        assert_eq!(g.merge_gone(1, left(1, 2, 200), 0), Merged::Went { at: 4 });
+        assert_eq!(
+            g.merge_gone(1, left(1, 2, 200), None),
+            Merged::Went { at: 4 }
+        );
         assert!(g.slot(1).is_none());
     }
 
     #[test]
     fn a_sender_held_as_gone_is_not_asked_for_its_record() {
         let mut g = group(0, &[(0, 1), (1, 2)]);
-        g.merge_gone(1, left(1, 2, 200), 0);
+        g.merge_gone(1, left(1, 2, 200), None);
         let mut requests = Requests::default();
         let ours = g.digest();
         requests.answer(&mut g, 1, Some(ours), None);
@@ -1377,9 +1396,9 @@ pub(crate) mod tests {
     #[test]
     fn a_stale_record_of_a_gone_member_is_refused_and_answered() {
         let mut g = group(0, &[(0, 1), (1, 2)]);
-        g.merge_gone(1, left(1, 2, 200), 0);
+        g.merge_gone(1, left(1, 2, 200), None);
         g.sent(1);
-        assert_eq!(g.merge(1, signed(1, 2, 150), 0), Merged::Unchanged);
+        assert_eq!(g.merge(1, signed(1, 2, 150), None), Merged::Unchanged);
         assert!(g.member(1).is_none());
         assert_eq!(g.unsent(), Ids::of(1), "the gone record goes back");
     }
@@ -1387,19 +1406,19 @@ pub(crate) mod tests {
     #[test]
     fn a_device_paired_again_wins_over_its_gone_record() {
         let mut g = group(0, &[(0, 1), (1, 2)]);
-        g.merge_gone(1, left(1, 2, 200), 0);
+        g.merge_gone(1, left(1, 2, 200), None);
         assert_eq!(
-            g.merge(1, signed(1, 2, 300), 0),
+            g.merge(1, signed(1, 2, 300), None),
             Merged::Changed { vacated: None }
         );
         assert_eq!(g.member(1), Some(&signed(1, 2, 300)));
-        assert_eq!(g.merge_gone(1, left(1, 2, 250), 0), Merged::Unchanged);
+        assert_eq!(g.merge_gone(1, left(1, 2, 250), None), Merged::Unchanged);
         assert_eq!(g.member(1), Some(&signed(1, 2, 300)));
 
         let mut g = group(0, &[(0, 1), (1, 2)]);
-        g.merge_gone(1, left(1, 2, 200), 0);
+        g.merge_gone(1, left(1, 2, 200), None);
         assert_eq!(
-            g.merge(3, signed(3, 2, 300), 0),
+            g.merge(3, signed(3, 2, 300), None),
             Merged::Changed { vacated: Some(1) }
         );
         assert!(g.slot(1).is_none());
@@ -1408,11 +1427,11 @@ pub(crate) mod tests {
     #[test]
     fn a_new_member_at_a_gone_id_keeps_the_gone_record_apart() {
         let mut g = group(0, &[(0, 1), (1, 2)]);
-        g.merge_gone(1, left(1, 2, 200), 0);
+        g.merge_gone(1, left(1, 2, 200), None);
         g.enrol(1, member(9, 300));
         assert_eq!(g.member(1), Some(&member(9, 300)));
         assert_eq!(g.former_unsent().count(), 0);
-        assert_eq!(g.merge(1, signed(1, 2, 150), 0), Merged::Unchanged);
+        assert_eq!(g.merge(1, signed(1, 2, 150), None), Merged::Unchanged);
         assert_eq!(g.member(1), Some(&member(9, 300)));
         let mut former = g.former_unsent();
         assert_eq!(former.next(), Some((0, 1, left(1, 2, 200))));
@@ -1425,10 +1444,10 @@ pub(crate) mod tests {
     #[test]
     fn pairing_a_gone_device_again_forgets_its_gone_record() {
         let mut g = group(0, &[(0, 1), (1, 2)]);
-        g.merge_gone(1, left(1, 2, 200), 0);
+        g.merge_gone(1, left(1, 2, 200), None);
         g.enrol(3, member(2, 300));
         assert!(g.slot(1).is_none());
-        assert_eq!(g.merge(3, signed(3, 2, 300), 0), Merged::Unchanged);
+        assert_eq!(g.merge(3, signed(3, 2, 300), None), Merged::Unchanged);
     }
 
     #[test]
@@ -1461,8 +1480,8 @@ pub(crate) mod tests {
         g.remove(&fingerprint(&member(3, 0).public), 500);
         // Since the switch, a device joined at the id it freed and a member renamed.
         g.enrol(2, member(9, 0));
-        g.merge(1, signed(1, 2, 550), 0);
-        g.rename(Name::from_mac(&[0, 0, 0, 0, 0, 7]), 700, &key(1));
+        g.merge(1, signed(1, 2, 550), None);
+        g.rename(Name::from_mac(&[0, 0, 0, 0, 0, 7]), Some(700), &key(1));
         let changed = g.take_changed();
         assert_eq!(changed.bits(), 1 << 0 | 1 << 1 | 1 << 2);
         assert!(g.held.former.iter().any(Option::is_some));
@@ -1475,7 +1494,7 @@ pub(crate) mod tests {
             "the gone record set apart is forgotten too"
         );
         assert_eq!(
-            g.merge(2, signed(2, 3, 100), 0),
+            g.merge(2, signed(2, 3, 100), None),
             Merged::Changed { vacated: None },
             "the member removed comes back"
         );
@@ -1484,26 +1503,30 @@ pub(crate) mod tests {
     #[test]
     fn a_record_without_its_devices_signature_changes_nothing() {
         let mut g = group(0, &[(0, 1), (1, 2)]);
-        assert_eq!(g.merge(1, member(2, 300), 0), Merged::Unchanged, "unsigned");
         assert_eq!(
-            g.merge(1, signed(4, 2, 300), 0),
+            g.merge(1, member(2, 300), None),
+            Merged::Unchanged,
+            "unsigned"
+        );
+        assert_eq!(
+            g.merge(1, signed(4, 2, 300), None),
             Merged::Unchanged,
             "signed for another id"
         );
         let mut forged = signed(1, 2, 300);
         forged.name = Name::new(b"Forged").unwrap();
-        assert_eq!(g.merge(1, forged, 0), Merged::Unchanged);
+        assert_eq!(g.merge(1, forged, None), Merged::Unchanged);
         let mut theirs = signed(1, 2, 300);
         theirs.public = member(3, 0).public;
         assert_eq!(
-            g.merge(1, theirs, 0),
+            g.merge(1, theirs, None),
             Merged::Unchanged,
             "another key cannot take over a member"
         );
         assert_eq!(g.member(1), Some(&member(2, 100)));
-        assert_eq!(g.merge_gone(1, gone(2, 300), 0), Merged::Unchanged);
+        assert_eq!(g.merge_gone(1, gone(2, 300), None), Merged::Unchanged);
         assert_eq!(
-            g.merge_gone(1, left(1, 3, 300), 0),
+            g.merge_gone(1, left(1, 3, 300), None),
             Merged::Unchanged,
             "only the device itself says it went"
         );
@@ -1522,7 +1545,7 @@ pub(crate) mod tests {
             if a.rank() < b.rank() { (2, 4) } else { (4, 2) }
         };
         let mut g = group(1, &[(0, 1), (1, high)]);
-        let Merged::Renumbered { to, .. } = g.merge(1, signed(1, low, 100), 1_000) else {
+        let Merged::Renumbered { to, .. } = g.merge(1, signed(1, low, 100), Some(1_000)) else {
             panic!("this node moves");
         };
         assert!(!g.unsent().contains(to), "not until it is signed");
@@ -1534,20 +1557,23 @@ pub(crate) mod tests {
     #[test]
     fn a_gone_record_about_this_node_is_ignored() {
         let mut g = group(0, &[(0, 1), (1, 2)]);
-        assert_eq!(g.merge_gone(0, left(0, 1, 999), 0), Merged::Unchanged);
-        assert_eq!(g.merge_gone(3, left(3, 1, 999), 0), Merged::Unchanged);
+        assert_eq!(g.merge_gone(0, left(0, 1, 999), None), Merged::Unchanged);
+        assert_eq!(g.merge_gone(3, left(3, 1, 999), None), Merged::Unchanged);
         assert!(g.member(0).is_some());
-        assert_eq!(g.leaving(50, &key(1)), left(0, 1, 101));
+        assert_eq!(g.leaving(Some(50), &key(1)), left(0, 1, 101));
     }
 
     #[test]
     fn a_gone_record_of_a_stranger_takes_only_a_free_id() {
         let mut g = group(0, &[(0, 1), (1, 2)]);
-        assert_eq!(g.merge_gone(4, left(4, 8, 200), 0), Merged::Went { at: 4 });
-        assert_eq!(g.merge_gone(1, left(1, 9, 200), 0), Merged::Unchanged);
+        assert_eq!(
+            g.merge_gone(4, left(4, 8, 200), None),
+            Merged::Went { at: 4 }
+        );
+        assert_eq!(g.merge_gone(1, left(1, 9, 200), None), Merged::Unchanged);
         assert_eq!(g.member(1), Some(&member(2, 100)));
         assert_eq!(
-            g.merge(1, signed(1, 9, 150), 0),
+            g.merge(1, signed(1, 9, 150), None),
             Merged::Unchanged,
             "kept apart, it still answers"
         );
@@ -1557,11 +1583,11 @@ pub(crate) mod tests {
     fn every_node_keeps_the_same_of_two_gone_records_for_an_id() {
         let (a, b) = (left(4, 8, 200), left(4, 9, 300));
         let mut first = group(0, &[(0, 1)]);
-        first.merge_gone(4, a, 0);
-        first.merge_gone(4, b, 0);
+        first.merge_gone(4, a, None);
+        first.merge_gone(4, b, None);
         let mut second = group(0, &[(0, 1)]);
-        second.merge_gone(4, b, 0);
-        second.merge_gone(4, a, 0);
+        second.merge_gone(4, b, None);
+        second.merge_gone(4, a, None);
         assert_eq!(first.gone(4), Some(&b));
         assert_eq!(second.gone(4), Some(&b));
         assert_eq!(first.digest(), second.digest());
@@ -1571,9 +1597,9 @@ pub(crate) mod tests {
     fn the_digest_tells_a_gone_record_from_a_member() {
         let mut a = group(0, &[(0, 1), (1, 2)]);
         let mut b = group(0, &[(0, 1), (1, 2)]);
-        a.merge_gone(1, left(1, 2, 200), 0);
+        a.merge_gone(1, left(1, 2, 200), None);
         assert_ne!(a.digest(), b.digest());
-        b.merge_gone(1, left(1, 2, 200), 0);
+        b.merge_gone(1, left(1, 2, 200), None);
         assert_eq!(a.digest(), b.digest());
     }
 
