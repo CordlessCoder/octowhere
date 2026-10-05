@@ -407,6 +407,11 @@ impl Pairing {
         self.group.as_ref()
     }
 
+    /// Takes the group out of a pairing that is over.
+    pub fn take_group(&mut self) -> Option<Group> {
+        self.group.take()
+    }
+
     /// Adding: whether the joining device's user has confirmed the code.
     #[must_use]
     pub fn peer_accepted(&self) -> bool {
@@ -879,7 +884,7 @@ impl Pairing {
 
     fn start_transfer(&mut self, now: i64) {
         let peer = self.peer.expect("chosen before the transfer");
-        let mut group = self.group.clone().expect("an adding device has a group");
+        let group = self.group.as_mut().expect("an adding device has a group");
         let Some(id) = group.id_for(&peer.public) else {
             self.end(End::Full, None, now);
             return;
@@ -898,10 +903,9 @@ impl Pairing {
                 signature: [0; SIGNATURE_LEN],
             },
         );
-        self.blob_len = welcome(&group, id, &mut self.blob);
+        self.blob_len = welcome(group, id, &mut self.blob);
         self.parts = self.blob_len.div_ceil(PART_DATA) as u8;
         self.parts_done = 0;
-        self.group = Some(group);
         self.stage = Stage::Transfer;
         self.deadline = now + STALL_US;
         self.send_now(now, Some(RETRY_US));

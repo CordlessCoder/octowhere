@@ -632,6 +632,9 @@ pub struct Mesh<R, T, G, D, S, A: Allocator> {
     leaving: Option<Box<Leaving>>,
     /// The order the group's ids send in, from its key.
     schedule: Option<Box<Schedule>>,
+    /// The order of the old key a packet under one goes out under, with that key, while it
+    /// stays the same.
+    old_schedule: Option<Box<(Key, Schedule)>>,
     /// The member records the next packet asks for.
     requests: Requests,
     /// The members' addresses as a refresh under way started, which tell the members it learns
@@ -719,6 +722,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             founding: None,
             leaving: None,
             schedule: None,
+            old_schedule: None,
             requests: Requests::default(),
             refresh_known: None,
             unsaved: Unsaved::default(),
@@ -1317,14 +1321,18 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
     /// out under, on the local timer, and its round. That is always in a sweep round, where
     /// every member listens throughout: one that switched to a rival key listens in no other
     /// round of the old key's order.
-    fn old_slot_at(&self, now: i64, own: u8) -> Option<(i64, i64)> {
+    fn old_slot_at(&mut self, now: i64, own: u8) -> Option<(i64, i64)> {
         if !self.removals.sends_old() {
+            self.old_schedule = None;
             return None;
         }
         let (time, _) = self.clock.at(now)?;
         let from = time + 2 * PREPARE_US;
         let (key, _, _) = self.removals.old_packet(round_at(from))?;
-        let schedule = Schedule::new(key);
+        if self.old_schedule.as_ref().is_none_or(|held| held.0 != *key) {
+            self.old_schedule = Some(Box::new((key.clone(), Schedule::new(key))));
+        }
+        let (_, schedule) = self.old_schedule.as_deref()?;
         let (mut round, mut start) = schedule.next_slot(from, own);
         if !is_sweep_round(round) {
             // A sweep round's header goes in that round only.
@@ -2015,12 +2023,13 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                 }
             }
         }
-        match (pairing.phase(), pairing.group()) {
+        match (pairing.phase(), pairing.take_group()) {
             (Phase::Done(_), Some(group)) => {
-                self.group = Some(group.clone());
+                let own = group.own();
+                self.group = Some(group);
                 self.unsaved.group_replaced();
                 if role == Role::Join || !had_group {
-                    self.restart(group.own());
+                    self.restart(own);
                     self.refresh = None;
                 }
             }
@@ -2039,7 +2048,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                     count: group.count() as u8,
                 });
                 self.founding = Some(Box::new(Founding {
-                    group: group.clone(),
+                    group,
                     until,
                     heard: false,
                 }));
