@@ -650,14 +650,6 @@ pub fn review(list: &mut List, thread: Thread, text: &str, scroll: i32, mail: &M
         11,
         chrome::GRAY,
     ));
-    list.text(parts::centred(
-        "Send waits for your radio slot.",
-        parts::CENTRE,
-        333,
-        Face::Sans,
-        15,
-        chrome::GRAY,
-    ));
     parts::button(list, PAIR[0], "EDIT", true);
     parts::action(list, PAIR[1], "SEND", mail.writable(thread));
     list.text(parts::centred(

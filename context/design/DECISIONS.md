@@ -172,3 +172,12 @@ Recorded 2026-09-26. These override the hand-off where they differ.
     the marks under it. The density eases from the lobes' to the rest's over 56 px. The screens
     the panel opens keep their middle clear, with the same easing outside it. The design has
     not seen it.
+32. **The message review drops its send line** (owner, 2026-10-05). The 2026-10-04 hand-off's
+    review screen said "Send waits for your radio slot." under the character count. The mesh
+    moved to contention that day, so there is no slot, and a message goes once the channel is
+    clear. The line is gone and nothing replaces it. The design has not seen it.
+33. **REFRESH DEVICES is to be retired** (owner, 2026-10-05). On contention every device
+    listens throughout, so every member in reach is heard within its floor, and a refresh only
+    counts who it heard. Removing it changes the group screens around the members list, the
+    refresh screens and the events drawer's refresh rows, so it waits for a design round; until
+    then the refresh stays as built.

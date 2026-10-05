@@ -246,8 +246,9 @@ until the feature set is complete, because profiling an incomplete firmware pric
   Contention replaced the slots on 2026-10-05 (owner; the protocol's "Medium access"), which
   drops step 5, CAD; the slots are on the `tdma` branch. It has run only in the simulator:
   run it on the two boards, with what the protocol's "Open" lists to check there. Then step 7.
-  The message review screen still says "Send waits for your radio slot.", the 2026-10-04
-  hand-off's copy, which is no longer true; it needs new copy from the owner or a design round.
+  REFRESH DEVICES is to be retired (owner, 2026-10-05; `design/DECISIONS.md` 33): that needs
+  a design round for the group screens, the refresh screens and the drawer's refresh rows,
+  and then the mesh's refresh command and view can go too.
 - Measure what the device draws once the owner's PPK2 is to hand (owner, 2026-10-04). It says
   whether continuous receive fits the budget, now that the mesh contends for the channel, and
   whether the firmware light-sleeps with the screen dark. The findings, the esp-hal wake-lock gap the owner
