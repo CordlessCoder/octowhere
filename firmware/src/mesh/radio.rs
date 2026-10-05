@@ -9,8 +9,8 @@ use sx127xlora::{
     registers::{
         FIFO_ADDR_PTR, FIFO_TX_BASE_ADDR, FIFO_TX_BASE_ADDR_VALUE, IRQ_FLAGS,
         IRQ_FLAGS_VALID_HEADER_MASK, MODEM_STAT, MODEM_STAT_MODEM_STATUS_HEADER_INFO_VALID_MASK,
-        MODEM_STAT_MODEM_STATUS_RX_ONGOING_MASK, MODEM_STAT_MODEM_STATUS_SIGNAL_DETECTED,
-        MODEM_STAT_MODEM_STATUS_SIGNAL_SYNCHRONIZED, SYNC_WORD as SYNC_WORD_REGISTER,
+        MODEM_STAT_MODEM_STATUS_SIGNAL_DETECTED, MODEM_STAT_MODEM_STATUS_SIGNAL_SYNCHRONIZED,
+        SYNC_WORD as SYNC_WORD_REGISTER,
     },
     types::{DeviceMode, OCP, PowerRamp, RxDone, TxConfig, TxDone},
 };
@@ -27,10 +27,10 @@ const POLL_US: u64 = 1_000;
 const IRQ_TX_DONE: u8 = 0x08;
 const IRQ_RX_DONE: u8 = 0x40;
 /// The modem's status while a packet is under way: its preamble detected, then the modem
-/// synchronised to it, receiving and its header read.
+/// synchronised to it and its header read. RX on-going holds throughout continuous receive,
+/// whatever is on the air, so it says nothing.
 const MODEM_BUSY: u8 = MODEM_STAT_MODEM_STATUS_SIGNAL_DETECTED
     | MODEM_STAT_MODEM_STATUS_SIGNAL_SYNCHRONIZED
-    | MODEM_STAT_MODEM_STATUS_RX_ONGOING_MASK
     | MODEM_STAT_MODEM_STATUS_HEADER_INFO_VALID_MASK;
 
 pub struct BoardRadio {
