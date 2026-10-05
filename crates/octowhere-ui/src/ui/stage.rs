@@ -1176,8 +1176,7 @@ impl Stage {
         if let (Rest::Awake, Some(timeout)) = (self.rest, self.peripherals.timeout.duration())
             && now.saturating_sub(self.active_since) >= timeout
         {
-            self.rest = Rest::Dimmed { since: now };
-            self.fade_to(rest::dim_level(self.level), rest::DIM_FADE, now);
+            self.enter(Rest::Dimmed { since: now }, now, &mut update);
         }
         update
     }
@@ -1200,31 +1199,13 @@ impl Stage {
         });
         // A toast already up keeps the rest it woke the screen from.
         let woke = self.toast.and_then(|toast| toast.woke).or(woke);
-        self.wake_for_toast(now, update);
+        // Over whatever the screen rested on, without the entry a wake by the user runs.
+        self.enter(Rest::Awake, now, update);
         self.toast = Some(Toast {
             event: id,
             since: now,
             woke,
         });
-    }
-
-    /// Brings a resting screen up to its level for a toast, over whatever it showed.
-    fn wake_for_toast(&mut self, now: Micros, update: &mut Update) {
-        match self.rest {
-            Rest::Awake => return,
-            Rest::Dimmed { .. } | Rest::Darkening { .. } => {}
-            Rest::AlwaysOn | Rest::Off => {
-                if self.rest == Rest::Off {
-                    update.display_on = Some(true);
-                }
-                self.drawn_always_on = None;
-                self.changed.make_full();
-            }
-        }
-        self.rest = Rest::Awake;
-        self.restart(now);
-        self.level = self.peripherals.brightness;
-        self.fade_to(self.level, rest::WAKE_FADE, now);
     }
 
     /// Shows a toast held for a finger once it lifts, and ends one that has shown long enough,
@@ -1541,7 +1522,7 @@ impl Stage {
         let (prior, prior_level) = (self.rest, self.shown_level);
         let resting = prior != Rest::Awake;
         if resting {
-            self.wake_by_key(now, update);
+            self.wake(now, update);
         }
         match key {
             Key::Short => {
@@ -1549,7 +1530,7 @@ impl Stage {
                     self.forget_drawn();
                 }
                 if !resting {
-                    self.sleep(update);
+                    self.sleep(now, update);
                 }
             }
             Key::Long if self.power_off.is_none() => {
@@ -1575,41 +1556,69 @@ impl Stage {
     #[expect(clippy::unused_self, reason = "the BOOT key's behaviour goes here")]
     fn press_boot(&self, _key: Key) {}
 
-    /// Wakes a screen on its way to rest, or resting, as a contact would.
-    fn wake_by_key(&mut self, now: Micros, update: &mut Update) {
-        match self.rest {
-            Rest::Awake => {}
-            Rest::Dimmed { .. } | Rest::Darkening { .. } => {
-                self.rest = Rest::Awake;
-                self.restart(now);
-                self.fade_to(self.level, rest::WAKE_FADE, now);
-            }
-            Rest::AlwaysOn | Rest::Off => self.wake(now, update),
-        }
-    }
-
     /// Rests the screen at once, on the always-on face or off, without the timeout's dim.
-    fn sleep(&mut self, update: &mut Update) {
-        self.clear_for_rest();
-        self.fade = None;
+    fn sleep(&mut self, now: Micros, update: &mut Update) {
+        // With no dim shown first, the always-on face follows the stored level rather than one
+        // still being edited.
         self.level = self.peripherals.brightness;
-        if self.peripherals.always_on.is_on() {
-            self.rest = Rest::AlwaysOn;
-            self.drawn_always_on = None;
-            update.brightness = Some(self.peripherals.always_on.level(self.level));
+        let to = if self.peripherals.always_on.is_on() {
+            Rest::AlwaysOn
         } else {
-            self.rest = Rest::Off;
-            update.brightness = Some(0);
-            update.display_on = Some(false);
-        }
+            Rest::Off
+        };
+        self.enter(to, now, update);
     }
 
-    /// Takes away what would show over the always-on face or wake to the panel again, as the
-    /// screen comes to rest by the key or by the timeout.
-    fn clear_for_rest(&mut self) {
-        self.route = None;
-        self.close_drawer();
-        self.toast = None;
+    /// Moves the screen to `to`. Every change of rest goes through here.
+    ///
+    /// A wake restarts the timeout, and a finger down as it wakes does nothing else. From a dim
+    /// it fades back up over what shows. From the always-on face or off it shows what lay
+    /// under them, at the stored level, once the panel is out of sleep; [`wake`](Self::wake)
+    /// moves on to a face from there.
+    ///
+    /// A dim or darkening begun at `since` fades on for the time it has left. The always-on
+    /// face and off come at once, and take away what would show over the face or wake to the
+    /// panel again.
+    fn enter(&mut self, to: Rest, now: Micros, update: &mut Update) {
+        let from = core::mem::replace(&mut self.rest, to);
+        match to {
+            Rest::Awake if from == Rest::Awake => {}
+            Rest::Awake => {
+                self.restart(now);
+                self.swallowed = self.raw_touch[0].is_some();
+                let mut start = now;
+                if matches!(from, Rest::AlwaysOn | Rest::Off) {
+                    self.entry_from = now;
+                    if from == Rest::Off {
+                        update.display_on = Some(true);
+                        self.entry_from += rest::PANEL_WAKE;
+                    }
+                    start = self.entry_from;
+                    self.drawn_always_on = None;
+                    self.shift.advance(now);
+                    self.level = self.peripherals.brightness;
+                    self.changed.make_full();
+                }
+                self.fade_to(self.level, rest::WAKE_FADE, start);
+            }
+            Rest::Dimmed { since } => {
+                self.fade_on(rest::dim_level(self.level), rest::DIM_FADE, since, now);
+            }
+            Rest::Darkening { since } => self.fade_on(0, rest::OFF_FADE, since, now),
+            Rest::AlwaysOn | Rest::Off => {
+                self.route = None;
+                self.close_drawer();
+                self.toast = None;
+                self.fade = None;
+                if to == Rest::AlwaysOn {
+                    self.drawn_always_on = None;
+                    update.brightness = Some(self.peripherals.always_on.level(self.level));
+                } else {
+                    update.brightness = Some(0);
+                    update.display_on = Some(false);
+                }
+            }
+        }
     }
 
     /// Steps the power-off confirmation, which takes every touch while it shows and holds the
@@ -1669,30 +1678,19 @@ impl Stage {
     /// Puts the screen back the way it showed before the power key woke it. A dim or darkening
     /// comes back at the level it had reached and carries on with the time it had left.
     fn rest_again(&mut self, prior: power_off::Prior, now: Micros, update: &mut Update) {
-        let (to, fade, elapsed) = match prior.rest {
+        let to = match prior.rest {
             Rest::Awake => return,
-            Rest::AlwaysOn | Rest::Off => return self.sleep(update),
-            Rest::Dimmed { since } => (
-                rest::dim_level(self.level),
-                rest::DIM_FADE,
-                prior.at - since,
-            ),
-            Rest::Darkening { since } => (0, rest::OFF_FADE, prior.at - since),
-        };
-        self.rest = match prior.rest {
-            Rest::Dimmed { .. } => Rest::Dimmed {
-                since: now - elapsed,
+            Rest::AlwaysOn | Rest::Off => return self.sleep(now, update),
+            Rest::Dimmed { since } => Rest::Dimmed {
+                since: now - (prior.at - since),
             },
-            _ => Rest::Darkening {
-                since: now - elapsed,
+            Rest::Darkening { since } => Rest::Darkening {
+                since: now - (prior.at - since),
             },
         };
-        self.fade = None;
         self.shown_level = prior.level;
         update.brightness = Some(prior.level);
-        if elapsed < fade {
-            self.fade_to(to, fade - elapsed, now);
-        }
+        self.enter(to, now, update);
     }
 
     /// Forgets what each screen showed, so the next step redraws in full.
@@ -1737,32 +1735,20 @@ impl Stage {
         let double_tapped = self.watches_for_wake() && self.double_tapped(*touch, now);
         match self.rest {
             Rest::Awake => return false,
-            // The contact that lifts the dim does nothing else.
             Rest::Dimmed { .. } | Rest::Darkening { .. } if contact => {
-                self.rest = Rest::Awake;
-                self.swallowed = true;
-                self.fade_to(self.level, rest::WAKE_FADE, now);
+                self.wake(now, update);
                 return false;
             }
             Rest::Dimmed { since } if now.saturating_sub(since) >= rest::DIM_HOLD => {
                 if self.peripherals.always_on.is_on() {
-                    self.clear_for_rest();
-                    self.rest = Rest::AlwaysOn;
-                    self.drawn_always_on = None;
-                    self.fade = None;
-                    update.brightness = Some(self.peripherals.always_on.level(self.level));
+                    self.enter(Rest::AlwaysOn, now, update);
                 } else {
-                    self.rest = Rest::Darkening { since: now };
-                    self.fade_to(0, rest::OFF_FADE, now);
+                    self.enter(Rest::Darkening { since: now }, now, update);
                     return false;
                 }
             }
             Rest::Darkening { since } if now.saturating_sub(since) >= rest::OFF_FADE => {
-                self.clear_for_rest();
-                self.rest = Rest::Off;
-                self.fade = None;
-                update.brightness = Some(0);
-                update.display_on = Some(false);
+                self.enter(Rest::Off, now, update);
             }
             Rest::Dimmed { .. } | Rest::Darkening { .. } => {
                 if *touch == Some(Touch::Cover) {
@@ -1819,29 +1805,21 @@ impl Stage {
         }
     }
 
-    /// Wakes from the always-on face or from off, onto the face that showed, which runs its
-    /// entry, or from the panel onto the clock face. The level fades back up to the stored one,
-    /// so an unsaved brightness goes with any other edit.
+    /// Wakes the screen for the user, by a contact, a double tap or the key. From the always-on
+    /// face or off it wakes onto the face that showed, which runs its entry, or from the panel
+    /// or a page onto the clock face. The level comes back to the stored one, so an unsaved
+    /// brightness goes with any other edit.
     fn wake(&mut self, now: Micros, update: &mut Update) {
-        self.restart(now);
-        self.entry_from = now;
-        if self.rest == Rest::Off {
-            update.display_on = Some(true);
-            self.entry_from += rest::PANEL_WAKE;
+        let hidden = matches!(self.rest, Rest::AlwaysOn | Rest::Off);
+        self.enter(Rest::Awake, now, update);
+        if !hidden {
+            return;
         }
-        self.rest = Rest::Awake;
-        self.swallowed = true;
-        self.drawn_always_on = None;
-        self.shift.advance(now);
         if self.page.is_some() || !self.sheet.is_closed() {
-            self.route = None;
             self.show(Screen::Clock);
         } else {
             self.face(self.screen);
         }
-        self.level = self.peripherals.brightness;
-        self.fade_to(self.level, rest::WAKE_FADE, self.entry_from);
-        self.changed.make_full();
     }
 
     /// Fades from the level that shows to `to`, starting at `start`.
@@ -1852,6 +1830,15 @@ impl Stage {
             start,
             duration,
         });
+    }
+
+    /// Fades on to `to` from now for what is left of a fade of `duration` begun at `since`.
+    fn fade_on(&mut self, to: u8, duration: Micros, since: Micros, now: Micros) {
+        let elapsed = now - since;
+        self.fade = None;
+        if elapsed < duration {
+            self.fade_to(to, duration - elapsed, now);
+        }
     }
 
     fn step_fade(&mut self, now: Micros, update: &mut Update) {

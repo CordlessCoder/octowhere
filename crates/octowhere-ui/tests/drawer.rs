@@ -11,10 +11,11 @@ use octowhere_ui::{
         drawer::{Child, Root},
         events::{Gnss, Kind},
         group::view::{RefreshPhase, RefreshView},
-        rest::{AlwaysOn, Rest, Timeout},
+        rest::{self, AlwaysOn, Rest, Timeout},
         screens::{Gnss as Reading, GnssHealth, PeripheralState, Screen},
         script::Driver,
-        stage::{Sensors, Stage},
+        second::Page,
+        stage::{Input, Sensors, Stage, Update},
     },
 };
 
@@ -37,7 +38,7 @@ fn start() -> Driver<'static> {
 }
 
 /// The receiver's health, as the GNSS task reports it.
-fn health(driver: &mut Driver, recovering: bool, failed_resets: u8) {
+fn health(driver: &mut Driver, recovering: bool, failed_resets: u8) -> Update {
     driver.sensors(Sensors {
         gnss: Reading {
             health: GnssHealth {
@@ -48,7 +49,7 @@ fn health(driver: &mut Driver, recovering: bool, failed_resets: u8) {
             ..Reading::default()
         },
         ..Sensors::default()
-    });
+    })
 }
 
 fn refresh(driver: &mut Driver, phase: RefreshPhase) {
@@ -121,6 +122,50 @@ fn an_untouched_toast_rests_the_screen_again() {
     assert_eq!(driver.stage.toast(), None);
     assert_eq!(driver.stage.rest(), Rest::AlwaysOn);
     assert_eq!(driver.stage.events().unread(), 1, "a timeout reads nothing");
+}
+
+#[test]
+fn a_toast_from_off_climbs_once_the_panel_is_on() {
+    let mut driver = start_with(Timeout::Seconds15, AlwaysOn::Off);
+    driver.wait(25 * SECOND);
+    assert_eq!(driver.stage.rest(), Rest::Off);
+    let woken = driver.now();
+    let update = health(&mut driver, true, 0);
+    assert_eq!(update.display_on, Some(true));
+    let mut levels: Vec<u8> = update.brightness.into_iter().collect();
+    while driver.now() < woken + rest::PANEL_WAKE {
+        levels.extend(driver.step(Input::default()).brightness);
+    }
+    assert!(
+        levels.iter().all(|&level| level == 0),
+        "the level climbed on a panel still asleep: {levels:?}"
+    );
+    while driver.stage.is_changing() {
+        levels.extend(driver.step(Input::default()).brightness);
+    }
+    assert_eq!(levels.last(), Some(&120));
+}
+
+#[test]
+fn a_toast_over_a_dim_wakes_to_the_level_being_edited() {
+    let mut driver = start_with(Timeout::Seconds15, AlwaysOn::Off);
+    driver.swipe(Point::new(233, 80), Point::new(233, 420), 250_000);
+    driver.settle();
+    driver.wait(500_000);
+    tap(&mut driver, 150, 190);
+    assert!(matches!(driver.stage.page(), Some(Page::Brightness(_))));
+    driver.swipe(Point::new(150, 280), Point::new(420, 280), 300_000);
+    driver.wait(16 * SECOND);
+    assert!(matches!(driver.stage.rest(), Rest::Dimmed { .. }));
+    let mut levels: Vec<u8> = health(&mut driver, true, 0)
+        .brightness
+        .into_iter()
+        .collect();
+    while driver.stage.is_changing() {
+        levels.extend(driver.step(Input::default()).brightness);
+    }
+    assert_eq!(levels.last(), Some(&255), "{levels:?}");
+    assert_eq!(driver.stage.peripherals().brightness, 120);
 }
 
 #[test]
