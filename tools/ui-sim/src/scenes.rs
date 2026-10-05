@@ -3,20 +3,28 @@
 
 use embedded_graphics::prelude::Point;
 
-use crate::caption::say;
+use crate::{
+    buttons::{self, Button},
+    caption::say,
+};
 use octowhere_ui::ui::{
     clock::{ClockState, DateTime, ZoneMode, ZoneState},
     compass::CompassView,
     gesture::Micros,
+    group::{
+        keyboard::{Mode, taps},
+        sim::{self, Arrival, Sim},
+        view::{Carriage, MessagesView, Name},
+    },
     panel::Cell,
     rest::{AlwaysOn, Timeout},
     screens::PeripheralState,
     screens::{Battery, Gnss, Screen},
-    script::Driver,
+    script::{self, Driver},
     second::Store,
     stage::Stage,
     stage::{Key, Motion, Sensors},
-    startup::{Outcome, Part},
+    startup::{Outcome, Part, Report},
 };
 
 pub struct Scene {
@@ -30,14 +38,44 @@ pub struct Scene {
 pub const SCENES: &[Scene] = &[
     Scene {
         name: "startup",
-        about: "the self-test as each part answers, the identity, the logo card and the clock",
+        about: "the self-test as each part answers, the identity, the logo card and the clock, charging",
         run: startup,
+        captioned: false,
+    },
+    Scene {
+        name: "startup-unplugged",
+        about: "the start-up into the clock with the battery not charging",
+        run: startup_unplugged,
         captioned: false,
     },
     Scene {
         name: "startup-failed",
         about: "the self-test with the magnetometer failing, the fault screen and the clock",
         run: startup_failed,
+        captioned: false,
+    },
+    Scene {
+        name: "startup-radio-failed",
+        about: "the self-test scrolling to a radio that does not answer, and its fault screen",
+        run: startup_radio_failed,
+        captioned: false,
+    },
+    Scene {
+        name: "startup-radio-slow",
+        about: "the self-test scrolling to a radio that takes its whole deadline to answer",
+        run: startup_radio_slow,
+        captioned: false,
+    },
+    Scene {
+        name: "startup-power-failed",
+        about: "the self-test with POWER failing, scrolled out of view by the radio and back",
+        run: startup_power_failed,
+        captioned: false,
+    },
+    Scene {
+        name: "startup-power-radio-failed",
+        about: "the self-test with POWER and the radio failing, and their fault screen",
+        run: startup_power_radio_failed,
         captioned: false,
     },
     Scene {
@@ -113,6 +151,30 @@ pub const SCENES: &[Scene] = &[
         captioned: false,
     },
     Scene {
+        name: "drawer",
+        about: "the Events drawer opened over the clock, a whole 10 s breathing cycle at rest, its list scrolled, Messages beside it, and closed",
+        run: drawer,
+        captioned: true,
+    },
+    Scene {
+        name: "member-face",
+        about: "the member face reached from the clock, turning with the heading, and a member selected",
+        run: member_face,
+        captioned: true,
+    },
+    Scene {
+        name: "messages",
+        about: "a private message arriving over the clock, read in its conversation, and a reply written, reviewed, sent and delivered",
+        run: messages,
+        captioned: true,
+    },
+    Scene {
+        name: "removal",
+        about: "removing a member with the slide and its countdown, then another member's request declined with the slide",
+        run: removal,
+        captioned: true,
+    },
+    Scene {
         name: "tour",
         about: "every screen and state, slowly: the start-up, the clock, the battery, the compass, settings, the always-on face and a demonstrated failure",
         run: tour,
@@ -171,6 +233,7 @@ fn dublin() -> Sensors {
             in_use: 9,
             in_view: 14,
             position: Some((533_498_000, -62_603_000)),
+            ..Gnss::default()
         },
     }
 }
@@ -457,6 +520,41 @@ fn drain(driver: &mut Driver, from: u8, to: u8, charging: bool) {
 }
 
 /// A tap, and a pause to see what it did.
+/// Presses `button` as a finger does, so a recording shows it held: a short press reaches the
+/// stage as the key comes back up, a long one once it has been held for the second the power
+/// controller is set to, and the finger lets go a little after.
+fn press(driver: &mut Driver, button: Button, key: Key) {
+    buttons::hold(button, true);
+    driver.wait(match key {
+        Key::Short => ms(150),
+        Key::Long => ms(1_000),
+    });
+    if let Key::Short = key {
+        buttons::hold(button, false);
+    }
+    match button {
+        Button::Power => driver.key(key),
+        Button::Boot => driver.boot_key(key),
+    };
+    if let Key::Long = key {
+        driver.wait(ms(300));
+        buttons::hold(button, false);
+    }
+}
+
+/// Drags a finger from `from` through each of `waypoints`, reaching each over its time and
+/// staying put on one that repeats the point before, then lifts it.
+fn drag(driver: &mut Driver, from: Point, waypoints: &[(Point, Micros)]) {
+    let mut path = vec![from];
+    let mut at = from;
+    for &(to, duration) in waypoints {
+        let steps = (duration / script::FRAME).max(1) as i32;
+        path.extend((1..=steps).map(|step| at + (to - at) * step / steps));
+        at = to;
+    }
+    driver.stroke(&path);
+}
+
 fn slow_tap(driver: &mut Driver, x: i32, y: i32) {
     driver.tap(Point::new(x, y));
     driver.wait(ms(1_500));
@@ -492,19 +590,8 @@ fn close_settings(driver: &mut Driver) {
 
 /// Every screen and state, paced for a viewer who has not seen the device.
 fn tour(driver: &mut Driver) {
-    use Outcome::Answered;
     say("SELF-TEST. EACH PART OF THE BOARD IS TICKED OFF AS IT ANSWERS.");
-    boot(
-        driver,
-        [
-            (Part::Power, Answered, 150),
-            (Part::Clock, Answered, 250),
-            (Part::Touch, Answered, 500),
-            (Part::Motion, Answered, 600),
-            (Part::Magnet, Answered, 750),
-            (Part::Gnss, Answered, 1_300),
-        ],
-    );
+    boot(driver, &ANSWERING);
     driver.motion(facing(37.0));
     driver.wait(ms(1_700).saturating_sub(driver.now()));
     say("EVERY PART ANSWERED, SO THE IDENTITY AND THE LOGO CARD PLAY.");
@@ -745,6 +832,18 @@ fn tour(driver: &mut Driver) {
     }
     say("THEN THE CLOCK, AS AFTER ANY START-UP.");
     driver.wait(ms(4_000));
+    say("A PRESS OF PWR RESTS THE SCREEN AT ONCE, HERE ON THE ALWAYS-ON FACE.");
+    press(driver, Button::Power, Key::Short);
+    driver.wait(ms(3_500));
+    say("ANOTHER PRESS WAKES IT.");
+    press(driver, Button::Power, Key::Short);
+    driver.wait(ms(3_000));
+    say("HELD FOR A SECOND, PWR ASKS WHETHER TO POWER OFF.");
+    press(driver, Button::Power, Key::Long);
+    driver.wait(ms(2_000));
+    say("SLIDING THE HANDLE ACROSS POWERS THE DEVICE OFF.");
+    driver.swipe(Point::new(113, 258), Point::new(400, 258), ms(800));
+    driver.wait(ms(2_500));
 }
 
 fn settings(driver: &mut Driver) {
@@ -826,8 +925,8 @@ fn settings_walk(driver: &mut Driver) {
     driver.wait(ms(1_000));
 }
 
-/// Boots with the clock running in Dublin, each part reporting at `at` ms from power-on.
-fn boot(driver: &mut Driver, reports: [(Part, Outcome, u64); 6]) {
+/// Boots with the clock running in Dublin, each report arriving at `at` ms from power-on.
+fn boot(driver: &mut Driver, reports: &[(Report, u64)]) {
     driver.stage = Stage::starting(PeripheralState {
         firmware: "0.1.0",
         ..PeripheralState::default()
@@ -835,40 +934,97 @@ fn boot(driver: &mut Driver, reports: [(Part, Outcome, u64); 6]) {
     driver.run_clock();
     driver.hold(hand);
     driver.sensors(dublin());
-    for (part, outcome, at) in reports {
+    for &(report, at) in reports {
         driver.wait(ms(at).saturating_sub(driver.now()));
-        driver.boot(part, outcome);
+        driver.report(report);
     }
 }
 
 fn startup(driver: &mut Driver) {
-    use Outcome::Answered;
+    boot(driver, &ANSWERING);
+    driver.wait(ms(5_900));
+}
+
+fn startup_unplugged(driver: &mut Driver) {
+    boot(driver, &ANSWERING);
+    on_battery(driver, 87, false);
+    driver.wait(ms(5_900));
+}
+
+/// Every part answering, as a start-up usually goes. The radio's check starts as GNSS's ends
+/// and takes about 2 ms, as on the board.
+pub const ANSWERING: [(Report, u64); 8] = [
+    (Report::Decided(Part::Power, Outcome::Answered), 150),
+    (Report::Decided(Part::Clock, Outcome::Answered), 250),
+    (Report::Decided(Part::Touch, Outcome::Answered), 500),
+    (Report::Decided(Part::Motion, Outcome::Answered), 600),
+    (Report::Decided(Part::Magnet, Outcome::Answered), 750),
+    (Report::Decided(Part::Gnss, Outcome::Answered), 1_300),
+    (Report::Started(Part::Radio), 1_300),
+    (Report::Decided(Part::Radio, Outcome::Answered), 1_302),
+];
+
+/// [`ANSWERING`] with `changes` in place of the reports for their parts.
+fn answering_but(changes: &[(Report, u64)]) -> Vec<(Report, u64)> {
+    let part = |report: &Report| match *report {
+        Report::Started(part) | Report::Decided(part, _) => part,
+    };
+    let decides = |report: &Report| matches!(report, Report::Decided(..));
+    let mut reports: Vec<_> = ANSWERING
+        .iter()
+        .filter(|(report, _)| {
+            !changes.iter().any(|(change, _)| {
+                part(change) == part(report) && decides(change) == decides(report)
+            })
+        })
+        .chain(changes)
+        .copied()
+        .collect();
+    reports.sort_by_key(|&(_, at)| at);
+    reports
+}
+
+fn startup_failed(driver: &mut Driver) {
     boot(
         driver,
-        [
-            (Part::Power, Answered, 150),
-            (Part::Clock, Answered, 250),
-            (Part::Touch, Answered, 500),
-            (Part::Motion, Answered, 600),
-            (Part::Magnet, Answered, 750),
-            (Part::Gnss, Answered, 1_300),
-        ],
+        &answering_but(&[(Report::Decided(Part::Magnet, Outcome::NoReply), 1_000)]),
+    );
+    driver.wait(ms(5_200));
+}
+
+fn startup_radio_failed(driver: &mut Driver) {
+    boot(
+        driver,
+        &answering_but(&[(Report::Decided(Part::Radio, Outcome::NoReply), 1_302)]),
+    );
+    driver.wait(ms(5_200));
+}
+
+/// The radio answering at the end of its 200 ms deadline.
+fn startup_radio_slow(driver: &mut Driver) {
+    boot(
+        driver,
+        &answering_but(&[(Report::Decided(Part::Radio, Outcome::Answered), 1_500)]),
     );
     driver.wait(ms(5_900));
 }
 
-fn startup_failed(driver: &mut Driver) {
-    use Outcome::{Answered, NoReply};
+/// POWER failing at its 200 ms deadline.
+fn startup_power_failed(driver: &mut Driver) {
     boot(
         driver,
-        [
-            (Part::Power, Answered, 150),
-            (Part::Clock, Answered, 250),
-            (Part::Touch, Answered, 500),
-            (Part::Motion, Answered, 600),
-            (Part::Magnet, NoReply, 1_000),
-            (Part::Gnss, Answered, 1_300),
-        ],
+        &answering_but(&[(Report::Decided(Part::Power, Outcome::NoReply), 200)]),
+    );
+    driver.wait(ms(5_200));
+}
+
+fn startup_power_radio_failed(driver: &mut Driver) {
+    boot(
+        driver,
+        &answering_but(&[
+            (Report::Decided(Part::Power, Outcome::NoReply), 200),
+            (Report::Decided(Part::Radio, Outcome::NoReply), 1_302),
+        ]),
     );
     driver.wait(ms(5_200));
 }
@@ -876,17 +1032,22 @@ fn startup_failed(driver: &mut Driver) {
 fn power_off(driver: &mut Driver) {
     start(driver, Screen::Clock);
     driver.wait(ms(1_000));
-    driver.key(Key::Long);
-    driver.wait(ms(1_000));
-    // Let go short of the target: the handle goes back to its start.
-    driver.swipe(Point::new(113, 258), Point::new(290, 258), ms(700));
+    press(driver, Button::Power, Key::Long);
+    driver.wait(ms(700));
+    // Drag the handle partway, think better of it and bring it back before letting go.
+    let (start, partway) = (Point::new(113, 258), Point::new(290, 258));
+    drag(
+        driver,
+        start,
+        &[(partway, ms(700)), (partway, ms(300)), (start, ms(600))],
+    );
     driver.wait(ms(1_000));
     driver.tap(Point::new(133, 118));
     driver.wait(ms(1_000));
-    driver.key(Key::Short);
-    driver.wait(ms(1_000));
-    driver.key(Key::Long);
-    driver.wait(ms(1_200));
+    press(driver, Button::Power, Key::Short);
+    driver.wait(ms(850));
+    press(driver, Button::Power, Key::Long);
+    driver.wait(ms(900));
     driver.swipe(Point::new(113, 258), Point::new(400, 258), ms(800));
     driver.wait(ms(1_000));
 }
@@ -898,9 +1059,9 @@ fn power_off_dim_cancel(driver: &mut Driver) {
         ..PeripheralState::default()
     });
     start(driver, Screen::Clock);
-    driver.wait(ms(16_000));
-    driver.key(Key::Long);
-    driver.wait(ms(1_500));
+    driver.wait(ms(15_000));
+    press(driver, Button::Power, Key::Long);
+    driver.wait(ms(1_200));
     driver.tap(Point::new(133, 118));
     driver.wait(ms(6_500));
 }
@@ -929,4 +1090,151 @@ fn rest_always_on(driver: &mut Driver) {
 
 fn rest_off(driver: &mut Driver) {
     rest(driver, Screen::Compass, false);
+}
+
+/// The clock in Dublin, awake, in a group with Ridge, Cove and Moss, and with their
+/// conversations if `conversations`.
+fn in_group(driver: &mut Driver, conversations: bool) {
+    driver.stage = Stage::new(PeripheralState {
+        firmware: "0.1.0",
+        timeout: Timeout::Never,
+        ..PeripheralState::default()
+    });
+    driver.stage.use_messages(Box::leak(MessagesView::boxed()));
+    start(driver, Screen::Clock);
+    let now = driver.now();
+    let mut group = sim::group(4, now);
+    for (id, name) in [(1, "Ridge"), (2, "Cove"), (3, "Moss")] {
+        if let Some(member) = &mut group.members[id] {
+            member.name = Name::new(name.as_bytes()).expect("a fixture name");
+        }
+    }
+    let mut mesh = Sim::new(Some(group));
+    if conversations {
+        mesh.conversations(now);
+    }
+    driver.mesh = Some(mesh);
+    driver.wait(ms(6_000));
+}
+
+fn mesh<'a>(driver: &'a mut Driver<'_>) -> &'a mut Sim {
+    driver.mesh.as_mut().expect("a scripted mesh")
+}
+
+fn open_drawer(driver: &mut Driver) {
+    driver.swipe(Point::new(233, 430), Point::new(233, 120), ms(300));
+    driver.settle();
+}
+
+fn drawer(driver: &mut Driver) {
+    in_group(driver, true);
+    let now = driver.now();
+    mesh(driver).request_removal(2, 1, 402_000_000, now);
+    driver.wait(ms(6_000));
+    say("AN UPWARD DRAG OPENS EVENTS OVER THE FACE.");
+    open_drawer(driver);
+    say("AT REST FOR A WHOLE 10 S BREATHING CYCLE: ONLY THE HALFTONE CHANGES.");
+    driver.wait(ms(10_000));
+    say("THE LIST SCROLLS, AND ROWS SHRINK A LITTLE NEAR ITS EDGES.");
+    driver.swipe(Point::new(233, 380), Point::new(233, 200), ms(700));
+    driver.wait(ms(1_200));
+    driver.swipe(Point::new(233, 200), Point::new(233, 380), ms(700));
+    driver.wait(ms(1_200));
+    say("A SIDEWAYS DRAG MOVES TO MESSAGES, AND BACK.");
+    driver.swipe(Point::new(380, 260), Point::new(80, 260), ms(400));
+    driver.wait(ms(2_500));
+    driver.swipe(Point::new(80, 260), Point::new(380, 260), ms(400));
+    driver.wait(ms(2_000));
+    say("A PULL DOWN FROM THE TOP OF THE LIST CLOSES IT.");
+    driver.swipe(Point::new(233, 160), Point::new(233, 440), ms(400));
+    driver.settle();
+    driver.wait(ms(1_500));
+}
+
+fn member_face(driver: &mut Driver) {
+    in_group(driver, false);
+    say("THE MEMBER FACE IS THE THIRD, AFTER THE COMPASS.");
+    page_left(driver, ms(400));
+    driver.wait(ms(1_000));
+    page_left(driver, ms(400));
+    driver.wait(ms(2_000));
+    say("THE GRID AND THE BEARINGS TURN WITH THE TRUE HEADING.");
+    driver.motion_over(ms(4_000), |t| facing(37.0 + 60.0 * swing(t)));
+    driver.wait(ms(1_000));
+    say("A TAP IN THE MIDDLE SELECTS THE NEXT MEMBER.");
+    slow_tap(driver, 233, 233);
+    driver.wait(ms(1_500));
+    slow_tap(driver, 233, 233);
+    driver.wait(ms(2_000));
+}
+
+fn messages(driver: &mut Driver) {
+    in_group(driver, true);
+    let now = driver.now();
+    let own = mesh(driver)
+        .view()
+        .group
+        .as_ref()
+        .map_or(0, |group| group.own);
+    say("A PRIVATE MESSAGE ARRIVES. THE TOAST NAMES ITS SENDER, NOT ITS WORDS.");
+    mesh(driver).arrive(
+        Arrival {
+            from: 1,
+            to: Some(own),
+            text: "Where are you?",
+            ago: 0,
+            carriage: Carriage::Received,
+            unread: true,
+        },
+        now,
+    );
+    driver.wait(ms(1_500));
+    say("A TAP ON THE TOAST OPENS THE CONVERSATION. A SECOND IN VIEW READS IT.");
+    slow_tap(driver, 233, 360);
+    driver.wait(ms(2_500));
+    say("WRITE OPENS THE KEYBOARD.");
+    slow_tap(driver, 233, 426);
+    driver.wait(ms(800));
+    for point in taps("at the bridge", Mode::Lower) {
+        driver.tap(point);
+        driver.wait(ms(120));
+    }
+    driver.wait(ms(800));
+    say("REVIEW READS IT THROUGH BEFORE SEND.");
+    slow_tap(driver, 333, 131);
+    driver.wait(ms(1_500));
+    say("SENT, IT GOES FROM QUEUED TO DELIVERED ONCE RIDGE ACKNOWLEDGES IT.");
+    slow_tap(driver, 306, 391);
+    driver.wait(ms(12_000));
+}
+
+fn removal(driver: &mut Driver) {
+    in_group(driver, false);
+    say("REMOVE ON A MEMBER OPENS A SLIDE.");
+    open_settings(driver);
+    page_left(driver, ms(400));
+    slow_tap(driver, 233, 190);
+    slow_tap(driver, 159, 353);
+    slow_tap(driver, 233, 380);
+    driver.wait(ms(800));
+    slow_tap(driver, 233, 353);
+    driver.wait(ms(1_200));
+    say("A SLIDE SHORT OF THE END EASES BACK AND ASKS NOTHING.");
+    driver.swipe(Point::new(110, 372), Point::new(230, 372), ms(500));
+    driver.wait(ms(800));
+    say("TO THE END, IT STARTS THE GROUP CHANGE AND COUNTS DOWN TO THE SWITCH.");
+    driver.swipe(Point::new(110, 372), Point::new(350, 372), ms(700));
+    driver.wait(ms(5_000));
+    say("ANOTHER MEMBER'S REQUEST, ON ANOTHER DEVICE: ITS TOAST OPENS IT.");
+    in_group(driver, false);
+    let now = driver.now();
+    mesh(driver).request_removal(2, 1, 402_000_000, now);
+    driver.wait(ms(1_000));
+    slow_tap(driver, 233, 360);
+    driver.wait(ms(2_500));
+    say("DECLINE ASKS FOR A SLIDE OF ITS OWN.");
+    slow_tap(driver, 306, 391);
+    driver.wait(ms(2_000));
+    driver.swipe(Point::new(110, 372), Point::new(350, 372), ms(700));
+    driver.wait(ms(3_000));
 }

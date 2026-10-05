@@ -7,11 +7,13 @@
     uv run tools/rtc-inject.py now
     uv run tools/rtc-inject.py 2026-12-31T23:59:50Z --as gnss
     uv run tools/rtc-inject.py 2026-03-29T00:59:30 --elf <elf>
+    uv run tools/rtc-inject.py now --probe 303a:1001:44:1B:F6:86:1A:38
 
 A time without an offset is UTC. `--as rtc`, the default, sets it as though the RTC had kept it,
 so the clock shows it unconfirmed; `--as gnss` as though GNSS had just set it. After either, GNSS
-no longer sets the clock until the firmware restarts. The ELF must be the one flashed, since the
-addresses come from it. The firmware logs `[RTC] injected …` when it takes the time.
+no longer sets the clock until the firmware restarts. With two boards attached, `--probe` picks
+one by its MAC, which `probe-rs list` shows. The ELF must be the one flashed, since the addresses
+come from it. The firmware logs `[RTC] injected …` when it takes the time.
 """
 
 import argparse
@@ -22,7 +24,6 @@ import sys
 from elftools.elf.elffile import ELFFile
 
 MODES = {"rtc": 1, "gnss": 2}
-PROBE = "303a:1001"
 
 
 def symbols(elf, names):
@@ -39,7 +40,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("time", help="`now`, or an ISO 8601 time; UTC unless it has an offset")
     parser.add_argument("--as", dest="mode", choices=MODES, default="rtc")
-    parser.add_argument("--elf", default="target/xtensa-esp32s3-none-elf/release/octowhere")
+    parser.add_argument("--elf", default="firmware/target/xtensa-esp32s3-none-elf/release/octowhere")
+    parser.add_argument("--probe", default="303a:1001")
     args = parser.parse_args()
 
     if args.time == "now":
@@ -55,7 +57,7 @@ def main():
     # The mode goes second: the firmware takes the time once it sees a mode.
     for name, value in zip(names, [seconds, MODES[args.mode]]):
         subprocess.run(
-            ["probe-rs", "write", "--chip", "esp32s3", "--probe", PROBE, "b32",
+            ["probe-rs", "write", "--chip", "esp32s3", "--probe", args.probe, "b32",
              hex(address[name]), str(value)],
             check=True,
         )

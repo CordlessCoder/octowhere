@@ -1,23 +1,40 @@
 //! A desktop window running the firmware's UI stage. The mouse is the touchscreen, and the
-//! keyboard sets the compass readings the motion task would publish. From the repository root:
+//! keyboard sets the compass readings the motion task would publish:
 //!
 //! ```text
-//! cargo +stable run --release --manifest-path tools/ui-sim/Cargo.toml -- [--scale 2]
+//! cargo run --release -p ui-sim -- [--scale 2] [--boards 3 [--alone] [--log]]
 //! ```
+//!
+//! `--boards <n>` shows up to six devices side by side, each its own stage and its own mesh
+//! node, unchanged from the firmware's, on `octowhere-sim`'s simulated air between them. They
+//! start in one group, or each alone with `--alone`, to pair through the screens. A click on a
+//! panel touches it and gives it the keyboard, as 1 to 6 do. A column beside them shows each
+//! node's group, the air's speed and time, and the link matrix: a click on a cell steps the
+//! link from its row's device to its column's through in reach, lossy and out of reach, with
+//! Shift both ways. `[` and `]` run the air slower or faster, up to 120 times the host's clock,
+//! though a finger or a key held keeps it at the host's pace, so that a press or a double tap
+//! keeps its length on a device's clock, which is its node's. X resets the device with the
+//! keyboard, which starts its node again from what it stored. Powering a device off stops its node. The nodes' warnings go to the terminal, and
+//! with `--log` every line they log. One device alone has no air: a scripted mesh answers it,
+//! whose other device pairs with whatever it asks.
 //!
 //! After `--`, `--play <scene>` loops a scene from `scenes.rs` in the window instead, and
 //! `--record <scene> <out>` records one without a window, to GIF or MP4 by `<out>`'s extension.
 //! Both step it on the firmware's frame period, so a recording is the same every run and shows
 //! none of the host's speed. A scene that captions its steps records with a column beside the
-//! panel for them. `--scenes` lists them. MP4 is encoded by `ffmpeg`, which must be on
-//! the path, as H.264 with full colour resolution (4:4:4): players built on ffmpeg or VLC take
-//! it, but most browsers do not.
+//! panel for them. In a terminal, `--record` shows bars for the frames rendered and encoded,
+//! against the scene's length from a first run that does not draw. `--scenes` lists them.
+//! MP4 is encoded by `ffmpeg`, which must be on the path, as H.264 with full colour resolution
+//! (4:4:4).
 //!
 //! A white disc marks where a finger is down, and fades as a ring for 300 ms after it lifts, so
 //! a recording shows taps and drags.
 //!
 //! The panel shows only its inscribed circle. The window paints the corners outside it grey, and
 //! screenshots and GIFs leave them transparent. An MP4 has no transparency and keeps the grey.
+//! Pixels the circle's edge crosses blend the panel with the grey by how much of them it covers.
+//! The board's PWR and BOOT keys show past the glass's right edge, where they sit on the device,
+//! and light while held, by K and O in the window or by a scene's press.
 //! `--unmasked`, or M in the window, shows the whole framebuffer instead, to see what is drawn
 //! where nobody will see it.
 //!
@@ -31,11 +48,15 @@
 //! - Z: the clock's zone, through unknown, automatic in Dublin, and chosen by hand in New York
 //!   and Kolkata. R: the clock, through set from GNSS, running unconfirmed, stopped and
 //!   unreadable.
-//! - B: the supply, through USB and charging, battery only, and USB with no battery. G: GNSS fix
-//!   or none.
+//! - B: the supply, through USB and charging, battery only, and USB with no battery. - / =:
+//!   the battery's level down / up 5 %, 1 % with Shift. G: GNSS fix or none. N: the GNSS
+//!   receiver through answering, being reset once, twice and three times after it stopped, and
+//!   faulted, as the GNSS task reports it.
+//! - Drag up from a face for the Events drawer, as on the device.
 //! - Hold H: a hand covering the screen, which goes to the clock face.
 //! - K: the power key. Released within a second it is a short press; held a second, a long one.
-//!   O: the BOOT key, the same way.
+//!   Once powered off, held 512 ms it powers the board on, through the start-up. O: the BOOT
+//!   key, the same way.
 //! - Drag down from a face for the settings panel, as on the device.
 //! - While the screen rests on the always-on face or is dark, a click is the touch controller's
 //!   tap gesture, as its gesture mode reports one, so a double click wakes it.
@@ -65,201 +86,51 @@ use octowhere_ui::{
     board::{LCD_HEIGHT, LCD_WIDTH},
     chrome::{Clip, FB},
     ui::{
-        clock::{ClockState, ZoneMode, ZoneState},
-        compass::CompassView,
-        screens::{Battery, Gnss, PeripheralState},
         script::{self, Driver},
         shift,
-        stage::{Input, Key as PowerKey, Motion, Sensors, Stage, Store, Touch, TouchGesture},
+        stage::Stage,
     },
 };
 
+mod air;
+mod buttons;
 mod caption;
+mod column;
+mod device;
 mod record;
 mod scenes;
 
-const WIDTH: usize = LCD_WIDTH as usize;
-const HEIGHT: usize = LCD_HEIGHT as usize;
-/// The longest press the touch controller's gesture mode takes for a tap.
-const TAP_US: u64 = 300_000;
-/// The motion task's sample periods, fast while a compass screen shows.
-const FAST_SAMPLE_US: u64 = 20_000;
-/// How long K is held before it counts as a long press, as the power controller is set to.
-const KEY_LONG_US: u64 = 1_000_000;
+use air::Air;
+use device::{Controls, Device, Readings};
 
-/// A key held down: when it went down, and whether it has already reported a long press.
-#[derive(Default)]
-struct Held(Option<(u64, bool)>);
-
-impl Held {
-    /// The press `down` makes at `now`: long once held a second, short if let go before.
-    fn press(&mut self, down: bool, now: u64) -> Option<PowerKey> {
-        match (down, self.0) {
-            (true, None) => self.0 = Some((now, false)),
-            (true, Some((since, false))) if now - since >= KEY_LONG_US => {
-                self.0 = Some((since, true));
-                return Some(PowerKey::Long);
-            }
-            (false, Some((_, long))) => {
-                self.0 = None;
-                return (!long).then_some(PowerKey::Short);
-            }
-            _ => {}
-        }
-        None
-    }
-}
-const SLOW_SAMPLE_US: u64 = 250_000;
-const SENSOR_PERIOD_US: u64 = 1_000_000;
+pub const WIDTH: usize = LCD_WIDTH as usize;
+pub const HEIGHT: usize = LCD_HEIGHT as usize;
 /// What the panel's round glass hides is shown in this in the window, so the corners read as
 /// off-panel.
-const OFF_PANEL: u32 = 0x1c1c1c;
-
-/// The readings the keyboard controls.
-struct Readings {
-    heading: f32,
-    pitch: i32,
-    roll: i32,
-    calibration: u8,
-    disturbed: bool,
-    live: bool,
-    spinning: bool,
-    vertical: bool,
-    /// Which of [`ZONES`] the clock shows.
-    zone: usize,
-    /// Which of [`CLOCKS`] the clock reads.
-    clock: usize,
-    /// A zone chosen in the settings panel, which the sensor task would report from then on.
-    chosen: Option<ZoneState>,
-    /// Which of [`BATTERIES`] the power controller reports.
-    battery: usize,
-    /// Whether GNSS has a fix.
-    fix: bool,
-}
-
-/// The supplies B steps through.
-const BATTERIES: [Option<Battery>; 3] = [
-    Some(Battery {
-        present: true,
-        percent: 87,
-        millivolts: 4020,
-        charging: true,
-        usb: true,
-    }),
-    Some(Battery {
-        present: true,
-        percent: 64,
-        millivolts: 3850,
-        charging: false,
-        usb: false,
-    }),
-    Some(Battery {
-        present: false,
-        percent: 0,
-        millivolts: 0,
-        charging: false,
-        usb: true,
-    }),
-];
-
-/// The clock's states R steps through: whether GNSS has set it, whether it stopped, and whether
-/// it can be read.
-const CLOCKS: [(bool, bool, bool); 4] = [
-    (true, false, true),
-    (false, false, true),
-    (false, true, true),
-    (false, false, false),
-];
-
-/// The zones Z steps through, and whether each was chosen by hand. `None` is automatic mode
-/// before any fix.
-const ZONES: [Option<(&str, ZoneMode)>; 4] = [
-    None,
-    Some(("Europe/Dublin", ZoneMode::Automatic)),
-    Some(("America/New_York", ZoneMode::Manual)),
-    Some(("Asia/Kolkata", ZoneMode::Manual)),
-];
-
-impl Readings {
-    fn compass(&self) -> CompassView {
-        if !self.live {
-            return CompassView {
-                calibration_percent: self.calibration,
-                ..CompassView::default()
-            };
-        }
-        CompassView {
-            live: true,
-            calibration_percent: self.calibration,
-            heading_decidegrees: (self.calibration >= 100 && !self.vertical)
-                .then(|| (self.heading.rem_euclid(360.0) * 10.0).round() as u16 % 3600),
-            pitch_deg: self.pitch.clamp(-90, 90) as i8,
-            roll_deg: self.roll.clamp(-128, 127) as i8,
-            disturbed: self.disturbed,
-        }
-    }
-
-    /// Applies a key, and says whether it changed a reading.
-    fn press(&mut self, key: Key, shift: bool) -> bool {
-        let step = if shift { 1.0 } else { 5.0 };
-        let tilt = if shift { 1 } else { 5 };
-        match key {
-            Key::Left => self.heading -= step,
-            Key::Right => self.heading += step,
-            Key::Up => self.pitch += tilt,
-            Key::Down => self.pitch -= tilt,
-            Key::Q => self.roll -= tilt,
-            Key::E => self.roll += tilt,
-            Key::C => {
-                self.calibration = match self.calibration {
-                    0 => 54,
-                    100 => 0,
-                    _ => 100,
-                }
-            }
-            Key::D => self.disturbed = !self.disturbed,
-            Key::L => self.live = !self.live,
-            Key::T => self.vertical = !self.vertical,
-            Key::Space => self.spinning = !self.spinning,
-            Key::Z => {
-                self.zone = (self.zone + 1) % ZONES.len();
-                self.chosen = None;
-            }
-            Key::B => self.battery = (self.battery + 1) % BATTERIES.len(),
-            Key::G => self.fix = !self.fix,
-            Key::R => self.clock = (self.clock + 1) % CLOCKS.len(),
-            _ => return false,
-        }
-        true
-    }
-
-    fn zone_state(&self) -> ZoneState {
-        if let Some(chosen) = self.chosen {
-            return chosen;
-        }
-        ZONES[self.zone].map_or(ZoneState::default(), |(name, mode)| ZoneState {
-            mode,
-            zone: octowhere_ui::tz::DATABASE.find(name).map(|zone| zone.id),
-        })
-    }
-
-    fn motion(&self) -> Motion {
-        Motion {
-            compass: self.compass(),
-        }
-    }
-}
+pub const OFF_PANEL: u32 = 0x1c1c1c;
+/// The gap between two devices' panels in the window.
+const GAP: usize = 8;
+/// The most devices the window holds.
+const MOST: usize = 6;
 
 /// The framebuffer and what the window shows of it.
-struct Panel {
+pub struct Panel {
     fb: Box<FB>,
     /// What the window shows of the framebuffer, before the touch marker.
     base: Vec<u32>,
     /// `base` with the touch marker over it.
-    pixels: Vec<u32>,
-    /// Whether each pixel shows on the panel.
+    pub pixels: Vec<u32>,
+    /// Whether each pixel shows on the panel, even in part.
     mask: Vec<bool>,
-    masked: bool,
+    /// The pixels the glass's edge crosses, and how much of each it shows, out of 255.
+    edge: Vec<(usize, u8)>,
+    /// The board's keys past the glass, which of them are held, the pixels past the glass they
+    /// reach, and whether each pixel shows anything: the glass or a key.
+    buttons: buttons::Buttons,
+    held: [bool; 2],
+    beyond: Vec<usize>,
+    shown: Vec<bool>,
+    pub masked: bool,
     /// Where a finger is down, or where one lifted and when, while its marker fades.
     contact: Option<Point>,
     lifted: Option<(Point, u64)>,
@@ -274,12 +145,33 @@ const MARKER_RADIUS: f32 = 16.0;
 const MARKER_FADE: u64 = 300_000;
 
 impl Panel {
-    fn new(masked: bool) -> Self {
+    pub fn new(masked: bool) -> Self {
+        let coverage = panel_coverage();
+        let buttons = buttons::Buttons::new();
+        let beyond = buttons
+            .reach()
+            .filter(|&index| coverage[index] == 0)
+            .collect();
+        let shown = coverage
+            .iter()
+            .enumerate()
+            .map(|(index, &glass)| glass > 0 || buttons.reaches(index))
+            .collect();
         Self {
             fb: FB::boxed(),
             base: vec![OFF_PANEL; WIDTH * HEIGHT],
             pixels: vec![OFF_PANEL; WIDTH * HEIGHT],
-            mask: panel_mask(),
+            mask: coverage.iter().map(|&shown| shown > 0).collect(),
+            edge: coverage
+                .iter()
+                .enumerate()
+                .filter(|&(_, &shown)| shown > 0 && shown < 255)
+                .map(|(index, &shown)| (index, shown))
+                .collect(),
+            buttons,
+            held: [false; 2],
+            beyond,
+            shown,
             masked,
             contact: None,
             lifted: None,
@@ -288,7 +180,12 @@ impl Panel {
         }
     }
 
-    fn set_masked(&mut self, masked: bool) {
+    /// Forgets the finger and its fading mark, as a device's clock starts again from zero.
+    pub fn forget_touch(&mut self) {
+        (self.contact, self.lifted) = (None, None);
+    }
+
+    pub fn set_masked(&mut self, masked: bool) {
         self.masked = masked;
         self.refresh();
         self.compose(0);
@@ -296,7 +193,8 @@ impl Panel {
 
     /// Follows the stage's contact, and puts a marker where it is: a disc while a finger is
     /// down, and a ring that fades after it lifts, so a one-step tap still shows in a recording.
-    fn touch(&mut self, stage: &Stage, now: u64) {
+    pub fn touch(&mut self, stage: &Stage, now: u64, held: [bool; 2]) {
+        self.held = held;
         // The stage reports the contact on its unshifted picture; the finger is on the panel.
         let contact = stage.contact().map(|point| point + stage.shift());
         if let (None, Some(was)) = (contact, self.contact) {
@@ -323,6 +221,23 @@ impl Panel {
                 let [_, r, g, b] = pixel.to_be_bytes();
                 let dim = |channel: u8| (f32::from(channel) * self.light) as u8;
                 *pixel = u32::from_be_bytes([0, dim(r), dim(g), dim(b)]);
+            }
+        }
+        // After the dim, which does not reach past the glass.
+        if self.masked {
+            for &index in &self.beyond {
+                self.pixels[index] = self.buttons.outside(index, self.held);
+            }
+            for &(index, shown) in &self.edge {
+                let [_, gr, gg, gb] = self.buttons.outside(index, self.held).to_be_bytes();
+                let [_, r, g, b] = self.pixels[index].to_be_bytes();
+                let mix = |panel: u8, grey: u8| {
+                    ((u32::from(panel) * u32::from(shown)
+                        + u32::from(grey) * (255 - u32::from(shown))
+                        + 127)
+                        / 255) as u8
+                };
+                self.pixels[index] = u32::from_be_bytes([0, mix(r, gr), mix(g, gg), mix(b, gb)]);
             }
         }
         let (center, fill, ring) = match (self.contact, self.lifted) {
@@ -363,13 +278,13 @@ impl Panel {
     }
 
     /// Which pixels an image of the panel should leave out.
-    fn knock_out(&self) -> Option<&[bool]> {
-        self.masked.then_some(&self.mask)
+    pub fn knock_out(&self) -> Option<&[bool]> {
+        self.masked.then_some(&self.shown)
     }
 
     /// Draws the stage's damage, or all of it when `whole`. Says how many pixels it drew and
     /// how long that took, or `None` when there was nothing to draw.
-    fn draw(&mut self, stage: &Stage, whole: bool) -> Option<(u32, Duration)> {
+    pub fn draw(&mut self, stage: &Stage, whole: bool) -> Option<(u32, Duration)> {
         let changed = stage.changed();
         let moved = stage.shift() != self.shift;
         self.shift = stage.shift();
@@ -425,6 +340,12 @@ fn main() {
     }
     let scene =
         after("--play").map(|rest| scenes::find(rest.first().expect("--play takes a scene")));
+    let count = after("--boards").map_or(1, |rest| {
+        rest.first()
+            .and_then(|count| count.parse().ok())
+            .filter(|count| (1..=MOST).contains(count))
+            .unwrap_or_else(|| panic!("--boards takes 1 to {MOST}"))
+    });
     let scale = match after("--scale")
         .and_then(|rest| rest.first())
         .map(String::as_str)
@@ -434,9 +355,10 @@ fn main() {
         Some("4") => Scale::X4,
         Some(other) => panic!("--scale takes 1, 2 or 4, not {other}"),
     };
+    let layout = Layout { count };
     let mut window = Window::new(
         "octowhere",
-        WIDTH,
+        layout.width(),
         HEIGHT,
         WindowOptions {
             scale,
@@ -448,21 +370,46 @@ fn main() {
         Some(scene) => play(&mut window, scene, masked),
         None => interact(
             window,
-            masked,
-            if after("--mp4").is_some() {
-                "mp4"
-            } else {
-                "gif"
+            layout,
+            Options {
+                masked,
+                extension: if after("--mp4").is_some() {
+                    "mp4"
+                } else {
+                    "gif"
+                },
+                in_group: after("--alone").is_none(),
+                every_line: after("--log").is_some(),
             },
         ),
     }
 }
 
-/// Steps `scene` on the firmware's frame period and records it to `path`.
+/// How long `scene` records for on the recording's own clock, from a run that steps the stage
+/// without drawing it.
+fn recorded_length(scene: &scenes::Scene) -> u64 {
+    caption::clear();
+    buttons::clear();
+    let (mut first, mut played, mut last) = (None, 0, 0);
+    let mut driver = Driver::new();
+    driver.observe(|_, now| {
+        played += (now - last) / caption::speed();
+        last = now;
+        first.get_or_insert(played);
+    });
+    (scene.run)(&mut driver);
+    drop(driver);
+    played - first.unwrap_or(played)
+}
+
+/// Steps `scene` on the firmware's frame period and records it to `path`, with bars for the
+/// frames rendered and encoded.
 fn record(scene: &scenes::Scene, path: PathBuf, masked: bool) {
+    let mut progress = Some(record::Progress::new(recorded_length(scene)));
     let mut panel = Panel::new(masked);
     let mut column = scene.captioned.then(caption::Column::new);
     caption::clear();
+    buttons::clear();
     let width = WIDTH + column.as_ref().map_or(0, |_| caption::COLUMN);
     let frame = |panel: &Panel, column: &mut Option<caption::Column>| match column {
         Some(column) => {
@@ -482,7 +429,7 @@ fn record(scene: &scenes::Scene, path: PathBuf, masked: bool) {
         match &mut recording {
             None => {
                 panel.draw(stage, true);
-                panel.touch(stage, now);
+                panel.touch(stage, now, buttons::held());
                 // The column shows in every frame.
                 let knock_out = panel.knock_out().map(|mask| {
                     mask.as_chunks::<WIDTH>()
@@ -501,13 +448,14 @@ fn record(scene: &scenes::Scene, path: PathBuf, masked: bool) {
                     width,
                     &frame(&panel, &mut column),
                     knock_out.as_deref(),
+                    progress.take(),
                 ));
             }
             Some(recording) => {
                 // Samples due before this step show the step before.
                 recording.sample(now - 1, &frame(&panel, &mut column));
                 panel.draw(stage, false);
-                panel.touch(stage, now);
+                panel.touch(stage, now, buttons::held());
                 recording.sample(now, &frame(&panel, &mut column));
             }
         }
@@ -533,6 +481,7 @@ fn play(window: &mut Window, scene: &scenes::Scene, masked: bool) {
     };
     loop {
         let mut panel = Panel::new(masked);
+        buttons::clear();
         let start = Instant::now();
         let (mut played, mut last) = (0, 0);
         let mut driver = Driver::new();
@@ -540,7 +489,7 @@ fn play(window: &mut Window, scene: &scenes::Scene, masked: bool) {
             panel.draw(stage, now == script::FRAME);
             played += (now - last) / caption::speed();
             last = now;
-            panel.touch(stage, played);
+            panel.touch(stage, played, buttons::held());
             let due = start + Duration::from_micros(played);
             thread::sleep(due.saturating_duration_since(Instant::now()));
             show(window, &panel.pixels);
@@ -556,190 +505,300 @@ fn play(window: &mut Window, scene: &scenes::Scene, masked: bool) {
     }
 }
 
-/// The mouse and keyboard drive the stage, on the host's clock.
-/// V records to files ending in `extension`.
-fn interact(mut window: Window, masked: bool, extension: &str) {
-    window.set_target_fps(60);
+/// Where each device's panel sits in the window, and the column after them when there are
+/// several.
+#[derive(Clone, Copy)]
+struct Layout {
+    count: usize,
+}
 
-    let mut stage = Stage::new(PeripheralState {
-        firmware: "0.1.0",
-        ..PeripheralState::default()
-    });
-    let mut readings = Readings {
-        heading: 37.0,
-        pitch: 0,
-        roll: 0,
-        calibration: 100,
-        disturbed: false,
-        live: true,
-        spinning: false,
-        vertical: false,
-        zone: 1,
-        clock: 0,
-        chosen: None,
-        battery: 0,
-        fix: true,
+impl Layout {
+    fn width(self) -> usize {
+        if self.count == 1 {
+            return WIDTH;
+        }
+        self.column_x() + column::WIDTH
+    }
+
+    fn panel_x(self, n: usize) -> usize {
+        n * (WIDTH + GAP)
+    }
+
+    fn column_x(self) -> usize {
+        self.count * (WIDTH + GAP)
+    }
+
+    /// The panel `point` falls on, and where on it.
+    fn panel_at(self, point: Point) -> Option<(usize, Point)> {
+        let x = usize::try_from(point.x).ok()?;
+        let n = x / (WIDTH + GAP);
+        let along = x - self.panel_x(n);
+        (n < self.count && along < WIDTH && (0..HEIGHT as i32).contains(&point.y))
+            .then(|| (n, Point::new(along as i32, point.y)))
+    }
+}
+
+struct Options {
+    masked: bool,
+    /// What V records to: "gif" or "mp4".
+    extension: &'static str,
+    /// Whether several devices start in one group.
+    in_group: bool,
+    /// Whether every line the nodes log goes to the terminal.
+    every_line: bool,
+}
+
+/// The mouse and keyboard drive the devices, on the host's clock.
+fn interact(mut window: Window, layout: Layout, options: Options) {
+    window.set_target_fps(60);
+    let count = layout.count;
+    let width = layout.width();
+    let host_utc = || {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_secs() as i64)
     };
-    let mut panel = Panel::new(masked);
+    let mut air =
+        (count > 1).then(|| Air::new(count, options.in_group, host_utc(), options.every_line));
+    let mut devices: Vec<Device> = (0..count)
+        .map(|n| {
+            let label = if count > 1 {
+                format!("[{}] ", n + 1)
+            } else {
+                String::new()
+            };
+            Device::new(
+                options.masked,
+                Readings::new(octowhere_sim::air::position(n)),
+                label,
+                air.is_none(),
+            )
+        })
+        .collect();
+    let mut frame = vec![OFF_PANEL; width * HEIGHT];
+    let mut column = vec![OFF_PANEL; column::WIDTH * HEIGHT];
     let start = Instant::now();
-    let (mut next_motion, mut next_sensors) = (0, 0);
-    let mut samples_fast = false;
-    let mut readings_changed = true;
-    let mut redraw = true;
+    let mut focus = 0;
+    // The device the mouse went down on, which has the finger until it lifts.
+    let mut touched: Option<usize> = None;
+    let mut was_down = false;
     let mut screenshots = 0;
     let mut recording: Option<record::Recording> = None;
     let (mut recordings, mut encoders) = (0, Vec::new());
-    let mut drawn = String::new();
-    let mut title_changed = false;
-    let mut zone_changed = false;
-    // When K went down, and whether it has been held long enough to count as a long press.
-    let (mut power_key, mut boot_key) = (Held::default(), Held::default());
-    // When the button went down while the controller watched for gestures.
-    let mut pressed_at = None;
+    let mut title = String::new();
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
-        let now = start.elapsed().as_micros() as u64 + 1;
+        let wall = start.elapsed().as_micros() as u64 + 1;
+        // A finger or a key held keeps the air at the host's pace, so presses keep their length.
+        let input = window.get_mouse_down(MouseButton::Left)
+            || [Key::K, Key::O, Key::H]
+                .iter()
+                .any(|&key| window.is_key_down(key));
+        if let Some(air) = &mut air {
+            air.advance(wall, input);
+        }
+        let utc_s = air.as_ref().map_or_else(host_utc, |air| air.paced.utc_s());
         let shift = window.is_key_down(Key::LeftShift) || window.is_key_down(Key::RightShift);
         for key in window.get_keys_pressed(KeyRepeat::Yes) {
-            match key {
-                Key::Tab => {
-                    stage.show(stage.screen().next());
-                    redraw = true;
+            let digit = [
+                Key::Key1,
+                Key::Key2,
+                Key::Key3,
+                Key::Key4,
+                Key::Key5,
+                Key::Key6,
+            ]
+            .iter()
+            .position(|&digit| digit == key);
+            match (key, digit) {
+                (_, Some(n)) if n < count && !input => {
+                    devices[focus].release_controls();
+                    focus = n;
                 }
-                Key::P => {
+                (Key::Tab, _) => {
+                    let device = &mut devices[focus];
+                    device.stage.show(device.stage.screen().next());
+                    device.redraw = true;
+                }
+                (Key::P, _) => {
                     screenshots += 1;
                     let path = format!("ui-sim-{screenshots}.png");
-                    write_png(&panel.pixels, panel.knock_out(), Path::new(&path));
+                    let mask = frame_mask(&devices, layout);
+                    write_png(&frame, width, mask.as_deref(), Path::new(&path));
                     println!("saved {path}");
                 }
-                Key::V => {
-                    match recording.take() {
-                        Some(finished) => encoders.push(finished.finish()),
-                        None => {
-                            recordings += 1;
-                            let path = PathBuf::from(format!("ui-sim-{recordings}.{extension}"));
-                            println!("recording {}", path.display());
-                            recording = Some(record::Recording::start(
-                                path,
-                                now,
-                                WIDTH,
-                                &panel.pixels,
-                                panel.knock_out(),
-                            ));
-                        }
+                (Key::V, _) => match recording.take() {
+                    Some(finished) => encoders.push(finished.finish()),
+                    None => {
+                        recordings += 1;
+                        let path =
+                            PathBuf::from(format!("ui-sim-{recordings}.{}", options.extension));
+                        println!("recording {}", path.display());
+                        let mask = frame_mask(&devices, layout);
+                        recording = Some(record::Recording::start(
+                            path,
+                            wall,
+                            width,
+                            &frame,
+                            mask.as_deref(),
+                            None,
+                        ));
                     }
-                    title_changed = true;
+                },
+                (Key::M, _) => {
+                    for device in &mut devices {
+                        device.panel.set_masked(!device.panel.masked);
+                    }
                 }
-                Key::M => {
-                    panel.set_masked(!panel.masked);
-                    title_changed = true;
+                (Key::LeftBracket | Key::RightBracket, _) => {
+                    if let Some(air) = &mut air {
+                        air.paced.faster(key == Key::RightBracket);
+                    }
                 }
-                key => {
-                    let clock = (readings.zone, readings.clock);
-                    readings_changed |= readings.press(key, shift);
-                    zone_changed |= (readings.zone, readings.clock) != clock;
+                (Key::X, _) if air.is_some() => {
+                    println!("[{}] reset", focus + 1);
+                    devices[focus].reset();
+                    if let Some(air) = &mut air {
+                        air.paced.sim.restart(focus);
+                    }
+                }
+                (key, _) => {
+                    devices[focus].press(key, shift);
                 }
             }
         }
-        if readings.spinning {
-            readings.heading += 0.5;
-            readings_changed = true;
-        }
 
-        let motion_due = now >= next_motion || readings_changed;
-        if motion_due {
-            next_motion = now
-                + if samples_fast {
-                    FAST_SAMPLE_US
-                } else {
-                    SLOW_SAMPLE_US
-                };
-            readings_changed = false;
-        }
-        let sensors_due = now >= next_sensors || zone_changed;
-        if sensors_due {
-            next_sensors = now + SENSOR_PERIOD_US;
-            zone_changed = false;
-        }
-        let contact = window
+        let pointer = window
             .get_mouse_pos(MouseMode::Discard)
-            .filter(|_| window.get_mouse_down(MouseButton::Left))
             .map(|(x, y)| Point::new(x as i32, y as i32));
-        let touch = if window.is_key_down(Key::H) {
-            Some(Touch::Cover)
-        } else if stage.watches_for_wake() {
-            // The controller's gesture mode reports a tap as the finger lifts, and no contacts.
-            match (contact, pressed_at) {
-                (Some(_), None) => {
-                    pressed_at = Some(now);
-                    None
+        let down = window.get_mouse_down(MouseButton::Left);
+        if down
+            && !was_down
+            && let Some(pointer) = pointer
+        {
+            if let Some((n, _)) = layout.panel_at(pointer) {
+                if n != focus {
+                    devices[focus].release_controls();
                 }
-                (None, Some(at)) => {
-                    pressed_at = None;
-                    (now - at < TAP_US).then_some(Touch::Gesture(TouchGesture::Tap))
+                touched = Some(n);
+                focus = n;
+            } else if let Some(air) = &air {
+                let inside = pointer - Point::new(layout.column_x() as i32, 0);
+                if let Some((from, to)) = column::link_at(inside, count) {
+                    let reach = air.paced.reach(from, to).next();
+                    air.paced.set_reach(from, to, reach);
+                    if shift {
+                        air.paced.set_reach(to, from, reach);
+                    }
                 }
-                _ => None,
             }
-        } else {
-            pressed_at = None;
-            Some(Touch::Contacts([contact, None]))
-        };
-        let update = stage.step(Input {
-            now,
-            touch,
-            motion: motion_due.then(|| readings.motion()),
-            sensors: sensors_due.then(|| sensors(&readings)),
-            boot: None,
-            key: power_key.press(window.is_key_down(Key::K), now),
-            boot_key: boot_key.press(window.is_key_down(Key::O), now),
-        });
-        samples_fast = update.samples_fast;
-        if update.recalibrate {
-            readings.calibration = 0;
-            readings_changed = true;
         }
-        if let Some(level) = update.brightness {
-            println!("brightness {level}");
+        if !down {
+            touched = None;
         }
-        if let Some(store) = update.store {
-            println!("store {store:?}");
-            // As the sensor task takes the choice and reports it from then on.
-            if !matches!(store, Store::Brightness(_)) {
-                let zone = stage.peripherals().clock.zone();
-                readings.chosen = Some(ZoneState {
-                    zone: zone.zone.or(readings.zone_state().zone),
-                    ..zone
+        was_down = down;
+
+        for (n, device) in devices.iter_mut().enumerate() {
+            let now = air
+                .as_ref()
+                .map_or(wall, |air| air.paced.sim.clock(n) as u64 + 1);
+            let contact = touched
+                .filter(|&touched| touched == n)
+                .and(pointer)
+                .and_then(|pointer| layout.panel_at(pointer))
+                .filter(|&(on, _)| on == n)
+                .map(|(_, at)| at);
+            let held = if n == focus {
+                Controls {
+                    power: window.is_key_down(Key::K),
+                    boot: window.is_key_down(Key::O),
+                    cover: window.is_key_down(Key::H),
+                }
+            } else {
+                Controls::default()
+            };
+            if let Some(air) = &air {
+                air.sense(n, &device.readings);
+                if let Some((view, seen)) = air.paced.sim.view_since(n, device.seen) {
+                    device.seen = seen;
+                    device.stage.set_mesh(view);
+                }
+                let seen = device.messages_seen;
+                let sim = &air.paced.sim;
+                let mut taken = None;
+                device.stage.update_messages(|messages| {
+                    taken = sim.messages_since(n, seen, messages);
+                    taken.is_some()
                 });
-                zone_changed = true;
+                if let Some(seen) = taken {
+                    device.messages_seen = seen;
+                }
+            }
+            let stepped = device.step(now, utc_s, contact, held);
+            if let Some(air) = &mut air {
+                if let Some(request) = stepped.mesh {
+                    air.paced.sim.command(n, request.into());
+                }
+                match stepped.powered {
+                    Some(false) => air.paced.sim.power_off(n),
+                    Some(true) => air.paced.sim.restart(n),
+                    None => {}
+                }
+            }
+            device
+                .panel
+                .touch(&device.stage, now, [held.power, held.boot]);
+        }
+
+        for (n, device) in devices.iter().enumerate() {
+            let x = layout.panel_x(n);
+            for (row, pixels) in device.panel.pixels.chunks(WIDTH).enumerate() {
+                frame[row * width + x..][..WIDTH].copy_from_slice(pixels);
+            }
+        }
+        if let Some(air) = &air {
+            let mut canvas = column::Canvas {
+                pixels: &mut frame,
+                width,
+            };
+            for n in 0..count {
+                column::number(&mut canvas, n, number_corner(layout, n), n == focus);
+            }
+            column::draw(&mut column, air, &devices, focus);
+            let x = layout.column_x();
+            for (row, pixels) in column.chunks(column::WIDTH).enumerate() {
+                frame[row * width + x..][..column::WIDTH].copy_from_slice(pixels);
             }
         }
 
-        if let Some((pixels_drawn, took)) = panel.draw(&stage, redraw) {
-            drawn = format!(
-                "octowhere: {:?}, {} px drawn in {:.2} ms on the host",
-                stage.screen(),
-                pixels_drawn,
-                took.as_secs_f64() * 1e3
-            );
-            title_changed = true;
-            redraw = false;
-        }
-        if title_changed {
-            let recording = if recording.is_some() {
+        let shown = format!(
+            "octowhere: {}{}{}{}",
+            if count > 1 {
+                format!("{}, ", focus + 1)
+            } else {
+                String::new()
+            },
+            devices[focus].drawn.as_deref().unwrap_or("starting"),
+            if devices[focus].panel.masked {
+                ""
+            } else {
+                " [unmasked]"
+            },
+            if recording.is_some() {
                 " [recording]"
             } else {
                 ""
-            };
-            let unmasked = if panel.masked { "" } else { " [unmasked]" };
-            window.set_title(&format!("{drawn}{unmasked}{recording}"));
-            title_changed = false;
+            },
+        );
+        if shown != title {
+            window.set_title(&shown);
+            title = shown;
         }
-        panel.touch(&stage, now);
         if let Some(recording) = &mut recording {
-            recording.sample(now, &panel.pixels);
+            recording.sample(wall, &frame);
         }
         window
-            .update_with_buffer(&panel.pixels, WIDTH, HEIGHT)
+            .update_with_buffer(&frame, width, HEIGHT)
             .expect("updating the window");
     }
     encoders.extend(recording.map(record::Recording::finish));
@@ -748,14 +807,47 @@ fn interact(mut window: Window, masked: bool, extension: &str) {
     }
 }
 
+/// Where device `n`'s number sits, in its panel's top left corner, past the glass.
+fn number_corner(layout: Layout, n: usize) -> Point {
+    Point::new(layout.panel_x(n) as i32 + 10, 8)
+}
+
+/// Which pixels of the window an image of it should leave out: each panel's corners, while
+/// they are masked.
+fn frame_mask(devices: &[Device], layout: Layout) -> Option<Vec<bool>> {
+    let masks: Vec<&[bool]> = devices
+        .iter()
+        .map(|device| device.panel.knock_out())
+        .collect::<Option<_>>()?;
+    let width = layout.width();
+    let mut shown = vec![true; width * HEIGHT];
+    for (n, mask) in masks.iter().enumerate() {
+        let x = layout.panel_x(n);
+        for (row, pixels) in mask.chunks(WIDTH).enumerate() {
+            shown[row * width + x..][..WIDTH].copy_from_slice(pixels);
+        }
+        if layout.count > 1 {
+            let corner = number_corner(layout, n);
+            for row in corner.y..corner.y + column::NUMBER.height as i32 {
+                let start = row as usize * width + corner.x as usize;
+                shown[start..][..column::NUMBER.width as usize].fill(true);
+            }
+        }
+    }
+    Some(shown)
+}
+
 /// Whether each pixel's centre falls on the round panel.
-fn panel_mask() -> Vec<bool> {
+/// How much of each pixel the round glass shows, out of 255, from how far its centre lies
+/// inside the circle.
+fn panel_coverage() -> Vec<u8> {
     let radius = WIDTH as f32 / 2.0;
     (0..WIDTH * HEIGHT)
         .map(|index| {
             let x = (index % WIDTH) as f32 + 0.5 - radius;
             let y = (index / WIDTH) as f32 + 0.5 - radius;
-            x * x + y * y <= radius * radius
+            let inside = (radius - x.hypot(y) + 0.5).clamp(0.0, 1.0);
+            (inside * 255.0).round() as u8
         })
         .collect()
 }
@@ -778,32 +870,8 @@ fn to_pixels(fb: &FB, knock_out: Option<&[bool]>, shift: Point, pixels: &mut [u3
     }
 }
 
-/// The host's UTC clock, in the state R selects, and the rest of the readings.
-fn sensors(readings: &Readings) -> Sensors {
-    let (gnss, stopped, readable) = CLOCKS[readings.clock];
-    let seconds = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |elapsed| elapsed.as_secs());
-    Sensors {
-        clock: ClockState {
-            utc: readable.then_some(seconds as i64),
-            set_from_gnss: gnss,
-            stopped,
-        },
-        zone: readings.zone_state(),
-        battery: BATTERIES[readings.battery],
-        gnss: Gnss {
-            fix: readings.fix,
-            in_use: if readings.fix { 9 } else { 0 },
-            in_view: 14,
-            // Dublin.
-            position: readings.fix.then_some((533_498_000, -62_603_000)),
-        },
-    }
-}
-
 /// Saves what the window shows, with the pixels `knock_out` leaves out transparent.
-fn write_png(pixels: &[u32], knock_out: Option<&[bool]>, path: &Path) {
+fn write_png(pixels: &[u32], width: usize, knock_out: Option<&[bool]>, path: &Path) {
     let pixels: Vec<u8> = pixels
         .iter()
         .enumerate()
@@ -814,7 +882,7 @@ fn write_png(pixels: &[u32], knock_out: Option<&[bool]>, path: &Path) {
         })
         .collect();
     let file = BufWriter::new(File::create(path).expect("creating the PNG"));
-    let mut encoder = png::Encoder::new(file, WIDTH as u32, HEIGHT as u32);
+    let mut encoder = png::Encoder::new(file, width as u32, HEIGHT as u32);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
     let mut writer = encoder.write_header().expect("writing the PNG header");

@@ -357,6 +357,82 @@ pub fn marks(length: u32, bands: u8) -> heapless::Vec<Mark, MAX_SLICES> {
     out
 }
 
+/// A bar along a row: its left edge from the row's start, and its width, in any unit.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Span {
+    pub left: f32,
+    pub width: f32,
+}
+
+/// The most bars [`build_in`] builds.
+pub const MAX_BARS: usize = 48;
+/// The frames the solid's wipe takes in [`build_in`], and the whole build with it.
+pub const WIPE_FRAMES: u32 = FLIGHT.len() as u32 - 1;
+pub const BUILD_IN_FRAMES: u32 = WIPE_FRAMES + BUILD_FRAMES as u32;
+
+/// What a barcode shows at `frame` of building in as the gauge's slices do when charging starts,
+/// its own bars, `rest`, standing for the slices. A solid as long as the bars reach closes in on
+/// their middle along `FLIGHT`; a seed grows there and splits into the two end bars, which fly
+/// out to their places on `FLIGHT`; and each inner bar appears on the logo's frame nearest its
+/// place. From [`BUILD_IN_FRAMES`] on it shows `rest`. `rest` runs left to right from 0.
+pub fn build_in(frame: u32, rest: &[Span], out: &mut heapless::Vec<Span, MAX_BARS>) {
+    out.clear();
+    let (Some(first), Some(last)) = (rest.first(), rest.last()) else {
+        return;
+    };
+    let length = last.left + last.width;
+    let middle = length / 2.0;
+    if frame <= WIPE_FRAMES {
+        let width = length * (1.0 - FLIGHT[frame as usize]);
+        if width > 0.0 {
+            _ = out.push(Span {
+                left: middle - width / 2.0,
+                width,
+            });
+        }
+        return;
+    }
+    let bands = frame - WIPE_FRAMES - 1;
+    if bands >= u32::from(BUILD_FRAMES) - 1 {
+        out.extend(rest.iter().copied().take(MAX_BARS));
+        return;
+    }
+    let bands = bands as u8;
+    if bands < SEED_FROM {
+        return;
+    }
+    if bands < FLY_FROM {
+        let width = (first.width + last.width) * SEED[usize::from(bands - SEED_FROM)] as f32 / 16.0;
+        _ = out.push(Span {
+            left: middle - width / 2.0,
+            width,
+        });
+        return;
+    }
+    let t = FLIGHT[usize::from(bands - FLY_FROM).min(FLIGHT.len() - 1)];
+    // The two end bars leave the middle half a unit either side of it.
+    let starts = [middle - 0.5 - first.width, middle + 0.5];
+    for (start, end) in starts.into_iter().zip([first, last]) {
+        _ = out.push(Span {
+            left: start + (end.left - start) * t,
+            width: end.width,
+        });
+        if rest.len() == 1 {
+            return;
+        }
+    }
+    for bar in &rest[1..rest.len() - 1] {
+        let place = (bar.left + bar.width / 2.0) / length;
+        let nearest = POPS
+            .iter()
+            .min_by(|a, b| (a.0 - place).abs().total_cmp(&(b.0 - place).abs()))
+            .map_or(0, |&(_, frame)| frame);
+        if bands >= nearest + SEED_FROM - LOGO_SEED && out.push(*bar).is_err() {
+            return;
+        }
+    }
+}
+
 /// The charging state the gauge shows: how far its bands show through the solid layer, and
 /// which frame of their build or loop they show.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -467,6 +543,25 @@ impl Charge {
         };
     }
 
+    /// Builds the gauge in from an empty fill at `at`, as the clock face comes in after the
+    /// start-up: the bands' build while charging, otherwise the solid growing out from the
+    /// fill's middle over bands that stay blank.
+    pub fn enter(&mut self, at: Micros) {
+        self.held = 0;
+        self.runs_from = at;
+        let to = if self.charging == Some(true) {
+            1.0
+        } else {
+            0.0
+        };
+        self.wipe = Wipe {
+            from: 1.0,
+            to,
+            start: at,
+            length: if to == 0.0 { WIPE } else { 0 },
+        };
+    }
+
     /// How far the bands show through the solid layer, from 0, covered, to 1. The solid is
     /// centred on the fill.
     #[must_use]
@@ -515,6 +610,71 @@ impl Charge {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn barcode() -> heapless::Vec<Span, MAX_BARS> {
+        let mut at = 0.0;
+        BARCODE
+            .iter()
+            .map(|&width| {
+                let span = Span { left: at, width };
+                at += width + 2.0;
+                span
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_barcode_builds_in_from_a_solid_to_its_bars() {
+        let rest = barcode();
+        let length = rest.last().map(|bar| bar.left + bar.width).unwrap();
+        let mut out = heapless::Vec::new();
+        build_in(0, &rest, &mut out);
+        assert_eq!(
+            out.as_slice(),
+            [Span {
+                left: 0.0,
+                width: length
+            }],
+            "covered"
+        );
+        build_in(WIPE_FRAMES / 2, &rest, &mut out);
+        assert_eq!(out.len(), 1);
+        assert!(
+            (out[0].left + out[0].width / 2.0 - length / 2.0).abs() < 1e-3,
+            "the solid closes in on the middle"
+        );
+        build_in(WIPE_FRAMES, &rest, &mut out);
+        assert!(out.is_empty(), "the wipe ends with nothing shown");
+        build_in(WIPE_FRAMES + 1 + u32::from(SEED_FROM), &rest, &mut out);
+        assert_eq!(out.len(), 1, "a seed");
+        build_in(WIPE_FRAMES + 1 + u32::from(FLY_FROM), &rest, &mut out);
+        assert_eq!(out.len(), 2, "the end bars leave the middle together");
+        let mut previous = 0;
+        for frame in WIPE_FRAMES + 1 + u32::from(FLY_FROM)..BUILD_IN_FRAMES {
+            build_in(frame, &rest, &mut out);
+            assert!(out.len() >= previous, "bars only appear");
+            previous = out.len();
+        }
+        build_in(BUILD_IN_FRAMES - 1, &rest, &mut out);
+        assert!(
+            out.len() < rest.len(),
+            "the last inner bars are still to come"
+        );
+        build_in(BUILD_IN_FRAMES, &rest, &mut out);
+        assert_eq!(out.as_slice(), rest.as_slice());
+        build_in(BUILD_IN_FRAMES + 40, &rest, &mut out);
+        assert_eq!(out.as_slice(), rest.as_slice());
+    }
+
+    #[test]
+    fn the_end_bars_land_where_they_rest() {
+        let rest = barcode();
+        let mut out = heapless::Vec::new();
+        let landed = WIPE_FRAMES + 1 + u32::from(LANDED);
+        build_in(landed, &rest, &mut out);
+        assert_eq!(out[0], rest[0]);
+        assert_eq!(out[1], rest[rest.len() - 1]);
+    }
 
     fn battery(percent: u8, charging: bool) -> Option<Battery> {
         Some(Battery {
@@ -746,6 +906,44 @@ mod tests {
         assert_eq!(charge.phase(dock), OPEN + OPEN_FRAMES);
         let again = looping + u64::from(LOOP_FRAMES) * FRAME;
         assert_eq!(charge.phase(again), OPEN);
+    }
+
+    #[test]
+    fn entering_while_charging_builds_the_bands_from_an_empty_fill() {
+        let mut charge = Charge::default();
+        charge.read(battery(87, true), 0);
+        let at = 1_000_000;
+        charge.enter(at);
+        for k in 0..BUILD_FRAMES {
+            let now = at + u64::from(k) * FRAME;
+            assert_eq!(marks(150, charge.phase(now)), marks(150, k), "{k}");
+            assert_eq!(charge.exposed(now), 1.0, "{k}");
+        }
+        assert!(marks(150, charge.phase(at - 1)).is_empty());
+        assert_eq!(charge.phase(at + u64::from(OPEN) * FRAME), OPEN);
+        assert!(charge.is_moving(at));
+    }
+
+    #[test]
+    fn entering_unplugged_grows_the_solid_from_the_middle_over_blank_bands() {
+        let mut charge = Charge::default();
+        charge.read(battery(87, false), 0);
+        let at = 1_000_000;
+        charge.enter(at);
+        assert_eq!(charge.exposed(at), 1.0);
+        let mut was = 1.0;
+        for now in (at..=at + WIPE).step_by(FRAME as usize) {
+            assert!(marks(150, charge.phase(now)).is_empty());
+            assert!(charge.exposed(now) <= was);
+            was = charge.exposed(now);
+        }
+        assert_eq!(charge.exposed(at + WIPE), 0.0);
+        assert!(charge.is_moving(at + WIPE / 2));
+        assert!(!charge.is_moving(at + WIPE));
+        // Plugging in afterwards still wipes in and builds.
+        charge.read(battery(87, true), at + 2 * WIPE);
+        assert_eq!(charge.exposed(at + 3 * WIPE), 1.0);
+        assert_eq!(charge.phase(at + 3 * WIPE), 0);
     }
 
     /// A charge that has looped since `0`, and when its loop started.

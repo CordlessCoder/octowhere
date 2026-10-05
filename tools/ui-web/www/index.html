@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Octowhere Simulator</title>
+<meta name="description" content="The octowhere firmware's screens, running in the browser from the firmware's own drawing code.">
+<link rel="stylesheet" href="style.css">
+<script defer src="sim.js"></script>
+</head>
+<body>
+<header class="masthead">
+  <h1 class="wordmark">OCTOWHERE</h1>
+  <p class="tag">SIMULATOR</p>
+  <p class="intro">The firmware's screens, drawn by its own code and running in your browser.
+    Touch the round screen as you would the device. The controls stand in for its keys and
+    sensors, and every reading is synthetic. Run several devices to see them find each other
+    over a simulated radio, each on the firmware's own mesh code.</p>
+</header>
+
+<main>
+  <section class="device" aria-label="The device">
+    <div class="stage">
+      <span class="mark tl" aria-hidden="true"></span>
+      <span class="mark tr" aria-hidden="true"></span>
+      <span class="mark bl" aria-hidden="true"></span>
+      <span class="mark br" aria-hidden="true"></span>
+      <div class="units" id="units"></div>
+      <div class="loading" id="loading">
+        <p>LOADING</p>
+        <div class="cells" id="loading-cells" aria-hidden="true"></div>
+        <p class="loaded" id="loading-bytes">The firmware's drawing code</p>
+      </div>
+    </div>
+    <template id="unit-template">
+      <div class="unit">
+        <div class="bezel">
+          <canvas class="panel" width="466" height="466" aria-label="The device's touchscreen"></canvas>
+          <canvas class="damage" width="466" height="466" aria-hidden="true" hidden></canvas>
+          <svg class="keys" viewBox="-300 -300 600 600">
+            <circle class="rim" r="246"></circle>
+            <g class="key" data-key="power" role="button" tabindex="0" aria-label="PWR key: press to rest the screen, hold a second to power off">
+              <path class="hit"></path>
+              <path class="arc"></path>
+              <path class="fill"></path>
+              <text>PWR</text>
+            </g>
+            <g class="key" data-key="boot" role="button" tabindex="0" aria-label="BOOT key: nothing uses it yet">
+              <path class="hit"></path>
+              <path class="arc"></path>
+              <path class="fill"></path>
+              <text>BOOT</text>
+            </g>
+          </svg>
+          <div class="off" hidden>
+            <p class="off-title">POWERED OFF</p>
+            <p>Hold PWR to power it on</p>
+            <button class="power-on" type="button">Power on</button>
+          </div>
+        </div>
+        <p class="unit-label"><b class="unit-number"></b><span class="unit-name">--</span><span class="unit-group">--</span></p>
+      </div>
+    </template>
+    <p class="hint" id="hint" aria-live="polite">Loading the firmware.</p>
+    <dl class="state" aria-label="What the device is doing">
+      <div><dt>SCREEN</dt><dd id="state-screen">--</dd></div>
+      <div><dt>REST</dt><dd id="state-rest">--</dd></div>
+      <div><dt>CLOCK</dt><dd id="state-clock">--</dd></div>
+      <div><dt>SUPPLY</dt><dd id="state-supply">--</dd></div>
+    </dl>
+  </section>
+
+  <section class="controls" aria-label="Controls">
+    <section class="module" aria-labelledby="device-title">
+      <header>
+        <svg class="sigil" data-glyph="device" aria-hidden="true"></svg>
+        <h2 id="device-title">DEVICE</h2>
+        <output class="reading meta" id="device-reading">FW 0.1.0</output>
+      </header>
+      <div class="keys-row">
+        <button type="button" class="hold" data-hold="power" title="Key: K">
+          <b>PWR</b><span>Press to rest the screen. Hold a second to power off.</span>
+        </button>
+        <button type="button" class="hold" data-hold="boot" title="Key: O">
+          <b>BOOT</b><span>Nothing uses it yet.</span>
+        </button>
+        <button type="button" class="hold" data-hold="cover" title="Hold H">
+          <b>COVER</b><span>A hand over the screen goes back to the clock.</span>
+        </button>
+      </div>
+      <div class="row">
+        <button type="button" id="replay">Replay the start-up</button>
+        <button type="button" id="skip">Start on the clock</button>
+      </div>
+    </section>
+
+    <section class="module" aria-labelledby="mesh-title">
+      <header>
+        <svg class="sigil" data-glyph="mesh" id="mesh-sigil" aria-hidden="true"></svg>
+        <h2 id="mesh-title">MESH</h2>
+        <output class="reading meta" id="mesh-reading">SCRIPTED</output>
+      </header>
+      <div class="segmented" role="radiogroup" aria-labelledby="devices-name" id="device-count">
+        <span class="name" id="devices-name">Devices</span>
+        <div class="rail">
+          <button type="button" data-value="1" title="One device, whose pairings a scripted device answers">1</button>
+          <button type="button" data-value="2">2</button>
+          <button type="button" data-value="3">3</button>
+          <button type="button" data-value="4">4</button>
+        </div>
+      </div>
+      <label class="check"><input type="checkbox" id="in-group" checked><span>Several devices start in one group, or else each alone, to pair through the screens</span></label>
+      <p class="note" id="scripted-note">With one device the mesh is scripted. After START, the other device appears, shows the same code and confirms it.</p>
+      <div class="air" id="air" hidden>
+        <p class="note">Each device runs the firmware's own mesh node on a simulated radio, and its screens show what that node holds. Click a device to touch it and give it the controls.</p>
+        <div class="segmented" role="radiogroup" aria-labelledby="speed-name" id="speed">
+          <span class="name" id="speed-name">Speed of the radio's time</span>
+          <div class="rail"></div>
+        </div>
+        <div class="links">
+          <span class="name" id="links-name">Links</span>
+          <div class="matrix" id="matrix" role="grid" aria-labelledby="links-name"></div>
+          <p class="note">A row's device sends, a column's hears. Click a link to put it out of reach, make it lossy, or bring it back.</p>
+        </div>
+        <div class="row">
+          <button type="button" id="reset-device">Reset the selected device</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="module" aria-labelledby="compass-title">
+      <header>
+        <svg class="sigil" data-glyph="arrow" id="compass-sigil" aria-hidden="true"></svg>
+        <h2 id="compass-title">COMPASS</h2>
+        <output class="reading" id="compass-reading">--</output>
+      </header>
+      <label class="slider">
+        <span class="name">Heading</span>
+        <output id="heading-out">037°</output>
+        <input type="range" id="heading" min="0" max="359" step="1" value="37">
+      </label>
+      <label class="check"><input type="checkbox" data-reading="11"><span>Keep turning</span></label>
+      <div class="pair">
+        <label class="slider">
+          <span class="name">Pitch</span>
+          <output id="pitch-out">0°</output>
+          <input type="range" id="pitch" min="-90" max="90" step="1" value="0">
+        </label>
+        <label class="slider">
+          <span class="name">Roll</span>
+          <output id="roll-out">0°</output>
+          <input type="range" id="roll" min="-90" max="90" step="1" value="0">
+        </label>
+      </div>
+      <div class="segmented" role="radiogroup" aria-labelledby="calibration-name" data-reading="3">
+        <span class="name" id="calibration-name">Calibration</span>
+        <div class="rail">
+          <button type="button" data-value="0">None</button>
+          <button type="button" data-value="54">Part-way</button>
+          <button type="button" data-value="100">Complete</button>
+        </div>
+      </div>
+      <label class="check"><input type="checkbox" data-reading="4"><span>Magnetic interference</span></label>
+      <label class="check"><input type="checkbox" data-reading="6"><span>Held upright, which withholds the heading</span></label>
+      <label class="check"><input type="checkbox" data-reading="5" checked><span>Motion sensors answering</span></label>
+    </section>
+
+    <section class="module" aria-labelledby="time-title">
+      <header>
+        <svg class="sigil" data-glyph="gnss" id="time-sigil" aria-hidden="true"></svg>
+        <h2 id="time-title">TIME AND PLACE</h2>
+        <output class="reading" id="time-reading">--</output>
+      </header>
+      <div class="segmented" role="radiogroup" aria-labelledby="clock-name" data-reading="8">
+        <span class="name" id="clock-name">Clock</span>
+        <div class="rail">
+          <button type="button" data-value="0" title="Set from satellite time">GNSS</button>
+          <button type="button" data-value="1" title="Running on the real-time clock, not confirmed by GNSS">RTC</button>
+          <button type="button" data-value="2" title="The real-time clock stopped">Stopped</button>
+          <button type="button" data-value="3" title="The real-time clock cannot be read">No data</button>
+        </div>
+      </div>
+      <label class="select">
+        <span class="name">Time zone</span>
+        <select data-reading="7">
+          <option value="0">Not known yet</option>
+          <option value="1" selected>Dublin, found from the position</option>
+          <option value="2">New York, chosen by hand</option>
+          <option value="3">Kolkata, chosen by hand</option>
+        </select>
+      </label>
+      <label class="check"><input type="checkbox" data-reading="10" checked><span>GNSS has a fix</span></label>
+      <div class="segmented" role="radiogroup" aria-labelledby="receiver-name" data-reading="13">
+        <span class="name" id="receiver-name">GNSS receiver</span>
+        <div class="rail">
+          <button type="button" data-value="0" title="The receiver answers the GNSS task">Answering</button>
+          <button type="button" data-value="1" title="It stopped answering, and the first reset is under way">Reset 1</button>
+          <button type="button" data-value="2" title="One reset failed, and the second is under way">Reset 2</button>
+          <button type="button" data-value="3" title="Two resets failed, and the third is under way">Reset 3</button>
+          <button type="button" data-value="4" title="Three resets failed: a fault, though the resets go on">Faulted</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="module" aria-labelledby="power-title">
+      <header>
+        <svg class="sigil" data-glyph="battery" id="power-sigil" aria-hidden="true"></svg>
+        <h2 id="power-title">POWER</h2>
+        <output class="reading" id="power-reading">--</output>
+      </header>
+      <div class="segmented" role="radiogroup" aria-labelledby="supply-name" data-reading="9">
+        <span class="name" id="supply-name">Supply</span>
+        <div class="rail">
+          <button type="button" data-value="0">USB, charging</button>
+          <button type="button" data-value="1">Battery</button>
+          <button type="button" data-value="2">USB, no battery</button>
+        </div>
+      </div>
+      <label class="slider">
+        <span class="name">Battery level</span>
+        <output id="level-out">87%</output>
+        <input type="range" id="level" min="0" max="100" step="1" value="87">
+      </label>
+    </section>
+
+    <section class="module" aria-labelledby="display-title">
+      <header>
+        <svg class="sigil" data-glyph="shift" id="display-sigil" aria-hidden="true"></svg>
+        <h2 id="display-title">DISPLAY</h2>
+        <output class="reading" id="display-reading">--</output>
+      </header>
+      <div class="shift">
+        <div class="pad" role="radiogroup" aria-label="Pixel shift position" id="pad"></div>
+        <div class="shift-text">
+          <span class="name">Pixel shift</span>
+          <p>The picture moves up to 3 px against burn-in, a step round these nine places when a
+            page settles, the panel opens or shuts, or the screen wakes, and otherwise after 10
+            minutes. Pick one to hold it there.</p>
+          <p class="meta" id="shift-moved">--</p>
+          <label class="check"><input type="checkbox" id="shift-auto" checked><span>Move it on its own</span></label>
+        </div>
+      </div>
+      <label class="check"><input type="checkbox" id="damage-view"><span>Outline what each frame sends to the panel</span></label>
+      <p class="meta" id="damage-stats">--</p>
+      <label class="check"><input type="checkbox" id="corners"><span>Show the corners the round glass hides</span></label>
+      <div class="row">
+        <button type="button" id="screenshot">Save a screenshot</button>
+      </div>
+    </section>
+
+    <section class="module log-module" id="log-module" aria-labelledby="log-title" hidden>
+      <header>
+        <svg class="sigil" data-glyph="log" aria-hidden="true"></svg>
+        <h2 id="log-title">NODE LOG</h2>
+        <output class="reading meta" id="log-reading">--</output>
+      </header>
+      <label class="check"><input type="checkbox" id="log-selected"><span>Only the selected device's lines</span></label>
+      <pre class="log" id="log"></pre>
+    </section>
+
+    <details class="module keyboard">
+      <summary><h2>GESTURES AND KEYS</h2></summary>
+      <dl>
+        <dt>Swipe sideways</dt><dd>Between the clock and the compass</dd>
+        <dt>Drag down</dt><dd>From the top for settings; drag up to close them</dd>
+        <dt>Drag up</dt><dd>From a face for events; swipe sideways there for messages</dd>
+        <dt>Tap</dt><dd>A setting, to open it</dd>
+        <dt>Double-tap</dt><dd>A resting screen, to wake it</dd>
+        <dt>Click a device</dt><dd>With several, gives it the controls</dd>
+      </dl>
+      <dl>
+        <dt>← →</dt><dd>Heading, 5° a press, 1° with Shift</dd>
+        <dt>↑ ↓</dt><dd>Pitch</dd>
+        <dt>Q E</dt><dd>Roll</dd>
+        <dt>Space</dt><dd>Keep turning</dd>
+        <dt>C</dt><dd>Calibration</dd>
+        <dt>D</dt><dd>Magnetic interference</dd>
+        <dt>T</dt><dd>Held upright</dd>
+        <dt>L</dt><dd>Motion sensors answering</dd>
+        <dt>R</dt><dd>Clock</dd>
+        <dt>Z</dt><dd>Time zone</dd>
+        <dt>G</dt><dd>GNSS fix</dd>
+        <dt>N</dt><dd>GNSS receiver answering, being reset, or faulted</dd>
+        <dt>B</dt><dd>Supply</dd>
+        <dt>- =</dt><dd>Battery level, 5 % a press, 1 % with Shift</dd>
+        <dt>K</dt><dd>Hold for PWR</dd>
+        <dt>O</dt><dd>Hold for BOOT</dd>
+        <dt>H</dt><dd>Hold to cover the screen</dd>
+        <dt>F</dt><dd>Outline what each frame sends</dd>
+        <dt>M</dt><dd>Show the corners</dd>
+        <dt>P</dt><dd>Save a screenshot</dd>
+        <dt>1 2 3 4</dt><dd>Select a device</dd>
+        <dt>[ ]</dt><dd>Run the radio's time slower or faster</dd>
+        <dt>X</dt><dd>Reset the selected device</dd>
+      </dl>
+    </details>
+  </section>
+</main>
+
+<footer>
+  <p>Built from <a id="revision" href="https://github.com/CordlessCoder/octowhere">__REVISION__</a>.
+    Zone rules from the <a href="https://www.iana.org/time-zones">IANA time zone database</a>.
+    The page leaves out the zone boundaries the device finds its zone with.
+    The page is set in Archivo and Martian Mono, under the
+    <a href="fonts/Archivo-OFL.txt">SIL Open Font License</a>.</p>
+</footer>
+</body>
+</html>

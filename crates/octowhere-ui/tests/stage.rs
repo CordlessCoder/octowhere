@@ -1,7 +1,10 @@
+mod common;
+
+use common::{Buffers, differing, differing_as_shown};
 use embedded_graphics::prelude::{Point, Size};
 use embedded_graphics::primitives::Rectangle;
 use octowhere_ui::{
-    chrome::{self, Clip, Color, Dirty, FB, Window},
+    chrome::{self, Color, Dirty, FB, Window},
     tz::DATABASE,
     ui::{
         clock::{ClockState, DateTime, ZoneMode, ZoneState},
@@ -385,108 +388,6 @@ fn a_heading_back_slowly_from_hold_level_reveals_again() {
 fn a_heading_back_from_no_data_reveals_again() {
     let accents = heading_back_after(Motion::default(), 300_000);
     assert!(accents.dial < 255 && accents.icon_rows < 5, "{accents:?}");
-}
-
-/// Two framebuffers drawn in turn as the frame loop draws them: each repaints the damage of the
-/// step before as well as its own, since it last saw the frame before that.
-struct Buffers {
-    fbs: [Box<FB>; 2],
-    next: usize,
-    previous: Dirty,
-    drawn: [bool; 2],
-    /// Pixels repainted, over every step.
-    pixels: u64,
-    /// What the panel shows: each buffer's flush rectangles copied in after it is drawn.
-    panel: Box<FB>,
-    flushed: bool,
-}
-
-impl Buffers {
-    fn new() -> Self {
-        Self {
-            fbs: [FB::boxed(), FB::boxed()],
-            next: 0,
-            previous: Dirty::new_full(),
-            drawn: [false; 2],
-            pixels: 0,
-            panel: FB::boxed(),
-            flushed: false,
-        }
-    }
-
-    /// Draws `stage` after a step that changed `changed`, and returns the buffer drawn into.
-    fn draw(&mut self, stage: &Stage, changed: &Dirty) -> &FB {
-        let mut repaint = self.previous.clone();
-        repaint.extend(changed);
-        self.previous = changed.clone();
-        let index = self.next;
-        self.next ^= 1;
-        let fb = &mut *self.fbs[index];
-        if repaint.is_full() || !self.drawn[index] {
-            self.drawn[index] = true;
-            self.pixels += 466 * 466;
-            stage.draw(fb);
-        } else if !repaint.is_empty() {
-            self.pixels += u64::from(repaint.pixels());
-            stage.draw(&mut Clip::new(fb, &repaint));
-        }
-        // The panel shows the step before, so the flush sends only this step's damage.
-        let flush = if self.flushed {
-            changed.clone()
-        } else {
-            Dirty::new_full()
-        };
-        self.flushed = true;
-        let rows = |rect: Rectangle| {
-            (rect.top_left.y..rect.top_left.y + rect.size.height as i32).map(move |y| {
-                let start = (y * 466 + rect.top_left.x) as usize * 2;
-                start..start + rect.size.width as usize * 2
-            })
-        };
-        let whole = Rectangle::new(Point::zero(), Size::new(466, 466));
-        let rects: Vec<_> = if flush.is_full() {
-            vec![whole]
-        } else {
-            flush
-                .rectangles(octowhere_ui::chrome::FLUSH_OVERHEAD)
-                .collect()
-        };
-        for rect in rects {
-            for range in rows(rect) {
-                self.panel.buffer_mut()[range.clone()].copy_from_slice(&fb.buffer()[range]);
-            }
-        }
-        &self.fbs[index]
-    }
-}
-
-/// How many pixels differ on the round panel, out to as far past its edge as the pixel shift
-/// can bring onto it. The square's corners beyond are never seen or cleared, and a page moving
-/// across them leaves what it drew there.
-fn differing(a: &FB, b: &FB) -> usize {
-    differing_within(a, b, 233.0 + octowhere_ui::ui::shift::REACH as f32)
-}
-
-/// [`differing`], but on the glass alone while the start-up shows, since it always shows
-/// unshifted.
-fn differing_as_shown(stage: &Stage, a: &FB, b: &FB) -> usize {
-    let reach = if stage.starting_up() {
-        0.0
-    } else {
-        octowhere_ui::ui::shift::REACH as f32
-    };
-    differing_within(a, b, 233.0 + reach)
-}
-
-fn differing_within(a: &FB, b: &FB, radius: f32) -> usize {
-    (0..466 * 466)
-        .map(|index| Point::new(index % 466, index / 466))
-        .filter(|&point| {
-            let (x, y) = (point.x as f32 + 0.5 - 233.0, point.y as f32 + 0.5 - 233.0);
-            x * x + y * y <= radius * radius
-        })
-        .filter(|&point| a.pixel(point) != b.pixel(point))
-        .count()
 }
 
 /// Readings that walk the compass through every state and turn the dial both ways.
@@ -1062,6 +963,7 @@ fn driver_on(screen: Screen) -> Driver<'static> {
                 in_use: 9,
                 in_view: 14,
                 position: None,
+                ..Gnss::default()
             },
         }),
         motion: Some(heading(470)),
@@ -1583,6 +1485,12 @@ fn start_up_damage_redraws_what_changed() {
             );
         };
         for part in Part::ALL {
+            // The radio's check starts a while before it ends, so the list scrolls while the
+            // parts wait.
+            if part == Part::Radio {
+                driver.boot_started(part);
+                check(&driver, "radio started");
+            }
             for _ in 0..6 {
                 driver.step(Input::default());
                 check(&driver, "waiting");
@@ -1678,8 +1586,9 @@ fn after_the_card_the_clock_runs_its_entry_and_types_its_time_in() {
 fn a_failure_shows_the_fault_screen_then_the_clock() {
     let mut driver = Driver::starting();
     boot_all(&mut driver, Some(Part::Gnss));
-    // The hold, then 120 frames at 30 fps and the 18 of the exit.
-    driver.wait(4_800_000);
+    // The list's scroll to the radio, the hold, then 120 frames at 30 fps and the 18 of the
+    // exit.
+    driver.wait(4_900_000);
     assert!(driver.stage.starting_up());
     driver.wait(200_000);
     assert!(!driver.stage.starting_up());
@@ -2447,6 +2356,49 @@ fn a_short_press_rests_the_screen_at_once_and_another_wakes_it() {
 }
 
 #[test]
+fn a_short_press_wakes_a_dimming_or_darkening_screen() {
+    for darkening in [false, true] {
+        let mut driver = resting_on(Screen::Clock, Timeout::Seconds15, false);
+        if darkening {
+            wait_until(&mut driver, 22_000_000, |rest| {
+                matches!(rest, Rest::Darkening { .. })
+            });
+        } else {
+            wait_until(&mut driver, 16_000_000, is_dimmed);
+        }
+        driver.wait(100_000);
+        driver.key(Key::Short);
+        assert_eq!(driver.stage.rest(), Rest::Awake, "darkening {darkening}");
+        let levels = levels_over(&mut driver, rest::WAKE_FADE + script::FRAME);
+        assert!(levels.is_sorted(), "{levels:?}");
+        assert_eq!(levels.last(), Some(&120), "{levels:?}");
+        driver.wait(10_000_000);
+        assert_eq!(
+            driver.stage.rest(),
+            Rest::Awake,
+            "the press restarts the timeout"
+        );
+    }
+}
+
+#[test]
+fn the_timeout_closes_the_drawer_as_the_screen_rests() {
+    for always_on in [true, false] {
+        let mut driver = resting_on(Screen::Clock, Timeout::Seconds15, always_on);
+        driver.swipe(Point::new(233, 430), Point::new(233, 120), 250_000);
+        driver.settle();
+        assert!(driver.stage.drawer().is_some());
+        wait_until(&mut driver, 22_000_000, |rest| {
+            matches!(rest, Rest::AlwaysOn | Rest::Off)
+        });
+        assert!(
+            driver.stage.drawer().is_none(),
+            "always-on {always_on}: the drawer stays over the resting screen"
+        );
+    }
+}
+
+#[test]
 fn a_short_press_cancels_the_confirmation_and_rests() {
     let mut driver = resting_on(Screen::Clock, Timeout::Seconds15, false);
     driver.key(Key::Long);
@@ -2713,6 +2665,80 @@ fn charging_builds_the_slices_out_from_the_middle_and_unplugging_covers_them_fro
     assert_eq!(dark(&covering, 265..280), 15, "with nothing beside it");
 }
 
+/// After the start-up the gauge builds in from an empty fill rather than rising: the slices'
+/// build while charging, otherwise the solid growing out from the middle.
+#[test]
+fn after_the_start_up_the_gauge_builds_in_from_the_middle() {
+    for charging in [true, false] {
+        let mut driver = Driver::starting();
+        driver.sensors(Sensors {
+            clock: clock_at(12, 7, 42),
+            zone: zone("Europe/Dublin", ZoneMode::Automatic),
+            battery: Some(Battery {
+                present: true,
+                percent: 87,
+                millivolts: 3900,
+                charging,
+                usb: charging,
+            }),
+            ..Sensors::default()
+        });
+        boot_all(&mut driver, None);
+        let mut buffers = Buffers::new();
+        let mut step = |driver: &mut Driver| {
+            driver.step(Input::default());
+            let partial = buffers.draw(&driver.stage, driver.stage.changed());
+            let whole = render(&driver.stage);
+            assert_eq!(
+                differing_as_shown(&driver.stage, partial, &whole),
+                0,
+                "{charging}"
+            );
+            whole
+        };
+        let mut shown = step(&mut driver);
+        for _ in 0..400 {
+            if !driver.stage.starting_up() {
+                break;
+            }
+            shown = step(&mut driver);
+        }
+        assert!(!driver.stage.starting_up());
+        // The fill runs from x 265 to 415 at 87 %, on rows 284 to 307.
+        let dark = |fb: &FB, xs: core::ops::Range<i32>| {
+            xs.filter(|&x| fb.pixel(Point::new(x, 295)) == Some(chrome::BLACK))
+                .count()
+        };
+        assert_eq!(
+            dark(&shown, 265..415),
+            150,
+            "{charging}: the fill starts empty"
+        );
+        let handed_over = driver.now();
+        let mut at = |driver: &mut Driver, after: Micros| {
+            let mut shown = None;
+            while driver.now() < handed_over + after {
+                shown = Some(step(driver));
+            }
+            shown.unwrap()
+        };
+        if charging {
+            let seeded = at(&mut driver, 160_000 + 150_000);
+            assert!(dark(&seeded, 330..360) < 30, "a seed grows in the middle");
+            assert_eq!(dark(&seeded, 265..300), 35, "with nothing at the ends yet");
+            let built = at(&mut driver, 160_000 + 1_000_000);
+            assert_ne!(built.pixel(Point::new(265, 295)), Some(chrome::BLACK));
+            assert!(dark(&built, 265..415) > 0, "the slices reach the start");
+        } else {
+            let growing = at(&mut driver, 160_000 + 250_000);
+            assert_eq!(dark(&growing, 320..360), 0, "the middle is solid");
+            assert_eq!(dark(&growing, 265..280), 15, "with nothing beside it");
+            let grown = at(&mut driver, 160_000 + 600_000);
+            assert_eq!(dark(&grown, 265..415), 0, "the solid fills it");
+        }
+    }
+}
+
 /// The step that cancels onto the always-on face draws that face, not the page under it.
 #[test]
 fn a_cancel_onto_the_always_on_face_draws_it_at_once() {
@@ -2776,6 +2802,24 @@ fn the_panel_settling_open_or_shut_moves_the_picture() {
     driver.settle();
     driver.wait(500_000);
     assert_eq!(driver.stage.shift(), Point::new(2, 2));
+}
+
+/// A pinned picture stays where it was put through a page change, and moves again once let go.
+#[test]
+fn a_pinned_picture_holds_through_a_page_change() {
+    let mut driver = driver_on(Screen::Clock);
+    let now = driver.now();
+    driver.stage.pin_shift(Some(4), now);
+    assert_eq!(driver.stage.shift(), Point::new(-2, 2));
+    driver.swipe(Point::new(420, 233), Point::new(60, 233), 250_000);
+    driver.settle();
+    assert_eq!(driver.stage.screen(), Screen::Compass);
+    assert_eq!(driver.stage.shift(), Point::new(-2, 2));
+    let now = driver.now();
+    driver.stage.pin_shift(None, now);
+    driver.swipe(Point::new(60, 233), Point::new(420, 233), 250_000);
+    driver.settle();
+    assert_eq!(driver.stage.shift(), Point::new(-3, 0));
 }
 
 /// A touch counts where the picture showed under it, not where the panel was touched.

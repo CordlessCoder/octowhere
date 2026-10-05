@@ -1,10 +1,8 @@
-//! Renders sample sheets of outlined text, the hollow ring and a halo at radius 1 and 2, in the
-//! faces and sizes the screens use. They show the primitive, not a screen. From the repository
-//! root:
+//! Renders sample sheets of hollow text at width 1 and 2, and haloed text at radius 1 and 2, in
+//! the faces and sizes the screens use. They show the primitive, not a screen:
 //!
 //! ```text
-//! cargo +stable run --manifest-path crates/octowhere-ui/Cargo.toml \
-//!   --target x86_64-unknown-linux-gnu --example outline -- [out-dir]
+//! cargo run -p octowhere-ui --example outline -- [out-dir]
 //! ```
 //!
 //! The output directory defaults to `target/renders` under the crate.
@@ -22,7 +20,7 @@ struct Sample {
     text: &'static str,
     size: u32,
     font: usize,
-    /// Each variant's pen on the baseline: hollow at radius 1 and 2, then the halos.
+    /// Each variant's pen on the baseline: hollow at width 1 and 2, then the halos.
     pens: [Point; 4],
 }
 
@@ -87,16 +85,16 @@ fn main() {
         let mut label = base.clone();
         label.font_index = chrome::FRAKTION;
         for (i, (&pen, text)) in sample.pens.iter().zip(LABELS).enumerate() {
-            let radius = if i % 2 == 0 { 1 } else { 2 };
+            let px = if i % 2 == 0 { 1 } else { 2 };
             if i < 2 {
                 style.text_color = chrome::WHITE;
                 style
-                    .draw_outline_on_baseline(sample.text, pen, radius, &mut *fb)
+                    .draw_hollow_on_baseline(sample.text, pen, px, &mut *fb)
                     .unwrap();
             } else {
                 style.text_color = chrome::ORANGE;
                 style
-                    .draw_outline_on_baseline(sample.text, pen, radius, &mut *fb)
+                    .draw_outline_on_baseline(sample.text, pen, px, &mut *fb)
                     .unwrap();
                 style.text_color = chrome::WHITE;
                 style.draw_on_baseline(sample.text, pen, &mut *fb).unwrap();

@@ -2,8 +2,9 @@
 
 The product is a closed group of up to 32 equivalent nodes that share positions and carry messages
 between members, including private ones. GPS supplies both position and the time reference; LoRa
-carries the traffic. This document is the agreed design. None of it is implemented yet. What exists
-on the radio today is the link test described in [`AGENTS.md`](../AGENTS.md).
+carries the traffic. This document is the agreed design. Steps 1 to 4 of the build order below
+are implemented, and the mesh's side of step 6; "Build order" says what comes next; [`AGENTS.md`](../AGENTS.md), "Radio",
+says how.
 
 The first version of this design (commit `e57fe0a`) was eight nodes and positions only. The owner
 extended it on 2026-09-29 to 32 nodes, messages and private messages, moved it to band O, and kept
@@ -15,7 +16,7 @@ fixed slots over contention.
 | --- | --- |
 | Band | O, 869.40–869.65 MHz: 500 mW e.r.p., ≤ 10% duty cycle or polite spectrum access |
 | Channel | 869.4625 MHz, 125 kHz |
-| Modulation | SF7, CR 4/5, explicit header, CRC on, 8-symbol preamble, sync word `0x12` |
+| Modulation | SF7, CR 4/5, explicit header, CRC on, 8-symbol preamble, sync word `0x6C` |
 | Output | +17 dBm on `PA_BOOST`, about 90 mA while transmitting |
 | Access | duty cycle, not polite spectrum access |
 
@@ -23,10 +24,18 @@ Band names are those of ETSI EN 300 220-2 V3.3.1 (2025-03), Table 4. ERC Recomme
 of February 2025), Annex 1, calls the same band h1.7. In EN 300 220-2, band P is 869.7–870 MHz at 5 mW;
 do not confuse the two.
 
-- **Channel.** At 125 kHz band O holds two channels, about 869.4625 and 869.5875 MHz. The upper one
-  overlaps 869.525 MHz, which is LoRaWAN's default second receive window (gateways transmit there at
-  high power) and Meshtastic's EU default at 250 kHz. The sync word filters their packets out, but
-  their airtime still collides with ours.
+- **Channel.** At 125 kHz band O holds two channels, about 869.4625 and 869.5875 MHz. 869.525 MHz
+  is LoRaWAN's default second receive window, where gateways transmit at high power, and
+  Meshtastic's EU default at 250 kHz. A LoRaWAN downlink there covers the upper half of our
+  channel, and Meshtastic's covers all of it. The sync word filters their packets out, but their
+  airtime still collides with ours. Two boards monitoring the channel for three hours found
+  nothing else on it (2026-10-02, `docs/logs/lora/crc-2026-10-02/`).
+- **Sync word.** `0x6C` (owner, 2026-10-02). The SX127x's reset value `0x12` is what most private
+  LoRa setups use, and a network on this channel sends with it: two boards decoded its 34- and
+  66-byte packets near -112 dBm. LoRaWAN uses `0x34` and Meshtastic `0x2B`. The sync word is two
+  symbols between the preamble and the header, not a byte of the payload, so a node cannot sync
+  on a `0x12` inside another network's packet. It only keeps other networks' packets from being
+  decoded; their airtime still collides with ours.
 - **Power.** The SX1272 allows +17 dBm continuously and limits +20 dBm to 1% duty (datasheet section
   5.4.3). The antenna is TE 2195835-3 (Digi-Key `17-2195835-3-ND`, datasheet
   `docs/datasheets/ENG_DS_2195835_A1.pdf`), a flexible PCB antenna for 863–928 MHz on a 150 mm
@@ -34,13 +43,19 @@ do not confuse the two.
   lists 3 dBi; TE's figure governs. Near 869 MHz its plots show VSWR about 1.35 and efficiency
   about 33%. 1.4 dBi is -0.75 dBd, so +17 dBm conducted is about 16 dBm e.r.p. at the peak, far
   under band O's 27 dBm. Band M's 14 dBm e.r.p. allows up to 14 dBm conducted.
-- **PA pin.** The carrier board cannot answer it: the module exposes one `ANT` pin and chooses the
-  PA inside. The module's datasheet specifies every transmit current "on PA Boost", at +7 to
-  +20 dBm, and claims +20 dBm, which only `PA_BOOST` gives, so the antenna is most likely on
-  `PA_BOOST`. The firmware never calls `configure_tx`, so today it transmits at `RegPaConfig`'s
-  reset value `0x0F`: +14 dBm on `RFO`. That fits the link test's RSSI of about -100 dBm between
-  two boards on one bench, far weaker than that range should give. A transmit on `PA_BOOST` at low
-  power, compared with the reset setting, settles it.
+- **Close neighbours.** Two nodes under a metre apart at +17 dBm hear each other at about
+  -21 dBm, which overloads the receiver: about 1% of packets fail their CRC, against none at
+  -45 dBm (`docs/logs/lora/crc-2026-10-02/`), with the AGC on. A node still sends at full power
+  to neighbours it hears strongly (owner, 2026-10-02). Otherwise two clusters of users, each
+  standing close together, would each turn down for their own close neighbours, and the two
+  clusters would never hear each other. And a neighbour that turns down lowers the RSSI the
+  decision is made from, so two nodes would steer by each other's settings; undoing that needs
+  each packet to carry its sender's power.
+- **PA pin.** The antenna is on `PA_BOOST` (2026-10-01, `docs/logs/lora/pa-2026-10-01/`). Two
+  boards on one bench hear each other at about -22 to -32 dBm at +17 dBm on it, and its strength
+  follows its setting; `RFO` arrives about 70 dB lower whatever its setting. The module exposes
+  one `ANT` pin and chooses the PA inside, so only a transmit could answer it. The link test sent
+  at `RegPaConfig`'s reset value, +14 dBm on `RFO`, which is why it heard about -100 dBm.
 - **Why duty cycle.** Polite spectrum access (listen before talk with adaptive frequency agility)
   caps cumulative transmit time at 100 s an hour per 200 kHz (EN 300 220-2 Table 18), which is 2.8%.
   Band O is 250 kHz wide, so agility cannot add a second 200 kHz. The duty-cycle option allows 10%.
@@ -63,25 +78,27 @@ With 32 nodes the whole table no longer fits a packet (23 entries do), and sendi
 round would grow channel load with the square of the group. So a packet carries a partial digest:
 the sender's own entry and the entries that most need spreading, chosen as described under "Packet".
 
-A relay passes an entry on in its own next slot, 1.4 s to one round after hearing it, depending on
-the ids along the path. A chain in id order crosses in one round; against id order, one round per
-hop.
+A relay passes an entry on in its own next slot. Slots are shuffled every round (see "Medium
+access"), so that takes a little over half a round a hop on average, and at most about two.
 
 Messages cannot ride the digest's merge, since each one must arrive, and arrive once. They are
-flooded through the same slots with their own ids and seen-set; see "Messages".
+flooded through the same slots with their own ids, and every node holds them for a day and
+passes on any a neighbour lacks; see "Messages".
 
 ## Medium access
 
-GPS-anchored TDMA. The slot index is the node's paired id, 0–31. Slots are anchored to absolute UTC,
+GPS-anchored TDMA. Each round's 32 slots are the paired ids, 0–31, in an order of the group's
+own, new every round (see "Shuffled slots"). Slots are anchored to absolute UTC,
 so two partitions that cannot hear each other compute the same schedule and are already in phase
-when they rejoin.
+when they rejoin. A node without a fix takes its time from the arrivals of another node's packets;
+see "Keeping time without a fix".
 
 - **Round.** 45 s, 32 slots, 1.40625 s apart. A UTC day holds exactly 1920 rounds. Slot `k` starts
   at the round's start plus `k × 1.40625 s`.
 - **Slot.** The packet, at most 400 ms (255 bytes), two ~80 µs TCA9554 writes, and a ±250 ms guard:
   at most 900 ms, leaving about 0.5 s before the next slot. Plain NMEA time is enough for that
   guard, so no PPS is needed; "Time sync" below says where the ±250 ms comes from.
-- **Budget.** One packet per node per round: 0.89% duty at the largest packet, 0.41% at an
+- **Budget.** One packet per node per round: 0.89% duty at the largest packet, 0.40% at an
   eight-entry digest. If all 32 nodes sent an eight-entry digest every round, the channel would be
   busy 13% of the time.
 
@@ -90,12 +107,16 @@ A node transmits in its slot when it has something to say, and stays silent othe
 - its own position moved more than ~25 m since the last one it sent, which is above GPS noise
 - it learned an entry materially newer than what it last relayed for that node
 - a node appeared for the first time
-- it holds a message, acknowledgement or member record not yet sent
+- it holds a message, member or gone record, request or summary not yet sent
 - the round is one of its floor rounds (below)
+- the round is a sweep round (see "Keeping time without a fix")
+- it hears no other node, so that another node's one-round sweep finds it wherever their slots
+  fall (owner, 2026-10-02). An 85-byte packet every round is about 7 mAh a day, paid only while
+  the node is alone
 
 Triggers promote a transmission to the node's next slot rather than sending immediately, so trigger
-latency is at most one round. Off-slot transmission has no audience, because the power saving
-depends on every node sleeping outside slots.
+latency is at most about two rounds, since slots are shuffled. Off-slot transmission has
+no audience, because the power saving depends on every node sleeping outside slots.
 
 The floor is every third round, at fixed rounds: node `k` transmits in every round `r` (UTC seconds
 divided by 45) with `r mod 3 == k mod 3`, whether or not it has anything new. So every node in range
@@ -105,6 +126,44 @@ A pending transmission is cancelled when an arriving packet already carries ever
 said and that packet's sender reports every neighbour this node has (the neighbours record, below).
 Without the cancel, all nodes react to the same event at once. Without the neighbour condition, a
 cancel starves a node that only this one reaches. A floor transmission is never cancelled.
+
+As built, the rule works entry by entry. Each entry such a packet carried at the stamp this node
+holds counts as sent, and so does its member record, so the node still sends whatever news is
+left. A node heard for the first time stays news, since the packet cannot say this node heard it.
+
+### Shuffled slots
+
+Owner, 2026-10-03 (`schedule::Schedule`).
+
+- **Order.** Each round, the 32 ids are sorted by AES-256 of the round's number on the node's
+  timebase and the id, under a key HKDF-SHA256 derives from the group key. An id's slot is its
+  place in that order. Members on one timebase share the round number, and only members hold
+  the key. The round number cannot be the key: every group with a fix shares it, so the order
+  would be every group's, and anyone's with GPS time.
+- **Exactly.** The key is HKDF-SHA256's 32 bytes from the group key, with no salt and the info
+  `octowhere slots`. Each id's block is the round number as eight big-endian bytes, then the
+  id, then seven zeros. The ids sort by the first eight bytes of their encrypted blocks, read
+  big-endian, then by id. Every device has to compute this alike.
+- **Why.** Every group's ids start at 0 and take the lowest free, so with slot = id, member k
+  of every group with a fix sends at the same instant, in the same floor rounds, as member k of
+  every other. Two groups in one place collide in every slot they share, and a receiver that
+  locks onto the other group's packet misses its own. Under their own keys, groups of n₁ and n₂
+  share about n₁·n₂/32 slots a round, rarely the same pair two rounds running. A transmitter
+  outside the group whose period divides the round hits a different member each round rather
+  than the same one for ever. And a listener with GPS time cannot read the sender's id from its
+  slot, which it could while a node's slot was its id (see "Packet").
+- **What stays.** Floor and sweep rounds go by the round number and the id. The header names
+  the slot as before: its base timestamp gives the round, and the order the slot. A notice's
+  sender works out the round of the node it notifies from that node's arrival, and its own slot
+  in that round from the order.
+- **Cost.** A node with news waits up to about two rounds for its slot, a little over half a
+  round on average, against at most one round and half on average with slot = id. A relay
+  chain in id order no longer crosses in one round. 32 AES blocks a round, cached for the two
+  rounds asked about last.
+- **Rekeying.** The order's key changes with the group key at the switch (owner, 2026-10-03).
+  Keeping the old order would let a removed member tell who sends from when they send. A
+  member that missed the switch sends in the old order from then on, and is found in a sweep
+  round (see "Removing a member").
 
 ### Time sync
 
@@ -152,15 +211,111 @@ size"): RMC's arrival after the second on one board, with its spread, from a fas
 the agreement between two boards synced this way, logged together. Both belong on a
 `bench/gnss-time` branch.
 
+### Keeping time without a fix
+
+A node needs a timebase to place slots: GPS time from its own fix, or another node's, taken from
+when that node's packets arrive. The owner chose this over running slots on the RTC, whose whole
+seconds two nodes can disagree on (2026-10-01). Every header names the sender's timebase:
+
+- **Source.** GPS, a node's clock started from its RTC's UTC, or a node's clock started from
+  its boot, by a node whose RTC held no time.
+- **Root.** For a node's clock, the id of the node that started it.
+- **Hops.** How many receptions the sender is from the root: 0 for a node timing from its own fix,
+  and for a root.
+
+GPS ranks above any node's clock, a clock started from UTC above one started from a boot, and of
+two clocks alike the lower root id ranks higher (owner, 2026-10-04). A clock started from a boot
+counts its seconds from 1970, so ranked by its root alone it took a whole group there, and every
+node, those whose RTCs held the time too, refused records stamped in 2026 as an hour ahead.
+
+- **Taking a timebase.** A node that hears a packet from a timebase ranked above its own adopts
+  it: it sets its clock from the packet's arrival, and takes the sender's root and its hops plus
+  one. Within its timebase it refines its clock only from packets with fewer hops than its own, so
+  two nodes never set their clocks from each other and a hop's error cannot circulate. A node
+  timing from its own fix never sets its clock from another's. A node that hears a clock rooted
+  at its own id takes it back as its root: it is the node's own clock, kept by the others while
+  it restarted. Without that, it would follow its own clock through them as a ghost root, until
+  each found the root lost.
+- **Replays.** A packet's timing says where its sender's clock stood when it was sent, so a
+  recording replayed later moves a clock by its age (owner, 2026-10-04):
+  - A node whose RTC holds the time refuses a timebase more than 5 minutes from it, and one
+    started from a boot. An RTC drifts a couple of seconds a day, so the bound holds for months
+    without a fix.
+  - A packet that would move a clock the node already has by more than a slot's guard waits,
+    held, for a second that agrees within the guard: from another sender, or from the same in a
+    later round, within four rounds, past a lone neighbour's floor round. The node listens
+    throughout those four rounds, since on a clock apart from the sender's its windows need not
+    meet the next packet. A replay of two recorded packets still gets through, within the
+    bound where the node has one.
+  - A node's first timebase is no move of a clock it has, so only the bound guards it.
+  Replayed an hour on, a packet had set a node's clock an hour back, which the node then kept as
+  its own root; in a sweep round it lost the sender for about 340 s.
+- **Arrival timing.** A sender starts its packet at its slot's start, and its id and the header's
+  base timestamp name the slot. The receiver takes the time `DIO0` signals RxDone, subtracts the
+  packet's airtime, and has that slot's start on its own timer. The latencies on both sides, the
+  transmitter's start and the receiver seeing RxDone, would make each hop's clock late by about
+  1.05 ms, so the receiver takes that out (measured on two boards, 2026-10-01). A root then hears
+  the nodes timing from it within about 0.15 ms, which is their crystals' drift since they last
+  heard it.
+- **Sweeps.** A node with no timebase listens continuously for three rounds, 135 s, which spans
+  every node's floor round. So does a node that has heard no packet with fewer hops in its
+  timebase for 7 rounds, and if that sweep hears none either, the node becomes its own root,
+  keeping its clock. Every round of a timebase whose index is a multiple of 13, about every
+  10 minutes, is a sweep round (owner, 2026-10-02): every node on it listens throughout, from a
+  guard before the round to a guard before its end, and sends in its own slot. A node not timing
+  from its own fix looks for a timebase ranked above its own, and every node looks for members
+  it does not know of (see "Listening"). Nodes on timebases close to one another sweep in rounds
+  that overlap, and hear each other there: nodes timing from GPS anywhere, and nodes whose clocks
+  started from RTCs a fix once set, which drift apart by a second or two a day. The RTC keeps
+  time while the device is off. 13 rounds is not a whole number of floors, so a sweep round
+  falls on each of the floor's three rounds in turn. A fix ends a node's first sweep at once. A
+  node keeps transmitting in its own slots during a sweep.
+- **Starting one.** A node that hears nobody in its first sweep starts its own timebase from its
+  RTC's time, as its root, or from its boot if its RTC holds no time. A node whose clock was
+  started from its boot takes UTC from a timebase started from UTC, for its own records' and
+  messages' stamps; the RTC is GNSS's alone to set (owner, 2026-10-04). Without one it stamps
+  its records 0, which lose every merge. Groups started this way merge as their sweeps find each other, to the
+  lowest root. A node that gets a fix moves to GPS time, and the nodes timing from it find it again
+  at their next sweep.
+- **Refreshing.** REFRESH DEVICES on the screens starts the same three-round sweep at once
+  (owner, 2026-10-03), and keeps it to its end though a timebase taken up or a fix would end a
+  sweep. It counts the members it heard directly apart from those the group gained while it
+  ran, and a pairing stops it. It brought two boards on clocks 271 s apart together from either
+  side (`docs/logs/lora/refresh-and-recovery-2026-10-03/`).
+- **Notices.** A node that hears a member on a timebase ranked below its own sends it a notice
+  (owner, 2026-10-03): a header alone, flagged, 24 bytes, at the time that member listens for
+  the sender's slot on its own timebase, which the packet's arrival told it. The notice is sent
+  off the sender's slot, so its arrival says nothing of the sender's timebase and nobody times
+  from it. A node that hears a notice from a timebase ranked above its own sweeps for three
+  rounds, and takes the timebase from the sender's ordinary packets. So two parts of a group find
+  each other as soon as either one's sweep hears the other, whichever ranks higher
+  (`docs/logs/lora/sweeps-and-notices-2026-10-03/`).
+- **Ageing.** A node's own GPS time counts as GPS while a fix has refined it within 30 minutes.
+  After that the node ranks as its own root, so a node with a live fix takes the group over.
+
+A node that restarted with no UTC while a removal was pending hears a group that has switched
+only under the key it is to switch to. It takes nothing else from such a packet, but moves to its
+clock if it outranks its own: without that it stayed on its boot clock, where the switch round it
+stored never came.
+
+A node's clock is UTC only as well as its root's RTC was. Its own entries need a fix, so they are
+always stamped in GPS time; it relays another's entry only when the entry's stamp fits the 12-bit
+window below its base timestamp.
+
 ### Listening
 
-A node listens to the slot of every neighbour, every round. A neighbour is a node heard within the
-last 7 rounds (315 s): long enough to span two floor transmissions, so one lost packet does not drop
-it.
+A node listens, every round, to the slot of every member its group holds and of every neighbour
+(owner, 2026-10-02). A neighbour is a node heard within the last 7 rounds (315 s): long enough to
+span two floor transmissions, so one lost packet does not drop it. A member out of range costs
+its window every round, and is heard again at its first transmission back in range.
 
-To find nodes that came into range, a node also listens to each other id's slot in that id's floor
-rounds. A node coming into range is heard within 135 s. It costs about a third of the non-neighbour
-slots each round: with 8 neighbours, 8 + 8 = 16 slots.
+A member added elsewhere, which the node does not know of yet, is found in a sweep round (see
+"Keeping time without a fix"), where timebases are found too. Every node on a timebase near the
+node's own sends in a sweep round, so a new member in range is heard at the next one, within
+about 10 minutes. Once heard it is a neighbour, and the node that heard it asks for its member
+record (see "Member records on request").
+The sweep rounds keep the receiver on 7.7% of the time, about 18 mAh a day, and the packet each
+node sends in them costs about 0.5 mAh a day.
 
 Listening costs the guard and the packet per slot, at 9.7 mA (125 kHz, LNA boost off, its reset
 state):
@@ -170,6 +325,11 @@ state):
 | 8 | 12% | about 28 mAh |
 | 16 | 24% | about 57 mAh |
 | 32 | 49% | about 114 mAh |
+
+The table counts a typical packet. As built, a window stays open for the longest packet and
+past the one it was for, about 0.9 s, so 8 slots keep the receiver on about 16% of the time.
+Ending a window at its guard when no packet started, with the radio's single receive and a
+symbol timeout, and at the end of the packet it was for, would bring it below the table.
 
 ### CAD is required at this size
 
@@ -192,6 +352,19 @@ neighbours' receive. Two things are unmeasured: what CAD costs across a slot who
 only to the ±250 ms guard, which a node never heard has, and how closely phase refined against GPS
 agrees between nodes that have never heard each other. Decide the floor once both are measured.
 
+Two levers found on 2026-10-03, for when this step comes:
+
+- **A guard per neighbour.** A root hears the nodes timing from it within about 0.15 ms of
+  where it expects them (see "Keeping time without a fix"), and `late_us` measures every
+  arrival against the node's clock, two nodes timing from their own fixes included. Sized from that, a heard neighbour's window
+  shrinks to milliseconds without CAD, which is left for the windows that stay wide: members not
+  heard yet, and sweeps. The receive time is read when the radio task runs after `DIO0`, not at
+  its edge, which a window of milliseconds has to account for.
+- **Sweeps.** They then cost the most: 18 mAh a day, against about 14 for listening to three
+  members as built. A member added elsewhere most likely has the lowest id free in this node's
+  table, so listening to that id's slot finds it at its next floor round, and nodes timing from
+  a fix could sweep less often.
+
 ### Why not contention
 
 Contention needs continuous receive, about 9.7 mA or 233 mAh a day, or low-power listening, where
@@ -206,21 +379,30 @@ wins a collision and a lost exchange costs a retry. The duty-cycle option needs 
 ## Packet
 
 ```text
-nonce (12, clear) | ciphertext: header (7) + records | tag (16)
+synthetic IV (16) | ciphertext: header (8) + records
 ```
 
-ChaCha20-Poly1305 under the group key. The nonce is fully random rather than `sender_id || counter`,
-because a sender id in the clear would tell a direction-finding listener which node transmitted. At
-~1e7 messages over the network's life, 96 random bits give a collision probability around 6e-16.
+AES-SIV (RFC 5297, AES-CMAC-SIV with a 256-bit key) under the group key, with no associated data.
+The synthetic IV is computed from the key and the whole plaintext, and is both the IV and the
+authentication tag, so the packet carries no nonce and nothing in the clear. A sender id in the
+clear would tell a direction-finding listener which node transmitted. Shuffled slots (see
+"Medium access") keep the slot from telling it, to a listener with GPS time. SIV's
+determinism reveals only that two packets are identical, and a packet's timestamp keeps that
+from happening. Sending needs no random numbers, so a faulty random source leaks nothing. The
+owner chose it over ChaCha20-Poly1305 with a random 12-byte nonce, which cost 12 bytes a packet
+more, about 18 ms of airtime (2026-10-01).
 
-Header, 7 bytes, encrypted:
+Header, 8 bytes, encrypted:
 
 | Field | Bits |
 | --- | --- |
 | version | 4 |
 | sender id | 5 |
-| flags, reserved | 7 |
-| base timestamp, UTC seconds | 32 |
+| timebase source: 0 GPS, 1 a node's clock | 1 |
+| timebase root, for a node's clock | 5 |
+| hops from the timebase's root | 5 |
+| flags: bit 0 a notice, bit 1 a node's clock started from its boot, the rest reserved | 4 |
+| base timestamp, timebase seconds | 32 |
 | slot phase, reserved for CAD | 8 |
 
 After the header comes a list of records, each a type byte, a length byte and a body. A node skips
@@ -231,9 +413,14 @@ header still is one.
 | --- | --- |
 | positions | packed entries, padded to a byte |
 | neighbours | 32-bit set of the ids the sender heard in its recent rounds |
-| member | id, X25519 public key, enrolment time, display name of up to 16 printable ASCII characters |
+| members digest | 32 bits of a hash of the sender's member table (see "Member records on request") |
+| request | 32-bit set of the ids whose member records the sender asks for |
+| member | id, X25519 public key, join time, change time, hardware address, then a name of 1 to 16 printable ASCII characters; 47 to 63 bytes |
+| gone | id, X25519 public key and change time of a member that left or was removed; 37 bytes |
+| on key | id, generation and the member's signature that it is on that generation's key; 67 bytes |
 | message | see "Messages" |
-| acknowledgement | origin id and sequence number of a message delivered to the sender |
+| messages digest | 32 bits of a hash of the messages the sender holds (see "Messages") |
+| summary | the messages the sender holds from each origin, to be sent what it lacks (see "Messages") |
 
 Position entry, 73 bits:
 
@@ -246,45 +433,116 @@ Position entry, 73 bits:
 | fix quality | 2 | |
 | hdop | 3 | log scale |
 
+With the neighbours and members digest records, which every packet carries:
+
 | Entries | Packet | Airtime |
 | --- | --- | --- |
-| 1 | 47 B | 92 ms |
-| 2 | 56 B | 108 ms |
-| 8 | 110 B | 185 ms |
-| 16 | 183 B | 292 ms |
-| 23 | 255 B | 400 ms |
+| 0 | 36 B | 77 ms |
+| 1 | 48 B | 98 ms |
+| 2 | 57 B | 108 ms |
+| 8 | 111 B | 190 ms |
+| 16 | 184 B | 297 ms |
+| 23 | 248 B | 389 ms |
 
-A packet is filled in this order until it is full or nothing is left: the sender's own entry and its
-neighbours, acknowledgements, messages oldest first, entries learned since this node last sent them
-(newest first), the rest of the table in rotation, and one member record in rotation.
+A packet is filled in this order until it is full or nothing is left: the sender's neighbours, its
+members digest, its messages digest while it holds a message, a request and a summary if it has
+them, up to three member and gone records it has not sent, the sender's own entry, messages
+oldest first, entries learned since this node last sent them (newest first), and the rest of
+the table in rotation. The member records go ahead of the
+positions so a busy table cannot crowd them out, but leave room for the sender's own entry; each
+costs a full packet about seven entries.
+
+A member record's join time and change time are UTC seconds. The change time is the join's, or a
+later rename's, and the newer record of a member wins a merge. A node never takes a record about
+itself, matched by key or hardware address.
 
 Sizing fields to their true ranges is the compression. Entropy coding gains nothing on top: the
 residual bits are close to uniform and the packets are far too short for a dictionary method. Delta
 coordinates against a reference position would save more but need an escape path for a node outside
 the delta range; not worth it before the base design flies.
 
+### Member records on request
+
+Owner, 2026-10-03. It replaced a rotation of one member record in every packet
+(`members::Requests`).
+
+- **No rotation.** A packet carries a member record only when the sender holds one not yet
+  sent: its own after a rename, one that changed in a merge, one enrolled or renumbered, or one
+  asked for.
+- **Digest.** Every packet carries a members-digest record: 4 bytes of a hash over each
+  member's id, public key and change time, 6 with the record's type and length. A packet with
+  no positions drops from 85 bytes to 36, and from 149 ms of airtime to 77. A full one has room
+  for about seven more entries.
+- **Request.** A request record holds the set of ids whose records the sender wants, and rides
+  in the sender's own next packet. Unlike a notice's target, its neighbours already listen to
+  its slot, and a new record type needs no header change. A node asks for one id when it hears
+  a sender it holds no record for. It asks for the whole table when a neighbour's digest has
+  differed from its own in two of that neighbour's packets running. Waiting for the second
+  gives an ordinary change, which goes out in the next slot, time to arrive.
+- **Answer.** A node that hears a request marks each record asked for that it holds as not yet
+  sent, unless its digest matches the requester's. The cancel rule marks a record sent once a
+  covering packet carried it, so usually one neighbour answers. Records go up to three a packet,
+  ahead of the positions but leaving room for the sender's own entry. A whole table of 32 is
+  about 11 packets, one a round, about 8 minutes.
+- **What it covers.** Everything the rotation did: a member added elsewhere, a member whose
+  last acknowledgement the adding device lost, a rename missed out of range, and the duplicate
+  id two partitions can hand out (see "Identity and storage").
+
 ## Messages
+
+Owner, 2026-10-03: store and forward, the body, and keeping messages in PSRAM. The design it
+replaced had relays pass each message on once and the origin repeat it until acknowledged. A
+repeat carried the same sequence number, so relays dropped it, and it reached only the origin's
+own neighbours.
 
 A message record carries:
 
 | Field | Bytes | Note |
 | --- | --- | --- |
 | origin id | 1 | 5 bits used |
-| destination | 1 | an id, or the whole group |
-| sequence number | 4 | per origin, never reused |
-| timestamp, UTC seconds | 4 | set by the origin, copied by relays |
-| body | rest | text, or for a private message its ciphertext and a 16-byte tag |
+| destination | 1 | an id; bit 7 the whole group instead; bit 6 a group key (see "Removing a member") |
+| sequence number | 4 | per origin, never reused, never 0 |
+| previous | 4 | the origin's sequence number before this one, 0 for none |
+| timestamp | 4 | timebase seconds, set by the origin, copied by relays |
+| body | rest | a kind byte and what it holds; to one member, sealed (see "Private messages"); a key message's seal is followed by its generation and its remover's signature (see "Signatures") |
 
-- **Flooding.** Every node relays each message once, in its next slot, while it is younger than the
-  message horizon, 24 hours. The seen-set is keyed by origin and sequence number and holds
-  entries until the horizon passes, about 9 bytes each. The origin repeats a message until it is
-  acknowledged or expires, doubling the gap between repeats up to 15 minutes.
-- **Acknowledgement.** The destination floods an acknowledgement back the same way. A message to the
-  whole group is not acknowledged.
+A message to one member is always private. The kinds are text, an acknowledgement, a new group
+key, and a removal.
+
+- **Body.** Text is printable ASCII, the fonts' characters, up to 160 of them. A private message
+  that long fills one packet with the sender's own entry and the records every packet carries.
+- **Flooding.** A node relays each message new to it once, in its next slot, oldest first. It
+  counts as sent once a covering packet carried it, as an entry does (the cancel rule).
+- **Store and forward.** Every node holds every message for the message horizon, 24 hours
+  from its timestamp, private ones included, and passes on any a neighbour lacks. The origin
+  does not repeat it. A message reaches a member who comes back into range of anyone holding it
+  within the horizon.
+- **Digest.** A packet carries a messages digest while its sender holds a message: 32 bits of
+  a hash over the origin and sequence number of each one not yet past the horizon. A message
+  passes the horizon at a round's start, the same for every node on a timebase, so two nodes'
+  digests agree when they hold the same messages. A node judges that against its own clock,
+  not the time in the header of the packet that carried the message.
+- **Summary.** A node whose digest has differed from a neighbour's in two of that neighbour's
+  packets running sends a summary in its next packet: for each origin, the oldest and newest
+  sequence numbers it holds, and those it knows it lacks between them. A message names the
+  origin's one before it, which is how a node knows. Sequence numbers skip at a restart, so a
+  gap in the numbers alone says nothing. A neighbour that hears a summary marks to be sent every
+  message it holds outside those ranges or among those lacked, unless its digest matches the
+  summary's sender's. A summary takes at most 120 bytes; one too short for every origin says
+  which it covers, and the next starts where it stopped. It is made before the slot it goes
+  in, since with a full store that takes milliseconds.
+- **Acknowledgement.** The destination of a private message answers with an acknowledgement,
+  itself a private message, which travels and is held the same way. Acknowledgements and
+  messages to the whole group are not acknowledged.
+- **Storage.** Messages are held in PSRAM and lost at a restart, to begin with. A restarted
+  node gets the horizon's messages back from its neighbours, but not which it had read. The
+  store holds the newest 256; a node holding that many takes no message older than all of them,
+  so every node keeps the same ones. The sequence number is kept in flash (see "Private
+  messages").
 - **Latency.** Each hop waits for the relaying node's slot, 1.4 s to one round.
 - **Capacity.** Every node carries every message once, so the group's message throughput is what fits
   in one node's packet beside its positions, whatever the group's size. Beside an eight-entry digest
-  and the neighbours record, that is about 130 bytes of message body a round, or about 10 kB an hour.
+  and the neighbours record, that is about 140 bytes of message body a round, or about 11 kB an hour.
 - **Pruning, later.** Gossiping every node's neighbour set gives every node the group's graph. A node
   can then skip relaying a direct message when it is not on a shortest path to the destination, and
   a group message when the sender already reaches all its neighbours. That is where routing starts
@@ -292,28 +550,131 @@ A message record carries:
 
 ### Private messages
 
-A private message's body is sealed with ChaCha20-Poly1305 under a key only its two members hold.
+A private message's body is sealed with AES-SIV under a key only its two members hold.
 Other members relay it without reading it. Origin, destination and timing remain visible to members,
 since the header and record are under the group key.
 
-- **Key.** HKDF-SHA256 over the X25519 shared secret of the two members' keys, bound to both public
-  keys. Every member learns the others' public keys from pairing and from member records.
-- **Nonce.** Built from the origin id and the sequence number. The two members share the key, so the
-  origin id keeps their nonces apart, and the sequence number must never repeat for an origin. It is
-  persisted in flash in reserved blocks, and a boot skips to the next block, so a crash wastes numbers
-  rather than reusing them.
-- **Rekeying.** Removing a member is a new group key with a UTC switch time, sent to each remaining
-  member as a private message. Before the switch nodes send under the old key, and after it under
-  the new one. Every node tries both keys on receive. A node on the new key that hears a member still
-  on the old one sends it the new key as a private message in a packet under the old key: the
-  removed member can see that packet but cannot open the pairwise-sealed key inside. The old key is
-  dropped once every remaining member has been heard under the new one, or after a limit not chosen
-  yet.
+- **Key.** 256 bits of HKDF-SHA256 over the X25519 shared secret of the two members' keys, bound to
+  both public keys. Every member learns the others' public keys from pairing and from member
+  records.
+- **Associated data.** The origin id, the destination and the sequence number, which bind the
+  body to its record. SIV needs no nonce. The sequence number must still never repeat for an
+  origin, because it names the message in every node's store. It is persisted in flash in
+  reserved blocks of 64, and a boot skips to the next block, so a crash wastes numbers rather
+  than reusing them. A new block starts no lower than the clock's second, so a device given a
+  freed id starts above every number its last holder used. A clock past 2100 counts as 2100
+  there, so that a timebase set far ahead cannot use up the numbers left. It belongs to the
+  device, not the group, so leaving keeps it.
+
+### Removing a member
+
+Owner, 2026-10-03, except where it says otherwise.
+
+- **Who.** Any member can remove any other, as any member can add one. The new key reaches
+  each member sealed under the key it shares with the remover, so each knows who asked.
+- **Confirming.** Each device's user is shown who asked to remove whom, and can decline until
+  the switch, or for a day after it (owner, 2026-10-03). A device whose user declines ignores
+  the removal and stays on the old key, so a member removing another out of malice can be
+  overruled; its group can then remove the remover. A device whose user does not answer
+  switches with the group. One that learns of the removal late switches three rounds after it
+  learns of it, at the earliest.
+- **Declining after the switch.** A device keeps the key it switched from for a day after its
+  own switch, and declining goes back to it. It forgets what it learned since, so that it does
+  not pass the removed member what the group shared without it: every other node's position,
+  the messages stamped from the group's switch round, and the records of every id that changed
+  since its own switch, other than its own, the removed member's among them. The removed member
+  and the nodes that never switched send those again as they hold them. Only the last removal
+  switched to can be declined this way, and not while another is under way. The user names the
+  member, so a removal that arrives meanwhile is not declined in its place. The remover cannot
+  decline its own, but can decline a rival that wins over it. A rival that wins after the
+  switch keeps the key before both, and the day the first switch gave; one that removes nobody
+  gives the member back and leaves nothing to decline. Any other key that removes nobody leaves
+  the last removal to decline, so that no member can take the day away with an empty removal.
+  The members that switched have heard the device on the new key, so they send it no key
+  message again.
+- **The new key.** The remover makes a random group key and sends it to each remaining member as
+  a private message, a key message, with its generation, one past the current key's, the round
+  the group switches at, counted on its timebase, the id and SHA-256 fingerprint of the
+  member removed, and the fingerprint of the key it replaces (owner, 2026-10-04). The remover
+  signs each (see "Signatures") and sends one a packet, so the
+  switch is as many rounds away as its key messages and the removal message take, and four more:
+  the round it is in, and three for hops. That is about 8 minutes for 8 members, 27 for 32.
+  Until then the removed device still reads everything. The remover reserves every sequence
+  number its key messages need before it starts, and a remover that restarts before they have
+  gone sends them again. Adding a device is refused while a removal is under way, since it would
+  get the key the group is leaving. A node ignores a key message whose switch round is further
+  off than a removal from a group of 32 needs, which would leave the removal pending for good,
+  or whose member removed is neither a member nor a gone record it holds (owner, 2026-10-03).
+  A node takes a key only on the key it names as replaced. It keeps one that names another
+  unread, and tries it again once it has switched: a member that missed several switches takes
+  them in order, and one still on a key a rival won over waits for the winner (owner,
+  2026-10-04).
+- **The switch.** Before it nodes send under the old key, and from it under the new one, in the
+  order the new key gives (see "Shuffled slots"). Every node tries both keys on receive, but
+  after the switch merges nothing that arrives under the old key but the key messages of its
+  own generation, rivals of its key. Anything else in such a packet only shows that its sender
+  missed the change. Before its own switch a node takes nothing from a packet under
+  the new key either: it still sends under the old key, which the removed device reads, and
+  its slot order is still the old key's, so the packet's timing says nothing about its clock.
+  A node holding the key message of the generation after the one a member is on sends it
+  again, in a packet under that member's key, in its own slot of that key's order in the next
+  sweep round. Every member listens throughout a sweep round, whichever key it is on, and one
+  that switched to a rival key listens in that order in no other (owner, 2026-10-04). A member
+  on a key a rival won over is sent the winner's key message instead, of the same generation. The removed device can
+  see that packet but cannot open the key inside. Key messages are kept for this past the
+  message horizon while the old key is, but are left out of the digest after it. A member that
+  missed the switch sends in the old order; nodes on the new key hear it in a sweep round,
+  where they listen throughout, within about 10 minutes. A node sends a member its key
+  message this way again only after a gap of sweep rounds that doubles with each send, up to
+  64 sweep rounds, about ten hours, and never stops while it keeps the old key (owner,
+  2026-10-04): one that declined never takes it, and is not acknowledged, so that it would
+  otherwise draw one every sweep round. A node sent it three times at most before, so that
+  anyone replaying one packet the member sent under the old key, which needs no key, spent
+  every send before the member was back. A packet under an old key whose base timestamp is
+  more than 5 minutes from the node's clock sends nothing at all, its key message or the
+  removal notice, when both clocks are UTC.
+- **The old key** is kept with no time limit, until every remaining member has said it is on
+  the new one; a member a later removal takes, or that leaves, is no longer waited for. A
+  member says so in an on-key record it signs over its id, the generation and the new key
+  itself, which it sends in its first three packets after the switch, and again at start-up,
+  and in its sweep rounds' packets for a day after either (owner, 2026-10-04). A node checks
+  one only while it waits for that member, about 32 ms on the board. A packet's sender id
+  proved nothing: any member could send one empty packet under the new key with an absent
+  member's id, and every node stopped waiting for it and dropped the key its catch-up needed. A
+  node keeps the four newest such keys. A member can be away for any length of time and come
+  back without pairing again. While some are not heard, a node sends a header under the old key
+  in its slot of each sweep round, so parts of the group that switched to different keys still
+  hear each other.
+- **The removed device** is sent a private message saying it was removed and by whom. Its
+  screen shows that, and it does not leave the group by itself, so a stolen device that removes
+  everyone else cannot take them out of their group. The remover sends it only after the
+  switch, under the old key, at its own slot in that key's order in a sweep round, where the
+  removed device still listens, and again when it hears the device under the old key, three
+  times in all.
+  Told before the switch, the device could answer by removing its remover, and the two keys
+  would be rivals, and it would win with a lower id than its remover's.
+- **Its record.** At the switch every node replaces the removed member's record with a gone
+  record, as of the start of the switch round, so every node's is the same. Its id is free
+  for the next pairing at once.
+- **Two at once.** Two removals made apart at the same time make two keys of one generation.
+  The one whose remover has the lower id wins wherever both are known, and of one remover's
+  two, the one with the lower SHA-256 (owner, 2026-10-04; the lower hash alone before). It
+  wins even after a switch to the other: a node takes a rival from a packet under the key both
+  replace, and the nodes that switched to the winner send it to the members on the loser. The
+  other remover makes its removal again under the winner once the member it removed is back.
+  A node that switched to the losing key puts back the record of the member that key removed,
+  as the node held it before that switch (owner, 2026-10-04). One of an earlier generation is
+  stale. The simulator's rival scenarios stage these (`crates/octowhere-sim`).
+- **What is kept across a restart.** A pending removal, the old keys and which members each
+  still waits for, and the key kept to decline the last removal after its switch; the record of
+  the member the last switch removed, the key the group's key replaced, and the removals this
+  device makes again after a rival won over them. The key messages themselves are in the message store, so a restarted node
+  gets them back from its neighbours within the horizon.
 
 ## Time and freshness
 
-Entries and messages carry absolute UTC seconds, set once by the originator and copied verbatim by
-every relay. Relays never recompute them, so error does not accumulate across hops and a clockless
+Entries carry absolute UTC seconds, and messages their timebase's seconds, which are UTC as well
+as its root's RTC was. Each is set once by the originator and copied verbatim by every relay. Relays never recompute them, so error does not accumulate across hops and a clockless
 node can forward entries whose freshness it cannot evaluate. Merge keeps the larger timestamp.
 
 A fix and a UTC stamp arrive in the same RMC sentence, so there is no state with fresh position and
@@ -330,10 +691,11 @@ What absolute timestamps do introduce is an unbounded top end. An entry stamped 
 wins every merge permanently, and a node with a bad clock causes that by accident, not just an
 attacker. So:
 
-- Reject entries and messages more than an hour ahead of local time. The gate is the PCF85063A
-  oscillator-stop flag, already read in [`src/peripherals/rtc.rs`](../src/peripherals/rtc.rs) and
-  exposed as `oscillator_stopped()`. A node with OS set skips the check and re-evaluates on its
-  first fix.
+- Reject entries and messages more than an hour ahead of local time. A node on a clock started
+  from a boot skips the check, since its clock is not UTC. The RTC's oscillator-stop flag
+  (`oscillator_stopped()` in
+  [`crates/octowhere-peripherals/src/rtc.rs`](../crates/octowhere-peripherals/src/rtc.rs)) is
+  what makes the firmware report no RTC time, and so start such a clock.
 - Drop entries past the retention horizon. Old positions are not worth relaying.
 
 An hour of margin passes a node whose RTC has free-run for a year. The margin only has to exceed
@@ -345,8 +707,53 @@ One group key, which every member encrypts and decrypts packets with, and a pair
 pair of members, for private message bodies.
 
 A group key proves membership, not identity: a compromised node can forge any other node's entry.
-Per-node authenticity would need Ed25519 signatures at 64 bytes each, which does not fit the payload
-budget. Revocation is a group rekey.
+Revocation is a group rekey.
+
+### Signatures
+
+Decided by the owner on 2026-10-03, after a review showed that any key holder could replace a
+member's public key with its own. The review's case: such a key holder is then sent that
+member's private messages, and is the one sealed that member's key message when a removal
+comes. Being built.
+
+- **One key.** A device's identity is an Ed25519 key pair, from a 32-byte seed it stores. Its
+  X25519 key for pairwise keys and pairing is derived from it, as libsodium does: the secret
+  from the seed's expanded scalar, and the public key by converting the Ed25519 public key,
+  which anyone can do. So a record names one public key, and nobody can pair another device's
+  X25519 key with a signing key of their own (owner, choosing this over a separate signing key
+  beside the X25519 one, which left that gap). Using one key for both is analysed in IACR
+  eprint 2021/509. Every device's key pair changed once with this, so devices paired before it
+  pair again.
+- **Member records.** A member signs its own record: its id, public key, joining and change
+  times, MAC and name, after the domain string `octowhere member`. A node checks the signature
+  against the record's public key before the record changes anything. A device is the same
+  device only by its public key, so a record replaces a held one only if the held key signed
+  it, and a MAC proves nothing. A device signs its record again whenever it changes: a rename,
+  or moving to another id. A record is about 127 bytes, so a packet carries one instead of
+  three, and a full table resync takes about three times as many rounds.
+- **Pairing.** The joining device's record is the first one made of it, so the joining device
+  signs it: the welcome gives it its id and the time the adding device dates the record, it
+  builds the same record the adding device built, and it returns the signature with its last
+  acknowledgement. The adding device checks it before storing the member. The welcome carries
+  every other record with its signature.
+- **Gone records.** One that a device sends as it leaves is signed by that device, after the
+  domain string `octowhere gone`, over its id, public key and time. One that a removal makes is
+  made by every node at its own switch, carries no signature, and is never sent. A node takes a
+  gone record from another node only if it is signed; a pairing's welcome carries both kinds.
+- **Lost keys.** A device that lost its keys, through a flash erase, pairs again as a new
+  member at a new id. Its old record stays until a member removes it.
+- **Key messages.** A key message carries its generation in the clear and its remover's
+  signature, after the domain string `octowhere key`, over the message's origin, destination,
+  sequence number, previous, timestamp, generation and sealed body. A relay checks it against
+  the origin's record, and keeps for catch-up only those from the member that removed for that
+  generation, as the relay learned it from its own key message. One signed key message takes a
+  packet's room for two unsigned ones, so a removal's switch is further off: about 8 minutes
+  for 8 members and 27 for 32, against 6 and 15.
+- **Catch-up.** A node keeps, for each member still waited for, the key message of each
+  generation after the one it is on, past the message horizon, while it keeps the old key. A
+  member heard under an old key is sent the key message for the generation after it, under that
+  key, so it takes one generation at a time, and is shown and can decline each removal in turn.
+  The kept messages are in RAM only (owner).
 
 ### Pairing
 
@@ -365,7 +772,74 @@ screen. A device always willing to pair is a permanent unauthenticated attack su
 defeat the point.
 
 The ESP32-S3 has no ECC accelerator, so X25519 runs in software. It runs at pairing and once per
-new member for the pairwise key.
+new member for the pairwise key. On the board the frame that runs it, and derives the code and
+the key, takes 22 ms (`docs/logs/lora/pairing-2026-10-02/`), so no screen needs to wait on it.
+
+#### The exchange as built
+
+The design hand-off of 2026-10-02 (`design/handoffs/octowhere-pairing-handoff-2026-10-02/`) and
+the owner's answers that day settle what this section leaves open. `crates/octowhere-mesh/src/pair.rs`
+implements it, with the radio left to the caller.
+
+- **Channel.** Pairing has band O's upper 125 kHz channel, 869.5875 MHz, to itself, with sync word
+  `0xA6` and the mesh's modulation (owner). Both devices leave the mesh for the pairing, at most
+  about four minutes, so the exchange runs back to back: the transfer of a full group takes
+  seconds. Both send at +2 dBm, PA_BOOST's lowest. That is to avoid the receiver overload two
+  devices side by side meet at +17 dBm, not a range limit: the screens make no promise of
+  distance, and the code is what secures the pairing.
+- **In the clear** go only public keys, hardware addresses and the commitment (owner). Names and
+  the group's size travel sealed, after both users confirm.
+- **Commitment.** The adding device commits to its nonce before it sees the joining device's, as
+  Bluetooth's numeric comparison does. Showing a hash of the two public keys alone would let a
+  device in the middle try keys offline until the two codes agreed, about a million X25519 key
+  generations. With the commitment each attempt it makes has one chance in a million, and a failed
+  one shows as differing codes.
+
+| Frame | From | Holds |
+| --- | --- | --- |
+| announce | joining, every 2 s | its public key, its hardware address |
+| offer | adding, until the nonce | the joining device's key, its own, HMAC-SHA256 of its nonce over both keys, its hardware address |
+| nonce | joining, until the reveal | the session, its nonce |
+| reveal | adding, on each nonce | the session, its nonce |
+| sealed | either | the session, then AES-SIV under the pairing key: an accept with the joining device's name, an end with its reason, a part of the group, an acknowledgement, or done |
+
+Every frame starts with a version byte and its kind. The session is the first eight bytes of
+SHA-256 over both keys. The code is six digits from SHA-256 over the transcript, the two keys and
+both 16-byte nonces, and the pairing key is HKDF-SHA256 of the X25519 secret salted with that
+transcript. A key whose shared secret is not contributory ends the pairing.
+
+- **Discovery.** The adding device lists every device announcing, up to four, by hardware address,
+  and drops one unheard for 10 s; its user chooses. Search ends after 120 s.
+- **Confirmation.** Each user confirms on their own device within 60 s, or declines, or reports that
+  the codes differ. An end frame tells the other device which, or that the code timed out, a
+  cancel, or a failed store; it is sent three times, a second apart. A device the other never hears
+  from again reaches its own deadline.
+- **Transfer.** Once the joining device's accept and its own user's confirmation are both in, the
+  adding device sends the group key, the joining device's id and every member's record, 226 bytes
+  a part. Each part waits for its acknowledgement and is resent a second later without it; 30 s
+  without progress loses contact. A full group of 32 is ten parts.
+- **Commit order.** The joining device stores the group before it acknowledges the last part. The
+  adding device stores the new member on that acknowledgement, then sends done, and stays 5 s to
+  answer a repeated acknowledgement. A joining device that stored but never hears done says so:
+  it is in the group, with the adding device's receipt unconfirmed. An adding device whose last
+  part is never acknowledged has not added the member, and says the outcome is unknown. If the
+  joining device did store the group, its own member record reaches the adding device through the
+  mesh, at the id it was given. A device that was founding the group has no group to hear that
+  under, so it listens throughout for 10 minutes under the founded group's key instead, as it
+  does when its own write of the group failed after it sent done. A packet
+  under that key shows the joining device stored the group, and the founding device then stores
+  it, and takes it up only once the write lands. A failed write is tried again every 10 s while
+  the wait lasts. The joining device is heard within about 3½ minutes: it waits 30 s for
+  done, sweeps for three rounds, then sends in its next slot, since it hears nobody. Starting
+  another pairing or leaving ends the wait.
+- **Capacity.** A full group refuses to add before it searches, a returning device included (design
+  hand-off). Below 32, a returning device keeps its id.
+- **Founding.** A device in no group that adds one founds a group, with a random key and itself at
+  id 0, only when the pairing completes. The first joining device gets id 1.
+- **Joining** needs a device in no group. Leaving is its own step, which the screens put first.
+
+Nothing is protected against a cancelled pairing's half-stored state, because nothing is stored
+before the commit order above.
 
 ### Identity and storage
 
@@ -373,14 +847,32 @@ The protocol id is 5 bits, 0–31. The enroller gives the joiner the lowest id f
 Two members enrolling in separate places at once can hand out the same id; member records reveal it
 when the partitions meet. The member whose public key has the lower SHA-256 keeps the id, and the
 other takes the lowest id free in its table and announces it with a member record. The user sees
-nothing. An id is freed only by removing its member.
+nothing.
+
+An id is freed when its member leaves or is removed (see "Removing a member"). A device that
+leaves sends a gone record for itself in its next two slots, within about three rounds, from
+memory, and then forgets the key; the others replace its record with the gone record and free
+its id, with no new key (owner, 2026-10-03). A pairing started meanwhile ends that, and a
+device with no timebase has nobody to tell; the others can still remove it. A device that may
+still hold the key is removed instead. A gone record wins a merge against the same device's
+record when it is newer, and a node that hears a record for a device it holds as gone sends the
+gone record back. A member or gone record stamped more than an hour ahead of a node's clock is
+refused: it would win every merge until then. When a new member takes a gone member's id, the gone record moves to a list
+of the last eight, kept in RAM, which still answers for it. Of two gone records for one id,
+every node keeps the newer. Pairing a device again gives it a newer record, which wins, and a
+pairing carries the gone records with the members.
 
 The eFuse base MAC is the stable hardware identity, used to recognise a re-pair of the same physical
 device rather than issuing a second id.
 
-Group key, id, member table and the sequence-number block persist through `esp-storage` and
-`sequential-storage` in a flash partition, not the SD card, which is removable. Store the blob behind
-a one-byte version envelope.
+Group key, id, member table and the sequence-number block persist in a flash partition, not the
+SD card, which is removable. They are in the settings' ekv database (`firmware/src/settings.rs`): the group
+key and this device's id under one key, each member's record under its own, and this device's
+X25519 secret and name apart from the group, each value behind a one-byte version. A device keeps
+its name and key pair when it leaves a group, and CLEAR SETTINGS keeps all of it (owner,
+2026-10-02). A member that changes is stored with the whole group in one transaction. The
+sequence-number block is stored with the identity, and a pending removal and the old keys with
+the group.
 
 ### Flash encryption is deferred
 
@@ -388,7 +880,7 @@ Not in the prototype. It costs an irreversible eFuse burn on boards that still n
 Release mode disables the plaintext UART download that `cargo run --release` relies on, and it
 probably breaks `sequential-storage`: XTS encrypts each 16-byte block with its offset as tweak, so
 a written block cannot be partially rewritten, while `sequential-storage` does multi-pass writes
-within a page.
+within a page. The store is ekv now, and whether it writes a block twice has not been checked.
 
 It also protects less than it appears to. It is not firmware authentication, which is Secure Boot,
 and it does nothing against a running device, since the controller decrypts transparently for
@@ -425,12 +917,31 @@ and the restore after are each short with the bus free between them.
 
 1. The radio in its own task, and a cross-core I2C lock. Done.
 2. Radio settings above, and slots on GPS time with the header and record format, carrying
-   positions and neighbours.
-3. Pairing, the member table and ids.
-4. The cancel rule and neighbour-only listening.
+   positions and neighbours, with a timebase taken from other nodes without a fix. Done, with ids
+   from the MAC and a development key until step 3.
+3. Pairing, the member table and ids. Done: the exchange, the member table, member records in
+   the mesh's packets, their storage, and the screens (`SCREEN-DESIGN-BRIEF.md`, "Group and
+   pairing as built").
+4. The cancel rule and neighbour-only listening. Built as listening to members and neighbours
+   with periodic sweeps (see "Listening"), the cancel rule entry by entry (below), and a changed
+   member record sent in the node's next slot.
 5. CAD with slot phase refined from arrival times.
 6. Messages, then private messages.
 7. Pruning relays from the gossiped graph.
+
+What is left goes in this order (owner, 2026-10-03):
+
+- Shuffled slots and member records on request (see "Medium access" and "Packet"), together
+  and first. Both change what goes on the air, which is cheapest while there are two boards.
+  Both are built and ran on the two boards (`docs/logs/lora/refresh-and-recovery-2026-10-03/`).
+- Step 6, ahead of step 5. A new group key goes to each member as a private message, so
+  removing a member needs the message machinery: flooding, the seen-set, acknowledgements,
+  sequence numbers kept in flash, and the pairwise seal. It is built with removal as its first
+  use, then messages on top. Removal and messages need screens, which need a design round; the
+  mesh's side goes first, driven over the USB JTAG as pairing's was. Its design was settled
+  with the owner on 2026-10-03 ("Messages", "Removing a member", "Identity and storage"). The
+  mesh's side is built and ran on the two boards (`docs/logs/lora/step6-2026-10-03/`).
+- Step 5, then step 7.
 
 ## RTC calibration
 
@@ -448,13 +959,42 @@ protocol does not need this.
 
 ## Open
 
-- Confirming the PA pin on the bench (see "Radio").
-- The limit after which a rekey drops the old key.
+- Two parts of a group whose clocks share no origin, such as RTCs that hold no time, sweep in
+  rounds that need not overlap. They find each other when a sweep round in either meets a
+  packet of the other, since a notice brings the lower one over: up to about 30 minutes for
+  idle nodes (`docs/logs/lora/founding-and-listening-2026-10-02/`). A node that hears nobody
+  sends every round, which leaves it one sweep.
+- A replay of two recorded packets still moves a clock, within 5 minutes where the node's RTC
+  holds the time and anywhere where it does not ("Replays" above). A replayed notice forces a
+  three-round sweep, and a replayed packet a four-round one while it is held; neither moves the
+  clock. Jamming does more harm more easily.
+- A member being removed can still see that a removal is under way before the switch: key
+  messages are marked as such, and none comes to it. Firmware changed to act on that can
+  remove its remover first. The lower remover's id decides which removal holds (owner,
+  2026-10-04, once the simulator staged rivals): it cannot be ground, as the lower hash could
+  in about 2^16 tries, but the lowest ids, the founder's first, win every race. Each device's
+  user is shown both and can decline the one they do not want. Bounding a key message's switch
+  round and refusing a key that names no member stop the cheapest uses (owner, 2026-10-03).
+- Two parts of a group apart, one of which removes twice while the other removes once, stay on
+  different keys when the other's removal wins over the first part's first. A node does not go
+  back past a switch it made, which would undo the removals after it, as declining after a
+  switch does. The simulator's `parts_apart_through_two_removals_settle_once_they_meet`,
+  ignored for now, stages it.
+- For step 5: the power budget is two days on a cell of about 1,000 mAh (owner, 2026-10-03),
+  which sets the floor, the sweeps and how far CAD has to go. CAD's two measurements need both
+  boards with a GPS fix at once, which will not be possible for a while, so step 5 waits
+  behind the simulator and the next design round (owner, 2026-10-03).
 - A shorter floor once CAD is measured (see "CAD is required at this size").
 - Measuring GNSS time sync (see "Time sync").
+- Contention in place of slots (owner, 2026-10-04), for message latency and to drop the slot
+  timing. It waits on measuring what the rest of the device draws
+  ([`POWER-INVESTIGATION.md`](POWER-INVESTIGATION.md)).
 
 ## Deferred
 
+- Tuning for range, the spreading factor and with it the slot length, once the protocol
+  carries everything (owner, 2026-10-03). Range has not been measured. SF8 fits today's slot:
+  a 255-byte packet takes about 707 ms, which with the 500 ms guard is inside 1,406 ms.
 - Moving a running group to the fallback band.
 - Messages longer than one packet.
 - Flash encryption, as above.

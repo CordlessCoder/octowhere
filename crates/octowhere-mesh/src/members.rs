@@ -1,0 +1,1741 @@
+//! The group a node belongs to: its key, the node's own id, and each member's public key, hardware
+//! address and name. Pairing fills it, and member records spread changes to it through the mesh.
+
+use alloc::boxed::Box;
+use core::cell::Cell;
+
+use sha2::{Digest, Sha256};
+
+use crate::identity::{Identity, SIGNATURE_LEN, verify};
+use crate::seal::Key;
+use crate::{AHEAD_S, IDS, Ids};
+
+pub const NAME_LEN: usize = 16;
+pub const MAC_LEN: usize = 6;
+pub const PUBLIC_LEN: usize = 32;
+/// A member record's body up to its name: id, public key, join time, change time, hardware
+/// address, signature.
+pub const RECORD_FIXED_LEN: usize = SIGNATURE_AT + SIGNATURE_LEN;
+/// Where a member record's signature starts, after the fields it covers but the name.
+const SIGNATURE_AT: usize = 1 + PUBLIC_LEN + 4 + 4 + MAC_LEN;
+/// What a member record's signature covers, before its fields.
+const MEMBER_DOMAIN: &[u8] = b"octowhere member";
+/// What a gone record's signature covers, before its fields.
+const GONE_DOMAIN: &[u8] = b"octowhere gone";
+pub const RECORD_MAX_LEN: usize = RECORD_FIXED_LEN + NAME_LEN;
+
+const SLOTS: usize = IDS as usize;
+
+/// Up to [`NAME_LEN`] printable ASCII characters, case kept.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Name {
+    len: u8,
+    bytes: [u8; NAME_LEN],
+}
+
+impl Name {
+    /// `None` for an empty, overlong or non-printable name.
+    #[must_use]
+    pub fn new(text: &[u8]) -> Option<Self> {
+        if text.is_empty()
+            || text.len() > NAME_LEN
+            || !text.iter().all(|&c| (0x20..0x7f).contains(&c))
+        {
+            return None;
+        }
+        let mut bytes = [0; NAME_LEN];
+        bytes[..text.len()].copy_from_slice(text);
+        Some(Self {
+            len: text.len() as u8,
+            bytes,
+        })
+    }
+
+    /// The name a device has until its user sets one: `OW-` and the last four hex digits of its
+    /// hardware address.
+    #[must_use]
+    pub fn from_mac(mac: &[u8; MAC_LEN]) -> Self {
+        const HEX: &[u8; 16] = b"0123456789ABCDEF";
+        let mut text = *b"OW-0000";
+        for (i, nibble) in [mac[4] >> 4, mac[4] & 15, mac[5] >> 4, mac[5] & 15]
+            .into_iter()
+            .enumerate()
+        {
+            text[3 + i] = HEX[usize::from(nibble)];
+        }
+        Self::new(&text).expect("a printable name")
+    }
+
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes[..usize::from(self.len)]
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        core::str::from_utf8(self.as_bytes()).expect("printable ASCII")
+    }
+}
+
+#[cfg(feature = "defmt")]
+impl defmt::Format for Name {
+    fn format(&self, f: defmt::Formatter) {
+        defmt::write!(f, "{=str}", self.as_str());
+    }
+}
+
+impl core::fmt::Display for Name {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct Member {
+    /// The device's Ed25519 public key, which is the device: two records with one key are one
+    /// device.
+    pub public: [u8; PUBLIC_LEN],
+    /// UTC seconds it joined, or rejoined after losing its keys.
+    pub joined: u32,
+    /// UTC seconds its record last changed: its joining or a later rename. The newer record of a
+    /// member wins a merge.
+    pub changed: u32,
+    pub mac: [u8; MAC_LEN],
+    pub name: Name,
+    /// The device's own, over the record at its id, as [`Member::sign`] makes it. A node merges
+    /// a record from another only if it holds.
+    pub signature: [u8; SIGNATURE_LEN],
+}
+
+impl Member {
+    /// Writes the member record's body for `id` and returns its length.
+    pub fn encode(&self, id: u8, out: &mut [u8; RECORD_MAX_LEN]) -> usize {
+        out[0] = id;
+        out[1..33].copy_from_slice(&self.public);
+        out[33..37].copy_from_slice(&self.joined.to_be_bytes());
+        out[37..41].copy_from_slice(&self.changed.to_be_bytes());
+        out[41..SIGNATURE_AT].copy_from_slice(&self.mac);
+        out[SIGNATURE_AT..RECORD_FIXED_LEN].copy_from_slice(&self.signature);
+        let name = self.name.as_bytes();
+        out[RECORD_FIXED_LEN..RECORD_FIXED_LEN + name.len()].copy_from_slice(name);
+        RECORD_FIXED_LEN + name.len()
+    }
+
+    /// Reads a member record's body.
+    #[must_use]
+    pub fn decode(body: &[u8]) -> Option<(u8, Self)> {
+        let fixed = body.get(..RECORD_FIXED_LEN)?;
+        let id = fixed[0];
+        if id >= IDS {
+            return None;
+        }
+        Some((
+            id,
+            Self {
+                public: fixed[1..33].try_into().ok()?,
+                joined: u32::from_be_bytes(fixed[33..37].try_into().ok()?),
+                changed: u32::from_be_bytes(fixed[37..41].try_into().ok()?),
+                mac: fixed[41..SIGNATURE_AT].try_into().ok()?,
+                name: Name::new(&body[RECORD_FIXED_LEN..])?,
+                signature: fixed[SIGNATURE_AT..RECORD_FIXED_LEN].try_into().ok()?,
+            },
+        ))
+    }
+
+    /// Signs the record at `id` with `me`, whose record it must be.
+    pub fn sign(&mut self, id: u8, me: &Identity) {
+        debug_assert_eq!(
+            self.public,
+            me.public(),
+            "a member signs only its own record"
+        );
+        let (signed, len) = self.signed(id);
+        self.signature = me.sign(&[&signed[..len]]);
+    }
+
+    /// Whether the record at `id` carries its device's signature.
+    #[must_use]
+    pub fn verify(&self, id: u8) -> bool {
+        let (signed, len) = self.signed(id);
+        verify(&self.public, &[&signed[..len]], &self.signature)
+    }
+
+    /// What the signature of the record at `id` covers, and its length.
+    fn signed(&self, id: u8) -> ([u8; MEMBER_DOMAIN.len() + RECORD_MAX_LEN], usize) {
+        let mut out = [0; MEMBER_DOMAIN.len() + RECORD_MAX_LEN];
+        let mut body = [0; RECORD_MAX_LEN];
+        let len = self.encode(id, &mut body);
+        out[..MEMBER_DOMAIN.len()].copy_from_slice(MEMBER_DOMAIN);
+        // Everything but the signature itself.
+        let fields = [&body[..SIGNATURE_AT], &body[RECORD_FIXED_LEN..len]];
+        let mut at = MEMBER_DOMAIN.len();
+        for field in fields {
+            out[at..at + field.len()].copy_from_slice(field);
+            at += field.len();
+        }
+        (out, at)
+    }
+
+    /// The bytes its member record takes in a packet, its type and length included.
+    #[must_use]
+    pub fn record_len(&self) -> usize {
+        2 + RECORD_FIXED_LEN + self.name.as_bytes().len()
+    }
+
+    /// Of two devices holding one id, the one with the lower rank keeps it.
+    fn rank(&self) -> [u8; 32] {
+        Sha256::digest(self.public).into()
+    }
+
+    fn same_device(&self, other: &Self) -> bool {
+        self.public == other.public
+    }
+}
+
+/// A member that left or was removed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct Gone {
+    pub public: [u8; PUBLIC_LEN],
+    /// UTC seconds it went. It wins a merge against an older record of the same device, and
+    /// loses to a newer one, as a device paired again has.
+    pub changed: u32,
+    /// The device's own, over the record at its id, when it left; all zeroes when a removal
+    /// made it, which is never sent.
+    pub signature: [u8; SIGNATURE_LEN],
+}
+
+/// A gone record's body: id, public key, change time, signature.
+pub const GONE_LEN: usize = 1 + PUBLIC_LEN + 4 + SIGNATURE_LEN;
+
+impl Gone {
+    /// The gone record a removal makes, which carries no signature.
+    #[must_use]
+    pub fn unsigned(public: [u8; PUBLIC_LEN], changed: u32) -> Self {
+        Self {
+            public,
+            changed,
+            signature: [0; SIGNATURE_LEN],
+        }
+    }
+
+    pub fn encode(&self, id: u8, out: &mut [u8; GONE_LEN]) {
+        out[0] = id;
+        out[1..33].copy_from_slice(&self.public);
+        out[33..37].copy_from_slice(&self.changed.to_be_bytes());
+        out[37..GONE_LEN].copy_from_slice(&self.signature);
+    }
+
+    /// Whether the device signed it as it left.
+    #[must_use]
+    pub fn is_signed(&self) -> bool {
+        self.signature != [0; SIGNATURE_LEN]
+    }
+
+    /// Signs the record at `id` with `me`, the device leaving.
+    pub fn sign(&mut self, id: u8, me: &Identity) {
+        debug_assert_eq!(
+            self.public,
+            me.public(),
+            "a device signs only its own going"
+        );
+        self.signature = me.sign(&[&self.signed(id)]);
+    }
+
+    /// Whether the record at `id` carries its device's signature.
+    #[must_use]
+    pub fn verify(&self, id: u8) -> bool {
+        verify(&self.public, &[&self.signed(id)], &self.signature)
+    }
+
+    /// What the signature of the record at `id` covers.
+    fn signed(&self, id: u8) -> [u8; GONE_DOMAIN.len() + 37] {
+        let mut out = [0; GONE_DOMAIN.len() + 37];
+        let mut body = [0; GONE_LEN];
+        self.encode(id, &mut body);
+        out[..GONE_DOMAIN.len()].copy_from_slice(GONE_DOMAIN);
+        out[GONE_DOMAIN.len()..].copy_from_slice(&body[..37]);
+        out
+    }
+
+    #[must_use]
+    pub fn decode(body: &[u8]) -> Option<(u8, Self)> {
+        let body = body.get(..GONE_LEN)?;
+        let id = body[0];
+        if id >= IDS {
+            return None;
+        }
+        Some((
+            id,
+            Self {
+                public: body[1..33].try_into().ok()?,
+                changed: u32::from_be_bytes(body[33..37].try_into().ok()?),
+                signature: body[37..GONE_LEN].try_into().ok()?,
+            },
+        ))
+    }
+
+    /// Which of two gone records holds an id, so that every node keeps the same one.
+    fn outranks(&self, other: &Self) -> bool {
+        (self.changed, other.public) > (other.changed, self.public)
+    }
+}
+
+/// The first eight bytes of SHA-256 over a public key, which name a device in a key message.
+#[must_use]
+pub fn fingerprint(public: &[u8; PUBLIC_LEN]) -> [u8; 8] {
+    let hash: [u8; 32] = Sha256::digest(public).into();
+    hash[..8].try_into().expect("eight bytes")
+}
+
+/// What an id holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum Slot {
+    Member(Member),
+    /// The member that held it went. The id is free.
+    Gone(Gone),
+}
+
+const _: () = assert!(
+    GONE_LEN < RECORD_FIXED_LEN,
+    "a gone record's length tells it from a member's"
+);
+
+impl Slot {
+    /// The bytes its record takes in a packet, its type and length included.
+    #[must_use]
+    pub fn record_len(&self) -> usize {
+        match self {
+            Self::Member(member) => member.record_len(),
+            Self::Gone(_) => 2 + GONE_LEN,
+        }
+    }
+
+    /// Writes its record for `id`, a member's or a gone one, and returns the record's length.
+    pub fn encode(&self, id: u8, out: &mut [u8; RECORD_MAX_LEN]) -> usize {
+        match self {
+            Self::Member(member) => member.encode(id, out),
+            Self::Gone(gone) => {
+                let (record, _) = out
+                    .split_first_chunk_mut::<GONE_LEN>()
+                    .expect("room for one");
+                gone.encode(id, record);
+                GONE_LEN
+            }
+        }
+    }
+
+    /// Reads a record [`Slot::encode`] wrote, and its id. A gone record is [`GONE_LEN`] bytes and
+    /// every member record is longer, which tells them apart where nothing else says which.
+    #[must_use]
+    pub fn decode(record: &[u8]) -> Option<(u8, Self)> {
+        if record.len() == GONE_LEN {
+            let (id, gone) = Gone::decode(record)?;
+            Some((id, Self::Gone(gone)))
+        } else {
+            let (id, member) = Member::decode(record)?;
+            Some((id, Self::Member(member)))
+        }
+    }
+}
+
+/// What a member or gone record heard from another node changed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum Merged {
+    Unchanged,
+    /// The slot at its id changed, and `vacated` is another id that changed with it: the one the
+    /// member moved from, or one a gone record of the same device held, now empty.
+    Changed {
+        vacated: Option<u8>,
+    },
+    /// Another device holds this node's id and keeps it, so this node took the lowest free id.
+    Renumbered {
+        from: u8,
+        to: u8,
+    },
+    /// A member went, and the slot at `at` holds its gone record.
+    Went {
+        at: u8,
+    },
+}
+
+fn is_ahead(changed: u32, now: Option<u32>) -> bool {
+    now.is_some_and(|now| changed > now.saturating_add(AHEAD_S))
+}
+
+/// The stamp of a record made at UTC `now`: 0 without UTC, which every record stamped with it
+/// outranks.
+#[must_use]
+pub fn stamp(now: Option<u32>) -> u32 {
+    now.unwrap_or(0)
+}
+
+/// The most gone records kept once new members have taken their ids.
+pub const FORMER: usize = 8;
+
+/// The bytes the flash keeps a group's header in: its key, this node's id in it, and the key's
+/// generation, little-endian.
+pub const STORED_HEADER_LEN: usize = 32 + 1 + 2;
+
+/// Reads a group's header as [`Group::encode_stored_header`] wrote it: its key, this node's id
+/// and the key's generation. One stored before keys had generations stops after the id, and
+/// its key is the first.
+#[must_use]
+pub fn decode_stored_header(bytes: &[u8]) -> Option<(Key, u8, u16)> {
+    let key: [u8; 32] = bytes.get(..32)?.try_into().ok()?;
+    let own = *bytes.get(32)?;
+    let generation = bytes.get(33..35).map_or(0, |generation| {
+        u16::from_le_bytes([generation[0], generation[1]])
+    });
+    Some((Key::new(key), own, generation))
+}
+const _: () = assert!(FORMER <= 8, "`former_unsent` is a `u8` set");
+
+#[derive(Clone)]
+struct Records {
+    slots: [Option<Slot>; SLOTS],
+    /// Gone records whose ids new members took, oldest first, with those ids.
+    former: [Option<(u8, Gone)>; FORMER],
+}
+
+#[derive(Clone)]
+pub struct Group {
+    key: Key,
+    /// How many times the key has changed since the group was founded. A new key's message
+    /// names its generation, which tells a later key from a rival.
+    generation: u16,
+    own: u8,
+    /// The records, on the heap: they are kilobytes, and a group moved or copied on the stack
+    /// would take that much under every call made meanwhile.
+    held: Box<Records>,
+    /// The ids whose slots changed here, or were asked for, and have not been sent since.
+    unsent: Ids,
+    /// The places in `former` whose records are to be sent, as a set.
+    former_unsent: u8,
+    /// The id whose slot went last. The next goes from the one after it.
+    sent_last: u8,
+    /// The slots' digest, until they change.
+    digest: Cell<Option<u32>>,
+    /// The ids whose slots changed since [`Group::take_changed`] last took them.
+    changed: Ids,
+    /// This node's record moved to another id and is not sent until it is signed again.
+    unsigned_own: bool,
+}
+
+impl Group {
+    /// A new group with `me` as its first member, id 0, joined at UTC `now`.
+    #[must_use]
+    pub fn found(key: Key, me: &Identity, now: Option<u32>) -> Self {
+        let mut record = Member {
+            public: me.public(),
+            joined: stamp(now),
+            changed: stamp(now),
+            mac: me.mac,
+            name: me.name,
+            signature: [0; SIGNATURE_LEN],
+        };
+        record.sign(0, me);
+        let mut slots = [None; SLOTS];
+        slots[0] = Some(Slot::Member(record));
+        Self::restore(key, 0, 0, slots).expect("it holds this node's record")
+    }
+
+    /// A group of members with its first key. `None` unless it holds this node's record.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn new(key: Key, own: u8, members: [Option<Member>; SLOTS]) -> Option<Self> {
+        Self::restore(key, 0, own, members.map(|member| member.map(Slot::Member)))
+    }
+
+    /// Writes the header the flash keeps the group under, which
+    /// [`decode_stored_header`] reads.
+    pub fn encode_stored_header(&self, out: &mut [u8; STORED_HEADER_LEN]) {
+        out[..32].copy_from_slice(self.key.bytes());
+        out[32] = self.own;
+        out[33..].copy_from_slice(&self.generation.to_le_bytes());
+    }
+
+    /// A group as stored or as pairing delivered it. `None` unless it holds this node's record.
+    #[must_use]
+    pub fn restore(
+        key: Key,
+        generation: u16,
+        own: u8,
+        slots: [Option<Slot>; SLOTS],
+    ) -> Option<Self> {
+        let Some(Slot::Member(_)) = slots.get(usize::from(own))? else {
+            return None;
+        };
+        Some(Self {
+            key,
+            generation,
+            own,
+            held: Box::new(Records {
+                slots,
+                former: [None; FORMER],
+            }),
+            unsent: Ids::EMPTY,
+            former_unsent: 0,
+            sent_last: IDS - 1,
+            digest: Cell::new(None),
+            changed: Ids::EMPTY,
+            unsigned_own: false,
+        })
+    }
+
+    #[must_use]
+    pub fn key(&self) -> &Key {
+        &self.key
+    }
+
+    #[must_use]
+    pub fn generation(&self) -> u16 {
+        self.generation
+    }
+
+    /// Takes up a new key, which the group switched to.
+    pub(crate) fn rekey(&mut self, key: Key, generation: u16) {
+        self.key = key;
+        self.generation = generation;
+    }
+
+    #[must_use]
+    pub fn own(&self) -> u8 {
+        self.own
+    }
+
+    #[must_use]
+    pub fn me(&self) -> &Member {
+        self.member(self.own)
+            .expect("a group holds its own node's record")
+    }
+
+    #[must_use]
+    pub fn slot(&self, id: u8) -> Option<&Slot> {
+        self.held.slots.get(usize::from(id))?.as_ref()
+    }
+
+    #[must_use]
+    pub fn member(&self, id: u8) -> Option<&Member> {
+        match self.slot(id)? {
+            Slot::Member(member) => Some(member),
+            Slot::Gone(_) => None,
+        }
+    }
+
+    #[must_use]
+    pub fn gone(&self, id: u8) -> Option<&Gone> {
+        match self.slot(id)? {
+            Slot::Gone(gone) => Some(gone),
+            Slot::Member(_) => None,
+        }
+    }
+
+    pub fn members(&self) -> impl Iterator<Item = (u8, &Member)> {
+        (0..IDS).filter_map(|id| Some((id, self.member(id)?)))
+    }
+
+    /// The ids members hold.
+    #[must_use]
+    pub fn ids(&self) -> Ids {
+        self.members().map(|(id, _)| id).collect()
+    }
+
+    /// The ids with a member or a gone record.
+    fn held(&self) -> Ids {
+        (0..IDS).filter(|&id| self.slot(id).is_some()).collect()
+    }
+
+    #[must_use]
+    pub fn count(&self) -> usize {
+        self.members().count()
+    }
+
+    #[must_use]
+    pub fn is_full(&self) -> bool {
+        self.count() == SLOTS
+    }
+
+    /// The lowest id no member holds; one a gone member held is free.
+    #[must_use]
+    pub fn lowest_free(&self) -> Option<u8> {
+        (0..IDS).find(|&id| self.member(id).is_none())
+    }
+
+    #[must_use]
+    pub fn by_mac(&self, mac: &[u8; MAC_LEN]) -> Option<u8> {
+        self.members()
+            .find(|(_, m)| m.mac == *mac)
+            .map(|(id, _)| id)
+    }
+
+    /// Whether `print` names a member, or a gone record held, as a key message's member removed
+    /// must. A member may have left by the time the key reaches a node.
+    #[must_use]
+    pub fn names(&self, print: &[u8; 8]) -> bool {
+        self.by_fingerprint(print).is_some()
+            || (0..IDS)
+                .filter_map(|id| self.gone(id))
+                .chain(self.held.former.iter().flatten().map(|(_, gone)| gone))
+                .any(|gone| fingerprint(&gone.public) == *print)
+    }
+
+    /// The id with `fingerprint`'s member, which a key message names.
+    #[must_use]
+    pub fn by_fingerprint(&self, fingerprint: &[u8; 8]) -> Option<u8> {
+        self.members()
+            .find(|(_, m)| self::fingerprint(&m.public) == *fingerprint)
+            .map(|(id, _)| id)
+    }
+
+    #[must_use]
+    pub fn by_public(&self, public: &[u8; PUBLIC_LEN]) -> Option<u8> {
+        self.members()
+            .find(|(_, m)| m.public == *public)
+            .map(|(id, _)| id)
+    }
+
+    /// The id a device joining with `public` gets: its old one if it was a member, otherwise the
+    /// lowest free. A device with a new key is a new member, whatever its MAC.
+    #[must_use]
+    pub fn id_for(&self, public: &[u8; PUBLIC_LEN]) -> Option<u8> {
+        self.by_public(public).or_else(|| self.lowest_free())
+    }
+
+    /// 32 bits of SHA-256 over each slot's id, public key and change time, in id order, with a
+    /// gone record marked. Two nodes whose digests agree hold the same records, as far as a
+    /// merge goes.
+    #[must_use]
+    pub fn digest(&self) -> u32 {
+        if let Some(digest) = self.digest.get() {
+            return digest;
+        }
+        let mut hash = Sha256::new();
+        for id in 0..IDS {
+            match self.slot(id) {
+                Some(Slot::Member(member)) => {
+                    hash.update([id]);
+                    hash.update(member.public);
+                    hash.update(member.changed.to_be_bytes());
+                }
+                Some(Slot::Gone(gone)) => {
+                    hash.update([id | 0x80]);
+                    hash.update(gone.public);
+                    hash.update(gone.changed.to_be_bytes());
+                }
+                None => {}
+            }
+        }
+        let hash: [u8; 32] = hash.finalize().into();
+        let digest = u32::from_be_bytes([hash[0], hash[1], hash[2], hash[3]]);
+        self.digest.set(Some(digest));
+        digest
+    }
+
+    fn set(&mut self, id: u8, slot: Option<Slot>) {
+        if let (Some(Slot::Gone(gone)), Some(Slot::Member(_))) = (self.slot(id).copied(), slot) {
+            self.keep_former(id, gone);
+        }
+        self.held.slots[usize::from(id)] = slot;
+        self.unsent.insert(id);
+        self.changed.insert(id);
+        self.digest.set(None);
+    }
+
+    /// The ids whose slots changed since the last call.
+    pub fn take_changed(&mut self) -> Ids {
+        core::mem::take(&mut self.changed)
+    }
+
+    fn keep_former(&mut self, id: u8, gone: Gone) {
+        if self.held.former[0].is_some() && self.held.former.iter().all(Option::is_some) {
+            self.held.former.rotate_left(1);
+            self.held.former[FORMER - 1] = None;
+            self.former_unsent >>= 1;
+        }
+        if let Some(free) = self.held.former.iter().position(Option::is_none) {
+            self.held.former[free] = Some((id, gone));
+        }
+    }
+
+    /// Where a gone record of the device `public` is held: an id, or a place in `former`.
+    fn gone_of(&self, public: &[u8; PUBLIC_LEN]) -> Option<(Held, Gone)> {
+        (0..IDS)
+            .find_map(|id| {
+                self.gone(id)
+                    .filter(|gone| gone.public == *public)
+                    .map(|gone| (Held::Slot(id), *gone))
+            })
+            .or_else(|| {
+                self.held
+                    .former
+                    .iter()
+                    .enumerate()
+                    .find_map(|(at, former)| {
+                        former
+                            .filter(|(_, gone)| gone.public == *public)
+                            .map(|(_, gone)| (Held::Former(at), gone))
+                    })
+            })
+    }
+
+    /// Puts a member pairing enrolled at `id`, which forgets any gone record of the device.
+    pub fn enrol(&mut self, id: u8, member: Member) {
+        if let Some((held, _)) = self.gone_of(&member.public) {
+            self.forget(held);
+        }
+        self.set(id, Some(Slot::Member(member)));
+    }
+
+    fn forget(&mut self, held: Held) {
+        match held {
+            Held::Slot(id) => self.set(id, None),
+            Held::Former(at) => {
+                self.held.former[at] = None;
+                self.former_unsent &= !(1 << at);
+            }
+        }
+    }
+
+    /// Renames this node, at UTC `now`, signing its record as `me`.
+    pub fn rename(&mut self, name: Name, now: Option<u32>, me: &Identity) {
+        let mut record = *self.me();
+        record.name = name;
+        record.changed = stamp(now).max(record.changed + 1);
+        record.sign(self.own, me);
+        self.set(self.own, Some(Slot::Member(record)));
+    }
+
+    /// The gone record this node sends as it leaves, at UTC `now`, signed as `me`. The group
+    /// itself is about to be forgotten, so it is left as it is.
+    #[must_use]
+    pub fn leaving(&self, now: Option<u32>, me: &Identity) -> Gone {
+        let record = self.me();
+        let mut gone = Gone::unsigned(record.public, stamp(now).max(record.changed + 1));
+        gone.sign(self.own, me);
+        gone
+    }
+
+    /// Replaces the member `fingerprint` names with a gone record at UTC `at`, as a switch to a
+    /// new key that removes it does. Returns its id, or `None` when no member has it.
+    pub(crate) fn remove(&mut self, fingerprint: &[u8; 8], at: u32) -> Option<u8> {
+        let id = self.by_fingerprint(fingerprint)?;
+        if id == self.own {
+            return None;
+        }
+        let member = *self.member(id).expect("found above");
+        self.set(
+            id,
+            Some(Slot::Gone(Gone::unsigned(
+                member.public,
+                at.max(member.changed + 1),
+            ))),
+        );
+        Some(id)
+    }
+
+    /// Gives the member that a gone record at `id` names by `fingerprint` its id back, as a
+    /// removal undone, with `record`, the one it had before. Without one its record comes back
+    /// from nodes that still hold it. Returns whether there was such a gone record.
+    pub(crate) fn put_back(
+        &mut self,
+        id: u8,
+        record: Option<Member>,
+        fingerprint: &[u8; 8],
+    ) -> bool {
+        if !self
+            .gone(id)
+            .is_some_and(|gone| self::fingerprint(&gone.public) == *fingerprint)
+        {
+            return false;
+        }
+        // Not through `set`: the gone record is undone, not a former member's to keep. Nor is it
+        // sent: every node that took the losing key puts the record back as it switches, and the
+        // others never removed it.
+        self.held.slots[usize::from(id)] = record.map(Slot::Member);
+        self.changed.insert(id);
+        self.digest.set(None);
+        true
+    }
+
+    /// Forgets what the ids `ids` hold, other than this node's, and every gone record set apart,
+    /// as declining a removal after its switch does. Those are never stored, so a restart
+    /// forgets them too. The nodes that never switched send the rest again as they hold them.
+    /// Returns the ids that held something.
+    pub(crate) fn forget_changed(&mut self, ids: Ids) -> Ids {
+        let mut forgotten = Ids::EMPTY;
+        for id in ids.without(self.own).iter() {
+            if self.slot(id).is_some() {
+                self.set(id, None);
+                forgotten.insert(id);
+            }
+        }
+        for at in 0..FORMER {
+            if self.held.former[at].is_some() {
+                self.forget(Held::Former(at));
+            }
+        }
+        forgotten
+    }
+
+    /// Merges a member record heard from another node, at UTC `now` if known. A record
+    /// that would change anything must carry its device's signature. When this node moves to
+    /// another id, its record waits to be signed again, by [`Group::sign_own`], before it is sent.
+    pub fn merge(&mut self, id: u8, record: Member, now: Option<u32>) -> Merged {
+        if id >= IDS || record.same_device(self.me()) || is_ahead(record.changed, now) {
+            // Nobody knows this node's record better than it does.
+            return Merged::Unchanged;
+        }
+        let gone = self.gone_of(&record.public);
+        if let Some((held, gone)) = gone
+            && gone.changed >= record.changed
+        {
+            // The sender missed it going: tell it.
+            match held {
+                Held::Slot(at) => self.unsent.insert(at),
+                Held::Former(at) => self.former_unsent |= 1 << at,
+            }
+            return Merged::Unchanged;
+        }
+        let elsewhere = (0..IDS).find(|&other| {
+            other != id
+                && self
+                    .member(other)
+                    .is_some_and(|held| held.same_device(&record))
+        });
+        if let Some(other) = elsewhere {
+            let held = self.member(other).expect("found above");
+            if held.changed >= record.changed {
+                return Merged::Unchanged;
+            }
+        }
+        // Where this node goes when the record takes its id; a gone slot already counts as free.
+        let moving = match self.member(id) {
+            None => None,
+            Some(held) if held.same_device(&record) => {
+                if held.changed >= record.changed {
+                    return Merged::Unchanged;
+                }
+                None
+            }
+            // Two devices were given this id in separate places.
+            Some(held) if record.rank() >= held.rank() => return Merged::Unchanged,
+            Some(_) if id == self.own => match self.lowest_free() {
+                Some(to) => Some(to),
+                // Nowhere to move to: keep the id, as though this node had won.
+                None => return Merged::Unchanged,
+            },
+            // The device that held it moves itself once it hears this record.
+            Some(_) => None,
+        };
+        if !record.verify(id) {
+            return Merged::Unchanged;
+        }
+        // The device was paired again since it went.
+        let vacated = match gone {
+            Some((Held::Slot(at), _)) => {
+                self.held.slots[usize::from(at)] = None;
+                self.changed.insert(at);
+                self.digest.set(None);
+                (at != id).then_some(at)
+            }
+            Some((held, _)) => {
+                self.forget(held);
+                None
+            }
+            None => None,
+        };
+        let outcome = match moving {
+            Some(to) => {
+                let mut me = *self.me();
+                me.changed = stamp(now).max(me.changed + 1);
+                self.set(to, Some(Slot::Member(me)));
+                self.own = to;
+                self.unsigned_own = true;
+                Merged::Renumbered { from: id, to }
+            }
+            None => Merged::Changed {
+                vacated: elsewhere.or(vacated),
+            },
+        };
+        if let Some(other) = elsewhere {
+            self.set(other, None);
+        }
+        self.set(id, Some(Slot::Member(record)));
+        if moving.is_some() {
+            // The others need this node's new record; the one heard is no news to them.
+            self.unsent.remove(id);
+        }
+        outcome
+    }
+
+    /// Signs this node's record again once it has moved to another id, which lets it be sent.
+    pub fn sign_own(&mut self, me: &Identity) {
+        let own = self.own;
+        let mut record = *self.me();
+        record.sign(own, me);
+        self.held.slots[usize::from(own)] = Some(Slot::Member(record));
+        self.unsigned_own = false;
+    }
+
+    /// Merges a gone record heard from another node, at UTC `now` if known.
+    pub fn merge_gone(&mut self, id: u8, gone: Gone, now: Option<u32>) -> Merged {
+        if id >= IDS
+            || gone.public == self.me().public
+            || is_ahead(gone.changed, now)
+            || !gone.verify(id)
+        {
+            // A device that leaves knows it; one removed is shown it and leaves by itself. Only
+            // the device itself can say it went: a removal's record is made by each node.
+            return Merged::Unchanged;
+        }
+        let held = (0..IDS).find(|&at| {
+            self.member(at)
+                .is_some_and(|member| member.public == gone.public)
+        });
+        if let Some(at) = held {
+            let member = self.member(at).expect("found above");
+            if member.changed > gone.changed {
+                // Paired again since: the sender needs the newer record.
+                self.unsent.insert(at);
+                return Merged::Unchanged;
+            }
+            self.set(at, Some(Slot::Gone(gone)));
+            return Merged::Went { at };
+        }
+        match self.gone_of(&gone.public) {
+            Some((_, ours)) if ours.changed >= gone.changed => return Merged::Unchanged,
+            Some((place, _)) => self.forget(place),
+            None => {}
+        }
+        match self.slot(id).copied() {
+            None => {
+                self.set(id, Some(Slot::Gone(gone)));
+                Merged::Went { at: id }
+            }
+            Some(Slot::Gone(theirs)) if gone.outranks(&theirs) => {
+                self.keep_former(id, theirs);
+                self.set(id, Some(Slot::Gone(gone)));
+                Merged::Went { at: id }
+            }
+            // A member holds the id, or a gone record that every node keeps over this one.
+            Some(_) => {
+                self.keep_former(id, gone);
+                Merged::Unchanged
+            }
+        }
+    }
+
+    /// Whether a record changed here and has not been sent since.
+    #[must_use]
+    pub fn has_unsent(&self) -> bool {
+        !self.unsent().is_empty() || self.former_unsent().next().is_some()
+    }
+
+    /// Counts the slot at `id` as sent, when a packet that reached this node's neighbours
+    /// carried it as this node holds it.
+    pub fn covered(&mut self, id: u8, slot: &Slot) {
+        if self.slot(id) == Some(slot) {
+            self.unsent.remove(id);
+        }
+    }
+
+    /// Marks the slots held of the ids `ids` to be sent, as another node asked.
+    pub(crate) fn ask(&mut self, ids: Ids) {
+        self.unsent |= ids & self.held();
+    }
+
+    /// The ids whose slots are to be sent: not a removal's gone record, which no other node
+    /// takes, nor this node's record while it waits to be signed again.
+    #[must_use]
+    pub fn unsent(&self) -> Ids {
+        let unsigned: Ids = (0..IDS)
+            .filter(|&id| self.gone(id).is_some_and(|gone| !gone.is_signed()))
+            .collect();
+        let own = if self.unsigned_own {
+            Ids::of(self.own)
+        } else {
+            Ids::EMPTY
+        };
+        self.unsent & self.held() & !unsigned & !own
+    }
+
+    /// The ids of [`Group::unsent`] in the order they take their turns: from the one after the
+    /// slot that went last. One record fits in a packet, so lowest first would let ids that a
+    /// neighbour asks for again and again keep a higher one waiting for good.
+    pub fn unsent_in_turn(&self) -> impl Iterator<Item = u8> + '_ {
+        let unsent = self.unsent();
+        (1..=IDS)
+            .map(move |step| (self.sent_last + step) % IDS)
+            .filter(move |&id| unsent.contains(id))
+    }
+
+    /// Counts the slot at `id` as sent, once a packet carries it.
+    pub fn sent(&mut self, id: u8) {
+        self.unsent.remove(id);
+        self.sent_last = id;
+    }
+
+    /// The gone records kept apart from the slots that are to be sent, with their places.
+    pub fn former_unsent(&self) -> impl Iterator<Item = (usize, u8, Gone)> + '_ {
+        self.held
+            .former
+            .iter()
+            .enumerate()
+            .filter(|(at, _)| self.former_unsent & 1 << at != 0)
+            .filter_map(|(at, former)| former.map(|(id, gone)| (at, id, gone)))
+            .filter(|(_, _, gone)| gone.is_signed())
+    }
+
+    pub fn former_sent(&mut self, at: usize) {
+        self.former_unsent &= !(1 << at);
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Held {
+    Slot(u8),
+    Former(usize),
+}
+
+/// A neighbour whose members or messages digest differs from this node's in this many of its
+/// packets running is asked for every record it holds, or sent a summary of the messages.
+pub const MISMATCHES: u8 = 2;
+
+/// For each id, how many of its packets running carried a digest unlike this node's.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Mismatches([u8; SLOTS]);
+
+impl Mismatches {
+    /// Counts a packet from `sender` whose digest `matched` this node's or not. Returns whether
+    /// that made [`MISMATCHES`] running, which starts the count again.
+    pub(crate) fn count(&mut self, sender: u8, matched: bool) -> bool {
+        let Some(count) = self.0.get_mut(usize::from(sender)) else {
+            return false;
+        };
+        if matched {
+            *count = 0;
+            return false;
+        }
+        *count += 1;
+        let due = *count >= MISMATCHES;
+        if due {
+            *count = 0;
+        }
+        due
+    }
+}
+
+/// The member records a node asks its neighbours for: a sender's own when the node holds none
+/// for it, and all of a neighbour's once their tables keep differing.
+#[derive(Clone, Debug, Default)]
+pub struct Requests {
+    /// The ids the next packet asks for.
+    pending: Ids,
+    mismatched: Mismatches,
+}
+
+impl Requests {
+    /// Takes the members digest a packet from `sender` carried, and answers the ids it asked
+    /// for by marking `group`'s records of them to send, where the two tables differ.
+    pub fn answer(
+        &mut self,
+        group: &mut Group,
+        sender: u8,
+        digest: Option<u32>,
+        asked: Option<Ids>,
+    ) {
+        let ours = group.digest();
+        // A sender held as gone is telling the others it left.
+        if group.slot(sender).is_none() {
+            self.pending.insert(sender);
+        }
+        if let Some(theirs) = digest
+            && self.mismatched.count(sender, theirs == ours)
+        {
+            self.pending = Ids::ALL;
+        }
+        if let Some(ids) = asked
+            && digest != Some(ours)
+        {
+            group.ask(ids);
+        }
+    }
+
+    /// The ids to ask for.
+    #[must_use]
+    pub fn pending(&self) -> Ids {
+        self.pending
+    }
+
+    /// Takes the ids in `asked` as asked for, once a packet carried them.
+    pub fn sent(&mut self, asked: Ids) {
+        self.pending &= !asked;
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+
+    /// The identity behind device `n`'s records, so that a test can sign as it.
+    pub(crate) fn key(n: u8) -> Identity {
+        Identity::new(
+            [n; 32],
+            [0x10, 0, 0, 0, 0, n],
+            Name::from_mac(&[0, 0, 0, 0, 0, n]),
+        )
+    }
+
+    /// Device `n`'s record, unsigned.
+    pub(crate) fn member(n: u8, changed: u32) -> Member {
+        Member {
+            public: key(n).public(),
+            joined: 1_790_000_000,
+            changed,
+            mac: [0x10, 0, 0, 0, 0, n],
+            name: Name::from_mac(&[0, 0, 0, 0, 0, n]),
+            signature: [0; SIGNATURE_LEN],
+        }
+    }
+
+    /// Device `n`'s record at `id`, signed by it.
+    pub(crate) fn signed(id: u8, n: u8, changed: u32) -> Member {
+        let mut record = member(n, changed);
+        record.sign(id, &key(n));
+        record
+    }
+
+    /// A group under the test key with this device at `own`, and device `n`'s record at each
+    /// `(id, n)`.
+    pub(crate) fn group(own: u8, ids: &[(u8, u8)]) -> Group {
+        group_at(0, own, ids)
+    }
+
+    /// As [`group`], at `generation`.
+    pub(crate) fn group_at(generation: u16, own: u8, ids: &[(u8, u8)]) -> Group {
+        let mut slots = [None; SLOTS];
+        for &(id, n) in ids {
+            slots[usize::from(id)] = Some(Slot::Member(member(n, 100)));
+        }
+        Group::restore(Key::new([5; 32]), generation, own, slots).unwrap()
+    }
+
+    #[test]
+    fn a_record_reads_back_as_it_was_written() {
+        let mut m = member(7, 1_790_000_123);
+        m.name = Name::new(b"Ana's watch ~16!").unwrap();
+        let mut body = [0; RECORD_MAX_LEN];
+        let len = m.encode(9, &mut body);
+        assert_eq!(len, RECORD_MAX_LEN);
+        assert_eq!(Member::decode(&body[..len]), Some((9, m)));
+        assert_eq!(
+            Member::decode(&body[..RECORD_FIXED_LEN]),
+            None,
+            "a name is never empty"
+        );
+        body[0] = 32;
+        assert_eq!(Member::decode(&body[..len]), None);
+    }
+
+    #[test]
+    fn names_are_printable_ascii_up_to_sixteen() {
+        assert_eq!(
+            Name::from_mac(&[0, 0, 0, 0, 0x1c, 0x1c]).as_str(),
+            "OW-1C1C"
+        );
+        assert!(Name::new(b"").is_none());
+        assert!(Name::new(b"seventeen chars!!").is_none());
+        assert!(Name::new(b"tab\there").is_none());
+        assert!(Name::new("café".as_bytes()).is_none());
+        assert_eq!(Name::new(b" ~").unwrap().as_str(), " ~");
+    }
+
+    #[test]
+    fn ids_go_to_the_lowest_free_or_back_to_a_returning_device() {
+        let g = group(0, &[(0, 1), (1, 2), (3, 4)]);
+        assert_eq!(g.id_for(&member(9, 0).public), Some(2));
+        assert_eq!(g.id_for(&member(4, 0).public), Some(3));
+        assert!(!g.is_full());
+        let mut lost_keys = member(5, 0);
+        lost_keys.mac = member(4, 0).mac;
+        assert_eq!(
+            g.id_for(&lost_keys.public),
+            Some(2),
+            "a known MAC with a new key is a new member"
+        );
+    }
+
+    #[test]
+    fn a_newer_record_of_a_member_replaces_its_older_one() {
+        let mut g = group(0, &[(0, 1), (1, 2)]);
+        let mut renamed = member(2, 200);
+        renamed.name = Name::new(b"Bo").unwrap();
+        renamed.sign(1, &key(2));
+        assert_eq!(g.merge(1, renamed, None), Merged::Changed { vacated: None });
+        assert_eq!(g.member(1).unwrap().name.as_str(), "Bo");
+        assert_eq!(g.merge(1, signed(1, 2, 150), None), Merged::Unchanged);
+        assert_eq!(
+            g.merge(5, signed(5, 6, 1), None),
+            Merged::Changed { vacated: None }
+        );
+    }
+
+    #[test]
+    fn a_record_about_this_node_is_never_taken() {
+        let mut g = group(0, &[(0, 1)]);
+        assert_eq!(g.merge(0, signed(0, 1, 999), None), Merged::Unchanged);
+        assert_eq!(g.merge(4, signed(4, 1, 999), None), Merged::Unchanged);
+        assert_eq!(g.me().changed, 100);
+    }
+
+    #[test]
+    fn a_member_that_moved_is_dropped_from_its_old_id() {
+        let mut g = group(0, &[(0, 1), (1, 2)]);
+        assert_eq!(
+            g.merge(4, signed(4, 2, 101), None),
+            Merged::Changed { vacated: Some(1) }
+        );
+        assert!(g.member(1).is_none());
+        assert_eq!(
+            g.merge(1, signed(1, 2, 100), None),
+            Merged::Unchanged,
+            "the stale record"
+        );
+        assert!(g.member(1).is_none());
+    }
+
+    #[test]
+    fn of_two_devices_given_one_id_the_lower_hash_keeps_it() {
+        let (low, high) = {
+            let (a, b) = (member(2, 100), member(3, 100));
+            if a.rank() < b.rank() { (2, 3) } else { (3, 2) }
+        };
+        let mut g = group(0, &[(0, 1), (1, high)]);
+        assert_eq!(
+            g.merge(1, signed(1, low, 100), None),
+            Merged::Changed { vacated: None }
+        );
+        assert_eq!(g.member(1).unwrap().public, member(low, 0).public);
+        assert_eq!(g.merge(1, signed(1, high, 500), None), Merged::Unchanged);
+    }
+
+    #[test]
+    fn this_node_moves_when_another_keeps_its_id() {
+        let (low, high) = {
+            let (a, b) = (member(2, 100), member(3, 100));
+            if a.rank() < b.rank() { (2, 3) } else { (3, 2) }
+        };
+        let mut g = group(1, &[(0, 1), (1, high), (2, 7)]);
+        assert_eq!(
+            g.merge(1, signed(1, low, 100), Some(1_000)),
+            Merged::Renumbered { from: 1, to: 3 }
+        );
+        assert_eq!(g.own(), 3);
+        assert_eq!(g.me().public, member(high, 0).public);
+        assert_eq!(g.me().changed, 1_000, "its record announces the move");
+        assert_eq!(g.member(1).unwrap().public, member(low, 0).public);
+
+        let mut g = group(1, &[(0, 1), (1, low)]);
+        assert_eq!(
+            g.merge(1, signed(1, high, 100), Some(1_000)),
+            Merged::Unchanged
+        );
+        assert_eq!(g.own(), 1);
+    }
+
+    #[test]
+    fn a_changed_or_asked_for_record_is_sent_once() {
+        let mut g = group(3, &[(0, 1), (3, 2), (31, 3)]);
+        assert!(!g.has_unsent());
+        g.rename(Name::new(b"New").unwrap(), Some(50), &key(2));
+        assert_eq!(
+            g.merge(31, signed(31, 3, 200), Some(1_000)),
+            Merged::Changed { vacated: None }
+        );
+        assert_eq!(g.unsent().bits(), 1 << 3 | 1 << 31);
+        g.sent(3);
+        g.sent(31);
+        assert!(!g.has_unsent());
+        // Only records held are sent, whatever is asked.
+        g.ask(Ids::ALL);
+        assert_eq!(g.unsent().bits(), 1 | 1 << 3 | 1 << 31);
+        for id in [0, 3, 31] {
+            g.sent(id);
+        }
+
+        assert_eq!(
+            g.merge(0, signed(0, 1, 300), Some(1_000)),
+            Merged::Changed { vacated: None }
+        );
+        g.covered(0, &Slot::Member(signed(0, 1, 299)));
+        assert!(g.has_unsent(), "an older record covers nothing");
+        g.covered(0, &Slot::Member(signed(0, 1, 300)));
+        assert!(!g.has_unsent());
+    }
+
+    #[test]
+    fn the_digest_follows_what_a_merge_compares() {
+        let g = group(3, &[(0, 1), (3, 2), (31, 3)]);
+        let mut other = group(0, &[(0, 1), (3, 2), (31, 3)]);
+        assert_eq!(g.digest(), other.digest(), "whichever node holds them");
+        assert_eq!(
+            other.merge(3, signed(3, 2, 200), Some(1_000)),
+            Merged::Changed { vacated: None }
+        );
+        assert_ne!(g.digest(), other.digest());
+        let mut more = group(3, &[(0, 1), (3, 2), (31, 3)]);
+        more.enrol(5, member(9, 100));
+        assert_ne!(g.digest(), more.digest());
+    }
+
+    #[test]
+    fn a_node_asks_for_a_record_it_lacks_and_for_all_once_tables_keep_differing() {
+        let mut g = group(0, &[(0, 1), (3, 2)]);
+        let mut requests = Requests::default();
+        let ours = g.digest();
+        requests.answer(&mut g, 3, Some(ours), None);
+        assert_eq!(requests.pending(), Ids::EMPTY);
+        requests.answer(&mut g, 7, Some(ours), None);
+        assert_eq!(
+            requests.pending(),
+            Ids::of(7),
+            "a sender it holds no record for"
+        );
+        requests.sent(Ids::of(7));
+        requests.answer(&mut g, 3, Some(ours ^ 1), None);
+        assert_eq!(
+            requests.pending(),
+            Ids::EMPTY,
+            "one packet may only be out of date"
+        );
+        requests.answer(&mut g, 3, Some(ours), None);
+        requests.answer(&mut g, 3, Some(ours ^ 1), None);
+        assert_eq!(
+            requests.pending(),
+            Ids::EMPTY,
+            "a match in between starts the count again"
+        );
+        requests.answer(&mut g, 3, Some(ours ^ 1), None);
+        assert_eq!(requests.pending(), Ids::ALL);
+    }
+
+    #[test]
+    fn a_request_is_answered_only_where_tables_differ() {
+        let mut g = group(0, &[(0, 1), (3, 2)]);
+        let mut requests = Requests::default();
+        let ours = g.digest();
+        requests.answer(&mut g, 3, Some(ours), Some(Ids::ALL));
+        assert!(!g.has_unsent());
+        requests.answer(&mut g, 3, Some(ours ^ 1), Some(Ids::of(3).with(9)));
+        assert_eq!(g.unsent(), Ids::of(3), "only the records held");
+    }
+
+    #[test]
+    fn a_rename_is_newer_than_the_record_it_replaces() {
+        let mut g = group(0, &[(0, 1)]);
+        g.rename(Name::new(b"New").unwrap(), Some(50), &key(1));
+        assert_eq!(g.me().changed, 101);
+        assert!(g.me().verify(0), "signed again");
+        assert_eq!(g.me().joined, 1_790_000_000);
+    }
+
+    fn gone(n: u8, changed: u32) -> Gone {
+        Gone::unsigned(key(n).public(), changed)
+    }
+
+    /// Device `n`'s gone record at `id`, signed by it as it left.
+    pub(crate) fn left(id: u8, n: u8, changed: u32) -> Gone {
+        let mut record = gone(n, changed);
+        record.sign(id, &key(n));
+        record
+    }
+
+    #[test]
+    fn a_record_stamped_far_ahead_is_refused() {
+        let mut g = group(0, &[(0, 1), (1, 2)]);
+        assert_eq!(
+            g.merge_gone(1, left(1, 2, 10_000), Some(1_000)),
+            Merged::Unchanged
+        );
+        assert_eq!(
+            g.merge(1, signed(1, 2, 10_000), Some(1_000)),
+            Merged::Unchanged
+        );
+        assert_eq!(
+            g.merge(1, signed(1, 2, 1_000 + AHEAD_S), Some(1_000)),
+            Merged::Changed { vacated: None }
+        );
+        assert_eq!(
+            g.merge_gone(1, left(1, 2, 5_000), None),
+            Merged::Went { at: 1 },
+            "no clock"
+        );
+    }
+
+    #[test]
+    fn an_undone_removal_gives_the_member_its_id_back() {
+        let mut g = group(0, &[(0, 1), (1, 2)]);
+        let record = *g.member(1).unwrap();
+        g.remove(&fingerprint(&member(2, 0).public), 500);
+        let digest = g.digest();
+        assert!(
+            !g.put_back(1, Some(record), &fingerprint(&member(3, 0).public)),
+            "another device's"
+        );
+        assert!(g.put_back(1, Some(record), &fingerprint(&member(2, 0).public)));
+        assert_eq!(g.member(1), Some(&record));
+        assert_ne!(g.digest(), digest);
+        assert!(g.former_unsent().next().is_none(), "no former member's");
+
+        // Without the record it had, it comes back from the others.
+        let mut g = group(0, &[(0, 1), (1, 2)]);
+        g.remove(&fingerprint(&member(2, 0).public), 500);
+        assert!(g.put_back(1, None, &fingerprint(&member(2, 0).public)));
+        assert!(g.slot(1).is_none());
+        assert_eq!(
+            g.merge(1, signed(1, 2, 100), None),
+            Merged::Changed { vacated: None }
+        );
+    }
+
+    #[test]
+    fn a_gone_record_reads_back_as_it_was_written() {
+        let mut body = [0; GONE_LEN];
+        gone(7, 1_790_000_123).encode(9, &mut body);
+        assert_eq!(Gone::decode(&body), Some((9, gone(7, 1_790_000_123))));
+        assert_eq!(Gone::decode(&body[..GONE_LEN - 1]), None);
+        body[0] = 32;
+        assert_eq!(Gone::decode(&body), None);
+    }
+
+    #[test]
+    fn a_member_that_went_frees_its_id() {
+        let mut g = group(0, &[(0, 1), (1, 2), (2, 3)]);
+        let before = g.digest();
+        assert_eq!(
+            g.merge_gone(1, left(1, 2, 200), None),
+            Merged::Went { at: 1 }
+        );
+        assert!(g.member(1).is_none());
+        assert_eq!(g.gone(1), Some(&left(1, 2, 200)));
+        assert_eq!(g.lowest_free(), Some(1));
+        assert_eq!(g.count(), 2);
+        assert_eq!(g.ids().bits(), 1 | 1 << 2);
+        assert_eq!(g.unsent(), Ids::of(1), "it passes the news on");
+        assert_ne!(g.digest(), before);
+        assert_eq!(g.merge_gone(1, left(1, 2, 200), None), Merged::Unchanged);
+    }
+
+    #[test]
+    fn a_gone_record_finds_its_member_at_another_id() {
+        let mut g = group(0, &[(0, 1), (4, 2)]);
+        assert_eq!(
+            g.merge_gone(1, left(1, 2, 200), None),
+            Merged::Went { at: 4 }
+        );
+        assert!(g.slot(1).is_none());
+    }
+
+    #[test]
+    fn a_sender_held_as_gone_is_not_asked_for_its_record() {
+        let mut g = group(0, &[(0, 1), (1, 2)]);
+        g.merge_gone(1, left(1, 2, 200), None);
+        let mut requests = Requests::default();
+        let ours = g.digest();
+        requests.answer(&mut g, 1, Some(ours), None);
+        assert_eq!(requests.pending(), Ids::EMPTY);
+    }
+
+    #[test]
+    fn a_stale_record_of_a_gone_member_is_refused_and_answered() {
+        let mut g = group(0, &[(0, 1), (1, 2)]);
+        g.merge_gone(1, left(1, 2, 200), None);
+        g.sent(1);
+        assert_eq!(g.merge(1, signed(1, 2, 150), None), Merged::Unchanged);
+        assert!(g.member(1).is_none());
+        assert_eq!(g.unsent(), Ids::of(1), "the gone record goes back");
+    }
+
+    #[test]
+    fn a_device_paired_again_wins_over_its_gone_record() {
+        let mut g = group(0, &[(0, 1), (1, 2)]);
+        g.merge_gone(1, left(1, 2, 200), None);
+        assert_eq!(
+            g.merge(1, signed(1, 2, 300), None),
+            Merged::Changed { vacated: None }
+        );
+        assert_eq!(g.member(1), Some(&signed(1, 2, 300)));
+        assert_eq!(g.merge_gone(1, left(1, 2, 250), None), Merged::Unchanged);
+        assert_eq!(g.member(1), Some(&signed(1, 2, 300)));
+
+        let mut g = group(0, &[(0, 1), (1, 2)]);
+        g.merge_gone(1, left(1, 2, 200), None);
+        assert_eq!(
+            g.merge(3, signed(3, 2, 300), None),
+            Merged::Changed { vacated: Some(1) }
+        );
+        assert!(g.slot(1).is_none());
+    }
+
+    #[test]
+    fn a_new_member_at_a_gone_id_keeps_the_gone_record_apart() {
+        let mut g = group(0, &[(0, 1), (1, 2)]);
+        g.merge_gone(1, left(1, 2, 200), None);
+        g.enrol(1, member(9, 300));
+        assert_eq!(g.member(1), Some(&member(9, 300)));
+        assert_eq!(g.former_unsent().count(), 0);
+        assert_eq!(g.merge(1, signed(1, 2, 150), None), Merged::Unchanged);
+        assert_eq!(g.member(1), Some(&member(9, 300)));
+        let mut former = g.former_unsent();
+        assert_eq!(former.next(), Some((0, 1, left(1, 2, 200))));
+        assert_eq!(former.next(), None);
+        drop(former);
+        g.former_sent(0);
+        assert_eq!(g.former_unsent().count(), 0);
+    }
+
+    #[test]
+    fn pairing_a_gone_device_again_forgets_its_gone_record() {
+        let mut g = group(0, &[(0, 1), (1, 2)]);
+        g.merge_gone(1, left(1, 2, 200), None);
+        g.enrol(3, member(2, 300));
+        assert!(g.slot(1).is_none());
+        assert_eq!(g.merge(3, signed(3, 2, 300), None), Merged::Unchanged);
+    }
+
+    #[test]
+    fn a_removal_replaces_the_member_its_fingerprint_names() {
+        let mut g = group(0, &[(0, 1), (5, 2)]);
+        assert_eq!(g.remove(&fingerprint(&member(2, 0).public), 500), Some(5));
+        assert_eq!(g.gone(5), Some(&gone(2, 500)));
+        assert_eq!(
+            g.remove(&fingerprint(&member(2, 0).public), 600),
+            None,
+            "already gone"
+        );
+        assert_eq!(
+            g.remove(&fingerprint(&member(1, 0).public), 600),
+            None,
+            "never itself"
+        );
+        let mut g = group(0, &[(0, 1), (5, 2)]);
+        assert_eq!(
+            g.remove(&fingerprint(&member(2, 0).public), 50),
+            Some(5),
+            "a gone record is newer than the record it replaces"
+        );
+        assert_eq!(g.gone(5), Some(&gone(2, 101)));
+    }
+
+    #[test]
+    fn declining_a_removal_after_its_switch_forgets_what_changed_since() {
+        let mut g = group(0, &[(0, 1), (1, 2), (2, 3), (3, 4)]);
+        g.remove(&fingerprint(&member(3, 0).public), 500);
+        // Since the switch, a device joined at the id it freed and a member renamed.
+        g.enrol(2, member(9, 0));
+        g.merge(1, signed(1, 2, 550), None);
+        g.rename(Name::from_mac(&[0, 0, 0, 0, 0, 7]), Some(700), &key(1));
+        let changed = g.take_changed();
+        assert_eq!(changed.bits(), 1 << 0 | 1 << 1 | 1 << 2);
+        assert!(g.held.former.iter().any(Option::is_some));
+        assert_eq!(g.forget_changed(changed).bits(), 1 << 1 | 1 << 2);
+        assert!(g.slot(1).is_none() && g.slot(2).is_none());
+        assert_eq!(g.member(3), Some(&member(4, 100)));
+        assert_eq!(g.me().changed, 700, "this node's own record stays");
+        assert!(
+            g.held.former.iter().all(Option::is_none),
+            "the gone record set apart is forgotten too"
+        );
+        assert_eq!(
+            g.merge(2, signed(2, 3, 100), None),
+            Merged::Changed { vacated: None },
+            "the member removed comes back"
+        );
+    }
+
+    #[test]
+    fn a_record_without_its_devices_signature_changes_nothing() {
+        let mut g = group(0, &[(0, 1), (1, 2)]);
+        assert_eq!(
+            g.merge(1, member(2, 300), None),
+            Merged::Unchanged,
+            "unsigned"
+        );
+        assert_eq!(
+            g.merge(1, signed(4, 2, 300), None),
+            Merged::Unchanged,
+            "signed for another id"
+        );
+        let mut forged = signed(1, 2, 300);
+        forged.name = Name::new(b"Forged").unwrap();
+        assert_eq!(g.merge(1, forged, None), Merged::Unchanged);
+        let mut theirs = signed(1, 2, 300);
+        theirs.public = member(3, 0).public;
+        assert_eq!(
+            g.merge(1, theirs, None),
+            Merged::Unchanged,
+            "another key cannot take over a member"
+        );
+        assert_eq!(g.member(1), Some(&member(2, 100)));
+        assert_eq!(g.merge_gone(1, gone(2, 300), None), Merged::Unchanged);
+        assert_eq!(
+            g.merge_gone(1, left(1, 3, 300), None),
+            Merged::Unchanged,
+            "only the device itself says it went"
+        );
+        assert!(g.member(1).is_some());
+    }
+
+    #[test]
+    fn a_removals_gone_record_and_an_unsigned_own_record_are_not_sent() {
+        let mut g = group(1, &[(0, 1), (1, 2), (2, 3)]);
+        g.remove(&fingerprint(&member(3, 0).public), 500);
+        assert_eq!(g.unsent(), Ids::EMPTY, "every node makes its own");
+        assert!(!g.has_unsent());
+
+        let (low, high) = {
+            let (a, b) = (member(2, 100), member(4, 100));
+            if a.rank() < b.rank() { (2, 4) } else { (4, 2) }
+        };
+        let mut g = group(1, &[(0, 1), (1, high)]);
+        let Merged::Renumbered { to, .. } = g.merge(1, signed(1, low, 100), Some(1_000)) else {
+            panic!("this node moves");
+        };
+        assert!(!g.unsent().contains(to), "not until it is signed");
+        g.sign_own(&key(high));
+        assert!(g.me().verify(to));
+        assert!(g.unsent().contains(to));
+    }
+
+    #[test]
+    fn a_gone_record_about_this_node_is_ignored() {
+        let mut g = group(0, &[(0, 1), (1, 2)]);
+        assert_eq!(g.merge_gone(0, left(0, 1, 999), None), Merged::Unchanged);
+        assert_eq!(g.merge_gone(3, left(3, 1, 999), None), Merged::Unchanged);
+        assert!(g.member(0).is_some());
+        assert_eq!(g.leaving(Some(50), &key(1)), left(0, 1, 101));
+    }
+
+    #[test]
+    fn a_gone_record_of_a_stranger_takes_only_a_free_id() {
+        let mut g = group(0, &[(0, 1), (1, 2)]);
+        assert_eq!(
+            g.merge_gone(4, left(4, 8, 200), None),
+            Merged::Went { at: 4 }
+        );
+        assert_eq!(g.merge_gone(1, left(1, 9, 200), None), Merged::Unchanged);
+        assert_eq!(g.member(1), Some(&member(2, 100)));
+        assert_eq!(
+            g.merge(1, signed(1, 9, 150), None),
+            Merged::Unchanged,
+            "kept apart, it still answers"
+        );
+    }
+
+    #[test]
+    fn every_node_keeps_the_same_of_two_gone_records_for_an_id() {
+        let (a, b) = (left(4, 8, 200), left(4, 9, 300));
+        let mut first = group(0, &[(0, 1)]);
+        first.merge_gone(4, a, None);
+        first.merge_gone(4, b, None);
+        let mut second = group(0, &[(0, 1)]);
+        second.merge_gone(4, b, None);
+        second.merge_gone(4, a, None);
+        assert_eq!(first.gone(4), Some(&b));
+        assert_eq!(second.gone(4), Some(&b));
+        assert_eq!(first.digest(), second.digest());
+    }
+
+    #[test]
+    fn the_digest_tells_a_gone_record_from_a_member() {
+        let mut a = group(0, &[(0, 1), (1, 2)]);
+        let mut b = group(0, &[(0, 1), (1, 2)]);
+        a.merge_gone(1, left(1, 2, 200), None);
+        assert_ne!(a.digest(), b.digest());
+        b.merge_gone(1, left(1, 2, 200), None);
+        assert_eq!(a.digest(), b.digest());
+    }
+
+    #[test]
+    fn a_stored_group_keeps_its_gone_records_and_generation() {
+        let mut slots = [None; SLOTS];
+        slots[0] = Some(Slot::Member(member(1, 100)));
+        slots[3] = Some(Slot::Gone(gone(2, 200)));
+        let g = Group::restore(Key::new([5; 32]), 7, 0, slots).unwrap();
+        assert_eq!(g.generation(), 7);
+        assert_eq!(g.gone(3), Some(&gone(2, 200)));
+        assert_eq!(g.lowest_free(), Some(1));
+        slots[0] = Some(Slot::Gone(gone(1, 300)));
+        assert!(
+            Group::restore(Key::new([5; 32]), 7, 0, slots).is_none(),
+            "a group needs this node's record"
+        );
+    }
+
+    /// The header as `settings.rs` wrote it before the encoding moved here.
+    fn header_as_first_stored(key: &[u8; 32], own: u8, generation: u16) -> [u8; 35] {
+        let mut value = [0; 35];
+        value[..32].copy_from_slice(key);
+        value[32] = own;
+        value[33..35].copy_from_slice(&generation.to_le_bytes());
+        value
+    }
+
+    #[test]
+    fn a_stored_header_keeps_its_bytes_and_reads_back() {
+        let g = group_at(0x0203, 1, &[(0, 1), (1, 2)]);
+        let mut bytes = [0; STORED_HEADER_LEN];
+        g.encode_stored_header(&mut bytes);
+        assert_eq!(bytes, header_as_first_stored(g.key().bytes(), 1, 0x0203));
+        let (key, own, generation) = decode_stored_header(&bytes).unwrap();
+        assert_eq!((key.bytes(), own, generation), (g.key().bytes(), 1, 0x0203));
+    }
+
+    #[test]
+    fn a_header_stored_before_generations_is_the_first_key() {
+        let bytes = header_as_first_stored(&[9; 32], 4, 7);
+        let (key, own, generation) = decode_stored_header(&bytes[..33]).unwrap();
+        assert_eq!((key.bytes(), own, generation), (&[9; 32], 4, 0));
+        assert!(decode_stored_header(&bytes[..32]).is_none());
+    }
+
+    /// A slot's record as `settings.rs` stored it before the encoding moved here.
+    fn slot_as_first_stored(id: u8, slot: &Slot) -> alloc::vec::Vec<u8> {
+        match slot {
+            Slot::Member(member) => {
+                let mut record = [0; RECORD_MAX_LEN];
+                let len = member.encode(id, &mut record);
+                record[..len].to_vec()
+            }
+            Slot::Gone(gone) => {
+                let mut record = [0; GONE_LEN];
+                gone.encode(id, &mut record);
+                record.to_vec()
+            }
+        }
+    }
+
+    #[test]
+    fn a_slot_keeps_its_bytes_and_reads_back_by_the_flash_rule_too() {
+        for (id, slot) in [
+            (3, Slot::Member(signed(3, 4, 120))),
+            (5, Slot::Gone(left(5, 6, 130))),
+        ] {
+            let mut record = [0; RECORD_MAX_LEN];
+            let len = slot.encode(id, &mut record);
+            assert_eq!(record[..len], slot_as_first_stored(id, &slot));
+            assert_eq!(Slot::decode(&record[..len]), Some((id, slot)));
+            // The flash told them apart by a member's fixed length, the welcome by a gone
+            // record's; both agree on every record written.
+            assert_eq!(
+                len > RECORD_FIXED_LEN,
+                matches!(slot, Slot::Member(_)),
+                "{slot:?}"
+            );
+        }
+    }
+}

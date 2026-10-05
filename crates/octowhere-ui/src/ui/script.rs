@@ -8,6 +8,10 @@ use embedded_graphics::prelude::Point;
 
 use super::{
     gesture::Micros,
+    group::{
+        sim::Sim,
+        view::{MeshView, MessagesView, Request},
+    },
     screens::{PeripheralState, Screen},
     stage::{Input, Key, Motion, Sensors, Stage, Touch, TouchGesture, Update},
     startup::{Outcome, Part, Report},
@@ -20,6 +24,19 @@ const SENSOR_PERIOD: Micros = 1_000_000;
 
 type Observer<'a> = Box<dyn FnMut(&Stage, Micros) + 'a>;
 
+/// A mesh node outside the driver, as a multi-device simulation runs one: the stage takes the
+/// views it publishes, and it takes the stage's requests. The driver's clock is the node's.
+pub trait MeshLink {
+    /// The view the node published since the last call, once it has run to `now`.
+    fn view(&mut self, now: Micros) -> Option<MeshView>;
+    /// Copies the messages the node published since the last call into `into`. Returns whether
+    /// it did.
+    fn messages(&mut self, _into: &mut MessagesView) -> bool {
+        false
+    }
+    fn request(&mut self, request: Request, now: Micros);
+}
+
 pub struct Driver<'a> {
     pub stage: Stage,
     now: Micros,
@@ -31,6 +48,10 @@ pub struct Driver<'a> {
     /// whose device is held rather than lying still.
     motion: Option<Motion>,
     hand: Option<fn(Motion, Micros) -> Motion>,
+    /// A simulated mesh, which takes the stage's requests and publishes to it every step.
+    pub mesh: Option<Sim>,
+    /// A node to step the stage against, as well as or in place of the scripted mesh.
+    pub link: Option<Box<dyn MeshLink + 'a>>,
 }
 
 impl<'a> Driver<'a> {
@@ -43,6 +64,8 @@ impl<'a> Driver<'a> {
             observer: None,
             motion: None,
             hand: None,
+            mesh: None,
+            link: None,
         }
     }
 
@@ -112,7 +135,31 @@ impl<'a> Driver<'a> {
                 input.sensors = Some(advanced);
             }
         }
+        if let Some(mesh) = &mut self.mesh {
+            if mesh.step(self.now) {
+                self.stage.set_mesh(mesh.view().clone());
+            }
+            if mesh.messages_changed() {
+                self.stage.update_messages(|messages| {
+                    messages.copy_from(mesh.messages());
+                    true
+                });
+            }
+        }
+        if let Some(link) = &mut self.link {
+            if let Some(view) = link.view(self.now) {
+                self.stage.set_mesh(view);
+            }
+            self.stage
+                .update_messages(|messages| link.messages(messages));
+        }
         let update = self.stage.step(input);
+        if let (Some(mesh), Some(request)) = (&mut self.mesh, update.mesh) {
+            mesh.request(request, self.now);
+        }
+        if let (Some(link), Some(request)) = (&mut self.link, update.mesh) {
+            link.request(request, self.now);
+        }
         if let Some(observer) = &mut self.observer {
             observer(&self.stage, self.now);
         }
@@ -173,8 +220,17 @@ impl<'a> Driver<'a> {
 
     /// Reports how boot left `part`.
     pub fn boot(&mut self, part: Part, outcome: Outcome) -> Update {
+        self.report(Report::Decided(part, outcome))
+    }
+
+    /// Reports that boot started checking `part`.
+    pub fn boot_started(&mut self, part: Part) -> Update {
+        self.report(Report::Started(part))
+    }
+
+    pub fn report(&mut self, report: Report) -> Update {
         self.step(Input {
-            boot: Some(Report { part, outcome }),
+            boot: Some(report),
             ..Input::default()
         })
     }

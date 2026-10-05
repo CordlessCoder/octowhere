@@ -1,0 +1,19 @@
+[2026-10-04T05:17:49Z INFO ] Serial port: '/dev/ttyACM1'
+[2026-10-04T05:17:49Z INFO ] Connecting...
+[2026-10-04T05:17:49Z INFO ] Using flash stub
+2.483529 [INFO ] [BOOT] Gnss Answered in 634ms (octowhere octowhere/src/main.rs:1900)
+2.523187 [INFO ] [GNSS] reference time 2026-10-04 05:17:49 sent=true (octowhere octowhere/src/main.rs:2424)
+2.523256 [INFO ] [BOOT] answered: power=true clock=true touch=true motion=true magnet=true gnss=true (octowhere octowhere/src/main.rs:2266)
+2.532086 [INFO ] [LORA] init_ok (octowhere octowhere/src/main.rs:2568)
+2.532109 [INFO ] [BOOT] Radio Answered in 8ms (octowhere octowhere/src/main.rs:1900)
+2.532305 [INFO ] [TOUCH] OK resolution=466x466 firmware=0x1000001 checksum=0x693275ee (octowhere octowhere/src/main.rs:2319)
+2.532824 [INFO ] [MESH] id=1 name=Roger Roger members=2 mac=[44, 1b, f6, 86, 1c, 1c] (octowhere_node octowhere-node/src/node.rs:721)
+2.536354 [INFO ] [MESH] tuned=true (octowhere_node octowhere-node/src/node.rs:776)
+2.537990 [INFO ] [MESH] id=1 members=2 generation=5 removal pending=false declinable until=Some(39803738) old keys=0 (octowhere_node octowhere-node/src/node.rs:820)
+2.539078 [INFO ] [MEM] internal_used=62464 psram_used=942532 (octowhere octowhere/src/main.rs:2354)
+137.533862 [INFO ] [MESH] timebase GPS hops=0 (octowhere_node octowhere-node/src/node.rs:2755)
+152.558050 [INFO ] [MESH] round=39802027 sending=true sweeping=false (octowhere_node octowhere-node/src/node.rs:1131)
+152.687153 [INFO ] [MESH] sent round=39802027 len=48 entries=1 records=0x00000000 asked=0x00000000 neighbours=0x00000000 messages=0 summary=false done=true (octowhere_node octowhere-node/src/node.rs:1736)
+159.720620 [INFO ] [MESH] heard id=0 timebase=Gps hops=1 taken=Ignored late_us=Some(648) len=48 rssi=-33 snr=7 entries=1 new=0 neighbours=0x00000002 messages=0/0 summary=false (octowhere_node octowhere-node/src/node.rs:1632)
+198.964280 [INFO ] [MESH] round=39802028 sending=true sweeping=false (octowhere_node octowhere-node/src/node.rs:1131)
+199.093594 [INFO ] [MESH] sent round=39802028 len=48 entries=1 records=0x00000000 asked=0x00000000 neighbours=0x00000001 messages=0 summary=false done=true (octowhere_node octowhere-node/src/node.rs:1736)

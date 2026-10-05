@@ -18,6 +18,7 @@ fn every_rule_parses() {
 }
 
 #[test]
+#[cfg(feature = "boundaries")]
 fn positions_find_the_generators_zone() {
     let vectors = include_str!("data/points.csv");
     for line in vectors.lines().skip(1) {

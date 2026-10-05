@@ -1,0 +1,85 @@
+[package]
+name = "octowhere"
+version = "0.1.0"
+edition = "2024"
+
+# Its own workspace, for the board's target and toolchain; the root's is the host's.
+[workspace]
+
+[dependencies]
+esp-hal = { version = "1.2.2", features = ["defmt", "esp32s3", "requires-unstable", "unstable"] }
+esp-rtos = { version = "0.4.0", features = ["esp32s3", "embassy", "esp-alloc", "defmt"] }
+esp-alloc = { version = "0.11.0", features = ["nightly"] }
+esp-println = { version = "0.18.0", default-features = false, features = [
+    "esp32s3",
+    "defmt-espflash",
+    "jtag-serial",
+    "critical-section",
+] }
+esp-backtrace = { version = "0.20.0", features = ["esp32s3", "panic-handler", "defmt"] }
+esp-bootloader-esp-idf = { version = "0.6.0", features = ["embedded-storage", "esp32s3"] }
+defmt = "1.1.1"
+
+# Allows for truly statically allocated tasks instead of a bump allocator
+embassy-executor = { version = "0.10.0", features = ["nightly"] }
+embassy-time = { version = "0.5.1", features = ["defmt-timestamp-uptime-us"] }
+embassy-sync = "0.8"
+embassy-futures = "0.1"
+static_cell = { version = "2.1", features = ["nightly"] }
+
+embedded-graphics = { version = "0.8", features = [] }
+embedded-graphics-core = "0.4"
+
+embedded-hal = "1.0"
+embedded-hal-bus = { version = "0.3", features = ["async"] }
+embedded-hal-async = "1.0.0"
+lc76g = { path = "../crates/lc76g", features = ["defmt"] }
+octowhere-ui = { path = "../crates/octowhere-ui", features = ["allocator-api", "defmt"] }
+# `half_duplex` gives a packet the radio's whole 256-byte FIFO; without it the driver refuses
+# anything over 128 bytes, in either direction.
+sx127xlora = { path = "../crates/sx127x-lora", features = ["defmt", "half_duplex"] }
+embassy-embedded-hal = { version = "0.6.0", features = ["defmt"] }
+ph-qmi8658 = { version = "0.1.1", features = ["defmt", "fixed"] }
+tca9554 = "0.2.0"
+heapless = { version = "0.9.3", features = ["nightly"] }
+esp-storage = { version = "0.10.0", features = ["esp32s3"] }
+# Unreleased main: 1.0.0 needs embassy-sync 0.6, and main also fixes a chunk buffer overflow.
+ekv = { git = "https://github.com/embassy-rs/ekv", rev = "a0e2c7e", features = ["crc", "max-chunk-size-512"] }
+octowhere-mesh = { path = "../crates/octowhere-mesh", features = ["defmt"] }
+octowhere-node = { path = "../crates/octowhere-node", features = ["defmt", "run"] }
+octowhere-peripherals = { path = "../crates/octowhere-peripherals", features = ["defmt"] }
+
+[features]
+default = []
+damage-debug = []
+timing-log = []
+gnss-raw-log = []
+gnss-full-power = []
+fontdue-target-bench = []
+fontdue-target-bench-gcc = ["fontdue-target-bench"]
+# Times flushes on the display core, whole and in regions, shifted and not; never returns.
+flush-shift-bench = []
+lora-link-tx = []
+lora-link-rx = []
+# Lets a debugger set the RTC, as GNSS or as the RTC's own time; see `tools/rtc-inject.py`.
+rtc-inject = []
+# Lets a debugger stand a position in for a GNSS fix; see `tools/fix-inject.py`.
+fix-inject = []
+# Lets a debugger give the mesh pairing commands; see `tools/pair-inject.py`.
+pair-inject = ["octowhere-node/phantom"]
+# Lets a debugger touch and cover the screen, press the power key and read the screen back; see
+# `tools/touch-inject.py`.
+touch-inject = []
+
+[patch.crates-io]
+tca9554 = { git = "https://github.com/CordlessCoder/tca9554-rs", rev = "dd76e69" }
+
+[profile.dev]
+opt-level = "s"
+lto = "thin"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+debug = true

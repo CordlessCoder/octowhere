@@ -12,11 +12,25 @@ mod references;
 mod rule;
 
 pub use civil::DateTime;
-pub use data::{Database, Locate, Progress, Zone, ZoneId};
+pub use data::{Database, Zone, ZoneId};
+#[cfg(feature = "boundaries")]
+pub use data::{Locate, Progress};
 pub use rule::{Offset, Rule};
 
+const ZONES: &[u8] = include_bytes!("../data/zones.bin");
+
 /// The zones built into the binary.
-pub static DATABASE: Database = Database::new(include_bytes!("../data/zones.bin"));
+#[cfg(feature = "boundaries")]
+pub static DATABASE: Database = Database::new(ZONES);
+
+/// The zones built into the binary, without their boundaries.
+#[cfg(not(feature = "boundaries"))]
+pub static DATABASE: Database = Database::new(&TABLES);
+
+/// `zones.bin` up to its boundaries, copied out at compile time so that the boundaries, which
+/// come last, are not built in.
+#[cfg(not(feature = "boundaries"))]
+static TABLES: [u8; data::tables_len(ZONES)] = data::prefix(ZONES);
 
 /// The local date and time in `zone` at `unix`, in seconds since 1970-01-01 UTC.
 #[must_use]

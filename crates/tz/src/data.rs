@@ -25,6 +25,24 @@
 use crate::rule::{Offset, Rule};
 
 const HEADER: usize = 48;
+
+/// How long `data`'s tables are: everything before its boundaries.
+#[cfg(not(feature = "boundaries"))]
+pub(crate) const fn tables_len(data: &[u8]) -> usize {
+    u32::from_le_bytes([data[24], data[25], data[26], data[27]]) as usize
+}
+
+/// The first `N` bytes of `data`, as an array of their own.
+#[cfg(not(feature = "boundaries"))]
+pub(crate) const fn prefix<const N: usize>(data: &[u8]) -> [u8; N] {
+    let mut out = [0; N];
+    let mut at = 0;
+    while at < N {
+        out[at] = data[at];
+        at += 1;
+    }
+    out
+}
 const RULE_RECORD: usize = 3;
 const ZONE_RECORD: usize = 32;
 const CHANGE_RECORD: usize = 16;
@@ -57,7 +75,9 @@ pub struct Zone {
     changes: &'static [u8],
     pool: &'static [u8],
     /// West, south, east and north, in grid steps.
+    #[cfg(feature = "boundaries")]
     bounds: [i32; 4],
+    #[cfg(feature = "boundaries")]
     boundary: &'static [u8],
 }
 
@@ -150,6 +170,7 @@ impl Database {
         ])
     }
 
+    #[cfg(feature = "boundaries")]
     fn i32_at(&self, at: usize) -> i32 {
         self.u32_at(at) as i32
     }
@@ -200,6 +221,7 @@ impl Database {
         self.release(40)
     }
 
+    #[cfg(feature = "boundaries")]
     fn e7_per_step(&self) -> i64 {
         i64::from(self.u32_at(28))
     }
@@ -216,7 +238,6 @@ impl Database {
         let rule = usize::from(self.data[at + 3]);
         assert!(rule < self.rule_count());
         let rule_at = HEADER + rule * RULE_RECORD;
-        let boundary_at = self.u32_at(24) as usize + self.u32_at(at + 20) as usize;
         let changes_at =
             self.u32_at(16) as usize + usize::from(self.u16_at(at + 28)) * CHANGE_RECORD;
         let changes_end = changes_at + usize::from(self.u16_at(at + 30)) * CHANGE_RECORD;
@@ -230,13 +251,18 @@ impl Database {
             ),
             changes: &data[changes_at..changes_end],
             pool: self.pool(),
+            #[cfg(feature = "boundaries")]
             bounds: [
                 self.i32_at(at + 4),
                 self.i32_at(at + 8),
                 self.i32_at(at + 12),
                 self.i32_at(at + 16),
             ],
-            boundary: &data[boundary_at..boundary_at + self.u32_at(at + 24) as usize],
+            #[cfg(feature = "boundaries")]
+            boundary: {
+                let boundary_at = self.u32_at(24) as usize + self.u32_at(at + 20) as usize;
+                &data[boundary_at..boundary_at + self.u32_at(at + 24) as usize]
+            },
         }
     }
 
@@ -253,6 +279,7 @@ impl Database {
 
     /// Starts looking for the zone containing a position, given in 1e-7 degrees as the GNSS
     /// receiver reports it.
+    #[cfg(feature = "boundaries")]
     #[must_use]
     pub fn locate(&self, latitude_e7: i32, longitude_e7: i32) -> Locate {
         Locate {
@@ -264,6 +291,7 @@ impl Database {
     }
 
     /// The zone containing a position, found all at once.
+    #[cfg(feature = "boundaries")]
     #[must_use]
     pub fn zone_at(&self, latitude_e7: i32, longitude_e7: i32) -> Option<Zone> {
         let mut locate = self.locate(latitude_e7, longitude_e7);
@@ -279,6 +307,7 @@ impl Database {
 
 /// A search for the zone containing a position, a zone's boundary at a time, so that a caller
 /// can yield between steps.
+#[cfg(feature = "boundaries")]
 pub struct Locate {
     database: Database,
     latitude: i64,
@@ -286,6 +315,7 @@ pub struct Locate {
     next: usize,
 }
 
+#[cfg(feature = "boundaries")]
 #[derive(Clone, Copy, Debug)]
 pub enum Progress {
     Searching,
@@ -294,6 +324,7 @@ pub enum Progress {
     Nowhere,
 }
 
+#[cfg(feature = "boundaries")]
 impl Locate {
     /// Tests the next zone whose bounding box holds the position.
     pub fn step(&mut self) -> Progress {
@@ -317,6 +348,7 @@ impl Locate {
     }
 }
 
+#[cfg(feature = "boundaries")]
 fn varint(data: &mut &[u8]) -> u32 {
     let mut value = 0;
     for shift in (0..32).step_by(7) {
@@ -330,6 +362,7 @@ fn varint(data: &mut &[u8]) -> u32 {
     value
 }
 
+#[cfg(feature = "boundaries")]
 fn zigzag(data: &mut &[u8]) -> i64 {
     let value = varint(data);
     i64::from((value >> 1) as i32 ^ -((value & 1) as i32))
@@ -337,6 +370,7 @@ fn zigzag(data: &mut &[u8]) -> i64 {
 
 /// The even-odd test of `(x, y)` against every ring of `boundary`, exact in integers so that it
 /// agrees with the generator's own.
+#[cfg(feature = "boundaries")]
 fn contains(mut boundary: &[u8], scale: i64, x: i64, y: i64) -> bool {
     let rings = varint(&mut boundary);
     let (mut previous_x, mut previous_y) = (0, 0);

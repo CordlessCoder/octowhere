@@ -1,10 +1,16 @@
 # Design hand-off, 26 Sep 2026
 
-The design agent's current hand-off, committed as the authority for how every screen looks. It
-supersedes the per-round folders that used to sit in `context/` (clock face, wordmark, compass
-animation, settings panel, round 3), whose specs are kept here under `specs/`. The owner approved
-all of it: see [`DECISIONS.md`](DECISIONS.md), which also settles the questions the hand-off
-left open.
+The design agent's hand-offs are the authority for how every screen looks. Only two parts of
+this folder are in the repository: [`DECISIONS.md`](DECISIONS.md), the owner's decisions on each
+hand-off, and `docs/`, the doctrine and the colour roles. The rest, the hand-offs, renders,
+references, specs and briefs below, and the update and power-off packages in `context/`, are
+kept on the owner's machine and ignored by git (owner, 2026-10-02). They are in history up to
+that date, and a clone without them reads them from there or asks the owner.
+
+The 26 Sep hand-off supersedes the per-round folders that used to sit in `context/` (clock face,
+wordmark, compass animation, settings panel, round 3), whose specs are kept here under `specs/`.
+The owner approved all of it, and `DECISIONS.md` also settles the questions it left open. The
+later hand-offs under `handoffs/` amend it, each with its entry there.
 
 Start with [`handoffs/IMPLEMENTATION-HANDOFF-CURRENT.md`](handoffs/IMPLEMENTATION-HANDOFF-CURRENT.md).
 It names every screen and state, its timing, and the render to compare it against. Paths in it
@@ -37,9 +43,9 @@ ln -sf "../../../../assets/PPFraktion-Free for personal use v1.1/Sans/PPFraktion
 ln -sf ../../../../assets/MarathonShapiro_Wide65.ttf Shapiro.ttf
 ```
 
-Then run a renderer from `renderer/`, giving it an output folder so it leaves the committed
+Then run a renderer from `renderer/`, giving it an output folder so it leaves the hand-off's
 renders alone: `PYTHONPATH=. uv run --no-project --with pillow --with numpy python
-concept/family_pass_v3.py /tmp/d3`. The D3, S1, K1, H2b and C1 renderers reproduce the committed
+concept/family_pass_v3.py /tmp/d3`. The D3, S1, K1, H2b and C1 renderers reproduce the hand-off's
 renders exactly this way. `concept/glitch-package/` holds only the two H2 stills the settings
 study composites.
 

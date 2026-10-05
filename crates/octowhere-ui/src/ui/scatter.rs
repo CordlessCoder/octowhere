@@ -24,8 +24,8 @@ pub struct Scatter {
     pub color: Color,
     /// Colours for the marks in place of `color`, if any.
     pub tones: Option<Tones>,
-    /// Where on the grid marks may show. Where fields overlap, a point takes its mark from the
-    /// first field that shows it.
+    /// Where on the grid marks may show, at most [`FIELDS`]. Where fields overlap, a point takes
+    /// its mark from the first field that shows it.
     pub fields: &'static [Field],
 }
 
@@ -56,12 +56,13 @@ pub struct Tones {
 pub enum Law {
     /// Rising from the centre to the edge, and highest on the side the look faces.
     Radial,
-    /// `quiet` everywhere but in `lobes`, where it is `peak`, by the mark's top-left corner.
-    /// Looks' facings do not turn it.
+    /// `peak` in `lobes`, easing to `quiet` at `reach` pixels from the nearest, by the mark's
+    /// top-left corner. Looks' facings do not turn it.
     Lobes {
         lobes: &'static [Rectangle],
         quiet: f32,
         peak: f32,
+        reach: f32,
     },
 }
 
@@ -90,6 +91,8 @@ pub fn breath(now: u64) -> u8 {
 /// The grid's pitch, and the side of the hollow mark: 6 × 6 with a 2 × 2 hole. The solid mark
 /// is 4 × 4, inset 1 px.
 pub const PITCH: i32 = 8;
+/// The most fields a scatter has.
+pub const FIELDS: usize = 4;
 const MARK: i32 = 6;
 /// Below this share of its numbers, a shown point draws the hollow mark.
 const HOLLOW: f32 = 0.6;
@@ -189,9 +192,7 @@ impl Scatter {
     pub fn shown_clear_of(&self, looks: &[Look], clear: &[Rectangle]) -> Shown {
         let words = (self.columns() * self.rows()).cast_unsigned().div_ceil(32) as usize;
         let mut shown = Shown {
-            shown: vec![0; words],
-            hollow: vec![0; words],
-            tone: [vec![0; words], vec![0; words]],
+            bits: vec![0; LAYERS * words],
         };
         self.each_shown(
             looks,
@@ -199,14 +200,13 @@ impl Scatter {
             &mut shown,
             |_, _| true,
             |shown, point, _, hollow, tone| {
-                let bit = 1 << (point % 32);
-                shown.shown[point / 32] |= bit;
+                shown.set(SHOWS, point);
                 if hollow {
-                    shown.hollow[point / 32] |= bit;
+                    shown.set(HOLLOWS, point);
                 }
-                for (place, bits) in shown.tone.iter_mut().enumerate() {
+                for place in 0..2 {
                     if tone >> place & 1 != 0 {
-                        bits[point / 32] |= bit;
+                        shown.set(TONES + place, point);
                     }
                 }
             },
@@ -217,16 +217,10 @@ impl Scatter {
     /// Adds the cell of every point that shows in one of `before` and `after` and not the other,
     /// or shows in both with a different mark or tone.
     pub fn changed(&self, before: &Shown, after: &Shown, changed: &mut Dirty) {
-        let bits = [
-            (&before.shown, &after.shown),
-            (&before.hollow, &after.hollow),
-            (&before.tone[0], &after.tone[0]),
-            (&before.tone[1], &after.tone[1]),
-        ];
-        for word in 0..before.shown.len().min(after.shown.len()) {
-            let mut differ = bits
-                .iter()
-                .fold(0, |differ, (a, b)| differ | (a[word] ^ b[word]));
+        for word in 0..before.words().min(after.words()) {
+            let mut differ = (0..LAYERS).fold(0, |differ, layer| {
+                differ | (before.layer(layer)[word] ^ after.layer(layer)[word])
+            });
             while differ != 0 {
                 let point = word as i32 * 32 + differ.trailing_zeros() as i32;
                 differ &= differ - 1;
@@ -270,9 +264,6 @@ impl Scatter {
     /// Calls `mark` with the index, the mark's top-left corner, whether it is hollow and its tone
     /// for each shown point whose mark lies in an area `wanted` accepts. `wanted` sees a grid
     /// row's whole strip before its points. Both get `state`.
-    ///
-    /// Each point owns two numbers of each field's generator, counted in raster order over the
-    /// whole grid, so a point keeps its numbers as the density and the facing change.
     fn each_shown<T: ?Sized>(
         &self,
         looks: &[Look],
@@ -281,14 +272,53 @@ impl Scatter {
         wanted: impl Fn(&mut T, Rectangle) -> bool,
         mut mark: impl FnMut(&mut T, usize, Point, bool, u8),
     ) {
-        debug_assert_eq!(looks.len(), self.fields.len());
-        let turns: Vec<(f32, f32)> = looks
-            .iter()
-            .map(|look| (libm::sinf(look.facing), libm::cosf(look.facing)))
-            .collect();
+        let turns = turns(looks);
+        self.each_point(state, wanted, |state, at| {
+            if let Some((hollow, tone)) = self.mark(at, looks, &turns, clear) {
+                mark(state, at.point, at.cell.top_left, hollow, tone);
+            }
+        });
+    }
+
+    /// Adds the cell of every point whose mark differs between `before` and `after`, each the
+    /// fields' looks and the areas marks keep clear of: shown in one and not the other, or shown
+    /// in both as a different kind or tone.
+    pub fn changed_between(
+        &self,
+        before: (&[Look], &[Rectangle]),
+        after: (&[Look], &[Rectangle]),
+        changed: &mut Dirty,
+    ) {
+        let turns = [turns(before.0), turns(after.0)];
+        self.each_point(
+            changed,
+            |_, _| true,
+            |changed, at| {
+                if self.mark(at, before.0, &turns[0], before.1)
+                    != self.mark(at, after.0, &turns[1], after.1)
+                {
+                    changed.add(at.cell);
+                }
+            },
+        );
+    }
+
+    /// Calls `visit` for each grid point on the glass and within a field's circle's columns
+    /// whose mark lies in an area `wanted` accepts. `wanted` sees a grid row's whole strip before
+    /// its points. Both get `state`.
+    fn each_point<T: ?Sized>(
+        &self,
+        state: &mut T,
+        wanted: impl Fn(&mut T, Rectangle) -> bool,
+        mut visit: impl FnMut(&mut T, &At<'_>),
+    ) {
+        assert!(
+            self.fields.len() <= FIELDS,
+            "a scatter has at most {FIELDS} fields"
+        );
         let half = MARK / 2;
         let columns = self.columns();
-        let mut spans: Vec<Option<(i32, i32)>> = vec![None; self.fields.len()];
+        let mut spans = [None; FIELDS];
         for row in 0..self.rows() {
             let y = self.origin.y + row * PITCH;
             if let Some((rows, _)) = &self.gap
@@ -346,61 +376,122 @@ impl Scatter {
                 if far_x * far_x > glass {
                     continue;
                 }
-                let corner = Point::new(x, top);
-                let cell = Rectangle::new(corner, Size::new_equal(MARK as u32));
+                let cell = Rectangle::new(Point::new(x, top), Size::new_equal(MARK as u32));
                 if !wanted(state, cell) {
                     continue;
                 }
-                let point = row as usize * columns as usize + column as usize;
-                let n = 2 * point as u32;
-                let fields = self.fields.iter().zip(looks).zip(&turns).zip(&spans);
-                for (((field, look), &(sin, cos)), span) in fields {
-                    if !span.is_some_and(|(first, last)| (first..=last).contains(&column)) {
-                        continue;
-                    }
-                    let dx = (x + half - field.center.x) as f32;
-                    let dy = (y + half - field.center.y) as f32;
-                    let squared = dx * dx + dy * dy;
-                    if squared > field.radius * field.radius {
-                        continue;
-                    }
-                    let chance = match field.law {
-                        Law::Radial => {
-                            let (r, toward) = if squared > 0.0 {
-                                let inverse = inverse_sqrt(squared);
-                                (squared * inverse, (dx * cos + dy * sin) * inverse)
-                            } else {
-                                (0.0, 0.0)
-                            };
-                            let radial = 0.45 + 0.55 * ((r - 40.0) * (1.0 / 180.0)).clamp(0.0, 1.0);
-                            radial * (0.45 + 0.55 * toward)
-                        }
-                        Law::Lobes { lobes, quiet, peak } => {
-                            if lobes.iter().any(|lobe| lobe.contains(corner)) {
-                                peak
-                            } else {
-                                quiet
-                            }
-                        }
-                    };
-                    if number(field.seed, n) < chance * look.density {
-                        // Checked only for a point that shows, as few do.
-                        if !clear
-                            .iter()
-                            .any(|keep| !keep.intersection(&cell).is_zero_sized())
-                        {
-                            // A generator of its own, so the tones leave the pattern alone.
-                            let spread = number(field.seed ^ TONE_SEED, n) - 0.5;
-                            let hollow = number(field.seed, n + 1) < HOLLOW;
-                            let tone = self.tone(chance, spread);
-                            mark(state, point, corner, hollow, tone);
-                        }
-                        break;
-                    }
-                }
+                let at = At {
+                    point: row as usize * columns as usize + column as usize,
+                    column,
+                    center: Point::new(x + half, y + half),
+                    cell,
+                    spans: &spans,
+                };
+                visit(state, &at);
             }
         }
     }
+
+    /// The mark at `at` with `looks`, whose facings' sines and cosines are `turns`, if it shows
+    /// and meets none of `clear`: whether it is hollow, and its tone.
+    ///
+    /// Each point owns two numbers of each field's generator, counted in raster order over the
+    /// whole grid, so a point keeps its numbers as the density and the facing change.
+    fn mark(
+        &self,
+        at: &At<'_>,
+        looks: &[Look],
+        turns: &[(f32, f32); FIELDS],
+        clear: &[Rectangle],
+    ) -> Option<(bool, u8)> {
+        debug_assert_eq!(looks.len(), self.fields.len());
+        let n = 2 * at.point as u32;
+        let fields = self.fields.iter().zip(looks).zip(turns).zip(at.spans);
+        for (((field, look), &(sin, cos)), span) in fields {
+            if !span.is_some_and(|(first, last)| (first..=last).contains(&at.column)) {
+                continue;
+            }
+            let dx = (at.center.x - field.center.x) as f32;
+            let dy = (at.center.y - field.center.y) as f32;
+            let squared = dx * dx + dy * dy;
+            if squared > field.radius * field.radius {
+                continue;
+            }
+            let chance = match field.law {
+                Law::Radial => {
+                    let (r, toward) = if squared > 0.0 {
+                        let inverse = inverse_sqrt(squared);
+                        (squared * inverse, (dx * cos + dy * sin) * inverse)
+                    } else {
+                        (0.0, 0.0)
+                    };
+                    let radial = 0.45 + 0.55 * ((r - 40.0) * (1.0 / 180.0)).clamp(0.0, 1.0);
+                    radial * (0.45 + 0.55 * toward)
+                }
+                Law::Lobes {
+                    lobes,
+                    quiet,
+                    peak,
+                    reach,
+                } => {
+                    let corner = at.cell.top_left;
+                    let squared = lobes
+                        .iter()
+                        .map(|lobe| {
+                            let end = lobe.top_left + lobe.size - Point::new(1, 1);
+                            let dx = (lobe.top_left.x - corner.x).max(corner.x - end.x).max(0);
+                            let dy = (lobe.top_left.y - corner.y).max(corner.y - end.y).max(0);
+                            (dx * dx + dy * dy) as f32
+                        })
+                        .fold(f32::MAX, f32::min);
+                    if squared >= reach * reach {
+                        quiet
+                    } else {
+                        let near = if squared > 0.0 {
+                            1.0 - squared * inverse_sqrt(squared) / reach
+                        } else {
+                            1.0
+                        };
+                        quiet + (peak - quiet) * near * near * (3.0 - 2.0 * near)
+                    }
+                }
+            };
+            if number(field.seed, n) >= chance * look.density {
+                continue;
+            }
+            // Checked only for a point that shows, as few do.
+            if clear
+                .iter()
+                .any(|keep| !keep.intersection(&at.cell).is_zero_sized())
+            {
+                return None;
+            }
+            // A generator of its own, so the tones leave the pattern alone.
+            let spread = number(field.seed ^ TONE_SEED, n) - 0.5;
+            let hollow = number(field.seed, n + 1) < HOLLOW;
+            return Some((hollow, self.tone(chance, spread)));
+        }
+        None
+    }
+}
+
+/// A grid point [`Scatter::each_point`] visits: its index, column, the centre of its unshifted
+/// place, its mark's cell, and each field's columns on its row.
+struct At<'a> {
+    point: usize,
+    column: i32,
+    center: Point,
+    cell: Rectangle,
+    spans: &'a [Option<(i32, i32)>; FIELDS],
+}
+
+/// The sines and cosines of `looks`' facings.
+fn turns(looks: &[Look]) -> [(f32, f32); FIELDS] {
+    let mut turns = [(0.0, 0.0); FIELDS];
+    for (turn, look) in turns.iter_mut().zip(looks) {
+        *turn = (libm::sinf(look.facing), libm::cosf(look.facing));
+    }
+    turns
 }
 
 /// A number from 0 to 1 for draw `n` of the generator seeded with `seed`.
@@ -415,12 +506,37 @@ fn number(seed: u32, n: u32) -> f32 {
 }
 
 /// Which of a scatter's grid points show, and which of those are hollow, a bit each, and the
-/// index of each one's tone in two bits.
+/// index of each one's tone in two bits: [`LAYERS`] layers of a bit a point, one after another.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Shown {
-    shown: Vec<u32>,
-    hollow: Vec<u32>,
-    tone: [Vec<u32>; 2],
+    bits: Vec<u32>,
+}
+
+/// [`Shown`]'s layers: which points show, which of those are hollow, and the tone's low bit and
+/// high bit.
+const SHOWS: usize = 0;
+const HOLLOWS: usize = 1;
+const TONES: usize = 2;
+const LAYERS: usize = 4;
+
+impl Shown {
+    fn words(&self) -> usize {
+        self.bits.len() / LAYERS
+    }
+
+    fn layer(&self, layer: usize) -> &[u32] {
+        let words = self.words();
+        &self.bits[layer * words..(layer + 1) * words]
+    }
+
+    fn layer_mut(&mut self, layer: usize) -> &mut [u32] {
+        let words = self.words();
+        &mut self.bits[layer * words..(layer + 1) * words]
+    }
+
+    fn set(&mut self, layer: usize, point: usize) {
+        self.layer_mut(layer)[point / 32] |= 1 << (point % 32);
+    }
 }
 
 /// 1/√x for positive x, to within a few units in the last place: a guess from the float's bits
@@ -595,12 +711,16 @@ mod tests {
             ..TWO
         };
         let before = toned.shown(&LOOKS);
-        let point = before.shown.iter().enumerate().find_map(|(word, bits)| {
-            (*bits != 0).then(|| word * 32 + bits.trailing_zeros() as usize)
-        });
+        let point = before
+            .layer(SHOWS)
+            .iter()
+            .enumerate()
+            .find_map(|(word, bits)| {
+                (*bits != 0).then(|| word * 32 + bits.trailing_zeros() as usize)
+            });
         let point = point.expect("a mark shows");
         let mut after = before.clone();
-        after.tone[1][point / 32] ^= 1 << (point % 32);
+        after.layer_mut(TONES + 1)[point / 32] ^= 1 << (point % 32);
         let mut changed = Dirty::default();
         toned.changed(&before, &after, &mut changed);
         assert!(!changed.is_empty());
@@ -610,18 +730,66 @@ mod tests {
             ..look
         });
         let later = toned.shown(&turned);
-        assert_ne!(before.tone, later.tone);
+        let tones = |shown: &Shown| [shown.layer(TONES).to_vec(), shown.layer(TONES + 1).to_vec()];
+        assert_ne!(tones(&before), tones(&later));
+    }
+
+    #[test]
+    fn comparing_two_looks_damages_what_their_shown_marks_differ_in() {
+        let toned = Scatter {
+            tones: Some(Tones {
+                colors: &chrome::HALFTONE,
+                dense: 0.7,
+            }),
+            ..TWO
+        };
+        let turned = LOOKS.map(|look| Look {
+            facing: look.facing + 0.4,
+            ..look
+        });
+        let thinner = LOOKS.map(|look| Look {
+            density: 0.6,
+            ..look
+        });
+        let clear = [Rectangle::new(Point::new(150, 120), Size::new(90, 60))];
+        let rows = |damage: &Dirty| {
+            (0..DISPLAY_SIZE.height as i32)
+                .map(|y| damage.spans(y).collect::<Vec<_>>())
+                .collect::<Vec<_>>()
+        };
+        for scatter in [&TWO, &toned] {
+            for (before, after) in [
+                ((&LOOKS, &[][..]), (&turned, &[][..])),
+                ((&LOOKS, &[][..]), (&thinner, &clear[..])),
+                ((&turned, &clear[..]), (&turned, &[][..])),
+                ((&LOOKS, &[][..]), (&LOOKS, &[][..])),
+            ] {
+                let mut paired = Dirty::default();
+                scatter.changed_between((before.0, before.1), (after.0, after.1), &mut paired);
+                let mut shown = Dirty::default();
+                scatter.changed(
+                    &scatter.shown_clear_of(before.0, before.1),
+                    &scatter.shown_clear_of(after.0, after.1),
+                    &mut shown,
+                );
+                assert_eq!(rows(&paired), rows(&shown));
+            }
+        }
     }
 
     #[test]
     fn a_mark_that_changes_kind_is_damaged() {
         let before = TWO.shown(&LOOKS);
-        let point = before.shown.iter().enumerate().find_map(|(word, bits)| {
-            (*bits != 0).then(|| word * 32 + bits.trailing_zeros() as usize)
-        });
+        let point = before
+            .layer(SHOWS)
+            .iter()
+            .enumerate()
+            .find_map(|(word, bits)| {
+                (*bits != 0).then(|| word * 32 + bits.trailing_zeros() as usize)
+            });
         let point = point.expect("a mark shows");
         let mut after = before.clone();
-        after.hollow[point / 32] ^= 1 << (point % 32);
+        after.layer_mut(HOLLOWS)[point / 32] ^= 1 << (point % 32);
         let mut changed = Dirty::default();
         TWO.changed(&before, &after, &mut changed);
         let mut expected = Dirty::default();

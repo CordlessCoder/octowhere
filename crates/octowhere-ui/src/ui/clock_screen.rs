@@ -1146,13 +1146,9 @@ pub fn damage(
     }
     let (old_clear, new_clear) = (old.clear(), new.clear());
     if (old.scatter, &old_clear) != (new.scatter, &new_clear) {
-        let scatter = scatter();
-        let shown = |bloom: Option<u8>, clear: &[Rectangle]| {
-            scatter.shown_clear_of(&looks(bloom.unwrap_or(0)), clear)
-        };
-        scatter.changed(
-            &shown(old.scatter, &old_clear),
-            &shown(new.scatter, &new_clear),
+        scatter().changed_between(
+            (&looks(old.scatter.unwrap_or(0)), &old_clear),
+            (&looks(new.scatter.unwrap_or(0)), &new_clear),
             damage,
         );
     }

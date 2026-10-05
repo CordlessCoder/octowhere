@@ -1,0 +1,1031 @@
+//! The member face: where the group's members are, as bearings round a ring that turns with
+//! the device's true heading over a grid that keeps to true north, with the selected member's
+//! distance and ages across the middle (2026-10-04 hand-off). Without a fix of its own, or
+//! without members' positions, the face keeps its grid and ring and says what it lacks.
+//!
+//! The ring is not a map: every member sits on it at the same radius, whatever its distance.
+//! Members whose rim labels would overlap share one node, labelled with the member it shows
+//! and how many more it holds, at their bearings' mean; a tap in the middle steps the selection
+//! through every member with a position, so each can be shown on its own.
+
+use embedded_graphics::{
+    prelude::{Point, Size},
+    primitives::Rectangle,
+};
+use heapless::Vec;
+use octowhere_mesh::packet::MAX_DELTA;
+
+use super::{
+    clock::ClockState,
+    compass::CompassView,
+    drawer::{age, age_due},
+    gesture::Micros,
+    group::{
+        layout::{
+            Align, Arc, Backdrop, Face, Line, List, Shape, Text, Turned, Vertical, format, rect,
+        },
+        view::{GroupView, IDS, Position},
+    },
+    screens::Gnss,
+    stroke,
+    text::style,
+};
+use crate::chrome::{self, Color, CoverageTarget, FontdueRenderer};
+
+const SECOND: Micros = 1_000_000;
+const CX: f32 = 233.0;
+const CY: f32 = 233.0;
+const CENTER: Point = Point::new(233, 233);
+/// The bearing ring, to the middle of its stroke, and where nodes, rim labels and the north
+/// mark are centred.
+const RING: f32 = 212.5;
+const NODE_RADIUS: f32 = 213.0;
+const LABEL_RADIUS: f32 = 188.0;
+const NORTH_RADIUS: f32 = 226.0;
+/// Half a node frame's side.
+const NODE_HALF: i32 = 12;
+/// How far apart two rim labels keep their ink along the label ring.
+const LABEL_GAP: f32 = 6.0;
+/// A whole ring, a little over a turn so that it has no seam.
+const WHOLE: (i16, i16) = (-900, 2720);
+/// The grid's pitch, which is a texture and not a scale, and how far out it is drawn: the
+/// glass and as far past it as the pixel shift reaches.
+const PITCH: i32 = 64;
+const GRID_REACH: f32 = 236.0;
+/// The grid's lines, three quarters of a pixel wide, and its marks' side.
+const GRID_LINE_WIDTH: u8 = 3;
+const GRID_MARK: u32 = 2;
+/// A position younger than this shows the solid glyph and an older one the hourglass. The
+/// hand-off proposes it and leaves it to engineering; explicit ages show either way.
+const RECENT: Micros = 5 * 60 * SECOND;
+/// A position older than this has left the protocol's table, so the face no longer places it.
+pub const EXPIRES: Micros = MAX_DELTA as Micros * SECOND;
+/// The forward arrow, in quarter pixels.
+const ARROW: [(i16, i16); 4] = [(932, 856), (900, 988), (932, 968), (964, 988)];
+/// The middle a tap selects the next member in, inside the rim labels.
+const MIDDLE_RADIUS: i32 = 160;
+/// The box with the selected member's coordinates while this device has no fix.
+const COORDINATES: Rectangle = rect(78, 248, 388, 360);
+/// The control that opens the members or the group while no member is placed.
+const BUTTON: Rectangle = rect(94, 305, 372, 389);
+/// The selected member's name: its widest ink in the left column, and the sizes it may take.
+const NAME_WIDTH: u32 = 106;
+const NAME_SIZES: (u8, u8) = (25, 14);
+/// The distance's widest ink and sizes.
+const DISTANCE_WIDTH: u32 = 100;
+const DISTANCE_SIZES: (u8, u8) = (39, 26);
+
+/// What the face is drawn from.
+pub struct Context<'a> {
+    pub group: Option<&'a GroupView>,
+    pub gnss: &'a Gnss,
+    /// Whole degrees clockwise from true north to the top edge, while the heading can be
+    /// trusted and turned to true north.
+    pub heading: Option<u16>,
+    /// The member chosen last, which the face keeps while it has a position.
+    pub selected: Option<u8>,
+    pub now: Micros,
+}
+
+/// What a tap on the face asks for.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Tap {
+    Select(u8),
+    /// The group's members, from the face with no member placed.
+    Members,
+    /// The group screen, from the face with no group.
+    Group,
+}
+
+/// A member with a position the face may show.
+#[derive(Clone, Copy, Debug)]
+struct Placed {
+    id: u8,
+    coordinates: (i32, i32),
+    /// How old the position is, or `None` while this device has no UTC to age it by.
+    age: Option<Micros>,
+    /// How long ago this device last heard the member itself.
+    heard: Option<Micros>,
+}
+
+type Placements = Vec<Placed, { IDS as usize }>;
+
+enum State {
+    NoGroup,
+    NoPositions,
+    NoOwnFix,
+    /// This device's position, from its current fix.
+    Ring((i32, i32)),
+}
+
+/// How far east of true north magnetic north lies where the device last had a fix, in the
+/// clock's year. `None` without a fix since start-up, without a trusted UTC, or where the
+/// magnetic model does not hold.
+#[must_use]
+pub fn declination(gnss: &Gnss, clock: &ClockState) -> Option<f32> {
+    let (latitude, longitude) = gnss.position?;
+    let utc = clock.utc.filter(|_| !clock.stopped)?;
+    octowhere_motion::declination::declination(
+        latitude as f32 * 1e-7,
+        longitude as f32 * 1e-7,
+        0.0,
+        octowhere_motion::declination::decimal_year(utc),
+    )
+}
+
+/// The compass's heading turned to true north, while the compass gives one it trusts: not
+/// calibrating, held too near upright, or disturbed.
+#[must_use]
+pub fn true_heading(compass: &CompassView, declination: Option<f32>) -> Option<f32> {
+    let magnetic = compass
+        .heading_decidegrees
+        .filter(|_| compass.live && !compass.disturbed)?;
+    Some(around(f32::from(magnetic) / 10.0 + declination?))
+}
+
+/// `heading` in whole degrees, kept at `shown` until it moves more than three quarters of a
+/// degree from it, so that a heading at rest does not flicker between two.
+#[must_use]
+pub fn hold(shown: Option<u16>, heading: Option<f32>) -> Option<u16> {
+    let heading = heading?;
+    if let Some(shown) = shown {
+        let apart = around(heading - f32::from(shown));
+        if apart.min(360.0 - apart) <= 0.75 {
+            return Some(shown);
+        }
+    }
+    Some(libm::roundf(heading) as u16 % 360)
+}
+
+/// The bearing from `from` to `to`, in degrees clockwise from true north, and the distance
+/// between them in metres, on a sphere. Positions are in degrees × 10⁷.
+#[must_use]
+fn bearing_distance(from: (i32, i32), to: (i32, i32)) -> (f32, f32) {
+    const EARTH: f32 = 6_371_008.8;
+    let radians = |e7: i64| (e7 as f32 * 1e-7).to_radians();
+    let (phi1, phi2) = (radians(from.0.into()), radians(to.0.into()));
+    // The differences are taken in integers, where they are exact.
+    let delta_phi = radians(i64::from(to.0) - i64::from(from.0));
+    let delta_lambda = radians(
+        (i64::from(to.1) - i64::from(from.1) + 1_800_000_000).rem_euclid(3_600_000_000)
+            - 1_800_000_000,
+    );
+    let (sin_half_phi, sin_half_lambda) =
+        (libm::sinf(delta_phi / 2.0), libm::sinf(delta_lambda / 2.0));
+    let (cos1, cos2) = (libm::cosf(phi1), libm::cosf(phi2));
+    let a = sin_half_phi * sin_half_phi + cos1 * cos2 * sin_half_lambda * sin_half_lambda;
+    let distance = 2.0 * EARTH * libm::asinf(libm::sqrtf(a.clamp(0.0, 1.0)));
+    // The bearing's northward part, rewritten so that it does not subtract two near-equal
+    // products when the points are close.
+    let north =
+        libm::sinf(delta_phi) + libm::sinf(phi1) * cos2 * 2.0 * sin_half_lambda * sin_half_lambda;
+    let east = libm::sinf(delta_lambda) * cos2;
+    let bearing = around(libm::atan2f(east, north).to_degrees());
+    (bearing, distance)
+}
+
+/// The members other than this device with a position the protocol still holds.
+fn placed(group: &GroupView, now: Micros) -> Placements {
+    let elapsed = |at: i64| (now as i64 - at).max(0) as Micros;
+    group
+        .members()
+        .filter(|&(id, _)| id != group.own)
+        .filter_map(|(id, member)| {
+            let age = match member.position {
+                Position::Never => return None,
+                Position::Unknown => None,
+                Position::At(at) => Some(elapsed(at)),
+            };
+            if age.is_some_and(|age| age > EXPIRES) {
+                return None;
+            }
+            Some(Placed {
+                id,
+                coordinates: member.coordinates?,
+                age,
+                heard: member.heard.map(elapsed),
+            })
+        })
+        .collect()
+}
+
+/// The member `selected` names while it is placed, or else the freshest position.
+fn chosen(placed: &[Placed], selected: Option<u8>) -> Option<&Placed> {
+    placed
+        .iter()
+        .find(|each| Some(each.id) == selected)
+        .or_else(|| freshest(placed.iter()))
+}
+
+fn freshest<'a>(placed: impl Iterator<Item = &'a Placed>) -> Option<&'a Placed> {
+    placed.min_by_key(|each| (each.age.is_none(), each.age, each.id))
+}
+
+fn state(context: &Context, placed: &Placements) -> State {
+    match context.group {
+        None => State::NoGroup,
+        Some(_) if placed.is_empty() => State::NoPositions,
+        Some(_) => match context.gnss.position.filter(|_| context.gnss.fix) {
+            Some(own) => State::Ring(own),
+            None => State::NoOwnFix,
+        },
+    }
+}
+
+/// What a tap at `point` asks of the face as `context` draws it.
+#[must_use]
+pub fn tap(context: &Context, point: Point) -> Option<Tap> {
+    let placed = context
+        .group
+        .map(|group| placed(group, context.now))
+        .unwrap_or_default();
+    let next = || {
+        let current = chosen(&placed, context.selected)?.id;
+        placed
+            .iter()
+            .find(|each| each.id > current)
+            .or(placed.first())
+            .map(|each| Tap::Select(each.id))
+    };
+    match state(context, &placed) {
+        State::NoGroup => BUTTON.contains(point).then_some(Tap::Group),
+        State::NoPositions => BUTTON.contains(point).then_some(Tap::Members),
+        State::NoOwnFix => COORDINATES.contains(point).then(next).flatten(),
+        State::Ring(_) => {
+            let (dx, dy) = (point.x - CENTER.x, point.y - CENTER.y);
+            (dx * dx + dy * dy < MIDDLE_RADIUS * MIDDLE_RADIUS)
+                .then(next)
+                .flatten()
+        }
+    }
+}
+
+/// Builds the face into `list`, and returns the member it shows selected.
+pub fn build(
+    context: &Context,
+    font: &FontdueRenderer<'static, Color>,
+    list: &mut List,
+) -> Option<u8> {
+    list.clear();
+    list.set_backdrop(Backdrop::Grid(context.heading.unwrap_or(0)));
+    let placed = context
+        .group
+        .map(|group| placed(group, context.now))
+        .unwrap_or_default();
+    let selected = chosen(&placed, context.selected).copied();
+    for each in &placed {
+        due(list, each, context.now);
+    }
+    let members = context.group.map_or(0, GroupView::count);
+    let counts = || {
+        format(format_args!(
+            "{:02} POSITION{} / {members:02} MEMBER{}",
+            placed.len(),
+            plural(placed.len()),
+            plural(members),
+        ))
+    };
+    match state(context, &placed) {
+        State::NoGroup => {
+            frame(list, "NO GROUP", context.heading);
+            absent(
+                list,
+                "NO GROUP",
+                ["POSITIONS ARE SHARED", "WITHIN A GROUP"],
+                "VIEW GROUP",
+            );
+        }
+        State::NoPositions => {
+            let counts = format(format_args!(
+                "{members:02} MEMBER{} / 00 POSITIONS",
+                plural(members)
+            ));
+            frame(list, &counts, context.heading);
+            absent(
+                list,
+                "NO POSITIONS",
+                ["MEMBERS MAY STILL BE HEARD", "POSITIONS NEED A GNSS FIX"],
+                "VIEW MEMBERS",
+            );
+        }
+        State::NoOwnFix => {
+            frame(list, &counts(), context.heading);
+            if let (Some(selected), Some(group)) = (&selected, context.group) {
+                coordinates(list, group, selected, font);
+            }
+        }
+        State::Ring(own) => {
+            header(list, &counts(), context.heading);
+            ring(
+                list,
+                context,
+                &placed,
+                selected.map(|each| each.id),
+                own,
+                font,
+            );
+            if let (Some(selected), Some(group)) = (&selected, context.group) {
+                middle(list, context, group, selected, own, font);
+            }
+        }
+    }
+    selected.map(|each| each.id)
+}
+
+fn plural(count: usize) -> &'static str {
+    if count == 1 { "" } else { "S" }
+}
+
+/// Notes when what the face shows of `placed` next changes: its age's next value, its glyph
+/// turning to the hourglass, and its position expiring.
+fn due(list: &mut List, placed: &Placed, now: Micros) {
+    if let Some(age) = placed.age {
+        list.changes_at(now + age_due(age));
+        if age < RECENT {
+            list.changes_at(now + RECENT - age);
+        }
+        list.changes_at(now + EXPIRES - age + 1);
+    }
+    if let Some(heard) = placed.heard {
+        list.changes_at(now + age_due(heard));
+    }
+}
+
+/// The title, the counts and the heading's caption.
+fn header(list: &mut List, counts: &str, heading: Option<u16>) {
+    list.centred("MEMBERS", 233, 103, Face::Title, 24, chrome::WHITE);
+    list.centred(counts, 233, 136, Face::Mono, 12, chrome::GRAY);
+    match heading {
+        Some(heading) => list.centred(
+            &format(format_args!("{heading:03}° TRUE / FORWARD")),
+            233,
+            156,
+            Face::Mono,
+            11,
+            chrome::GRAY,
+        ),
+        None => list.centred(
+            "NORTH UP / NO HEADING",
+            233,
+            156,
+            Face::Mono,
+            11,
+            chrome::ORANGE,
+        ),
+    }
+}
+
+/// The ring whole, the north mark and the header, as every state without nodes has them.
+fn frame(list: &mut List, counts: &str, heading: Option<u16>) {
+    list.arc(ring_arc(WHOLE));
+    north(list, heading);
+    header(list, counts, heading);
+}
+
+fn ring_arc(span: (i16, i16)) -> Arc {
+    Arc {
+        center: CENTER,
+        radius: (RING * 4.0) as u16,
+        width: 4,
+        span,
+        color: chrome::GRAY,
+    }
+}
+
+/// The rim's N, where true north lies on screen.
+fn north(list: &mut List, heading: Option<u16>) {
+    let angle = -f32::from(heading.unwrap_or(0));
+    list.push(Shape::Turned(Turned {
+        text: line("N"),
+        face: Face::Mono,
+        size: 11,
+        color: chrome::LIME,
+        center: on_circle(angle, NORTH_RADIUS),
+        angle: tenths(angle),
+    }));
+}
+
+/// What the face says in place of the ring's members, and the control that leads to them.
+fn absent(list: &mut List, heading: &str, lines: [&str; 2], control: &str) {
+    list.centred(heading, 233, 180, Face::Kh, 30, chrome::GRAY);
+    for (line, top) in lines.into_iter().zip([228, 256]) {
+        list.centred(line, 233, top, Face::Sans, 16, chrome::WHITE);
+    }
+    outline(list, BUTTON);
+    list.centred(control, 233, 338, Face::Kh, 20, chrome::WHITE);
+}
+
+/// The selected member's last coordinates and their age, while this device has no fix to
+/// place it from.
+fn coordinates(
+    list: &mut List,
+    group: &GroupView,
+    selected: &Placed,
+    font: &FontdueRenderer<'static, Color>,
+) {
+    list.centred("NO OWN FIX", 233, 180, Face::Kh, 30, chrome::ORANGE);
+    list.centred(
+        "DISTANCE FROM HERE UNAVAILABLE",
+        233,
+        223,
+        Face::Mono,
+        13,
+        chrome::GRAY,
+    );
+    outline(list, COORDINATES);
+    if let Some(member) = group.member(selected.id) {
+        name(
+            list,
+            member.name.as_str(),
+            233,
+            265,
+            Align::Centre,
+            280,
+            font,
+        );
+    }
+    let (latitude, longitude) = selected.coordinates;
+    list.centred(
+        &format(format_args!(
+            "{}   {}",
+            Degrees(latitude, ['N', 'S']),
+            Degrees(longitude, ['E', 'W'])
+        )),
+        233,
+        305,
+        Face::Mono,
+        16,
+        chrome::WHITE,
+    );
+    let age_text = match selected.age {
+        Some(elapsed) => format(format_args!("POSITION {} OLD", age(elapsed))),
+        None => line("POSITION AGE UNKNOWN"),
+    };
+    list.centred(&age_text, 233, 336, Face::Mono, 13, chrome::GRAY);
+    list.centred(
+        "LAST COORDINATES / NO RELATIVE MARKERS",
+        233,
+        408,
+        Face::Mono,
+        11,
+        chrome::GRAY,
+    );
+}
+
+/// Degrees × 10⁷ to four places, with the hemisphere's letter.
+struct Degrees(i32, [char; 2]);
+
+impl core::fmt::Display for Degrees {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let tenths_of_thousandths = (self.0.unsigned_abs() + 500) / 1_000;
+        let letter = self.1[usize::from(self.0 < 0)];
+        write!(
+            f,
+            "{}.{:04} {letter}",
+            tenths_of_thousandths / 10_000,
+            tenths_of_thousandths % 10_000
+        )
+    }
+}
+
+/// A node on the ring: one member, or several whose labels would overlap.
+#[derive(Clone, Copy, Debug)]
+struct Mark {
+    /// Degrees clockwise from true north: its members' bearings' mean.
+    bearing: f32,
+    /// Its members' ids, as bits.
+    ids: u32,
+}
+
+impl Mark {
+    fn count(&self) -> u32 {
+        self.ids.count_ones()
+    }
+}
+
+/// Gathers the members at `bearings` into marks whose rim labels keep apart, merging the
+/// neighbours that overlap most first. Every label's age takes at most three characters, so a
+/// mark's width depends only on how many members it holds, not on which it shows.
+fn marks(
+    placed: &[Placed],
+    bearings: &[f32],
+    font: &FontdueRenderer<'static, Color>,
+) -> Vec<Mark, { IDS as usize }> {
+    let label = style(font, chrome::WHITE, 11, Face::Mono.index());
+    let measure = |text: &str| label.baseline_bounds(text, Point::zero()).size.width as f32;
+    let widths = [
+        measure("00 / 00S"),
+        measure("00 +0 / 00S"),
+        measure("00 +00 / 00S"),
+    ];
+    let width = |mark: &Mark| match mark.count() {
+        1 => widths[0],
+        2..=10 => widths[1],
+        _ => widths[2],
+    };
+    let mut marks: Vec<Mark, { IDS as usize }> = placed
+        .iter()
+        .zip(bearings)
+        .map(|(each, &bearing)| Mark {
+            bearing,
+            ids: 1 << each.id,
+        })
+        .collect();
+    marks.sort_unstable_by(|a, b| a.bearing.total_cmp(&b.bearing));
+    while marks.len() > 1 {
+        let n = marks.len();
+        let overlap = |i: usize| {
+            let (a, b) = (&marks[i], &marks[(i + 1) % n]);
+            let apart = around(b.bearing - a.bearing).to_radians() * LABEL_RADIUS;
+            (width(a) + width(b)) / 2.0 + LABEL_GAP - apart
+        };
+        let Some(i) = (0..n)
+            .map(|i| (i, overlap(i)))
+            .filter(|&(_, overlap)| overlap > 0.0)
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(i, _)| i)
+        else {
+            break;
+        };
+        let j = (i + 1) % n;
+        let (a, b) = (marks[i], marks[j]);
+        let apart = around(b.bearing - a.bearing);
+        let (na, nb) = (a.count() as f32, b.count() as f32);
+        marks[i] = Mark {
+            bearing: around(a.bearing + apart * nb / (na + nb)),
+            ids: a.ids | b.ids,
+        };
+        marks.remove(j);
+        marks.sort_unstable_by(|a, b| a.bearing.total_cmp(&b.bearing));
+    }
+    marks
+}
+
+/// The ring with its nodes, gapped under each, the forward tick, the north mark and the
+/// middle's heading marker.
+fn ring(
+    list: &mut List,
+    context: &Context,
+    placed: &Placements,
+    selected: Option<u8>,
+    own: (i32, i32),
+    font: &FontdueRenderer<'static, Color>,
+) {
+    let turn = f32::from(context.heading.unwrap_or(0));
+    let bearings: Vec<f32, { IDS as usize }> = placed
+        .iter()
+        .map(|each| bearing_distance(own, each.coordinates).0)
+        .collect();
+    let marks = marks(placed, &bearings, font);
+    // Each mark's angle on screen, clockwise from up, its node's centre and the ring's gap
+    // under it.
+    let nodes: Vec<(f32, Point, (f32, f32)), { IDS as usize }> = marks
+        .iter()
+        .map(|mark| {
+            let angle = around(mark.bearing - turn);
+            let node = on_circle(angle, NODE_RADIUS);
+            (angle, node, gap(angle, node))
+        })
+        .collect();
+    match nodes.len() {
+        0 => list.arc(ring_arc(WHOLE)),
+        n => {
+            for (i, &(angle, _, (_, after))) in nodes.iter().enumerate() {
+                let (next, _, (before, _)) = nodes[(i + 1) % n];
+                let mut end = next - before;
+                let start = angle + after;
+                while end <= start {
+                    end += 360.0;
+                }
+                list.arc(ring_arc((tenths(start - 90.0), tenths(end - 90.0))));
+            }
+        }
+    }
+    let tick_clear = nodes.iter().all(|&(angle, _, (before, after))| {
+        let from_up = if angle > 180.0 { angle - 360.0 } else { angle };
+        from_up > before + 1.0 || from_up < -after - 1.0
+    });
+    if tick_clear {
+        list.path(&[(932, 60), (932, 112)], 4, chrome::GRAY);
+    }
+    north(list, context.heading);
+    for (mark, &(angle, node, _)) in marks.iter().zip(&nodes) {
+        let shown = placed
+            .iter()
+            .find(|each| Some(each.id) == selected && mark.ids & 1 << each.id != 0)
+            .or_else(|| freshest(placed.iter().filter(|each| mark.ids & 1 << each.id != 0)));
+        let Some(shown) = shown else {
+            continue;
+        };
+        let color = if Some(shown.id) == selected {
+            chrome::LIME
+        } else {
+            chrome::WHITE
+        };
+        node_frame(list, node, shown.age.is_some_and(|age| age < RECENT), color);
+        let age_text = shown.age.map_or_else(|| line("--"), age);
+        let more = mark.count() - 1;
+        let label = if more == 0 {
+            format(format_args!("{:02} / {age_text}", shown.id))
+        } else {
+            format(format_args!("{:02} +{more} / {age_text}", shown.id))
+        };
+        list.push(Shape::Turned(Turned {
+            text: label,
+            face: Face::Mono,
+            size: 11,
+            color,
+            center: on_circle(angle, LABEL_RADIUS),
+            angle: tenths(angle),
+        }));
+    }
+    list.arc(Arc {
+        center: CENTER,
+        radius: 106,
+        width: 4,
+        span: WHOLE,
+        color: chrome::GRAY,
+    });
+    if context.heading.is_some() {
+        list.polygon(&ARROW, chrome::LIME);
+    } else {
+        list.path(&[(900, 932), (964, 932)], 4, chrome::GRAY);
+        list.path(&[(932, 900), (932, 964)], 4, chrome::GRAY);
+    }
+}
+
+/// A node's upright frame at `node` with its freshness glyph: a solid square for a recent
+/// position, an hourglass for an older one.
+fn node_frame(list: &mut List, node: Point, recent: bool, color: Color) {
+    let (x, y) = ((node.x * 4) as i16, (node.y * 4) as i16);
+    let side = (NODE_HALF * 4 - 2) as i16;
+    list.path(
+        &[
+            (x - side, y - side),
+            (x + side, y - side),
+            (x + side, y + side),
+            (x - side, y + side),
+            (x - side, y - side),
+        ],
+        4,
+        color,
+    );
+    if recent {
+        list.fill(
+            Rectangle::new(node - Point::new_equal(3), Size::new_equal(6)),
+            color,
+        );
+    } else {
+        list.path(
+            &[
+                (x - 14, y - 18),
+                (x + 14, y - 18),
+                (x - 14, y + 18),
+                (x + 14, y + 18),
+                (x - 14, y - 18),
+            ],
+            4,
+            color,
+        );
+    }
+}
+
+/// How far, in degrees either side of a node at `angle`, the ring runs under its frame.
+fn gap(angle: f32, node: Point) -> (f32, f32) {
+    let outside = |degrees: f32| {
+        let (sin, cos) = libm::sincosf(degrees.to_radians());
+        let (x, y) = (CX + sin * RING, CY - cos * RING);
+        (x - node.x as f32).abs().max((y - node.y as f32).abs()) > NODE_HALF as f32 + 0.5
+    };
+    let side = |direction: f32| {
+        let (mut inside, mut out) = (0.0, 12.0);
+        for _ in 0..12 {
+            let middle = (inside + out) / 2.0;
+            if outside(angle + direction * middle) {
+                out = middle;
+            } else {
+                inside = middle;
+            }
+        }
+        out
+    };
+    (side(-1.0), side(1.0))
+}
+
+/// The selected member across the middle: its index, name and true bearing on the left, the
+/// distance on the right, and below them its position's age, when this device last heard it,
+/// and this device's own fix.
+fn middle(
+    list: &mut List,
+    context: &Context,
+    group: &GroupView,
+    selected: &Placed,
+    own: (i32, i32),
+    font: &FontdueRenderer<'static, Color>,
+) {
+    let (bearing, metres) = bearing_distance(own, selected.coordinates);
+    list.left(
+        &format(format_args!("[{:02}]", selected.id)),
+        94,
+        183,
+        Face::Mono,
+        12,
+        chrome::LIME,
+    );
+    if let Some(member) = group.member(selected.id) {
+        name(
+            list,
+            member.name.as_str(),
+            94,
+            209,
+            Align::Left,
+            NAME_WIDTH,
+            font,
+        );
+    }
+    list.left(
+        &format(format_args!(
+            "{:03}° TRUE",
+            libm::roundf(bearing) as u16 % 360
+        )),
+        94,
+        248,
+        Face::Mono,
+        15,
+        chrome::WHITE,
+    );
+    let (figure, unit) = distance(metres);
+    let size = fit(&figure, Face::Kh, DISTANCE_SIZES, DISTANCE_WIDTH, font);
+    list.left(&figure, 289, 203, Face::Kh, size, chrome::WHITE);
+    list.left(unit, 289, 251, Face::Mono, 12, chrome::GRAY);
+
+    list.left("POSITION", 128, 296, Face::Mono, 11, chrome::GRAY);
+    let position = match selected.age {
+        Some(elapsed) => format(format_args!("{} OLD", age(elapsed))),
+        None => line("UNKNOWN"),
+    };
+    list.left(&position, 128, 318, Face::Kh, 18, chrome::WHITE);
+    list.left("DIRECT", 258, 296, Face::Mono, 11, chrome::GRAY);
+    match selected.heard {
+        Some(heard) => list.left(
+            &format(format_args!("{} AGO", age(heard))),
+            258,
+            318,
+            Face::Kh,
+            18,
+            chrome::VIOLET,
+        ),
+        None => list.left("NEVER", 258, 318, Face::Kh, 18, chrome::GRAY),
+    }
+
+    let gnss = context.gnss;
+    let fix_age = gnss
+        .health
+        .last_fix
+        .map(|at| context.now.saturating_sub(at));
+    if let Some(fix_age) = fix_age {
+        list.changes_at(context.now + age_due(fix_age));
+    }
+    let mut own_fix = Line::new();
+    _ = core::fmt::Write::write_str(&mut own_fix, "OWN FIX");
+    if let Some(fix_age) = fix_age {
+        _ = core::fmt::Write::write_fmt(&mut own_fix, format_args!(" {}", age(fix_age)));
+    }
+    match gnss.hdop_milli {
+        Some(milli) => {
+            let tenths = (milli + 50) / 100;
+            _ = core::fmt::Write::write_fmt(
+                &mut own_fix,
+                format_args!(" / HDOP {}.{}", tenths / 10, tenths % 10),
+            );
+        }
+        None => _ = core::fmt::Write::write_str(&mut own_fix, " / HDOP --"),
+    }
+    list.centred(&own_fix, 233, 348, Face::Mono, 14, chrome::GRAY);
+}
+
+/// A distance as a figure and its unit: whole metres below a kilometre, kilometres to a tenth
+/// below a hundred, and whole kilometres past that.
+fn distance(metres: f32) -> (Line, &'static str) {
+    let whole = libm::roundf(metres);
+    if whole < 1_000.0 {
+        (format(format_args!("{whole:.0}")), "METRES")
+    } else if metres < 99_950.0 {
+        (
+            format(format_args!("{:.1}", metres / 1_000.0)),
+            "KILOMETRES",
+        )
+    } else {
+        (
+            format(format_args!("{:.0}", metres / 1_000.0)),
+            "KILOMETRES",
+        )
+    }
+}
+
+/// The largest size within `sizes` at which `text`'s ink is at most `width` wide, or the
+/// smallest.
+fn fit(
+    text: &str,
+    face: Face,
+    (largest, smallest): (u8, u8),
+    width: u32,
+    font: &FontdueRenderer<'static, Color>,
+) -> u8 {
+    (smallest..=largest)
+        .rev()
+        .find(|&size| {
+            style(font, chrome::WHITE, u32::from(size), face.index())
+                .baseline_bounds(text, Point::zero())
+                .size
+                .width
+                <= width
+        })
+        .unwrap_or(smallest)
+}
+
+/// A member's name, as large as fits `width` up to the design's 25 px, sitting where a capital
+/// of 25 px would whatever size it takes, and cut short if it fits at none.
+fn name(
+    list: &mut List,
+    text: &str,
+    x: i32,
+    top: i32,
+    align: Align,
+    width: u32,
+    font: &FontdueRenderer<'static, Color>,
+) {
+    let size = fit(text, Face::Mono, NAME_SIZES, width, font);
+    let at = |size: u8| style(font, chrome::WHITE, u32::from(size), Face::Mono.index());
+    let baseline = top + super::text::cap(&at(NAME_SIZES.0));
+    let style = at(size);
+    let mut shown = line(text);
+    while shown.len() > 1 && style.baseline_bounds(&shown, Point::zero()).size.width > width {
+        shown.pop();
+    }
+    list.text(
+        Text::new(&shown, Face::Mono, size, chrome::WHITE)
+            .at(x, baseline - super::text::cap(&style))
+            .align(align)
+            .vertical(Vertical::Cap),
+    );
+}
+
+/// Draws the grid turned `turn` degrees anticlockwise about the panel's centre.
+pub fn draw_grid<D: CoverageTarget<Color = Color>>(
+    turn: u16,
+    target: &mut D,
+) -> Result<(), D::Error> {
+    let (sin, cos) = libm::sincosf(-f32::from(turn).to_radians());
+    let place = |x: f32, y: f32| (CX + cos * x - sin * y, CY + sin * x + cos * y);
+    let quarter = |(x, y): (f32, f32)| (libm::roundf(x * 4.0) as i16, libm::roundf(y * 4.0) as i16);
+    let lines = (GRID_REACH / PITCH as f32) as i32;
+    for k in -lines..=lines {
+        let along = (k * PITCH) as f32;
+        let half = libm::sqrtf(GRID_REACH * GRID_REACH - along * along);
+        for (a, b) in [
+            (place(along, -half), place(along, half)),
+            (place(-half, along), place(half, along)),
+        ] {
+            stroke::draw_path(
+                &[quarter(a), quarter(b)],
+                GRID_LINE_WIDTH,
+                chrome::GRID_LINE,
+                target,
+            );
+        }
+    }
+    for i in -lines..=lines {
+        for j in -lines..=lines {
+            let (x, y) = ((i * PITCH) as f32, (j * PITCH) as f32);
+            if x * x + y * y > GRID_REACH * GRID_REACH {
+                continue;
+            }
+            let (px, py) = place(x, y);
+            let mark = Rectangle::new(
+                Point::new(libm::roundf(px) as i32 - 1, libm::roundf(py) as i32 - 1),
+                Size::new_equal(GRID_MARK),
+            );
+            target.fill_solid(&mark, chrome::GRID_MARK)?;
+        }
+    }
+    Ok(())
+}
+
+/// `degrees` brought into `0.0..360.0`.
+fn around(degrees: f32) -> f32 {
+    let turn = libm::fmodf(degrees, 360.0);
+    if turn < 0.0 { turn + 360.0 } else { turn }
+}
+
+/// Tenths of a degree, as the list's angles take them.
+fn tenths(degrees: f32) -> i16 {
+    libm::roundf(degrees * 10.0) as i16
+}
+
+/// The point `radius` from the centre at `degrees` clockwise from up.
+fn on_circle(degrees: f32, radius: f32) -> Point {
+    let (sin, cos) = libm::sincosf(degrees.to_radians());
+    Point::new(
+        libm::roundf(CX + sin * radius) as i32,
+        libm::roundf(CY - cos * radius) as i32,
+    )
+}
+
+/// A one-pixel outline round `area` that leaves the grid inside showing: its four sides as
+/// fills, where a path would measure every pixel inside.
+fn outline(list: &mut List, area: Rectangle) {
+    let (x0, y0) = (area.top_left.x, area.top_left.y);
+    let (x1, y1) = (x0 + area.size.width as i32, y0 + area.size.height as i32);
+    for side in [
+        rect(x0, y0, x1, y0 + 1),
+        rect(x0, y1 - 1, x1, y1),
+        rect(x0, y0 + 1, x0 + 1, y1 - 1),
+        rect(x1 - 1, y0 + 1, x1, y1 - 1),
+    ] {
+        list.fill(side, chrome::GRAY);
+    }
+}
+
+fn line(text: &str) -> Line {
+    format(format_args!("{text}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const DUBLIN: (i32, i32) = (533_498_000, -62_603_000);
+
+    /// The point `metres` from `from` at `bearing`, in doubles, as the reference.
+    fn destination(from: (i32, i32), bearing: f64, metres: f64) -> (i32, i32) {
+        let (phi1, lambda1) = (
+            (f64::from(from.0) * 1e-7).to_radians(),
+            (f64::from(from.1) * 1e-7).to_radians(),
+        );
+        let (d, theta) = (metres / 6_371_008.8, bearing.to_radians());
+        let phi2 = (phi1.sin() * d.cos() + phi1.cos() * d.sin() * theta.cos()).asin();
+        let lambda2 =
+            lambda1 + (theta.sin() * d.sin() * phi1.cos()).atan2(d.cos() - phi1.sin() * phi2.sin());
+        (
+            (phi2.to_degrees() * 1e7).round() as i32,
+            (lambda2.to_degrees() * 1e7).round() as i32,
+        )
+    }
+
+    #[test]
+    fn a_bearing_and_distance_match_the_great_circle() {
+        for (bearing, metres) in [
+            (25.0, 420.0),
+            (217.0, 12.0),
+            (285.0, 2_350.0),
+            (120.0, 464_000.0),
+        ] {
+            let (found, distance) = bearing_distance(DUBLIN, destination(DUBLIN, bearing, metres));
+            assert!(
+                (f64::from(found) - bearing).abs() < 0.1,
+                "{bearing}: {found}"
+            );
+            assert!(
+                (f64::from(distance) - metres).abs() < metres * 1e-3 + 0.5,
+                "{metres}: {distance}"
+            );
+        }
+        // A quarter of a meridian.
+        let (bearing, metres) = bearing_distance((0, 0), (900_000_000, 0));
+        assert!(bearing.abs() < 0.01, "{bearing}");
+        assert!((metres - 10_007_557.0).abs() < 50.0, "{metres}");
+        // Across the antimeridian, east is still east.
+        let (bearing, _) = bearing_distance((0, 1_799_000_000), (0, -1_799_000_000));
+        assert!((bearing - 90.0).abs() < 0.1, "{bearing}");
+    }
+
+    #[test]
+    fn a_heading_holds_until_it_moves_most_of_a_degree() {
+        assert_eq!(hold(None, Some(61.6)), Some(62));
+        assert_eq!(hold(Some(62), Some(62.7)), Some(62));
+        assert_eq!(hold(Some(62), Some(61.3)), Some(62));
+        assert_eq!(hold(Some(62), Some(62.8)), Some(63));
+        assert_eq!(hold(Some(0), Some(359.4)), Some(0));
+        assert_eq!(hold(Some(0), Some(359.1)), Some(359));
+        assert_eq!(hold(Some(62), None), None);
+    }
+
+    #[test]
+    fn a_distance_counts_in_the_unit_it_fits() {
+        assert_eq!(distance(420.4).0, "420");
+        assert_eq!(distance(999.6), (line("1.0"), "KILOMETRES"));
+        assert_eq!(distance(12_340.0).0, "12.3");
+        assert_eq!(distance(464_000.0), (line("464"), "KILOMETRES"));
+    }
+
+    #[test]
+    fn coordinates_read_to_four_places_with_their_hemisphere() {
+        let text = format(format_args!(
+            "{}   {}",
+            Degrees(DUBLIN.0, ['N', 'S']),
+            Degrees(DUBLIN.1, ['E', 'W'])
+        ));
+        assert_eq!(text, "53.3498 N   6.2603 W");
+    }
+}

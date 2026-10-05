@@ -122,3 +122,53 @@ Recorded 2026-09-26. These override the hand-off where they differ.
     wipes in to the fill's middle before the build and back out from it after, on the curve the
     logo's end bars fly on. `SCREEN-DESIGN-BRIEF.md` has the timings. Placement, envelope,
     percentage and the low and unknown treatment are unchanged. The design has not seen it.
+25. **The identity's upper scatter field turns on every frame** (owner, 2026-10-01). G19
+    turned it by 0.09 rad on frames 66, 77, 88, 99 and 110, and each step flipped a batch of
+    marks at once, which read as large jumps. It now turns by the same 0.45 rad in equal steps
+    on every frame from 66 to 110, ending where it did. The lower field still holds still. The
+    design has not seen it.
+26. **The battery gauge builds in after the start-up** (owner, 2026-10-01). When the start-up
+    hands over to the clock face, the gauge no longer rises from the left. While charging,
+    the slices run their build from an empty fill, as when charging starts. Otherwise the
+    solid grows out from the fill's middle, as when charging stops. Both start at the rise's
+    160 ms. Other entries to the clock face keep the rise. The design has not seen it.
+27. **The pairing and group hand-off** (owner, 2026-10-02), in
+    `handoffs/octowhere-pairing-handoff-2026-10-02/`, approved in full, to be built. It answers
+    `handoffs/PAIRING-ROUND-BRIEF-2026-10-02.md`. GROUP and NAME replace GNSS and BATTERY on the
+    panel's second page, whose readings stay on DEVICE. A name is set on a full QWERTY keyboard
+    of all 95 printable ASCII characters, 16 at most and case kept; its 39 × 53 px letter keys
+    are an exception to the 10 mm target for that screen alone. Each user confirms the code with
+    an orange drag on their own device. A full group refuses ADD before it searches, a returning
+    device included. REMOVE shows as unavailable until private rekeying exists. The group
+    footer's outer edges are x 94 and 372, and the slider's chevron is centred by its ink. The
+    hand-off's own table of implementation defaults is not a record of owner decisions; of
+    those, the owner settled that CLEAR SETTINGS keeps the group and the name, and that a
+    pairing sends only keys, hardware addresses and its commitment unencrypted. Pairing's
+    channel and frames are in `LORA-PROTOCOL.md`, "The exchange as built".
+28. **The design's files stay out of the repository** (owner, 2026-10-02). The hand-offs,
+    renders, references, specs and briefs, and the update and power-off packages in
+    `context/`, are kept on the owner's machine and ignored by git; this file and `docs/` stay.
+    They were deleted in an ordinary commit, so history up to it still holds them.
+29. **The radio, refresh and founder recovery hand-off** (owner, 2026-10-03), in
+    `handoffs/octowhere-radio-refresh-handoff-2026-10-03/`, to be built. It answers
+    `handoffs/REFRESH-AND-RADIO-ROUND-BRIEF-2026-10-03.md`. The owner approved RADIO as its own
+    seventh self-test part, whose real failure takes the red fault screen; a self-test that
+    scrolls one row when the radio's check starts, each row widening by where it is; REFRESH
+    DEVICES on MEMBERS, running in the background with its time left and what it really heard;
+    the founder's wait shown with its deadline; and the group screen's even spacing. The full
+    keyboard's touch accuracy is settled on the boards. The owner also settled four points the
+    hand-off left to the build: the founder waits for the group's write to land before taking
+    it up, and retries a failed write while its ten minutes last; the radio's check reports when
+    it starts, for the scroll, and has a deadline of its own; on MEMBERS, BACK's tap region ends
+    at y 141, so it does not reach the refresh strip at y 148; and every refresh result offers
+    VIEW MEMBERS, back to where the refresh started, and the refresh's first screen has BACK.
+30. **The settings panel's rules span the wider row beside them** (owner, 2026-10-03). S1
+    drew each rule at its row's width, so the rule under the third row was as short as the
+    fourth row's. Each rule between two rows now spans the wider of them: the top and bottom
+    rules stay x 83–383, and the three between run x 57–409. The design has not seen it.
+31. **The settings halftone runs under the rows** (owner, 2026-10-04). S1 kept it out of a
+    rectangle around the rows, and its density stepped at its lobes' edges, so it read as broken
+    up. The panel now keeps it off only the title and the hint, and the rows' text blends over
+    the marks under it. The density eases from the lobes' to the rest's over 56 px. The screens
+    the panel opens keep their middle clear, with the same easing outside it. The design has
+    not seen it.

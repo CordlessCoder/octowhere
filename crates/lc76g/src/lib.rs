@@ -1531,7 +1531,10 @@ where
 
     /// Reads exactly `buffer.len()` bytes of buffered NMEA, which must not be more than
     /// [`Self::nmea_length`] last reported.
-    pub async fn read_buffered_nmea(&mut self, buffer: &mut [u8]) -> Result<(), GnssError<I::Error>> {
+    pub async fn read_buffered_nmea(
+        &mut self,
+        buffer: &mut [u8],
+    ) -> Result<(), GnssError<I::Error>> {
         self.read_after_config(CONFIG_READ_DATA, buffer, GnssOperation::ReadData)
             .await
     }

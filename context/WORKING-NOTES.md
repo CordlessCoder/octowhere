@@ -36,7 +36,7 @@ look is in [`design/`](design/README.md).
 - It has no battery fitted. The PMIC reports none present, so the clock shows no battery reading,
   and a charging gauge shows only with a synthetic battery, as `bench/charge-fault-draw` gives.
 - From a shell without a TTY, `cargo run --release` flashes but its monitor fails ("Failed to
-  initialize input reader"). Flash with
+  initialize input reader"). Flash from `firmware/` with
   `espflash flash --partition-table partitions.csv --port <by-id> <elf>`, then capture with
   `timeout N espflash monitor --non-interactive -L defmt --elf <elf> --port <by-id> > file`.
   That is a reset read. Filter the file after the capture ends: a pipeline under `timeout`
@@ -46,11 +46,26 @@ look is in [`design/`](design/README.md).
 - Do not use `--no-reset`. With `--non-interactive` it left the board frozen in download mode
   and the owner had to reconnect it; alone, under `script` for a pty, it did the same on
   2026-09-30. Capture with a reset read.
+- With both boards attached, a capture's reset makes them enumerate again, and their `ttyACM`
+  numbers can swap. `espflash monitor` reopens the number it started on, so it goes on capturing
+  the other board. Name a log by the hardware address the firmware prints (`[MESH]` lines carry
+  it), not by the port it was opened on. `probe-rs` takes `--probe 303a:1001:<MAC>` and is not
+  affected.
 - Opening the serial port resets the chip, even with DTR and RTS held low. To inspect a hang,
   halt it with `probe-rs` over the USB JTAG first (`probe-rs list` shows "ESP JTAG").
+- Driving the screens with `touch-inject`: a resting screen takes no contacts, so wake it with
+  `short` first, and set TIMEOUT to NEVER for a long session. The panel opens on the page it
+  was last left on, so check the page before tapping a row. A `shot` takes about 11 s and
+  interrupts the board: during one, the other board dropped it from its devices found. Keep
+  shots out of a pairing's search, and take at most a couple in the code's 60 s.
 - The PMIC's I2C init fails about one boot in three right after flashing. Retry before
   suspecting a change.
 - `pkill -f` with a pattern that matches its own command line kills the calling shell.
+- Give a worktree its own target directory. Cargo hashes a path crate without its location, so
+  a worktree building into the main checkout's `target/` overwrites its artifacts, and the main
+  checkout then takes them as fresh wherever its sources are older. A later build there compiled
+  against a commit-old `settings.rs`; `cargo clean --release -p octowhere -p octowhere-mesh`
+  cleared it.
 - `tools/flash-until.sh` on `bench/fontdue-pin` flashes and ends the capture on a marker or a
   panic. A normal boot prints `[DISPLAY] OK`.
 - `bench/clock-draw` carries `tools/clock-bench.sh`, which flashes that bench and saves its log,
@@ -125,11 +140,14 @@ shadows the standard library.
 
 ## Outside the repository
 
-On the original machine, and not needed to build or continue the design:
+On the original machine, and not needed to build the firmware:
 
+- The design's hand-offs, renders, references, specs and briefs under `context/design/`, and the
+  update and power-off packages in `context/` (ignored by git, owner, 2026-10-02). Building
+  does not need them; building a screen to its design, and comparing against its render, does.
+  `context/design/README.md` lists them, and history up to 2026-10-02 holds them.
 - `context/octowhere-design-project/`, the design agent's full backup (ignored by git). It
-  holds explorations, historical packages and the design agent's transcript. Everything the
-  build needs is in `context/design/`.
+  holds explorations, historical packages and the design agent's transcript.
 - The two Marathon reference videos in `context/` (excluded in `.git/info/exclude`). The
   design's `references/VIDEO-TIMING-MAP.md` gives their timecodes.
 - `~/git/esp-idf`, a blobless ESP-IDF clone kept for reading Espressif's reference code, and

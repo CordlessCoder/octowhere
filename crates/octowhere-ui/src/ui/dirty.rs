@@ -313,8 +313,8 @@ impl<const WIDTH: usize, const BANDS: usize, const K: usize> RowSpans<WIDTH, BAN
             return;
         }
         for band in other.used() {
-            for index in 0..usize::from(other.counts[band]) {
-                self.insert(band, other.spans[band][index]);
+            for &span in other.band_spans(band) {
+                self.insert(band, span);
             }
         }
     }

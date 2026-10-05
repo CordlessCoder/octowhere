@@ -37,14 +37,16 @@ pub(crate) fn rssi_dbm<V: Sx127xVariant>(frequency: Hz, rssi: i16) -> i16 {
     rssi_constant::<V>(frequency) + rssi
 }
 
+/// The packet's strength from `RegPktRssiValue` and `RegPktSnrValue`, with the slope correction the
+/// datasheets give from zero SNR up. `RegRssiValue` is the channel now, not the packet, once RxDone
+/// is up.
 pub(crate) fn last_packet_rssi_dbm_with_raw_snr<V: Sx127xVariant>(
     frequency: Hz,
     last_packet_rssi: i16,
     last_packet_snr_raw: i8,
-    rssi: i16,
 ) -> i16 {
     if last_packet_snr_raw >= 0 {
-        rssi_dbm::<V>(frequency, rssi * 16 / 15)
+        rssi_dbm::<V>(frequency, last_packet_rssi * 16 / 15)
     } else {
         let snr_db = -((-(last_packet_snr_raw as i16) + 3) / 4);
         rssi_dbm::<V>(frequency, last_packet_rssi) + snr_db
@@ -124,7 +126,7 @@ mod tests {
     #[test]
     fn last_packet_rssi_dbm_snr_negative() {
         assert_eq!(
-            last_packet_rssi_dbm_with_raw_snr::<Sx1276>(778_999_999, 46, -8, 42),
+            last_packet_rssi_dbm_with_raw_snr::<Sx1276>(778_999_999, 46, -8),
             -120
         );
     }
@@ -132,15 +134,15 @@ mod tests {
     #[test]
     fn last_packet_rssi_dbm_snr_positive() {
         assert_eq!(
-            last_packet_rssi_dbm_with_raw_snr::<Sx1276>(779_000_000, 46, 40, 42),
-            -113
+            last_packet_rssi_dbm_with_raw_snr::<Sx1276>(779_000_000, 46, 40),
+            -108
         );
     }
 
     #[test]
     fn last_packet_rssi_dbm_rounds_negative_quarter_db_snr_down() {
         assert_eq!(
-            last_packet_rssi_dbm_with_raw_snr::<Sx1272>(868_000_000, 46, -2, 42),
+            last_packet_rssi_dbm_with_raw_snr::<Sx1272>(868_000_000, 46, -2),
             -94
         );
     }

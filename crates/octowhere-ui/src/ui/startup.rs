@@ -16,6 +16,7 @@ use embedded_graphics::{
 
 use super::{
     clock::ClockView,
+    ease::{Ease, SETTLE},
     gesture::Micros,
     icon::{self, Glyph, Tile},
     identity, screens, text,
@@ -24,6 +25,9 @@ use crate::chrome::{
     self, Color, CoverageTarget, FRAKTION, FRAKTION_BOLD, FontdueRenderer, INTERFERENCE_BOLD,
     Knockout, OnBackground, SHAPIRO, Window,
 };
+
+/// How many parts the self-test waits for.
+pub const PARTS: usize = 7;
 
 /// A part the self-test waits for, in the order its cells run.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -35,16 +39,18 @@ pub enum Part {
     Motion,
     Magnet,
     Gnss,
+    Radio,
 }
 
 impl Part {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; PARTS] = [
         Self::Power,
         Self::Clock,
         Self::Touch,
         Self::Motion,
         Self::Magnet,
         Self::Gnss,
+        Self::Radio,
     ];
 
     #[must_use]
@@ -61,6 +67,7 @@ impl Part {
             Self::Motion => "MOTION",
             Self::Magnet => "MAGNET",
             Self::Gnss => "GNSS",
+            Self::Radio => "RADIO",
         }
     }
 
@@ -74,6 +81,7 @@ impl Part {
             Self::Motion => &[0b10000, 0b10000, 0b10000, 0b10000, 0b11111],
             Self::Magnet => &[0b11011, 0b11011, 0b11011, 0b11111, 0b01110],
             Self::Gnss => &GNSS,
+            Self::Radio => &[0b00100, 0b01010, 0b10001, 0b00100, 0b00100],
         }
     }
 }
@@ -87,7 +95,7 @@ pub enum Replay {
 }
 
 impl Replay {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; PARTS + 1] = [
         Self::Good,
         Self::Failing(Part::Power),
         Self::Failing(Part::Clock),
@@ -95,6 +103,7 @@ impl Replay {
         Self::Failing(Part::Motion),
         Self::Failing(Part::Magnet),
         Self::Failing(Part::Gnss),
+        Self::Failing(Part::Radio),
     ];
 
     #[must_use]
@@ -107,6 +116,7 @@ impl Replay {
             Self::Failing(Part::Motion) => "MOTION FAIL",
             Self::Failing(Part::Magnet) => "MAGNET FAIL",
             Self::Failing(Part::Gnss) => "GNSS FAIL",
+            Self::Failing(Part::Radio) => "RADIO FAIL",
         }
     }
 
@@ -142,12 +152,13 @@ impl Outcome {
     }
 }
 
-/// One part's bring-up, as boot reports it.
+/// A part's bring-up, as boot reports it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct Report {
-    pub part: Part,
-    pub outcome: Outcome,
+pub enum Report {
+    /// Its check began. Only the radio's shows, as the list scrolls to it.
+    Started(Part),
+    Decided(Part, Outcome),
 }
 
 /// The panel's brightness climbs from dark to its level over this, from the first frame.
@@ -165,20 +176,29 @@ const CLOCK_FROM: u32 = CARD_FROM + identity::CARD_FRAMES;
 const FAULT_FRAMES: u32 = 120;
 /// The damaged exit that follows the fault screen's hold, unless a touch skips it.
 const EXIT_FRAMES: u32 = 18;
-/// When each part reports in a demonstration, from its start, in cell order.
-const DEMO_REPORTS: [Micros; 6] = [150_000, 250_000, 500_000, 600_000, 750_000, 1_300_000];
+/// When each part reports in a demonstration, from its start, in cell order. The radio's
+/// check starts as GNSS's ends.
+const DEMO_REPORTS: [Micros; PARTS] = [
+    150_000, 250_000, 500_000, 600_000, 750_000, 1_300_000, 1_302_000,
+];
+const DEMO_RADIO_STARTS: Micros = 1_300_000;
+/// How long the radio's row shows its result before the list goes back to a failed POWER.
+const RADIO_SHOWN: Micros = 200_000;
 
 /// The whole sequence, from the first frame after power-on.
 #[derive(Clone, Debug, Default)]
 pub struct Startup {
     began: Option<Micros>,
-    outcomes: [Option<(Outcome, Micros)>; 6],
+    outcomes: [Option<(Outcome, Micros)>; PARTS],
+    /// When the radio's check began, which scrolls the list to it.
+    radio_started: Option<Micros>,
     /// A touch cut the identity, the card or the fault screen short.
     skipped: bool,
     /// Set on a replay, which starts the identity here and shows no self-test or fault screen.
     identity_from: Option<Micros>,
     /// A demonstration: its outcomes are scripted, not reported, and it says so.
     demo: bool,
+    title: identity::TitleSlot,
 }
 
 /// Where the sequence is.
@@ -209,7 +229,11 @@ pub enum Cell {
 /// What a frame of the sequence draws. Two equal views draw the same pixels.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum View {
-    SelfTest([Cell; 6]),
+    /// The cells, and how far the list has scrolled up, in pixels.
+    SelfTest {
+        cells: [Cell; PARTS],
+        scroll: i32,
+    },
     Identity(u32),
     /// The card, by its own frame.
     Card(u32),
@@ -222,11 +246,19 @@ impl Startup {
         Self::default()
     }
 
-    /// Takes a part's outcome. Only the first report for a part counts.
+    /// Takes a report. Only the first of each kind for a part counts.
     pub fn report(&mut self, report: Report, now: Micros) {
-        let slot = &mut self.outcomes[report.part.index()];
-        if slot.is_none() {
-            *slot = Some((report.outcome, now));
+        match report {
+            Report::Started(Part::Radio) => {
+                self.radio_started.get_or_insert(now);
+            }
+            Report::Started(_) => {}
+            Report::Decided(part, outcome) => {
+                let slot = &mut self.outcomes[part.index()];
+                if slot.is_none() {
+                    *slot = Some((outcome, now));
+                }
+            }
         }
     }
 
@@ -237,9 +269,11 @@ impl Startup {
         Self {
             began: Some(now.saturating_sub(RAMP)),
             outcomes: self.outcomes,
+            radio_started: None,
             skipped: false,
             identity_from: Some(now),
             demo: false,
+            title: identity::TitleSlot::default(),
         }
     }
 
@@ -257,10 +291,17 @@ impl Startup {
                 };
                 Some((outcome, now + DEMO_REPORTS[i]))
             }),
+            radio_started: Some(now + DEMO_RADIO_STARTS),
             skipped: false,
             identity_from: None,
             demo: true,
+            title: identity::TitleSlot::default(),
         }
+    }
+
+    /// Lets the identity's title go, for a sequence that is over but kept.
+    pub fn forget_title(&self) {
+        self.title.forget();
     }
 
     /// Whether this is the boot itself, rather than a replay or a demonstration.
@@ -306,20 +347,60 @@ impl Startup {
         }
         let mut built = 0;
         for outcome in &self.outcomes {
-            let (outcome, at) = (*outcome)?;
-            let lands = if outcome == Outcome::Answered {
-                at + 4 * ROW
-            } else {
-                at
-            };
-            built = built.max(lands);
+            built = built.max(landed((*outcome)?));
         }
+        built = built.max(self.scroll_settles().unwrap_or(0));
         let hold = if self.failed().next().is_some() {
             FAIL_HOLD
         } else {
             PASS_HOLD
         };
         Some(built + hold)
+    }
+
+    /// When the list starts down to the radio: as its check starts, or as it ends if no start
+    /// was reported.
+    fn reveal_from(&self) -> Option<Micros> {
+        let decided = self.outcomes[Part::Radio.index()].map(|(_, at)| at);
+        match (self.radio_started, decided) {
+            (Some(started), Some(decided)) => Some(started.min(decided)),
+            (started, decided) => started.or(decided),
+        }
+    }
+
+    /// When the list starts back up to a failed POWER, which the radio's row pushes out of
+    /// view: once the radio has decided and shown its result.
+    fn return_from(&self) -> Option<Micros> {
+        let reveal = self.reveal_from()?;
+        let (power, at) = self.outcomes[Part::Power.index()]?;
+        let radio = self.outcomes[Part::Radio.index()]?;
+        (power != Outcome::Answered)
+            .then(|| (reveal + SETTLE).max(landed(radio)).max(at) + RADIO_SHOWN)
+    }
+
+    /// How far the list has scrolled up at `now`, in pixels.
+    fn scroll(&self, now: Micros) -> f32 {
+        let Some(reveal) = self.reveal_from().filter(|&reveal| now >= reveal) else {
+            return 0.0;
+        };
+        match self.return_from().filter(|&back| now >= back) {
+            Some(back) => Ease::new(ROW_PITCH as f32, 0, back).at(now).0,
+            None => Ease::new(0.0, ROW_PITCH, reveal).at(now).0,
+        }
+    }
+
+    /// When the list comes to rest for the last time.
+    fn scroll_settles(&self) -> Option<Micros> {
+        self.return_from()
+            .or(self.reveal_from())
+            .map(|from| from + SETTLE)
+    }
+
+    fn scrolling(&self, now: Micros) -> bool {
+        [self.reveal_from(), self.return_from()]
+            .into_iter()
+            .flatten()
+            .any(|from| (from..from + SETTLE).contains(&now))
     }
 
     #[must_use]
@@ -354,14 +435,17 @@ impl Startup {
     #[must_use]
     pub fn view(&self, now: Micros) -> Option<View> {
         Some(match self.phase(now) {
-            Phase::SelfTest => View::SelfTest(core::array::from_fn(|i| match self.outcomes[i] {
-                None => Cell::Waiting,
-                Some((_, at)) if at > now => Cell::Waiting,
-                Some((Outcome::Answered, at)) => {
-                    Cell::Answered(((now.saturating_sub(at)) / ROW + 1).min(5) as u8)
-                }
-                Some(_) => Cell::Failed,
-            })),
+            Phase::SelfTest => View::SelfTest {
+                cells: core::array::from_fn(|i| match self.outcomes[i] {
+                    None => Cell::Waiting,
+                    Some((_, at)) if at > now => Cell::Waiting,
+                    Some((Outcome::Answered, at)) => {
+                        Cell::Answered(((now.saturating_sub(at)) / ROW + 1).min(5) as u8)
+                    }
+                    Some(_) => Cell::Failed,
+                }),
+                scroll: libm::roundf(self.scroll(now)) as i32,
+            },
             Phase::Identity(frame) if frame < CARD_FROM => View::Identity(frame),
             Phase::Identity(frame) => View::Card(frame - CARD_FROM),
             Phase::Fault(frame) => View::Fault(frame),
@@ -385,6 +469,7 @@ impl Startup {
     pub fn next_change(&self, now: Micros) -> Option<Micros> {
         let ramping = self.began.is_none_or(|began| now < began + RAMP);
         let next = match self.phase(now) {
+            Phase::SelfTest if self.scrolling(now) => Some(now),
             Phase::SelfTest => {
                 let rows = self.outcomes.iter().flatten().filter_map(|&(outcome, at)| {
                     if at > now {
@@ -393,7 +478,11 @@ impl Startup {
                     let row = at + (now.saturating_sub(at) / ROW + 1) * ROW;
                     (outcome == Outcome::Answered && row <= at + 4 * ROW).then_some(row)
                 });
-                rows.chain(self.frames_from()).min()
+                let scroll = [self.reveal_from(), self.return_from()]
+                    .into_iter()
+                    .flatten()
+                    .filter(|&from| from > now);
+                rows.chain(scroll).chain(self.frames_from()).min()
             }
             Phase::Identity(_) | Phase::Fault(_) => {
                 let from = self.frames_from()?;
@@ -403,6 +492,15 @@ impl Startup {
             Phase::Done { .. } => None,
         };
         if ramping { Some(now) } else { next }
+    }
+}
+
+/// When a decided cell is finished: a passed one once its glyph has landed.
+fn landed((outcome, at): (Outcome, Micros)) -> Micros {
+    if outcome == Outcome::Answered {
+        at + 4 * ROW
+    } else {
+        at
     }
 }
 
@@ -426,19 +524,24 @@ where
     D: CoverageTarget<Color = Color>,
 {
     match view {
-        View::SelfTest(cells) => {
+        View::SelfTest { cells, scroll } => {
             let mut version = heapless::String::<32>::new();
             let _ = if startup.demo {
                 write!(version, "DEMO, NOT A HARDWARE TEST")
             } else {
                 write!(version, "VERSION {}", context.firmware)
             };
-            draw_self_test(&cells, &version, font, target)
+            draw_self_test(&cells, scroll, &version, font, target)
         }
-        View::Identity(frame) => {
-            identity::draw_identity(frame, startup.answered(), context, font, target)
-        }
-        View::Card(frame) => identity::draw_card(frame, target),
+        View::Identity(frame) => identity::draw_identity(
+            frame,
+            startup.answered(),
+            context,
+            font,
+            &startup.title,
+            target,
+        ),
+        View::Card(frame) => identity::draw_card(frame, &startup.title, target),
         View::Fault(frame) if frame < FAULT_FRAMES => {
             draw_fault(frame, startup, context.firmware, font, true, target)
         }
@@ -452,54 +555,75 @@ where
     }
 }
 
-// The self-test: six rows, one a part, each with its index, glyph, name and state.
+// The self-test: seven rows, one a part, each with its index, glyph, name and state, in a list
+// that shows six. It scrolls a row as the radio's check starts, and back for a failed POWER.
 
 const TITLE: &str = "SELF TEST";
 const TITLE_TOP: i32 = 30;
 const COUNTER_TOP: i32 = 70;
-/// Each row's rule, the top of the row below it.
+/// The list's top rule, which is also its first row's, and its bottom rule.
 const ROW_TOP: i32 = 89;
-const ROW_PITCH: i32 = 45;
-/// The rows run between these columns, the first and last narrower, as the glass is there.
-const WIDE: (i32, i32) = (62, 404);
-const NARROW: (i32, i32) = (82, 384);
 const LAST_RULE: i32 = 359;
+const ROW_PITCH: i32 = 45;
+/// The list's fixed rules, as narrow as the rows at either end, as the glass is there.
+const NARROW: (i32, i32) = (82, 384);
+/// Half a row's width across the list's middle four places, and how much narrower it is for
+/// each row's height its middle lies beyond them.
+const WIDE_HALF: f32 = 171.0;
+const NARROWING: f32 = 20.0;
+/// The middles of the first and last of those four places.
+const MIDDLE: (f32, f32) = (156.5, 291.5);
 const VERSION_TOP: i32 = 380;
 
-fn row_top(index: usize) -> i32 {
-    ROW_TOP + ROW_PITCH * index as i32
+/// Where the list's rows show, between its rules.
+pub const LIST: Rectangle = Rectangle::new(
+    Point::new(0, ROW_TOP),
+    Size::new(466, (LAST_RULE - ROW_TOP + 1) as u32),
+);
+
+fn row_top(index: usize, scroll: i32) -> i32 {
+    ROW_TOP + ROW_PITCH * index as i32 - scroll
 }
 
-fn row_columns(index: usize) -> (i32, i32) {
-    if index == 0 || index == 5 {
-        NARROW
-    } else {
-        WIDE
-    }
+/// A row's columns, from where its middle is now.
+fn row_columns(index: usize, scroll: i32) -> (i32, i32) {
+    let middle = row_top(index, scroll) as f32 + ROW_PITCH as f32 / 2.0;
+    let beyond = ((MIDDLE.0 - middle).max(middle - MIDDLE.1) / ROW_PITCH as f32).max(0.0);
+    let half = WIDE_HALF - NARROWING * beyond;
+    let centre = CENTER.x as f32;
+    (
+        libm::roundf(centre - half) as i32,
+        libm::roundf(centre + half) as i32,
+    )
 }
 
-fn row_tile(index: usize) -> Tile {
+fn row_tile(index: usize, scroll: i32) -> Tile {
     Tile {
-        corner: Point::new(row_columns(index).0 + 38, row_top(index) + 6),
+        corner: Point::new(
+            row_columns(index, scroll).0 + 38,
+            row_top(index, scroll) + 6,
+        ),
         module: 5,
         padding: 4,
     }
 }
 
-/// Everything in one row below its rule.
+/// Everything in one row below its rule, as far as the list shows it.
 #[must_use]
-pub fn cell_bounds(index: usize) -> Rectangle {
-    let (left, right) = row_columns(index);
+pub fn cell_bounds(index: usize, scroll: i32) -> Rectangle {
+    let (left, right) = row_columns(index, scroll);
+    let top = row_top(index, scroll);
     Rectangle::with_corners(
-        Point::new(left, row_top(index) + 1),
-        Point::new(right - 1, row_top(index) + ROW_PITCH - 1),
+        Point::new(left, top + 1),
+        Point::new(right - 1, top + ROW_PITCH - 1),
     )
+    .intersection(&LIST)
 }
 
-fn counter(cells: &[Cell; 6]) -> heapless::String<16> {
+fn counter(cells: &[Cell; PARTS]) -> heapless::String<16> {
     let decided = cells.iter().filter(|cell| **cell != Cell::Waiting).count();
     let mut text = heapless::String::new();
-    let _ = write!(text, "DECIDED  {decided}/6");
+    let _ = write!(text, "DECIDED  {decided}/{PARTS}");
     text
 }
 
@@ -532,7 +656,7 @@ fn counter_style(font: &FontdueRenderer<'static, Color>) -> FontdueRenderer<'sta
 
 /// Where the counter's ink can land, whatever it counts.
 #[must_use]
-pub fn counter_bounds(font: &FontdueRenderer<'static, Color>, cells: &[Cell; 6]) -> Rectangle {
+pub fn counter_bounds(font: &FontdueRenderer<'static, Color>, cells: &[Cell; PARTS]) -> Rectangle {
     let style = counter_style(font);
     let text = counter(cells);
     let pen = Point::new(
@@ -543,7 +667,8 @@ pub fn counter_bounds(font: &FontdueRenderer<'static, Color>, cells: &[Cell; 6])
 }
 
 fn draw_self_test<D: CoverageTarget<Color = Color>>(
-    cells: &[Cell; 6],
+    cells: &[Cell; PARTS],
+    scroll: i32,
     version: &str,
     font: &FontdueRenderer<'static, Color>,
     target: &mut D,
@@ -558,14 +683,18 @@ fn draw_self_test<D: CoverageTarget<Color = Color>>(
     )?;
     centred(&counter_style(font), &counter(cells), COUNTER_TOP, field)?;
     let index_style = small(font, chrome::GRAY, 13, FRAKTION);
+    let list = &mut Window::new(&mut *field, Point::zero(), LIST);
     for (i, (part, cell)) in Part::ALL.into_iter().zip(cells).enumerate() {
-        let (left, right) = row_columns(i);
-        let top = row_top(i);
-        field.fill_solid(
+        let (left, right) = row_columns(i, scroll);
+        let top = row_top(i, scroll);
+        if top > LAST_RULE || top + ROW_PITCH <= ROW_TOP {
+            continue;
+        }
+        list.fill_solid(
             &Rectangle::with_corners(Point::new(left, top), Point::new(right - 1, top)),
             chrome::GRAY,
         )?;
-        if !field.visible(&cell_bounds(i)) {
+        if !list.visible(&cell_bounds(i, scroll)) {
             continue;
         }
         let mut index = heapless::String::<2>::new();
@@ -574,20 +703,20 @@ fn draw_self_test<D: CoverageTarget<Color = Color>>(
             text::pen_x_for_ink_left(&index_style, &index, left + 9),
             text::baseline_for_ink_top(&index_style, &index, top + 14),
         );
-        index_style.draw_on_baseline(&index, pen, field)?;
-        let tile = row_tile(i);
+        index_style.draw_on_baseline(&index, pen, list)?;
+        let tile = row_tile(i, scroll);
         let (status, color, name_color) = match *cell {
             Cell::Waiting => {
-                tile.draw(part.glyph(), chrome::GRAY, 0, field)?;
+                tile.draw(part.glyph(), chrome::GRAY, 0, list)?;
                 ("--", chrome::GRAY, chrome::GRAY)
             }
             Cell::Answered(rows) => {
-                tile.draw(part.glyph(), chrome::WHITE, rows, field)?;
+                tile.draw(part.glyph(), chrome::WHITE, rows, list)?;
                 ("OK", chrome::WHITE, chrome::WHITE)
             }
             Cell::Failed => {
-                tile.draw(&icon::NO_DATA, chrome::RED, 5, field)?;
-                field.fill_solid(
+                tile.draw(&icon::NO_DATA, chrome::RED, 5, list)?;
+                list.fill_solid(
                     &Rectangle::new(Point::new(left, top + 4), Size::new(4, 36)),
                     chrome::RED,
                 )?;
@@ -602,22 +731,21 @@ fn draw_self_test<D: CoverageTarget<Color = Color>>(
             text::pen_x_for_ink_left(&name_style, name, left + 81),
             text::baseline_for_ink_top(&name_style, name, top + 11),
         );
-        name_style.draw_on_baseline(name, pen, field)?;
+        name_style.draw_on_baseline(name, pen, list)?;
         let status_style = small(font, color, 16, FRAKTION_BOLD);
         let pen = Point::new(
             text::pen_x_for_ink_right(&status_style, status, right - 13),
             text::baseline_for_ink_middle(&status_style, status, (top + 23) as f32),
         );
-        status_style.draw_on_baseline(status, pen, field)?;
+        status_style.draw_on_baseline(status, pen, list)?;
     }
     let (left, right) = NARROW;
-    field.fill_solid(
-        &Rectangle::with_corners(
-            Point::new(left, LAST_RULE),
-            Point::new(right - 1, LAST_RULE),
-        ),
-        chrome::GRAY,
-    )?;
+    for rule in [ROW_TOP, LAST_RULE] {
+        field.fill_solid(
+            &Rectangle::with_corners(Point::new(left, rule), Point::new(right - 1, rule)),
+            chrome::GRAY,
+        )?;
+    }
     centred(
         &small(font, chrome::GRAY, 13, FRAKTION),
         version,
@@ -1016,7 +1144,7 @@ fn draw_fault<D: CoverageTarget<Color = Color>>(
     {
         // Two lines take turns, both moving all the while: the failed parts' names in blue and
         // the fault in yellow.
-        let mut line = heapless::String::<40>::new();
+        let mut line = heapless::String::<48>::new();
         let color = if (frame as u32 / TICKER_TURN).is_multiple_of(2) {
             for (part, _) in startup.failed() {
                 let _ = write!(line, "{}_", part.name());
@@ -1032,7 +1160,7 @@ fn draw_fault<D: CoverageTarget<Color = Color>>(
         let period = libm::roundf(style.advance(&line)) as i32;
         let mut pen = (-TICKER_SPEED * frame).rem_euclid(period) - period;
         while pen < 466 {
-            style.draw_stretched(&line, Point::new(pen, baseline), 1.0, &mut strip)?;
+            style.draw_on_baseline(&line, Point::new(pen, baseline), &mut strip)?;
             pen += period;
         }
         strip.finish();
@@ -1042,7 +1170,7 @@ fn draw_fault<D: CoverageTarget<Color = Color>>(
     let bold = small(font, chrome::BLACK, 12, FRAKTION_BOLD);
     let regular = small(font, chrome::BLACK, 12, FRAKTION);
     let mut count = heapless::String::<24>::new();
-    let _ = write!(count, "SELF TEST {}/6 OK", startup.answered());
+    let _ = write!(count, "SELF TEST {}/{PARTS} OK", startup.answered());
     let failures = startup.failed().count();
     let tops: &[i32] = if failures > 1 {
         &SUMMARY_TOPS
@@ -1339,24 +1467,25 @@ fn draw_exit<D: CoverageTarget<Color = Color>>(
 mod tests {
     use super::*;
 
-    fn passed_at(times: [Micros; 6]) -> Startup {
+    fn passed_at(times: [Micros; PARTS]) -> Startup {
         let mut startup = Startup::new();
         startup.begin(0);
         for (part, at) in Part::ALL.into_iter().zip(times) {
-            startup.report(
-                Report {
-                    part,
-                    outcome: Outcome::Answered,
-                },
-                at,
-            );
+            startup.report(Report::Decided(part, Outcome::Answered), at);
         }
         startup
     }
 
+    fn scroll_at(startup: &Startup, now: Micros) -> i32 {
+        match startup.view(now) {
+            Some(View::SelfTest { scroll, .. }) => scroll,
+            other => panic!("{other:?}"),
+        }
+    }
+
     #[test]
     fn the_identity_starts_once_the_last_glyph_has_landed_and_the_hold_is_over() {
-        let startup = passed_at([10_000, 20_000, 30_000, 40_000, 50_000, 1_000_000]);
+        let startup = passed_at([10_000, 20_000, 30_000, 40_000, 50_000, 1_000_000, 600_000]);
         let from = 1_000_000 + 4 * ROW + PASS_HOLD;
         assert_eq!(startup.phase(from - 1), Phase::SelfTest);
         assert_eq!(startup.phase(from), Phase::Identity(0));
@@ -1375,7 +1504,7 @@ mod tests {
 
     #[test]
     fn a_failure_holds_longer_and_shows_the_fault_screen_for_four_seconds() {
-        let mut startup = passed_at([0; 6]);
+        let mut startup = passed_at([0; PARTS]);
         startup.outcomes[Part::Magnet.index()] = Some((Outcome::NoReply, 500_000));
         let from = 500_000 + FAIL_HOLD;
         assert_eq!(startup.phase(from - 1), Phase::SelfTest);
@@ -1393,7 +1522,7 @@ mod tests {
 
     #[test]
     fn a_touch_skips_the_identity_but_not_the_self_test() {
-        let mut startup = passed_at([0; 6]);
+        let mut startup = passed_at([0; PARTS]);
         startup.touch(0);
         assert_eq!(startup.phase(ROW), Phase::SelfTest);
         startup.touch(1_000_000);
@@ -1408,7 +1537,7 @@ mod tests {
 
     #[test]
     fn the_brightness_climbs_then_holds() {
-        let startup = passed_at([0; 6]);
+        let startup = passed_at([0; PARTS]);
         assert_eq!(
             [0, 100_000, RAMP].map(|now| startup.brightness(now, 200)),
             [0, 100, 200]
@@ -1419,8 +1548,8 @@ mod tests {
 
     #[test]
     fn frames_after_the_hold_are_due_at_thirty_a_second() {
-        let startup = passed_at([0; 6]);
-        let from = 4 * ROW + PASS_HOLD;
+        let startup = passed_at([0; PARTS]);
+        let from = startup.frames_from().unwrap();
         assert_eq!(startup.next_change(from), Some(from + 33_334));
         assert_eq!(startup.next_change(from + 33_334), Some(from + 66_667));
         assert_eq!(startup.next_change(from + 66_667), Some(from + 100_000));
@@ -1430,19 +1559,13 @@ mod tests {
     fn a_passed_cell_builds_its_glyph_a_row_at_a_time() {
         let mut startup = Startup::new();
         startup.begin(0);
-        startup.report(
-            Report {
-                part: Part::Touch,
-                outcome: Outcome::Answered,
-            },
-            300_000,
-        );
+        startup.report(Report::Decided(Part::Touch, Outcome::Answered), 300_000);
         let cells = |now| match startup.view(now) {
-            Some(View::SelfTest(cells)) => cells[Part::Touch.index()],
+            Some(View::SelfTest { cells, .. }) => cells[Part::Touch.index()],
             other => panic!("{other:?}"),
         };
         assert!(
-            matches!(startup.view(300_000), Some(View::SelfTest(cells)) if cells[0] == Cell::Waiting)
+            matches!(startup.view(300_000), Some(View::SelfTest { cells, .. }) if cells[0] == Cell::Waiting)
         );
         assert_eq!(
             [300_000, 329_999, 330_000, 500_000].map(cells),
@@ -1457,29 +1580,104 @@ mod tests {
         let demo = Startup::demo(Part::Magnet, 1_000_000);
         assert!(!demo.is_boot());
         let cells = |now| match demo.view(now) {
-            Some(View::SelfTest(cells)) => cells,
+            Some(View::SelfTest { cells, .. }) => cells,
             other => panic!("{other:?}"),
         };
-        assert_eq!(cells(1_100_000), [Cell::Waiting; 6]);
+        assert_eq!(cells(1_100_000), [Cell::Waiting; PARTS]);
         assert_eq!(cells(1_800_000)[Part::Magnet.index()], Cell::Failed);
         assert_eq!(cells(1_800_000)[Part::Gnss.index()], Cell::Waiting);
         assert_eq!(demo.next_change(1_100_000), Some(1_150_000));
+        // The radio's check starts as GNSS's ends, and the list settles last.
+        assert_eq!(scroll_at(&demo, 2_299_999), 0);
+        assert_eq!(scroll_at(&demo, 1_000_000 + 1_300_000 + SETTLE), ROW_PITCH);
         assert_eq!(
-            demo.phase(1_000_000 + 1_300_000 + 4 * ROW + FAIL_HOLD),
+            demo.phase(1_000_000 + 1_300_000 + SETTLE + FAIL_HOLD),
             Phase::Fault(0)
         );
         assert_eq!(demo.brightness(1_000_000, 200), 200);
     }
 
-    /// The fault screen rasterizes its giant name a glyph at a time, at half size, into a raster
-    /// of its own with four bytes a pixel on the internal heap. A 140 KB raster for the full
-    /// size failed to allocate there.
     #[test]
-    fn every_giant_glyph_rasters_within_40_kb() {
+    fn the_list_scrolls_to_the_radio_as_its_check_starts_by_the_clock() {
+        let mut startup = passed_at([0, 0, 0, 0, 0, 700_000, 0]);
+        startup.outcomes[Part::Radio.index()] = None;
+        startup.report(Report::Started(Part::Radio), 700_000);
+        assert_eq!(scroll_at(&startup, 699_999), 0);
+        assert_eq!(startup.next_change(700_000), Some(700_000));
+        // Halfway through its time, a cubic ease-out has gone seven eighths of the way.
+        assert_eq!(scroll_at(&startup, 780_000), 39);
+        assert_eq!(scroll_at(&startup, 860_000), ROW_PITCH);
+        // The radio's result can arrive while it moves, and every decided part counts.
+        startup.report(Report::Decided(Part::Radio, Outcome::Answered), 702_000);
+        assert_eq!(scroll_at(&startup, 1_000_000), ROW_PITCH);
+        assert!(
+            matches!(startup.view(710_000), Some(View::SelfTest { cells, .. })
+                if counter(&cells).as_str() == "DECIDED  7/7")
+        );
+        // GNSS's glyph lands at 820 ms, and the list rests at 860.
+        assert_eq!(startup.frames_from(), Some(860_000 + PASS_HOLD));
+    }
+
+    #[test]
+    fn a_failed_power_brings_the_list_back_once_the_radio_has_shown() {
+        let mut startup = passed_at([0, 0, 0, 0, 0, 700_000, 0]);
+        startup.outcomes[Part::Power.index()] = Some((Outcome::NoReply, 50_000));
+        startup.outcomes[Part::Radio.index()] = None;
+        startup.report(Report::Started(Part::Radio), 700_000);
+        startup.report(Report::Decided(Part::Radio, Outcome::Answered), 702_000);
+        // The design's study: down by 860 ms, back from 1060 to 1220.
+        assert_eq!(scroll_at(&startup, 1_059_999), ROW_PITCH);
+        assert_eq!(scroll_at(&startup, 1_220_000), 0);
+        assert_eq!(startup.phase(1_220_000 + FAIL_HOLD - 1), Phase::SelfTest);
+        assert_eq!(startup.phase(1_220_000 + FAIL_HOLD), Phase::Fault(0));
+    }
+
+    #[test]
+    fn a_slow_radio_stays_in_view_until_it_decides() {
+        let mut startup = passed_at([0, 0, 0, 0, 0, 700_000, 0]);
+        startup.outcomes[Part::Power.index()] = Some((Outcome::NoReply, 50_000));
+        startup.outcomes[Part::Radio.index()] = None;
+        startup.report(Report::Started(Part::Radio), 700_000);
+        assert_eq!(scroll_at(&startup, 3_000_000), ROW_PITCH);
+        assert_eq!(startup.phase(3_000_000), Phase::SelfTest);
+        startup.report(Report::Decided(Part::Radio, Outcome::NoReply), 3_000_000);
+        assert_eq!(scroll_at(&startup, 3_199_999), ROW_PITCH);
+        assert_eq!(scroll_at(&startup, 3_360_000), 0);
+        assert_eq!(startup.phase(3_360_000 + FAIL_HOLD), Phase::Fault(0));
+    }
+
+    #[test]
+    fn each_row_is_as_wide_as_where_its_middle_is() {
+        let widths = |scroll| core::array::from_fn::<_, PARTS, _>(|i| row_columns(i, scroll));
+        assert_eq!(
+            widths(0),
+            [
+                (82, 384),
+                (62, 404),
+                (62, 404),
+                (62, 404),
+                (62, 404),
+                (82, 384),
+                (102, 364)
+            ]
+        );
+        assert_eq!(widths(ROW_PITCH)[1], (82, 384));
+        assert_eq!(widths(ROW_PITCH)[5], (62, 404));
+        assert_eq!(widths(ROW_PITCH)[6], (82, 384));
+        // Halfway, GNSS and the radio have each widened half their way.
+        assert_eq!(widths(22)[5], (72, 394));
+        assert_eq!(widths(22)[6], (92, 374));
+    }
+
+    /// The fault screen rasterizes its giant name a glyph at a time, at half size, and draws it
+    /// doubled. The raster made at boot must hold the largest of those glyphs, since growing it
+    /// there can fail.
+    #[test]
+    fn every_giant_glyph_fits_the_raster_reserved_at_boot() {
         let font = chrome::FONTS[SHAPIRO];
         for c in Part::ALL.into_iter().flat_map(|part| part.name().chars()) {
             let metrics = font.metrics(c, (NAME_PX / 2) as f32);
-            assert!(metrics.width * metrics.height * 4 < 40_000, "{c}");
+            chrome::fits(metrics.width, metrics.height);
         }
     }
 

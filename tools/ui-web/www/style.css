@@ -1,0 +1,630 @@
+/* Archivo and Martian Mono, under the SIL Open Font License (fonts/*-OFL.txt), cut to the
+   characters the page uses. The device's own fonts are not licensed for a web page. */
+@font-face {
+  font-family: "Archivo";
+  src: url("fonts/Archivo.woff2") format("woff2");
+  font-weight: 100 900;
+  font-stretch: 62% 125%;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Martian Mono";
+  src: url("fonts/MartianMono.woff2") format("woff2");
+  font-weight: 100 800;
+  font-stretch: 75% 112.5%;
+  font-display: swap;
+}
+
+:root {
+  /* The firmware's colours, from crates/octowhere-ui/src/chrome.rs, with the meanings
+     context/design/docs/OCTOWHERE-COLOR-ROLES.md gives them. */
+  --black: #000000;
+  --white: #d2d3d6;
+  --gray: #888e98;
+  --lime: #c0fe04;
+  --violet: #b32be5;
+  --blue: #409de4;
+  --orange: #f1710d;
+  /* The reference board's dark neutrals, for the page around the device. */
+  --ground: #1e1f24;
+  --rule: #31333b;
+  --sans: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --mono: "Martian Mono", ui-monospace, Menlo, Consolas, monospace;
+  /* Set by sim.js so the panel's pixels land on whole device pixels. */
+  --panel: 466px;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--white);
+  font: 400 15px/1.5 var(--sans);
+}
+
+a { color: inherit; text-underline-offset: 3px; }
+
+button, input, select { font: inherit; color: inherit; }
+
+:focus-visible { outline: 2px solid var(--white); outline-offset: 2px; }
+
+/* --- Masthead -------------------------------------------------------------------------- */
+
+.masthead {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 28px 24px 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 18px;
+}
+
+.wordmark {
+  margin: 0;
+  font-weight: 800;
+  font-stretch: 125%;
+  font-size: clamp(28px, 8vw, 64px);
+  line-height: 0.9;
+  letter-spacing: 0.01em;
+}
+
+.tag {
+  margin: 0 0 4px;
+  padding: 3px 8px 2px;
+  background: var(--lime);
+  color: var(--black);
+  font: 600 12px/1.4 var(--mono);
+  letter-spacing: 0.08em;
+}
+
+.intro {
+  flex: 1 0 100%;
+  margin: 6px 0 0;
+  max-width: 68ch;
+  color: var(--gray);
+}
+
+/* --- Layout ---------------------------------------------------------------------------- */
+
+main {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 24px;
+  display: grid;
+  grid-template-columns: auto minmax(320px, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  main { grid-template-columns: 1fr; padding: 16px; }
+  .masthead { padding: 20px 16px 0; }
+}
+
+.device {
+  position: sticky;
+  top: 16px;
+  display: flex;
+  flex-direction: column;
+  /* The stage's width, so the hint and the strip wrap under it instead of widening it. */
+  width: calc(var(--panel) * 600 / 466 + 40px);
+  max-width: 100%;
+  min-width: 0;
+}
+
+@media (max-width: 900px) {
+  .device { position: static; }
+}
+
+/* Several devices take the page's width above the controls, which lay out in columns. */
+main.several { grid-template-columns: minmax(0, 1fr); }
+main.several .device { position: static; width: 100%; }
+main.several .controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  align-items: start;
+}
+main.several .log-module { grid-column: 1 / -1; }
+
+/* --- The stage: the device on unlit black, with registration marks at its corners ---------- */
+
+.stage {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  padding: 20px;
+  background: var(--black);
+}
+
+.units { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px 20px; }
+
+.unit { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+
+/* The label says which device is which, and marks the one the controls act on. */
+.unit-label {
+  display: none;
+  width: calc(var(--panel) * 600 / 466);
+  margin: 0;
+  padding: 6px 0 0;
+  border-top: 2px solid var(--rule);
+  font: 500 12px/1.4 var(--mono);
+  color: var(--gray);
+}
+
+.several .unit-label { display: grid; grid-template-columns: auto 1fr; gap: 0 10px; }
+.unit-number { grid-row: span 2; color: var(--white); font: 800 22px/1 var(--sans); font-stretch: 125%; }
+.unit-name { color: var(--white); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.unit-group { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.unit.selected .unit-label { border-top-color: var(--lime); }
+.unit.selected .unit-number { color: var(--lime); }
+
+.mark {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border: 0 solid var(--rule);
+}
+
+.mark.tl { top: 8px; left: 8px; border-top-width: 2px; border-left-width: 2px; }
+.mark.tr { top: 8px; right: 8px; border-top-width: 2px; border-right-width: 2px; }
+.mark.bl { bottom: 8px; left: 8px; border-bottom-width: 2px; border-left-width: 2px; }
+.mark.br { bottom: 8px; right: 8px; border-bottom-width: 2px; border-right-width: 2px; }
+
+.bezel {
+  position: relative;
+  width: calc(var(--panel) * 600 / 466);
+  height: calc(var(--panel) * 600 / 466);
+}
+
+.panel, .damage, .off, .loading {
+  position: absolute;
+  left: calc(var(--panel) * 67 / 466);
+  top: calc(var(--panel) * 67 / 466);
+  width: var(--panel);
+  height: var(--panel);
+  border-radius: 50%;
+}
+
+/* Until the module loads, over the first device's glass. */
+.loading { left: calc(20px + var(--panel) * 67 / 466); top: calc(20px + var(--panel) * 67 / 466); }
+
+.panel {
+  background: var(--black);
+  touch-action: none;
+  cursor: pointer;
+  image-rendering: auto;
+}
+
+.panel.pixelated { image-rendering: pixelated; }
+
+.panel.corners, .damage.corners { border-radius: 0; }
+
+.damage { pointer-events: none; image-rendering: pixelated; }
+.damage[hidden] { display: none; }
+
+.keys {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.rim { fill: none; stroke: var(--rule); stroke-width: 3; }
+
+.key { cursor: pointer; pointer-events: all; outline: none; }
+.key .hit { fill: transparent; }
+.key .arc { fill: var(--gray); }
+.key .fill { fill: var(--lime); }
+
+.key text {
+  fill: var(--gray);
+  font: 500 14px var(--mono);
+  text-anchor: middle;
+  dominant-baseline: central;
+  user-select: none;
+}
+
+.key:hover .arc, .key:focus-visible .arc { fill: var(--white); }
+.key:hover text, .key:focus-visible text { fill: var(--white); }
+.key:focus-visible .hit { stroke: var(--white); stroke-width: 2; }
+.key.held .arc, .key.held text { fill: var(--lime); }
+
+.off, .loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: var(--black);
+  color: var(--gray);
+  font-size: 13px;
+  text-align: center;
+}
+
+.off[hidden], .loading[hidden] { display: none; }
+.off p, .loading p { margin: 0; }
+
+/* The download as a segmented rail, a cell per twentieth. */
+.cells { display: grid; grid-template-columns: repeat(20, 6px); gap: 3px; }
+.cells span { height: 12px; border: 1px solid var(--gray); }
+.cells span.on { background: var(--white); border-color: var(--white); }
+
+.loading .loaded {
+  color: var(--gray);
+  font: 500 12px/1.4 var(--mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+.off-title, .loading p:first-child {
+  color: var(--white);
+  font: 700 18px/1 var(--sans);
+  font-stretch: 125%;
+  letter-spacing: 0.04em;
+}
+
+/* --- What the device is doing ------------------------------------------------------------ */
+
+.hint {
+  margin: 0;
+  padding: 12px 16px;
+  /* Room for the longest hint, so a change of hint moves nothing below it. */
+  min-height: calc(var(--hint-lines, 2) * 1.4em + 24px);
+  background: var(--white);
+  color: var(--black);
+  font: 500 15px/1.4 var(--sans);
+}
+
+.state {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border: 1px solid var(--rule);
+  border-top: 0;
+}
+
+.state div { padding: 8px 12px 9px; min-width: 0; }
+.state div + div { border-left: 1px solid var(--rule); }
+
+.state dt {
+  color: var(--gray);
+  font: 500 10px/1.4 var(--mono);
+  letter-spacing: 0.08em;
+}
+
+.state dd {
+  margin: 2px 0 0;
+  font: 500 13px/1.3 var(--mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 520px) {
+  .state { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .state div:nth-child(3) { border-left: 0; }
+  .state div:nth-child(n + 3) { border-top: 1px solid var(--rule); }
+}
+
+/* --- Modules ------------------------------------------------------------------------------- */
+
+.controls { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+
+.module {
+  border: 1px solid var(--rule);
+  padding: 0 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.module > header, .module > summary {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 12px;
+  margin: 0 -16px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.module h2 {
+  margin: 0;
+  font: 800 15px/1 var(--sans);
+  font-stretch: 125%;
+  letter-spacing: 0.04em;
+}
+
+.sigil { width: 31px; height: 31px; display: block; shape-rendering: crispEdges; }
+
+.reading {
+  font: 500 22px/1 var(--mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.reading[data-role="live"] { color: var(--blue); }
+.reading[data-role="attention"] { color: var(--orange); }
+.reading[data-role="unknown"] { color: var(--gray); }
+.reading.meta { font-size: 13px; color: var(--gray); letter-spacing: 0.04em; }
+
+.keyboard { padding-bottom: 0; }
+.keyboard[open] { padding-bottom: 16px; }
+.keyboard > summary { grid-template-columns: 1fr auto; cursor: pointer; list-style: none; }
+.keyboard > summary::-webkit-details-marker { display: none; }
+.keyboard > summary::after { content: "+"; font: 500 18px/1 var(--mono); color: var(--gray); }
+.keyboard[open] > summary::after { content: "\2212"; }
+.keyboard:not([open]) > summary { border-bottom: 0; }
+
+.keyboard dl {
+  display: grid;
+  grid-template-columns: 10em 1fr;
+  gap: 4px 18px;
+  margin: 0;
+}
+
+.keyboard dt { font: 500 13px/1.5 var(--mono); }
+.keyboard dd { margin: 0; color: var(--gray); }
+
+/* --- Controls ------------------------------------------------------------------------------ */
+
+.name { color: var(--gray); }
+
+.row { display: flex; flex-wrap: wrap; gap: 8px; }
+
+button {
+  background: transparent;
+  border: 1px solid var(--rule);
+  border-radius: 0;
+  padding: 8px 14px;
+  cursor: pointer;
+  user-select: none;
+  touch-action: manipulation;
+}
+
+button:hover { border-color: var(--white); }
+
+.keys-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+
+@media (max-width: 520px) {
+  .keys-row { grid-template-columns: 1fr; }
+}
+
+button.hold {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 10px 12px 14px;
+  text-align: left;
+  touch-action: none;
+}
+
+button.hold b {
+  font: 800 18px/1 var(--sans);
+  font-stretch: 125%;
+  letter-spacing: 0.03em;
+}
+
+button.hold span { color: var(--gray); font-size: 13px; line-height: 1.35; }
+
+button.hold .progress {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 0;
+  height: 4px;
+  background: var(--black);
+}
+
+/* A held key is lime, as the bezel's arcs are; its long press fills along the foot. */
+button.held { background: var(--lime); border-color: var(--lime); color: var(--black); }
+button.held span { color: var(--black); }
+
+.slider {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: baseline;
+  gap: 6px 12px;
+}
+
+.slider output {
+  font: 500 15px/1 var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.slider input { grid-column: 1 / -1; }
+
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 20px; }
+
+/* The range is the panel's editing control: a rule with its chosen part in violet and a
+   square handle. */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 22px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+  --filled: 50%;
+}
+
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  background: linear-gradient(to right, var(--violet) var(--filled), var(--rule) var(--filled));
+}
+
+input[type="range"]::-moz-range-track { height: 4px; background: var(--rule); }
+input[type="range"]::-moz-range-progress { height: 4px; background: var(--violet); }
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 22px;
+  margin-top: -9px;
+  border: 0;
+  border-radius: 0;
+  background: var(--white);
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 12px;
+  height: 22px;
+  border: 0;
+  border-radius: 0;
+  background: var(--white);
+}
+
+input[type="range"]:disabled { cursor: not-allowed; opacity: 0.3; }
+
+.segmented { display: flex; flex-direction: column; gap: 6px; }
+
+.rail { display: flex; flex-wrap: wrap; }
+
+.rail button { flex: 1 1 auto; margin: 0 -1px -1px 0; }
+
+/* The chosen value takes the settings' editing colour with black knockout text. */
+.rail button[aria-checked="true"] {
+  position: relative;
+  background: var(--violet);
+  border-color: var(--violet);
+  color: var(--black);
+  font-weight: 600;
+}
+
+.select { display: flex; flex-direction: column; gap: 6px; }
+
+select {
+  appearance: none;
+  background: transparent
+    linear-gradient(45deg, transparent 50%, var(--gray) 50%) no-repeat calc(100% - 18px) 50% / 6px 6px;
+  border: 1px solid var(--rule);
+  border-radius: 0;
+  padding: 8px 36px 8px 12px;
+  cursor: pointer;
+}
+
+select:hover { border-color: var(--white); }
+select option { background: var(--ground); }
+
+/* A filled square is on, an outlined one off. */
+.check {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  cursor: pointer;
+}
+
+.check input {
+  appearance: none;
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  border: 2px solid var(--gray);
+  border-radius: 0;
+  transform: translateY(2px);
+  cursor: pointer;
+}
+
+.check input:checked { background: var(--white); border-color: var(--white); }
+.check:hover input { border-color: var(--white); }
+
+/* --- Mesh ----------------------------------------------------------------------------------- */
+
+.note { margin: 0; color: var(--gray); font-size: 13px; line-height: 1.45; }
+.note[hidden], .air[hidden], .log-module[hidden] { display: none; }
+
+.air { display: flex; flex-direction: column; gap: 14px; }
+/* Seven speeds share one line. */
+#speed .rail button { flex: 1 1 0; padding: 8px 2px; }
+.links { display: flex; flex-direction: column; gap: 6px; }
+
+/* The link matrix: a row per sender, a column per receiver, numbered as the devices are. */
+.matrix { display: grid; gap: 4px; justify-content: start; }
+
+.matrix span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: 500 12px/1 var(--mono);
+  color: var(--gray);
+}
+
+.matrix button { width: 34px; height: 34px; padding: 0; position: relative; }
+.matrix button::after { content: ""; position: absolute; inset: 6px; }
+.matrix button[data-state="1"]::after { background: var(--white); }
+.matrix button[data-state="2"]::after { background: linear-gradient(to right, var(--white) 50%, transparent 50%); }
+.matrix .self { border: 0; }
+
+.log {
+  margin: 0;
+  height: 280px;
+  overflow: auto;
+  padding: 8px 10px;
+  background: var(--black);
+  border: 1px solid var(--rule);
+  font: 400 11px/1.5 var(--mono);
+  color: var(--gray);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.log .warn { color: var(--orange); }
+
+/* --- Footer -------------------------------------------------------------------------------- */
+
+footer {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 0 24px 32px;
+  color: var(--gray);
+  font-size: 12px;
+}
+
+footer p { max-width: 100ch; margin: 0; padding-top: 14px; border-top: 1px solid var(--rule); }
+
+@media (max-width: 900px) {
+  footer { padding: 0 16px 24px; }
+}
+
+.keyboard dl + dl { padding-top: 12px; border-top: 1px solid var(--rule); }
+
+/* --- Display -------------------------------------------------------------------------------- */
+
+.shift { display: grid; grid-template-columns: auto 1fr; gap: 16px; align-items: start; }
+
+.shift-text { display: flex; flex-direction: column; gap: 8px; }
+.shift-text p { margin: 0; color: var(--gray); font-size: 13px; line-height: 1.45; }
+
+.meta {
+  margin: 0;
+  color: var(--gray);
+  font: 500 12px/1.4 var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The nine places as they lie: the middle, and eight round it. */
+.pad { display: grid; grid-template-columns: repeat(3, 34px); grid-auto-rows: 34px; gap: 4px; }
+
+.pad button {
+  padding: 0;
+  font: 500 11px/1 var(--mono);
+  color: var(--gray);
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  padding: 3px 4px;
+}
+
+.pad button[aria-checked="true"] { background: var(--white); border-color: var(--white); color: var(--black); }
+.pad.pinned button[aria-checked="true"] { background: var(--violet); border-color: var(--violet); }

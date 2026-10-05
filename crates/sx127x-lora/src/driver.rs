@@ -813,7 +813,6 @@ impl<SPI: SpiDevice, V: Sx127xVariant> Sx127xLora<SPI, V> {
             self.frequency().await?,
             self.read(PKT_RSSI_VALUE).await? as i16,
             snr_raw,
-            self.read(RSSI_VALUE).await? as i16,
         ))
     }
 
@@ -1223,7 +1222,7 @@ impl<SPI: SpiDevice, V: Sx127xVariant> Sx127xLora<SPI, V> {
         if version != V::CHIP_VERSION {
             #[cfg(feature = "defmt")]
             error!("invalid chip version: {} != {}", version, V::CHIP_VERSION);
-            return Err(InvalidVersion);
+            return Err(InvalidVersion(version));
         }
         Ok(())
     }

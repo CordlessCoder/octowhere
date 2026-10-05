@@ -1,3 +1,6 @@
+# Nightly for the mesh's node, which the simulators run. The firmware has its own, in
+# `firmware/`.
 [toolchain]
-# Use the toolchain installed by espup.
-channel = "esp"
+channel = "nightly"
+components = ["clippy", "rustfmt"]
+targets = ["wasm32-unknown-unknown"]

@@ -82,6 +82,7 @@ pub struct Effects {
     /// Show the display at this level now.
     pub brightness: Option<u8>,
     pub store: Option<Store>,
+    pub mesh: Option<super::group::view::Request>,
 }
 
 /// Where a second-level screen goes after a step.
@@ -89,7 +90,7 @@ pub struct Effects {
 pub enum Next {
     Stay,
     Panel,
-    Open(Page),
+    Open(alloc::boxed::Box<Page>),
     /// Close the panel and play the start-up again, as chosen.
     ReplayStartUp(Replay),
 }
@@ -103,6 +104,8 @@ pub enum Page {
     Replay(ReplayChooser),
     Timeout(TimeoutChooser),
     AlwaysOn(AlwaysOnChooser),
+    /// The group screens, which the stage steps and draws itself, since they need the mesh.
+    Group(super::group::Flow),
 }
 
 /// How far a second-level screen's icon and hint have come in since it opened.
@@ -144,6 +147,7 @@ impl Page {
             Self::Timeout(chooser) => chooser.handle(event, effects),
             Self::AlwaysOn(chooser) => chooser.handle(event, effects),
             Self::Picker(picker) => picker.handle(event, peripherals, effects),
+            Self::Group(_) => Next::Stay,
         }
     }
 
@@ -200,6 +204,7 @@ impl Page {
             Self::Timeout(chooser) => chooser.draw(accents, font, target),
             Self::AlwaysOn(chooser) => chooser.draw(accents, font, target),
             Self::Picker(picker) => picker.draw(peripherals, accents, font, target),
+            Self::Group(_) => Ok(()),
         }
     }
 }
@@ -603,13 +608,15 @@ impl Device {
                 if (LIST_TOP..=LIST_BOTTOM).contains(&point.y)
                     && self.clear_box().contains(point) =>
             {
-                return Next::Open(Page::Clear(Clear::default()));
+                return Next::Open(alloc::boxed::Box::new(Page::Clear(Clear::default())));
             }
             GestureEvent::Tap(point)
                 if (LIST_TOP..=LIST_BOTTOM).contains(&point.y)
                     && self.replay_box().contains(point) =>
             {
-                return Next::Open(Page::Replay(ReplayChooser::default()));
+                return Next::Open(alloc::boxed::Box::new(Page::Replay(
+                    ReplayChooser::default(),
+                )));
             }
             _ => {}
         }
@@ -943,7 +950,7 @@ impl Stepper {
         }
         let mut position = String::<20>::new();
         if failure {
-            _ = write!(position, "DEMO / {:02} OF 06", self.index);
+            _ = write!(position, "DEMO / {:02} OF {:02}", self.index, len - 1);
         } else if !replay {
             _ = write!(position, "{:02} / {:02}", self.index + 1, len);
         }
@@ -991,7 +998,7 @@ impl ReplayChooser {
     fn handle(&mut self, event: &GestureEvent) -> Next {
         match self.stepper.handle(event, Replay::ALL.len()) {
             Step::Stay => Next::Stay,
-            Step::Cancel => Next::Open(Page::Device(Device::default())),
+            Step::Cancel => Next::Open(alloc::boxed::Box::new(Page::Device(Device::default()))),
             Step::Choose(index) => Next::ReplayStartUp(Replay::ALL[index]),
         }
     }
@@ -1003,10 +1010,12 @@ impl ReplayChooser {
         target: &mut D,
     ) -> Result<(), D::Error> {
         let choice = Replay::ALL[self.stepper.index];
+        // The captions count the choices and BACK.
+        const _: () = assert!(Replay::ALL.len() + 1 == 9);
         let section = if choice.glyph().is_some() {
-            "FAILURE DEMO / 08"
+            "FAILURE DEMO / 09"
         } else {
-            "REPLAY / 08"
+            "REPLAY / 09"
         };
         let icon_color = if choice.glyph().is_some() {
             chrome::ORANGE
@@ -1292,7 +1301,7 @@ impl Clear {
         }
         match *event {
             GestureEvent::Tap(point) if in_top_cap(point) => {
-                Next::Open(Page::Device(Device::default()))
+                Next::Open(alloc::boxed::Box::new(Page::Device(Device::default())))
             }
             _ => Next::Stay,
         }

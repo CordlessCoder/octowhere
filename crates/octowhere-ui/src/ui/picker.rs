@@ -1,7 +1,7 @@
 //! The zone picker: an offset chosen by local time, then a zone at that offset.
 //! Its D3 layout is in `context/design/handoffs/IMPLEMENTATION-HANDOFF-CURRENT.md`.
 
-use alloc::vec::Vec;
+use alloc::{rc::Rc, vec::Vec};
 use core::fmt::Write as _;
 
 use embedded_graphics::{
@@ -52,15 +52,16 @@ const LINES: [Rectangle; 2] = [
 const SCROLL_HOLD: Micros = 1_200_000;
 const SCROLL_SPEED: f32 = 40.0;
 
+/// The lists are shared, so that the copy the stage keeps of what it drew costs no request.
 #[derive(Clone, Debug, PartialEq)]
 enum Step {
     /// The distinct offsets in force, ascending, in seconds.
-    Offset { offsets: Vec<i32> },
+    Offset { offsets: Rc<[i32]> },
     /// The zones at `offset`, in the order they are listed, which is nearest first when the
     /// position is known.
     Zone {
         offset: i32,
-        zones: Vec<ZoneId>,
+        zones: Rc<[ZoneId]>,
         nearest: bool,
     },
 }
@@ -154,7 +155,8 @@ fn offsets_of(
     unix: Option<i64>,
 ) -> heapless::Vec<crate::tz::Offset<'static>, 2> {
     let mut offsets = heapless::Vec::new();
-    for time in unix.map_or(RULES_ONLY.to_vec(), |unix| alloc::vec![unix]) {
+    let times = unix.as_ref().map_or(&RULES_ONLY[..], core::slice::from_ref);
+    for &time in times {
         let offset = zone.at(time);
         if !offsets
             .iter()
@@ -312,7 +314,9 @@ impl Picker {
             .position(|&offset| offset >= current)
             .unwrap_or(offsets.len().saturating_sub(1));
         Self {
-            step: Step::Offset { offsets },
+            step: Step::Offset {
+                offsets: offsets.into(),
+            },
             index,
             grabbed: None,
             fling: None,
@@ -387,7 +391,7 @@ impl Picker {
                     .unwrap_or(0);
                 self.step = Step::Zone {
                     offset,
-                    zones,
+                    zones: zones.into(),
                     nearest: position.is_some(),
                 };
                 self.fling = None;
@@ -397,7 +401,9 @@ impl Picker {
                 let offset = *offset;
                 let offsets = offsets_at(unix);
                 self.index = offsets.iter().position(|&each| each == offset).unwrap_or(0);
-                self.step = Step::Offset { offsets };
+                self.step = Step::Offset {
+                    offsets: offsets.into(),
+                };
                 self.fling = None;
                 Next::Stay
             }

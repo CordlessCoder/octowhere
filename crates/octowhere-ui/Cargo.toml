@@ -4,13 +4,14 @@ version = "0.1.0"
 edition = "2024"
 description = "Screens, drawing and input handling for octowhere, free of board dependencies"
 
-[workspace]
-
 [features]
-default = []
+default = ["boundaries"]
+# The time zones' boundaries, for finding the zone under a position (`tz::Database::locate`).
+# The screens never need them, and they are most of the zone data.
+boundaries = ["octowhere-tz/boundaries"]
 # `Framebuffer::alloc` into a caller's allocator. Needs a nightly compiler.
 allocator-api = []
-defmt = ["dep:defmt", "octowhere-motion/defmt"]
+defmt = ["dep:defmt", "octowhere-motion/defmt", "octowhere-mesh/defmt", "octowhere-node/defmt"]
 
 [dependencies]
 defmt = { version = "1.1.1", optional = true }
@@ -22,8 +23,10 @@ fontdue = { git = "https://github.com/CordlessCoder/fontdue", rev = "a71751e3e94
 fontdue-macros = { git = "https://github.com/CordlessCoder/fontdue", rev = "a71751e3e94864c2608a481308fc906e6302dea2" }
 heapless = "0.9.3"
 libm = "0.2.16"
-octowhere-tz = { path = "../tz" }
+octowhere-tz = { path = "../tz", default-features = false }
 octowhere-motion = { path = "../octowhere-motion" }
+octowhere-mesh = { path = "../octowhere-mesh" }
+octowhere-node = { path = "../octowhere-node" }
 
 [dev-dependencies]
 critical-section = { version = "1.2.0", features = ["std"] }
