@@ -4,7 +4,8 @@ use co5300::{Bus, Lanes};
 use esp_hal::Async;
 use esp_hal::dma::{DmaRxBuf, DmaTxBuf, EmptyBuf};
 use esp_hal::gpio::Output;
-use esp_hal::spi::master::{Address, Command, DataMode, SpiDma};
+use esp_hal::spi::master::{Address, Command, Config, DataMode, SpiDma};
+use esp_hal::time::Rate;
 
 #[cfg(feature = "timing-log")]
 use embassy_time::Instant;
@@ -13,6 +14,8 @@ use embassy_time::Instant;
 /// microseconds a chunk, and the display core has nothing else to run meanwhile.
 pub struct QspiBus<'d> {
     spi: Option<SpiDma<'d, Async>>,
+    /// The bus's own configuration, which a read leaves for its slower clock.
+    config: Config,
     /// A command's parameters, and a read's reply.
     command: Option<DmaTxBuf>,
     reply: Option<DmaRxBuf>,
@@ -27,6 +30,7 @@ impl<'d> QspiBus<'d> {
     #[must_use]
     pub fn new(
         spi: SpiDma<'d, Async>,
+        config: Config,
         command: DmaTxBuf,
         reply: DmaRxBuf,
         stream: DmaTxBuf,
@@ -35,6 +39,7 @@ impl<'d> QspiBus<'d> {
     ) -> Self {
         Self {
             spi: Some(spi),
+            config,
             command: Some(command),
             reply: Some(reply),
             cs,
@@ -84,6 +89,12 @@ impl<'d> QspiBus<'d> {
         Ok(())
     }
 }
+
+/// A read's clock, under the controller's 10 MHz.
+const READ_MHZ: u32 = 5;
+/// A configuration fails only on a clock out of the SPI's range, and the bus's own was applied
+/// when the SPI was made.
+const IN_RANGE: &str = "the SPI clock is in range";
 
 fn mode(lanes: Lanes) -> DataMode {
     match lanes {
@@ -201,16 +212,19 @@ impl Bus for QspiBus<'_> {
         sent
     }
 
-    /// The reply comes on SIO0, where the controller's read diagram has it. Nothing has read
-    /// the panel yet to show the module wires it there rather than to SIO1.
+    /// The reply comes on SIO0, the panel's only line that runs both ways on the board's
+    /// schematic. Every read on this board has come back as zeros, on SIO0 and SIO1 alike, so
+    /// the panel's reply line is likely not connected (`context/BACKLOG.md`).
     async fn read(
         &mut self,
         instruction: u8,
         address: u32,
         buffer: &mut [u8],
     ) -> Result<(), Self::Error> {
+        let mut spi = self.spi.take().unwrap();
+        spi.apply_config(&self.config.with_frequency(Rate::from_mhz(READ_MHZ)))
+            .expect(IN_RANGE);
         self.cs.set_low();
-        let spi = self.spi.take().unwrap();
         let reply = self.reply.take().unwrap();
         let transfer = spi
             .half_duplex_read_buffer(
@@ -221,14 +235,16 @@ impl Bus for QspiBus<'_> {
                 buffer.len(),
                 reply,
             )
-            .map_err(|(error, spi, reply)| {
+            .map_err(|(error, mut spi, reply)| {
+                spi.apply_config(&self.config).expect(IN_RANGE);
                 self.spi = Some(spi);
                 self.reply = Some(reply);
                 self.cs.set_high();
                 error
             })?;
-        let (spi, reply) = transfer.wait();
+        let (mut spi, reply) = transfer.wait();
         reply.read_received_data(buffer);
+        spi.apply_config(&self.config).expect(IN_RANGE);
         self.spi = Some(spi);
         self.reply = Some(reply);
         self.cs.set_high();

@@ -52,7 +52,8 @@ pub trait Bus {
     /// Sends what the stream holds back and closes the transaction.
     async fn end(&mut self) -> Result<(), Self::Error>;
 
-    /// Reads `buffer.len()` bytes after `instruction` and `address`, all on one line.
+    /// Reads `buffer.len()` bytes after `instruction` and `address`, all on one line. The
+    /// controller takes a read's clock cycle no shorter than 100 ns, so at 10 MHz at most.
     async fn read(
         &mut self,
         instruction: u8,

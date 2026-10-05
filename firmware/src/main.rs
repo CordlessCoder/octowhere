@@ -626,7 +626,15 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
         .with_sio3(gpio7)
         .with_dma(dma_ch0)
         .into_async();
-    let bus = QspiBus::new(spi, dma_tx_command, dma_rx_reply, dma_tx, dma_tx_swap, cs);
+    let bus = QspiBus::new(
+        spi,
+        spi_config,
+        dma_tx_command,
+        dma_rx_reply,
+        dma_tx,
+        dma_tx_swap,
+        cs,
+    );
     let mut display: Display<'_, chrome::Color> =
         Display::new(bus, reset, te, embassy_time::Delay, board::DISPLAY)
             .await
