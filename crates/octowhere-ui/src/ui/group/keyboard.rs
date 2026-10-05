@@ -449,7 +449,7 @@ impl Keyboard {
                 let Some(line) = lines.get(first + row) else {
                     return self.draft.len();
                 };
-                (line.start..=line.end)
+                (line.start..=self.line_end(&lines, first + row))
                     .min_by_key(|&index| {
                         let x =
                             MESSAGE_LEFT as f32 + style.advance(&self.draft()[line.start..index]);
@@ -481,12 +481,32 @@ impl Keyboard {
         lines
     }
 
-    /// The line the caret is on: the first that ends at or past it.
+    /// The line the caret is on: the last that starts at or before it. A line's wrapped range
+    /// leaves out the spaces that end it, which the caret still steps through.
     fn caret_line(&self, lines: &[core::ops::Range<usize>]) -> usize {
         lines
             .iter()
-            .position(|line| line.end >= self.cursor)
-            .unwrap_or(lines.len() - 1)
+            .rposition(|line| line.start <= self.cursor)
+            .unwrap_or(0)
+    }
+
+    /// Where line `row` ends with the spaces after it: where the next starts, or the draft's end.
+    fn line_end(&self, lines: &[core::ops::Range<usize>], row: usize) -> usize {
+        lines
+            .get(row + 1)
+            .map_or(self.draft.len(), |next| next.start)
+    }
+
+    /// The caret's column on its line, which stops at the field's right edge.
+    fn message_caret(
+        &self,
+        style: &FontdueRenderer<'static, Color>,
+        lines: &[core::ops::Range<usize>],
+    ) -> i32 {
+        let line = &lines[self.caret_line(lines)];
+        let before = &self.draft()[line.start.min(self.cursor)..self.cursor];
+        let x = MESSAGE_LEFT + libm::roundf(style.advance(before)) as i32;
+        x.min(MESSAGE_LEFT + MESSAGE_WIDTH as i32)
     }
 
     /// The first of the two lines the field shows, which keep the caret's in view.
@@ -523,8 +543,7 @@ impl Keyboard {
                 );
             }
             if row == caret {
-                let before = &self.draft()[line.start..self.cursor.clamp(line.start, line.end)];
-                let x = MESSAGE_LEFT + libm::roundf(style.advance(before)) as i32;
+                let x = self.message_caret(&style, &lines);
                 list.fill(rect(x, baseline + 1, x + 8, baseline + 3), chrome::WHITE);
             }
         }
@@ -699,6 +718,52 @@ mod tests {
         keyboard.cursor = 1;
         press(&mut keyboard, "DELETE");
         assert_eq!((keyboard.draft(), keyboard.cursor), ("idge0", 0));
+    }
+
+    fn font() -> FontdueRenderer<'static, Color> {
+        crate::chrome::FontdueRenderer::new(
+            crate::chrome::FontdueRendererCtx::new_rc(),
+            20,
+            chrome::WHITE,
+            chrome::FONTS,
+        )
+    }
+
+    /// The caret's column in a message draft.
+    fn message_caret(keyboard: &Keyboard) -> i32 {
+        let style = Keyboard::message_style(&font());
+        keyboard.message_caret(&style, &keyboard.message_lines(&style))
+    }
+
+    #[test]
+    fn a_space_moves_the_caret_before_the_next_letter() {
+        let mut message = Keyboard::message();
+        for label in ["h", "i"] {
+            press(&mut message, label);
+        }
+        let word = message_caret(&message);
+        press(&mut message, "SPACE");
+        let space = message_caret(&message);
+        assert!(space > word, "{space} after the space, {word} before");
+        press(&mut message, "j");
+        assert!(message_caret(&message) > space);
+
+        let mut name = Keyboard::new(Name::new(b"Ana").unwrap());
+        let word = name.boundary_x(name.cursor, &font());
+        press(&mut name, "SPACE");
+        assert!(name.boundary_x(name.cursor, &font()) > word);
+    }
+
+    #[test]
+    fn a_space_at_the_field_s_edge_keeps_the_caret_inside() {
+        let mut message = Keyboard::message();
+        for _ in 0..40 {
+            press(&mut message, "w");
+        }
+        for _ in 0..3 {
+            press(&mut message, "SPACE");
+        }
+        assert!(message_caret(&message) <= MESSAGE_LEFT + MESSAGE_WIDTH as i32);
     }
 
     #[test]
