@@ -1,35 +1,5 @@
 use embedded_graphics::{prelude::*, primitives::Rectangle};
-use octowhere_ui::ui::{
-    dirty::RowSpans,
-    geometry::{FillRegion, clipped_fill_region, for_each_visible_color},
-};
-
-#[test]
-fn fill_region_clips_negative_coordinates() {
-    assert_eq!(
-        clipped_fill_region(4, 3, -1, -1, 3, 3),
-        Some(FillRegion {
-            x: 0,
-            y: 0,
-            width: 2,
-            height: 2,
-            source_x: 1,
-            source_y: 1,
-        })
-    );
-}
-
-#[test]
-fn fill_consumes_area_and_ignores_excess_colors() {
-    let mut pixels = Vec::new();
-    for_each_visible_color(
-        Size::new(3, 2),
-        Rectangle::new(Point::new(-1, 0), Size::new(3, 1)),
-        0..10,
-        |x, y, color| pixels.push((x, y, color)),
-    );
-    assert_eq!(pixels, vec![(0, 0, 1), (1, 0, 2)]);
-}
+use octowhere_ui::ui::dirty::RowSpans;
 
 type Spans = RowSpans<16, 8, 2>;
 

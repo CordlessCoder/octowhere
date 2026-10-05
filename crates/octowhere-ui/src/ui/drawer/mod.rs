@@ -272,7 +272,7 @@ impl Drawer {
 
     /// Open on a conversation, over the Messages root.
     #[must_use]
-    pub fn at_thread(thread: Thread) -> Self {
+    fn at_thread(thread: Thread) -> Self {
         Self {
             slide: WIDTH,
             child: Some(Child::Thread(thread)),
@@ -288,12 +288,6 @@ impl Drawer {
     /// The draft, to keep while the drawer is closed.
     pub fn take_draft(&mut self) -> Option<Draft> {
         self.draft.take()
-    }
-
-    /// Whether the keyboard shows, which a toast keeps clear of.
-    #[must_use]
-    pub fn typing(&self) -> bool {
-        self.child == Some(Child::Draft)
     }
 
     /// The root that shows, or that the roots are nearest.

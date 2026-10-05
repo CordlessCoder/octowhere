@@ -100,7 +100,6 @@ impl<const N: usize, const WIDTH: usize, const HEIGHT: usize, C: PixelFormat>
 where
     <C as embedded_graphics::pixelcolor::raw::ToBytes>::Bytes: core::convert::AsRef<[u8]>,
 {
-    const PIXEL_COUNT: usize = WIDTH * HEIGHT;
     const BUFFER_SIZE: usize = buffer_size::<C>(WIDTH, HEIGHT);
 
     /// Static assertion that N is correct.
@@ -126,17 +125,11 @@ where
         unsafe { Box::new_zeroed().assume_init() }
     }
 
-    /// Clear the entire framebuffer with a color.
-    pub fn clear_color(&mut self, color: C) {
-        let raw = color.to_be_bytes();
-        fill_buf_repeat(self.buf.as_mut_slice(), raw.as_ref(), Self::PIXEL_COUNT);
-    }
-
     /// Set a single pixel
     ///
     /// PERF: no panic for speed?
     #[inline]
-    pub fn set_pixel(&mut self, x: usize, y: usize, color: C) {
+    fn set_pixel(&mut self, x: usize, y: usize, color: C) {
         if x < WIDTH && y < HEIGHT {
             let idx = y * WIDTH + x;
             unsafe {
@@ -149,7 +142,7 @@ where
     }
 
     /// Fill a rectangular region.
-    pub fn fill_rect(&mut self, x: usize, y: usize, w: usize, h: usize, raw: &[u8]) {
+    fn fill_rect(&mut self, x: usize, y: usize, w: usize, h: usize, raw: &[u8]) {
         let x_end = (x + w).min(WIDTH);
         let y_end = (y + h).min(HEIGHT);
         for row in y..y_end {

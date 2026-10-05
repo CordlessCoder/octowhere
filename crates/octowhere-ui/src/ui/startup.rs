@@ -1160,7 +1160,7 @@ fn draw_fault<D: CoverageTarget<Color = Color>>(
         let period = libm::roundf(style.advance(&line)) as i32;
         let mut pen = (-TICKER_SPEED * frame).rem_euclid(period) - period;
         while pen < 466 {
-            style.draw_stretched(&line, Point::new(pen, baseline), 1.0, &mut strip)?;
+            style.draw_on_baseline(&line, Point::new(pen, baseline), &mut strip)?;
             pen += period;
         }
         strip.finish();

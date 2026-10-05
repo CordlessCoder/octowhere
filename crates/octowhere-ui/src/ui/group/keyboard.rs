@@ -302,25 +302,6 @@ impl Keyboard {
         }
     }
 
-    /// The saved name the draft started from, for a name.
-    #[must_use]
-    pub fn original(&self) -> Option<Name> {
-        match self.field {
-            Field::Name(name) => Some(name),
-            Field::Message => None,
-        }
-    }
-
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.draft.len()
-    }
-
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.draft.is_empty()
-    }
-
     /// Shows that the draft is being saved, and holds the keys until [`Keyboard::resume`].
     pub fn saving(&mut self) {
         self.note = Some(Note::Saving);
@@ -332,7 +313,7 @@ impl Keyboard {
     }
 
     #[must_use]
-    pub fn is_saving(&self) -> bool {
+    fn is_saving(&self) -> bool {
         self.note == Some(Note::Saving)
     }
 

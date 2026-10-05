@@ -11,7 +11,7 @@ use heapless::String;
 use super::{
     clock_screen,
     icon::{self, Glyph, Tile},
-    reveal::{Reveal, draw_revealed, revealed_bounds},
+    reveal::{Reveal, draw_revealed},
     scatter::{Field, Law, Look, Scatter, Tones},
     screens::PeripheralState,
     text::{self, style},
@@ -618,15 +618,6 @@ pub fn cell_damage(cell: Cell, scroll: i32) -> Rectangle {
 #[must_use]
 pub fn cell_changed(cell: Cell, before: &PeripheralState, after: &PeripheralState) -> bool {
     content(cell, before) != content(cell, after)
-}
-
-/// Everything the title and hint can cover, at any stage of their reveals.
-#[must_use]
-pub fn text_damage(font: &FontdueRenderer<'static, Color>) -> [Rectangle; 2] {
-    [
-        revealed_bounds(&title_style(font), TITLE, title_pen(font)),
-        revealed_bounds(&hint_style(font), HINT, hint_pen(font)),
-    ]
 }
 
 #[cfg(test)]

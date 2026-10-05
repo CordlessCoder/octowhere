@@ -98,7 +98,7 @@ impl TextureKind {
 /// 19 px legs on its corner, rising when its right angle is at the bottom right. A shade is 0 for
 /// black, or a palette level from 1 to 5, with 8 added for its highlight.
 #[derive(Clone, Copy, Debug)]
-pub enum Shape {
+pub(crate) enum Shape {
     Rect(i16, i16, u8, u8, u8),
     Triangle(i16, i16, bool, u8),
 }

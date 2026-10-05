@@ -57,7 +57,7 @@ const GRID_LINE_WIDTH: u8 = 3;
 const GRID_MARK: u32 = 2;
 /// A position younger than this shows the solid glyph and an older one the hourglass. The
 /// hand-off proposes it and leaves it to engineering; explicit ages show either way.
-pub const RECENT: Micros = 5 * 60 * SECOND;
+const RECENT: Micros = 5 * 60 * SECOND;
 /// A position older than this has left the protocol's table, so the face no longer places it.
 pub const EXPIRES: Micros = MAX_DELTA as Micros * SECOND;
 /// The forward arrow, in quarter pixels.
@@ -160,7 +160,7 @@ pub fn hold(shown: Option<u16>, heading: Option<f32>) -> Option<u16> {
 /// The bearing from `from` to `to`, in degrees clockwise from true north, and the distance
 /// between them in metres, on a sphere. Positions are in degrees × 10⁷.
 #[must_use]
-pub fn bearing_distance(from: (i32, i32), to: (i32, i32)) -> (f32, f32) {
+fn bearing_distance(from: (i32, i32), to: (i32, i32)) -> (f32, f32) {
     const EARTH: f32 = 6_371_008.8;
     let radians = |e7: i64| (e7 as f32 * 1e-7).to_radians();
     let (phi1, phi2) = (radians(from.0.into()), radians(to.0.into()));

@@ -986,7 +986,7 @@ pub fn shade(color: Color, level: u8) -> Color {
 }
 
 #[inline]
-pub const fn lerp_u8(a: u8, b: u8, factor: u8) -> u8 {
+const fn lerp_u8(a: u8, b: u8, factor: u8) -> u8 {
     // `>> 8` with a +255 bias stands in for `/ 255`: it matches the floor division or exceeds it
     // by one, and factors 0 and 255 return `a` and `b` exactly.
     ((a as u16 * (u8::MAX - factor) as u16 + b as u16 * factor as u16 + u8::MAX as u16) >> 8) as u8
@@ -1366,72 +1366,6 @@ impl<C: PixelColor + RgbColorExt> FontdueRenderer<'_, C> {
             if !target.visible(&turned) {
                 continue;
             }
-            let (metrics, bitmap) =
-                font.rasterize_indexed_transformed(&mut ctx.canvas, index, px, transform, pen);
-            fits(metrics.width, metrics.height);
-            ctx.coverage.resize(metrics.width, 0);
-            let color = self.text_color;
-            bitmap.rows(&mut ctx.coverage, |y, x, row| {
-                target.blend_row(metrics.x + x as i32, metrics.y + y as i32, row, color);
-            });
-        }
-        Ok(())
-    }
-
-    /// The ink box of one glyph drawn by [`draw_stretched`](Self::draw_stretched), a pixel wider
-    /// each way for its edges.
-    fn stretched_glyph(
-        origin: Point,
-        offset: f32,
-        metrics: &fontdue::Metrics,
-        scale: f32,
-    ) -> Rectangle {
-        let left = origin.x + libm::roundf(offset) as i32 + metrics.xmin - 1;
-        let top =
-            libm::floorf(origin.y as f32 - (metrics.ymin + metrics.height as i32) as f32 * scale)
-                as i32
-                - 1;
-        let bottom = libm::ceilf(origin.y as f32 - metrics.ymin as f32 * scale) as i32 + 1;
-        Rectangle::with_corners(
-            Point::new(left, top),
-            Point::new(left + metrics.width as i32 + 1, bottom),
-        )
-    }
-
-    /// The ink bounds [`draw_stretched`](Self::draw_stretched) can cover, edges included.
-    #[must_use]
-    pub fn stretched_bounds(&self, text: &str, origin: Point, scale: f32) -> Rectangle {
-        self.pens(text)
-            .filter(|(_, _, metrics)| metrics.width > 0 && metrics.height > 0)
-            .fold(Rectangle::zero(), |bounds, (_, offset, metrics)| {
-                Self::union_rect(
-                    bounds,
-                    Self::stretched_glyph(origin, offset, &metrics, scale),
-                )
-            })
-    }
-
-    /// Draws `text` with its pen starting at `origin` on the baseline, `scale` times as tall as
-    /// the font draws it and no wider.
-    pub fn draw_stretched<D: CoverageTarget<Color = C>>(
-        &self,
-        text: &str,
-        origin: Point,
-        scale: f32,
-        target: &mut D,
-    ) -> Result<(), D::Error> {
-        let font = self.fonts[self.font_index];
-        let px = self.font_size as f32;
-        let transform = fontdue::Transform::new(1.0, 0.0, 0.0, scale);
-        let ctx = &mut *self.ctx.borrow_mut();
-        for (index, offset, metrics) in self.pens(text) {
-            if metrics.width == 0
-                || metrics.height == 0
-                || !target.visible(&Self::stretched_glyph(origin, offset, &metrics, scale))
-            {
-                continue;
-            }
-            let pen = (origin.x as f32 + libm::roundf(offset), origin.y as f32);
             let (metrics, bitmap) =
                 font.rasterize_indexed_transformed(&mut ctx.canvas, index, px, transform, pen);
             fits(metrics.width, metrics.height);

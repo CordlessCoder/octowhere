@@ -16,9 +16,9 @@ const SEARCH: Micros = 120 * SECOND;
 const COMPARE: Micros = 60 * SECOND;
 const STALL: Micros = 30 * SECOND;
 /// A refresh's three rounds.
-pub const REFRESH: Micros = 135 * SECOND;
+const REFRESH: Micros = 135 * SECOND;
 /// How long a founding listens for the joining device.
-pub const RECOVERY: Micros = 600 * SECOND;
+const RECOVERY: Micros = 600 * SECOND;
 
 /// What the user of the other device does with the code.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -113,10 +113,10 @@ const ANSWERED_AFTER: Micros = 20 * SECOND;
 /// How long after a removal starts its switch comes, as for a group of eight, and how long after
 /// the switch it can be declined.
 pub const SWITCH_AFTER: Micros = 8 * 60 * SECOND;
-pub const DECLINE_FOR: Micros = 86_400 * SECOND;
+const DECLINE_FOR: Micros = 86_400 * SECOND;
 
-pub const PEER_MAC: Mac = [0x48, 0xa1, 0xb2, 0xc3, 0x8c, 0x91];
-pub const OWN_MAC: Mac = [0x48, 0xa1, 0xb2, 0xc3, 0x7a, 0x2f];
+const PEER_MAC: Mac = [0x48, 0xa1, 0xb2, 0xc3, 0x8c, 0x91];
+const OWN_MAC: Mac = [0x48, 0xa1, 0xb2, 0xc3, 0x7a, 0x2f];
 const CODE: u32 = 482_731;
 const PARTS: u8 = 2;
 

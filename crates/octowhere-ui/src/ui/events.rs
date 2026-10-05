@@ -126,16 +126,9 @@ pub struct Events {
     refresh_session: u32,
     /// The events of two removals that compete, the winner first, while the mesh shows both.
     rivals: Option<[Id; 2]>,
-    /// Counts every change, so that a screen can tell when to look again.
-    version: u32,
 }
 
 impl Events {
-    #[must_use]
-    pub fn version(&self) -> u32 {
-        self.version
-    }
-
     #[must_use]
     pub fn get(&self, id: Id) -> Option<&Event> {
         self.list.iter().find(|event| event.id == id)
@@ -181,7 +174,6 @@ impl Events {
             && event.unread
         {
             event.unread = false;
-            self.version += 1;
         }
     }
 
@@ -194,7 +186,6 @@ impl Events {
     pub fn mark_all_read(&mut self) {
         if self.can_mark_all_read() {
             self.list.iter_mut().for_each(|event| event.unread = false);
-            self.version += 1;
         }
     }
 
@@ -212,7 +203,6 @@ impl Events {
     pub fn clear_read(&mut self) {
         if self.can_clear_read() {
             self.list.retain(|event| !Self::clearable(event));
-            self.version += 1;
         }
     }
 
@@ -228,7 +218,6 @@ impl Events {
             return Err(Kept::Protected(protected));
         }
         self.list.remove(index);
-        self.version += 1;
         Ok(())
     }
 
@@ -260,7 +249,6 @@ impl Events {
             unread,
         });
         debug_assert!(pushed.is_ok(), "the list had room");
-        self.version += 1;
         Some(id)
     }
 
@@ -276,7 +264,6 @@ impl Events {
             event.unread = true;
             event.at = now;
         }
-        self.version += 1;
         material.then_some(id)
     }
 
@@ -395,7 +382,6 @@ impl Events {
                     {
                         *held = unread;
                         event.unread &= unread > 0;
-                        self.version += 1;
                     }
                 }
             }
@@ -470,7 +456,6 @@ impl Events {
     /// there is nothing to go back to.
     fn settle_removals(&mut self, shown: &[Option<RemovalView>; 2], grouped: bool) {
         let gone = |key: [u8; 8]| !shown.iter().flatten().any(|removal| removal.key == key);
-        let before = self.list.len();
         self.list.retain(|event| match event.kind {
             Kind::Removal(removal) if gone(removal.key) => match removal.stage {
                 RemovalStage::Pending { .. } => false,
@@ -482,7 +467,6 @@ impl Events {
             },
             _ => true,
         });
-        let mut changed = self.list.len() != before;
         for event in &mut self.list {
             if let Kind::Removal(removal) = &mut event.kind
                 && gone(removal.key)
@@ -490,11 +474,7 @@ impl Events {
                 && matches!(decline, Decline::Until(_))
             {
                 *decline = Decline::Later;
-                changed = true;
             }
-        }
-        if changed {
-            self.version += 1;
         }
     }
 

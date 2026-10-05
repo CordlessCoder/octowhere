@@ -35,7 +35,7 @@ const TOUCH_HEIGHT: u32 = 40;
 const REASON_TOP: i32 = 419;
 /// Prose's reading column, size and line pitch.
 pub const PROSE_X: i32 = 88;
-pub const PROSE_SIZE: u8 = 18;
+const PROSE_SIZE: u8 = 18;
 pub const PROSE_PITCH: i32 = 24;
 /// Rows of figures: their label and value columns, first row and pitch.
 const FIGURE_LABEL: i32 = 88;

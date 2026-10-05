@@ -8,7 +8,7 @@ pub mod dirty;
 pub mod drawer;
 pub mod ease;
 pub mod events;
-pub mod geometry;
+pub(crate) mod geometry;
 pub mod gesture;
 pub mod group;
 pub mod icon;

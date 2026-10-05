@@ -38,7 +38,7 @@ const MESSAGE_ROW: i32 = 111;
 /// How wide an inbox preview's ink may run.
 const PREVIEW_WIDTH: f32 = 270.0;
 /// The review's body: where it shows, scrolled, its first line and the lines' pitch.
-pub const REVIEW_VIEWPORT: Rectangle = rect(80, 140, 386, 284);
+const REVIEW_VIEWPORT: Rectangle = rect(80, 140, 386, 284);
 const REVIEW_TOP: i32 = 149;
 const REVIEW_PITCH: i32 = 25;
 /// The widest a title's ink may be at its smallest, past which it is cut short.
@@ -97,7 +97,7 @@ impl Mail<'_> {
 
     /// Whether `device`, which this device had messages with, is no member now.
     #[must_use]
-    pub fn is_removed(&self, device: [u8; 8]) -> bool {
+    fn is_removed(&self, device: [u8; 8]) -> bool {
         device != [0; 8] && self.member_with(device).is_none()
     }
 
@@ -519,7 +519,7 @@ fn message_row(
 
 /// Whom a new message may go to: the group, then each other member by id.
 #[must_use]
-pub fn destinations(mail: &Mail) -> Vec<Thread, CONVERSATIONS> {
+fn destinations(mail: &Mail) -> Vec<Thread, CONVERSATIONS> {
     let mut list = Vec::new();
     if let Some(group) = mail.group {
         _ = list.push(Thread::Group);

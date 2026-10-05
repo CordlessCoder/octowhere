@@ -1,7 +1,7 @@
 use embedded_graphics_core::{geometry::Size, primitives::Rectangle};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct FillRegion {
+pub(crate) struct FillRegion {
     pub x: usize,
     pub y: usize,
     pub width: usize,
@@ -11,7 +11,7 @@ pub struct FillRegion {
 }
 
 /// Return the visible part of a signed drawing rectangle and its source offset.
-pub const fn clipped_fill_region(
+const fn clipped_fill_region(
     screen_width: usize,
     screen_height: usize,
     left: i32,
@@ -55,7 +55,7 @@ pub const fn clipped_fill_region(
 }
 
 /// Consume one input item for every source pixel and emit only visible pixels.
-pub fn for_each_visible_color<I, T, F>(screen: Size, area: Rectangle, colors: I, mut draw: F)
+pub(crate) fn for_each_visible_color<I, T, F>(screen: Size, area: Rectangle, colors: I, mut draw: F)
 where
     I: IntoIterator<Item = T>,
     F: FnMut(usize, usize, T),
@@ -89,5 +89,39 @@ where
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::{vec, vec::Vec};
+    use embedded_graphics_core::geometry::Point;
+
+    #[test]
+    fn fill_region_clips_negative_coordinates() {
+        assert_eq!(
+            clipped_fill_region(4, 3, -1, -1, 3, 3),
+            Some(FillRegion {
+                x: 0,
+                y: 0,
+                width: 2,
+                height: 2,
+                source_x: 1,
+                source_y: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn fill_consumes_area_and_ignores_excess_colors() {
+        let mut pixels = Vec::new();
+        for_each_visible_color(
+            Size::new(3, 2),
+            Rectangle::new(Point::new(-1, 0), Size::new(3, 1)),
+            0..10,
+            |x, y, color| pixels.push((x, y, color)),
+        );
+        assert_eq!(pixels, vec![(0, 0, 1), (1, 0, 2)]);
     }
 }

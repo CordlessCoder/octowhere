@@ -228,7 +228,7 @@ pub struct Item {
 }
 
 /// The status glyph's frame, and where its modules start.
-pub const GLYPH: Rectangle = Rectangle::new(Point::new(342, 96), Size::new_equal(42));
+const GLYPH: Rectangle = Rectangle::new(Point::new(342, 96), Size::new_equal(42));
 const GLYPH_MODULE: i32 = 6;
 
 const ITEMS: usize = 128;
