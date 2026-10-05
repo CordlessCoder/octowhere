@@ -95,8 +95,12 @@ and the notices are on the `tdma` branch, at `146fd7a`, with this document as it
 A node in a group keeps its receiver on throughout and sends when it has something to say and
 the channel is clear (`octowhere-node`'s `access`).
 
-- **When a packet is due.** At once when the node holds records: a message, a member, gone or
-  key record, a request or a summary not yet sent (owner, 2026-10-05). A round after its last
+- **When a packet is due.** At once when the node holds records: a message, or a member, gone
+  or key record, not yet sent (owner, 2026-10-05). At a time drawn up to 5 s ahead when it holds
+  a request or a summary, which ask for what it lacks: nodes that cannot hear each other often
+  answer one packet together, and the backoff below keeps a node apart only from those it
+  hears. Two such nodes, both answering a packet from a node between them, collided in the
+  simulator. A round after its last
   packet when it holds only news: its own position moved more than ~25 m, which is above GPS
   noise, it learned an entry materially newer than what it last relayed, a node appeared, or
   its word that it is on a new key is to go in its first packets after a switch. And at the
@@ -137,11 +141,11 @@ later.
 Measured in the simulator, at four seeds (`crates/octowhere-sim/tests/contention.rs` asserts
 looser bounds):
 
-- A group message reaches 31 other nodes in reach in 0.2 to 0.7 s, in the origin's one packet:
-  it covers everyone, so nobody relays it.
-- Along a line of twelve, each node in reach of the next only, it takes 3.0 to 3.6 s from end to
+- A group message reaches 31 other nodes in reach in 0.2 to 1.1 s, in the origin's one packet:
+  it covers everyone, so nobody relays it. The slowest found the channel busy as it was due.
+- Along a line of twelve, each node in reach of the next only, it takes 3.0 to 4.0 s from end to
   end, about 0.3 s a hop.
-- 32 idle nodes in reach keep the channel 2% busy, and lose up to 2.3% of receptions to two nodes
+- 32 idle nodes in reach keep the channel 2% busy, and lose up to 1.1% of receptions to two nodes
   sending at once.
 
 Every header names its sender's timebase and when the packet started on it (see "Keeping time
@@ -375,11 +379,13 @@ Owner, 2026-10-03. It replaced a rotation of one member record in every packet
   no positions drops from 85 bytes to 36, and from 149 ms of airtime to 77. A full one has room
   for about seven more entries.
 - **Request.** A request record holds the set of ids whose records the sender wants, and rides
-  in the sender's own next packet, which it makes due at once. A new record type needs no
-  header change. A node asks for one id when it hears a sender it holds no record for. It asks
-  for the whole table when a neighbour's digest has differed from its own in two of that
-  neighbour's packets running. Waiting for the second gives an ordinary change, which goes out
-  at once, time to arrive.
+  in the sender's own next packet, at the time it draws for it (see "Medium access"). A new
+  record type needs no header change. A node asks for one id when it hears a sender it holds no
+  record for. It asks for the whole table when a neighbour's digest has differed from its own
+  for a round since the last of that neighbour's packets that agreed or brought it a record new
+  to it (owner, 2026-10-05). A change on its way has that long to arrive, and a neighbour still
+  bringing records is not asked. Counted in packets, as slots did, two came seconds apart on
+  contention, and every node asked at once.
 - **Answer.** A node that hears a request marks each record asked for that it holds as not yet
   sent, unless its digest matches the requester's. The cancel rule marks a record sent once a
   covering packet carried it, so usually one neighbour answers. Records go up to three a packet,
@@ -425,15 +431,24 @@ key, and a removal.
   passes the horizon at a round's start, the same for every node on a timebase, so two nodes'
   digests agree when they hold the same messages. A node judges that against its own clock,
   not the time in the header of the packet that carried the message.
-- **Summary.** A node whose digest has differed from a neighbour's in two of that neighbour's
-  packets running sends a summary in its next packet: for each origin, the oldest and newest
-  sequence numbers it holds, and those it knows it lacks between them. A message names the
-  origin's one before it, which is how a node knows. Sequence numbers skip at a restart, so a
-  gap in the numbers alone says nothing. A neighbour that hears a summary marks to be sent every
-  message it holds outside those ranges or among those lacked, unless its digest matches the
-  summary's sender's. A summary takes at most 120 bytes; one too short for every origin says
+- **Summary.** A node sends a summary of the messages it holds: for each origin, the oldest and
+  newest sequence numbers it holds, and those it knows it lacks between them. A message names
+  the origin's one before it, which is how a node knows. Sequence numbers skip at a restart, so
+  a gap in the numbers alone says nothing. A neighbour that hears a summary marks to be sent
+  every message it holds outside those ranges or among those lacked, unless its digest matches
+  the summary's sender's. A summary takes at most 120 bytes; one too short for every origin says
   which it covers, and the next starts where it stopped. It is made before the backoff, since
-  with a full store that takes milliseconds.
+  with a full store that takes milliseconds. Three things make one due (owner, 2026-10-05):
+  - a neighbour's digest has differed from its own for a round since the last of that
+    neighbour's packets that agreed or brought it a message new to it, as records are asked for;
+  - it takes a message whose origin's one before it, which it names, it does not hold: a message
+    lost on the way, which a node hidden from the sender's next relay loses;
+  - a neighbour's summary shows it holds the newest message from an origin that this node
+    lacks, which no gap shows.
+
+  A summary waits while the node has messages to send. Before it did, a remover with 30 key
+  messages to send filled its packets with summaries instead, while every other node sent it
+  summaries too: after almost nine minutes, 17 of 30 members held their key messages.
 - **Acknowledgement.** The destination of a private message answers with an acknowledgement,
   itself a private message, which travels and is held the same way. Acknowledgements and
   messages to the whole group are not acknowledged.
@@ -500,10 +515,14 @@ Owner, 2026-10-03, except where it says otherwise.
   a private message, a key message, with its generation, one past the current key's, the round
   the group switches at, counted on its timebase, the id and SHA-256 fingerprint of the
   member removed, and the fingerprint of the key it replaces (owner, 2026-10-04). The remover
-  signs each (see "Signatures") and sends one a packet. The switch is a round away for each of
-  its key messages and the removal message, as slots sent them, and four more: the round it is
-  in, and three for hops. That is about 8 minutes for 8 members, 27 for 32. On contention they
-  go out in seconds (see "Open").
+  signs each (see "Signatures") and sends one a packet. The switch is as far off as the remover
+  needs to send its key messages and the removal message, one a packet with the rest after
+  each, about 4 s each, and four rounds more: three for relays and repair, and the round it is
+  in (owner, 2026-10-05). That is about 3.75 minutes for 8 members and 5.25 for 32, against 8
+  and 27 when slots sent one a round. In the simulator, groups of 16 and 32 in reach had every
+  key message within 45 s and 100 s, and every member switched at the switch. Along relay
+  chains of 8 and 12, over ten seeds each, up to two members learned of the removal after the
+  switch, and switched three rounds after learning, as a member that learns late does.
   Until then the removed device still reads everything. The remover reserves every sequence
   number its key messages need before it starts, and a remover that restarts before they have
   gone sends them again. Adding a device is refused while a removal is under way, since it would
@@ -656,8 +675,7 @@ comes. Being built.
   sequence number, previous, timestamp, generation and sealed body. A relay checks it against
   the origin's record, and keeps for catch-up only those from the member that removed for that
   generation, as the relay learned it from its own key message. One signed key message takes a
-  packet's room for two unsigned ones, so a removal's switch is further off: about 8 minutes
-  for 8 members and 27 for 32, against 6 and 15.
+  packet's room for two unsigned ones, so a remover sends one a packet.
 - **Catch-up.** A node keeps, for each member still waited for, the key message of each
   generation after the one it is on, past the message horizon, while it keeps the old key. A
   member heard under an old key is sent the key message for the generation after it, under that
@@ -885,9 +903,9 @@ protocol does not need this.
   back past a switch it made, which would undo the removals after it, as declining after a
   switch does. The simulator's `parts_apart_through_two_removals_settle_once_they_meet`,
   ignored for now, stages it.
-- A removal's switch still allows a round for each key message, as slots sent them. On
-  contention they go in seconds, so the switch could come within minutes, which shortens the
-  time the removed device still reads everything.
+- A message lost along a relay chain is repaired only as fast as its neighbours' packets come,
+  and a quiet neighbour sends at its floor. A relay chain of 12 took from 40 s to about 9
+  minutes to carry a removal's key messages to its far end in the simulator.
 - Contention has run only in the simulator. On the boards: whether the modem's status sees a
   packet under way as the simulator assumes, how late the transmission starts after the check,
   and whether the header's 256ths keep two boards' clocks as close as slots did.

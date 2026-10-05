@@ -270,9 +270,9 @@ and a feature names one. The check rebuilds a temporary manifest with a stable c
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 1,841,408 bytes, 11.76% of the 15,663,104-byte app partition that
-`partitions.csv` gives it (the plain build at `a75dcfe`, which dropped the slots; it was
-1,846,208 at `e1b7176`, 1,840,576 at `def9052`,
+The image is currently 1,841,904 bytes, 11.76% of the 15,663,104-byte app partition that
+`partitions.csv` gives it (the plain build at `06b85db`; it was 1,841,408 at `a75dcfe`, which
+dropped the slots, 1,846,208 at `e1b7176`, 1,840,576 at `def9052`,
 1,840,544 at `da358ab`,
 1,839,344 at `dca8b71`, before
 the scan line's read buffer, 1,845,216 at `4abb8d6`,
@@ -681,7 +681,8 @@ errata workaround, are in [`docs/hardware-notes.md`](docs/hardware-notes.md).
   3,200, and core 0's stack is 107,068 bytes; after that day's security fixes (`03cc818`) the
   radio task's poll takes 15,824, and after the mesh clean-up (`3a9d42e`) 16,384, with
   `async_main`'s 15,840; keeping key messages in flash (`e1b7176`) took them to 14,864 and
-  16,096, and contention (`a75dcfe`) the radio task's to 14,912. The clean-up took a pairing's copy of the group off its receive path,
+  16,096, and contention (`a75dcfe`) the radio task's to 14,912, and pacing the repairs
+  (`874d599`) to 15,328. The clean-up took a pairing's copy of the group off its receive path,
   so `Pairing::start_transfer` went from 5,344 to 320. This lists the largest frames, from the
   root:
 
