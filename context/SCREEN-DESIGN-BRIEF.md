@@ -360,17 +360,19 @@ two hand-offs:
 - **MEMBERS** moves its list down to y 244 under the refresh strip, showing a row and part of
   the next. A row's own layout is the pairing hand-off's, 1 to 2 px lower than the 2026-10-03
   render. BACK's tap region there ends at y 141, short of the strip at y 148 (owner).
-- **REFRESH DEVICES.** The strip reads LISTENING and the time left while a refresh runs, and
-  NO RADIO in red without one. It opens the refresh running, an ended one the first time after
-  it ends, and otherwise the screen that starts one, which has BACK (owner). So a second
-  refresh can start: the hand-off had the strip open a kept result every time, and the result
-  offers no way to start another. Every result offers VIEW MEMBERS (owner). A refresh counts
-  the devices it heard packets from itself, and apart from those the members the group gained
-  while it ran, by address, so a member that moved to another id is not counted as new. Its
-  result says REFRESH ENDED, or NOTHING NEW when it neither heard nor learned anything. One
-  that a pairing stopped says REFRESH STOPPED / PAIRING TOOK THE RADIO with what it had by
-  then. The caption under the title reads REFRESH / JUST ENDED for a minute, then its age.
-  Without a group or with a pairing under way it says why it cannot run.
+- **REFRESH DEVICES** is to be retired (owner, 2026-10-05; `design/DECISIONS.md` 33): every device
+  listens throughout now, so a refresh only counts who it heard. Until a design round removes it,
+  it stays as built. The strip reads LISTENING and the time left while a refresh runs, and NO
+  RADIO in red without one. It opens the refresh running, an ended one the first time after it
+  ends, and otherwise the screen that starts one, which has BACK (owner). So a second refresh can
+  start: the hand-off had the strip open a kept result every time, and the result offers no way to
+  start another. Every result offers VIEW MEMBERS (owner). A refresh counts the devices it heard
+  packets from itself, and apart from those the members the group gained while it ran, by address,
+  so a member that moved to another id is not counted as new. Its result says REFRESH ENDED, or
+  NOTHING NEW when it neither heard nor learned anything. One that a pairing stopped says REFRESH
+  STOPPED / PAIRING TOOK THE RADIO with what it had by then. The caption under the title reads
+  REFRESH / JUST ENDED for a minute, then its age. Without a group or with a pairing under way it
+  says why it cannot run.
 - **A founder's wait.** The hub shows GROUP PENDING with the device it waits for and the time
   left, and its PAIR asks END CURRENT WAIT? first, which BACK leaves. The wait ends only when a
   new pairing actually starts. CHECK MEMBER counts down, says STORING THE GROUP once the
@@ -442,7 +444,9 @@ open:
   one has, HEARD RELAYED once another member's packet has, DELIVERED once its destination
   acknowledged it, which only a private message is. A message to someone in reach of its
   origin is never relayed, since the origin's own packet reached everyone it would be relayed
-  to, so it can go from SENT to DELIVERED. Another member's message is RECEIVED.
+  to, so it can go from SENT to DELIVERED. Another member's message is RECEIVED. Since the mesh
+  contends for the channel (2026-10-05), each step comes within about a second in reach, where
+  each waited for the sender's slot before: QUEUED shows only for a moment.
 - **After a restart.** Messages that come back from another member are not news: they are
   never unread and never told of. Another member's shows RECOVERED; this device's own shows how
   far it had gone, from what came back with it.
@@ -461,7 +465,8 @@ open:
 - **Drafts.** One at a time. CANCEL, and closing the drawer, keep it until it is sent; WRITE to
   the same conversation takes it up again, and WRITE to another starts afresh and drops it.
   REVIEW is unavailable while the draft is blank, and SEND sends once and opens the
-  conversation.
+  conversation. The review leaves out the hand-off's "Send waits for your radio slot." under the
+  character count, with nothing in its place (owner, 2026-10-05; `design/DECISIONS.md` 32).
 - **Wrapping.** A message's body breaks at spaces within 250 px, and inside a word too long for
   a line; rows grow to hold it, and it is never cut. An inbox preview is cut with an ellipsis at
   270 px.
