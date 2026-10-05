@@ -4,15 +4,14 @@ use octowhere_ui::chrome::{self, CoverageTarget, FB, Knockout};
 const ROWS: core::ops::Range<i32> = 10..30;
 const SKIP: core::ops::Range<i32> = 18..22;
 
-/// A glyph's box and the rows it sends: each row's start column, row and coverage.
-type Glyph = (Rectangle, Vec<(i32, i32, Vec<u8>)>);
+/// The rows a glyph sends: each row's start column, row and coverage.
+type Glyph = Vec<(i32, i32, Vec<u8>)>;
 
 /// Two glyphs whose boxes overlap, and two after gaps, the last on an odd column and of odd
-/// width. Each sends rows that start part way into its box.
-fn glyphs() -> [Glyph; 4] {
+/// width, then one left of them all. Each sends rows that start part way into its box.
+fn glyphs() -> [Glyph; 5] {
     let glyph = |left: i32, top: i32, width: u32, height: u32, seed: usize| {
-        let bounds = Rectangle::new(Point::new(left, top), Size::new(width, height));
-        let rows = (top..top + height as i32)
+        (top..top + height as i32)
             .map(|y| {
                 let skip = (y - top) as usize % 3;
                 let coverage = (skip..width as usize)
@@ -24,14 +23,14 @@ fn glyphs() -> [Glyph; 4] {
                     .collect();
                 (left + skip as i32, y, coverage)
             })
-            .collect();
-        (bounds, rows)
+            .collect()
     };
     [
         glyph(100, 5, 40, 30, 1),
         glyph(130, 8, 40, 20, 2),
         glyph(200, 12, 30, 25, 3),
         glyph(241, 6, 29, 28, 4),
+        glyph(20, 9, 90, 14, 5),
     ]
 }
 
@@ -44,8 +43,7 @@ fn a_knockout_matches_filling_then_blending_and_leaves_skipped_rows() {
     let mut fb = FB::boxed();
     fb.fill_solid(&chrome::DISPLAY_BBOX, chrome::RED).unwrap();
     let mut knockout = Knockout::new(&mut *fb, ROWS, SKIP, chrome::BLACK);
-    for (bounds, rows) in glyphs() {
-        knockout.begin_glyph(bounds);
+    for rows in glyphs() {
         for (x, y, coverage) in rows {
             knockout.blend_row(x, y, &coverage, chrome::WHITE);
         }
@@ -58,7 +56,7 @@ fn a_knockout_matches_filling_then_blending_and_leaves_skipped_rows() {
         .unwrap();
     let band = Rectangle::new(Point::new(0, ROWS.start), Size::new(466, ROWS.len() as u32));
     expected.fill_solid(&band, chrome::BLACK).unwrap();
-    for (_, rows) in glyphs() {
+    for rows in glyphs() {
         for (x, y, coverage) in rows.into_iter().filter(|(_, y, _)| ROWS.contains(y)) {
             expected.blend_row(x, y, &coverage, chrome::WHITE);
         }

@@ -8,7 +8,7 @@
 pub mod keyboard;
 pub mod layout;
 pub mod sim;
-pub mod view;
+pub use octowhere_node::view;
 pub mod words;
 
 use embedded_graphics::{prelude::Point, primitives::Rectangle};
@@ -18,13 +18,19 @@ use self::{
     layout::{Face, List, Text, Vertical, format, rect},
     view::{
         Answer, At, Done, End, MemberView, MeshView, PairingView, Phase, Position, Reason,
-        RecoveryPhase, RecoveryView, RefreshPhase, RefreshView, Refused, Request, Role,
+        RecoveryPhase, RecoveryView, RefreshPhase, RefreshView, Refused, RemovalStage, RemovalView,
+        Request, Role, Unremovable,
     },
 };
 use super::{
-    ease::{Ease, SETTLE},
+    drawer::{
+        parts::{self, FOOTER, TOP_HIT},
+        removals::{self, Show},
+    },
+    ease::Ease,
     gesture::{GestureEvent, Micros},
     icon::Glyph,
+    slide::{Slide, Track},
 };
 use crate::chrome::{self, Color, FontdueRenderer};
 
@@ -87,6 +93,13 @@ enum Unavailable {
     Pairing,
 }
 
+/// Why REMOVE cannot go ahead.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NotRemoved {
+    NoRadio,
+    Mesh(Unremovable),
+}
+
 /// Where a screen that shows this device's membership goes back to.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum From {
@@ -94,7 +107,8 @@ enum From {
     Members,
 }
 
-/// A list dragged up and down, which settles on a whole row.
+/// A list dragged up and down, which settles on a whole row, or at its end, where the last row
+/// shows whole.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct Scroll {
     offset: i32,
@@ -153,7 +167,12 @@ impl Scroll {
             }
             GestureEvent::DragEnd(_) => {
                 if self.grabbed.take().is_some() {
-                    let to = ((self.offset + ROW / 2) / ROW * ROW).clamp(0, max);
+                    let row = ((self.offset + ROW / 2) / ROW * ROW).min(max);
+                    let to = if max - self.offset < (self.offset - row).abs() {
+                        max
+                    } else {
+                        row
+                    };
                     self.settle = (to != self.offset).then_some((self.offset, to, now));
                 }
             }
@@ -197,83 +216,28 @@ impl Scroll {
 /// The handle a deliberate drag carries to the right to confirm: a code that matches, or
 /// leaving the group.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-struct Slider {
-    /// How far right the handle is, while a drag that started on it holds it.
-    held: Option<i32>,
-    /// Returning to the start from a release short of the end, since a time.
-    back: Option<(i32, Micros)>,
-    done: bool,
-}
+struct Slider(Slide);
 
 /// The handle at rest, and where a drag must start to take it.
 const HANDLE: Rectangle = rect(98, 304, 200, 402);
-const GRAB: Rectangle = rect(94, 300, 200, 406);
-const TRAVEL: i32 = 168;
-/// 90 % of the travel, rounded up.
-const COMMIT: i32 = 152;
+const TRACK: Track = Track {
+    grab: rect(94, 300, 200, 406),
+    travel: 168,
+};
 
 impl Slider {
-    /// Follows a horizontal drag that starts on the handle, and returns whether it let go at
-    /// the end. A tap, a flick that ends short and a vertical drag confirm nothing.
     fn handle(&mut self, event: &GestureEvent, now: Micros) -> bool {
-        if self.done {
-            return false;
-        }
-        match *event {
-            GestureEvent::Down(_) => self.back = None,
-            GestureEvent::DragStart(drag) => {
-                let offset = drag.offset();
-                if GRAB.contains(drag.start) && offset.x.abs() >= offset.y.abs() {
-                    self.held = Some(offset.x.clamp(0, TRAVEL));
-                }
-            }
-            GestureEvent::DragMove(drag) => {
-                if self.held.is_some() {
-                    self.held = Some(drag.offset().x.clamp(0, TRAVEL));
-                }
-            }
-            GestureEvent::DragEnd(drag) => {
-                if self.held.take().is_some() {
-                    let travel = drag.offset().x.clamp(0, TRAVEL);
-                    if travel >= COMMIT {
-                        self.done = true;
-                        return true;
-                    }
-                    self.back = (travel > 0).then_some((travel, now));
-                }
-            }
-            GestureEvent::Tap(_) | GestureEvent::None => {}
-        }
-        false
-    }
-
-    fn travel(&self, now: Micros) -> i32 {
-        if self.done {
-            return TRAVEL;
-        }
-        if let Some(held) = self.held {
-            return held;
-        }
-        match self.back {
-            Some((from, start)) => libm::roundf(Ease::new(from as f32, 0, start).at(now).0) as i32,
-            None => 0,
-        }
+        self.0.handle(event, now, &TRACK)
     }
 
     fn step(&mut self, now: Micros) -> bool {
-        if self
-            .back
-            .is_some_and(|(_, start)| now.saturating_sub(start) >= SETTLE)
-        {
-            self.back = None;
-        }
-        self.back.is_some()
+        self.0.step(now)
     }
 
     fn draw(&self, prompt: &str, label: &str, now: Micros, list: &mut List) {
-        let travel = self.travel(now);
+        let travel = self.0.travel(now, &TRACK);
         list.outline(ACTION, chrome::ORANGE);
-        if travel * 10 < TRAVEL * 4 {
+        if travel * 10 < TRACK.travel * 4 {
             list.centred(prompt, 279, 327, Face::Mono, 13, chrome::ORANGE);
             list.centred(label, 279, 351, Face::Mono, 13, chrome::ORANGE);
         }
@@ -326,10 +290,16 @@ impl Session {
         mesh.session_after(self.after)
     }
 
+    fn refused(&self, mesh: &MeshView) -> Option<Refused> {
+        mesh.refusal_after(self.after)
+    }
+
     /// Whether the pairing has not yet ended, including one the mesh has not taken up yet.
     fn active(&self, mesh: &MeshView) -> bool {
-        self.view(mesh)
-            .is_none_or(|pairing| !pairing.phase.is_final() && pairing.refused.is_none())
+        self.refused(mesh).is_none()
+            && self
+                .view(mesh)
+                .is_none_or(|pairing| !pairing.phase.is_final())
     }
 
     fn caption(&self) -> &'static str {
@@ -348,8 +318,21 @@ enum Screen {
         id: u8,
         from: From,
     },
+    /// Removing member `id`, the device with this fingerprint: the slide, and the answer count
+    /// when the request went out.
+    RemoveConfirm {
+        id: u8,
+        device: [u8; 8],
+        slide: Slide,
+        asked: Option<u32>,
+    },
+    /// This device's removal of the device with this fingerprint, under way.
+    Removing {
+        device: [u8; 8],
+    },
     RemoveUnavailable {
         id: u8,
+        why: NotRemoved,
     },
     Leave {
         from: From,
@@ -396,6 +379,8 @@ pub enum Exit {
     Stay,
     /// Back to the settings panel.
     Panel,
+    /// VIEW REQUEST: the removal with this new key, in the drawer.
+    Request([u8; 8]),
 }
 
 /// The group screens, opened from the panel.
@@ -410,6 +395,28 @@ impl Flow {
     pub fn group() -> Self {
         Self {
             screen: Screen::Hub,
+        }
+    }
+
+    /// Whether the name's keyboard shows, which a toast keeps clear of.
+    #[must_use]
+    pub fn typing(&self) -> bool {
+        matches!(self.screen, Screen::Name { .. })
+    }
+
+    /// The group's members, as an event's VIEW MEMBERS opens them.
+    #[must_use]
+    pub fn members() -> Self {
+        Self {
+            screen: Screen::Members(Scroll::default()),
+        }
+    }
+
+    /// Leaving the group, as the removed notice's LEAVE GROUP opens it.
+    #[must_use]
+    pub fn leave() -> Self {
+        Self {
+            screen: Screen::Leave { from: From::Hub },
         }
     }
 
@@ -458,6 +465,8 @@ impl Flow {
             _ => None,
         };
         let tapped = |area: Rectangle| tap.is_some_and(|point| area.contains(point));
+        // The removal screens' controls, from the drawer's parts, take its touch height.
+        let pressed = |area: Rectangle| tap.is_some_and(|point| parts::pressed(area, point));
         let own = mesh.group.as_ref().map(|group| group.own);
         let next = match &mut self.screen {
             Screen::Hub => {
@@ -581,18 +590,59 @@ impl Flow {
                     } else {
                         None
                     }
+                } else if let Some(removal) = pending_removal_of(mesh, id) {
+                    if pressed(FOOTER) {
+                        return Exit::Request(removal.key);
+                    }
+                    tapped(TOP_HIT).then_some(Screen::Members(Scroll::default()))
                 } else if tapped(NAV_HIT) {
                     Some(Screen::Members(Scroll::default()))
                 } else if tapped(ACTION) {
-                    Some(Screen::RemoveUnavailable { id })
+                    remove(mesh, id)
                 } else {
                     None
                 }
             }
-            Screen::RemoveUnavailable { id } => tapped(NAV_HIT).then_some(Screen::Member {
-                id: *id,
-                from: From::Members,
-            }),
+            Screen::RemoveConfirm {
+                id,
+                device,
+                slide,
+                asked,
+            } => {
+                let (id, device) = (*id, *device);
+                if asked.is_some() {
+                    None
+                } else if let Some(why) = cannot_remove(mesh, id, &device) {
+                    Some(Screen::RemoveUnavailable { id, why })
+                } else if slide.handle(event, now, &removals::SLIDE) {
+                    *request = Some(Request::Remove { id, device });
+                    *asked = Some(mesh.answered);
+                    None
+                } else if tapped(TOP_HIT) || pressed(FOOTER) {
+                    Some(Screen::Member {
+                        id,
+                        from: From::Members,
+                    })
+                } else {
+                    None
+                }
+            }
+            Screen::Removing { .. } => {
+                (tapped(TOP_HIT) || pressed(FOOTER)).then_some(Screen::Members(Scroll::default()))
+            }
+            Screen::RemoveUnavailable { id, why } => {
+                let underway = why == &NotRemoved::Mesh(Unremovable::Underway);
+                match mesh.removals.current {
+                    Some(removal) if underway && pressed(FOOTER) => {
+                        return Exit::Request(removal.key);
+                    }
+                    _ if tapped(TOP_HIT) => Some(Screen::Member {
+                        id: *id,
+                        from: From::Members,
+                    }),
+                    _ => pressed(FOOTER).then_some(Screen::Members(Scroll::default())),
+                }
+            }
             Screen::Leave { from } => {
                 let from = *from;
                 if tapped(NAV_HIT) {
@@ -639,7 +689,8 @@ impl Flow {
                 asked,
                 back,
             } => match keyboard.handle(event, font) {
-                Outcome::Stay => None,
+                // A name keyboard never asks to review.
+                Outcome::Stay | Outcome::Review(_) => None,
                 Outcome::Cancel | Outcome::Unchanged => match *back {
                     None => return Exit::Panel,
                     Some(from) => own
@@ -727,6 +778,19 @@ impl Flow {
                 let rows = mesh.group.as_ref().map_or(0, view::GroupView::count);
                 return (Exit::Stay, scroll.step(rows, now, MEMBER_ROWS));
             }
+            Screen::RemoveConfirm {
+                id,
+                device,
+                slide,
+                asked,
+            } => match answered(*asked) {
+                Some(Answer::Removing(Ok(()))) => Some(Screen::Removing { device: *device }),
+                Some(Answer::Removing(Err(why))) => Some(Screen::RemoveUnavailable {
+                    id: *id,
+                    why: NotRemoved::Mesh(why),
+                }),
+                _ => return (Exit::Stay, slide.step(now)),
+            },
             Screen::LeaveSlide { slider, asked, .. } => match answered(*asked) {
                 Some(Answer::Left(true)) => Some(Screen::LeaveDone),
                 Some(Answer::Left(false)) => Some(Screen::LeaveFailed),
@@ -910,31 +974,40 @@ impl Flow {
                     pair(l, ACTIONS, ["NAME", "LEAVE"]);
                     footer(l, COVER);
                 }
-                Some(group) => match group.member(*id) {
-                    Some(member) => member_detail(l, *id, member, now, font),
-                    None => gone(l),
+                Some(group) => match (group.member(*id), pending_removal_of(mesh, *id)) {
+                    (Some(member), Some(removal)) => {
+                        pending_member(l, *id, member, &removal, now, font);
+                    }
+                    (Some(member), None) => member_detail(l, *id, member, now, font),
+                    (None, _) => gone(l),
                 },
                 None => gone(l),
             },
-            Screen::RemoveUnavailable { .. } => {
-                head(
-                    l,
-                    "REMOVE",
-                    "GROUP / LATER FEATURE",
-                    Some("BACK"),
-                    GROUP,
-                    chrome::ORANGE,
-                );
-                big(l, "UNAVAILABLE", chrome::GRAY);
-                copy(
-                    l,
-                    &[
-                        "REMOVAL REQUIRES A GROUP UPDATE",
-                        "THIS DEVICE CANNOT REMOVE MEMBERS",
-                    ],
-                );
-                footer(l, COVER);
+            Screen::RemoveConfirm {
+                id, device, slide, ..
+            } => match mesh.group.as_ref().and_then(|group| group.member(*id)) {
+                Some(member) => remove_confirm(l, *id, device, member, slide, now, font),
+                None => gone(l),
+            },
+            Screen::Removing { device } => {
+                let show = Show {
+                    own: mesh.group.as_ref().map_or(0, |group| group.own),
+                    now,
+                    font,
+                };
+                match mesh.removals.current {
+                    Some(removal) if removal.device == *device => {
+                        removals::detail(l, &removal, &show);
+                    }
+                    _ => {
+                        parts::back(l);
+                        parts::title(l, "REMOVING", font);
+                        parts::meta(l, "YOUR REQUEST");
+                        parts::button(l, FOOTER, "VIEW GROUP", true);
+                    }
+                }
             }
+            Screen::RemoveUnavailable { id, why } => remove_unavailable(l, *id, *why, mesh, font),
             Screen::Leave { .. } => {
                 head(
                     l,
@@ -1002,7 +1075,7 @@ impl Flow {
                 action(l, "BACK TO GROUP", false, ACTION, chrome::WHITE, None);
                 footer(l, COVER);
             }
-            Screen::Name { keyboard, .. } => keyboard.draw(font, l),
+            Screen::Name { keyboard, .. } => keyboard.draw(font, l, ""),
             Screen::NameFailed { .. } => {
                 head(l, "MY NAME", "NAME / LOCAL", None, FAULT, chrome::RED);
                 big(l, "SAVE FAILED", chrome::RED);
@@ -1129,9 +1202,7 @@ fn handle_pairing(
     let tapped = |area: Rectangle| tap.is_some_and(|point| area.contains(point));
     let pairing = session.view(mesh);
     let phase = pairing.map(|pairing| pairing.phase);
-    if pairing.is_some_and(|pairing| pairing.refused.is_some())
-        || phase.is_some_and(Phase::is_final)
-    {
+    if session.refused(mesh).is_some() || phase.is_some_and(Phase::is_final) {
         if tapped(ACTION)
             && let Some(recovery) = pairing.and_then(|pairing| recovery_of(mesh, pairing))
             && recovery.phase.is_final()
@@ -1445,15 +1516,222 @@ fn member_detail(
         None => format(format_args!("JOINED TIME UNKNOWN")),
     };
     list.centred(&joined, CENTRE, 280, Face::Mono, 13, chrome::GRAY);
-    action(
-        list,
-        "REMOVE",
-        false,
-        ACTION,
-        chrome::GRAY,
-        Some("UNAVAILABLE"),
-    );
+    action(list, "REMOVE", false, ACTION, chrome::ORANGE, None);
     footer(list, COVER);
+}
+
+/// The removal under way of member `id`, while the device at `id` is the one it removes.
+fn pending_removal_of(mesh: &MeshView, id: u8) -> Option<RemovalView> {
+    let member = mesh.group.as_ref()?.member(id)?;
+    mesh.removals.current.filter(|removal| {
+        matches!(removal.stage, RemovalStage::Pending { .. })
+            && removal.removed == id
+            && removal.device == member.device
+    })
+}
+
+/// Why member `id`, the device `device`, cannot be removed now, if it cannot.
+fn cannot_remove(mesh: &MeshView, id: u8, device: &[u8; 8]) -> Option<NotRemoved> {
+    let member = mesh.group.as_ref().and_then(|group| group.member(id));
+    if !mesh.radio {
+        Some(NotRemoved::NoRadio)
+    } else if member.is_none_or(|member| member.device != *device) {
+        Some(NotRemoved::Mesh(Unremovable::Changed))
+    } else if mesh
+        .removals
+        .current
+        .is_some_and(|removal| matches!(removal.stage, RemovalStage::Pending { .. }))
+    {
+        Some(NotRemoved::Mesh(Unremovable::Underway))
+    } else {
+        None
+    }
+}
+
+/// REMOVE on member `id`: its confirmation, or why it cannot go ahead.
+fn remove(mesh: &MeshView, id: u8) -> Option<Screen> {
+    let device = mesh.group.as_ref()?.member(id)?.device;
+    Some(match cannot_remove(mesh, id, &device) {
+        Some(why) => Screen::RemoveUnavailable { id, why },
+        None => Screen::RemoveConfirm {
+            id,
+            device,
+            slide: Slide::default(),
+            asked: None,
+        },
+    })
+}
+
+/// The removal of member `id`, the device `device`, to confirm with the slide.
+fn remove_confirm(
+    list: &mut List,
+    id: u8,
+    device: &[u8; 8],
+    member: &MemberView,
+    slide: &Slide,
+    now: Micros,
+    font: &FontdueRenderer<'static, Color>,
+) {
+    parts::back(list);
+    parts::title(list, "REMOVE", font);
+    parts::meta(list, "GROUP CHANGE");
+    removals::target(
+        list,
+        &member.name,
+        &removals::device_caption(id, device),
+        font,
+    );
+    let reads = format(format_args!(
+        "{} can still read the group",
+        member.name.as_str()
+    ));
+    let reads = if crate::ui::text::style(font, chrome::WHITE, 17, Face::Sans.index())
+        .advance(&reads)
+        <= 290.0
+    {
+        reads
+    } else {
+        format(format_args!("The member can still read the group"))
+    };
+    for (i, line) in [
+        "A group change will be scheduled.",
+        &reads,
+        "until the switch.",
+    ]
+    .iter()
+    .enumerate()
+    {
+        list.text(parts::text(
+            line,
+            parts::PROSE_X,
+            211 + 24 * i as i32,
+            Face::Sans,
+            17,
+            chrome::WHITE,
+        ));
+    }
+    removals::slider(list, "SLIDE TO REMOVE", slide, now);
+}
+
+/// Why member `id` cannot be removed, and where to go from here.
+fn remove_unavailable(
+    list: &mut List,
+    id: u8,
+    why: NotRemoved,
+    mesh: &MeshView,
+    font: &FontdueRenderer<'static, Color>,
+) {
+    parts::back(list);
+    parts::title(list, "REMOVE", font);
+    parts::meta(list, "GROUP CHANGE");
+    if let Some(member) = mesh.group.as_ref().and_then(|group| group.member(id)) {
+        removals::target(
+            list,
+            &member.name,
+            &removals::device_caption(id, &member.device),
+            font,
+        );
+    }
+    list.text(parts::centred(
+        "REMOVE UNAVAILABLE",
+        parts::CENTRE,
+        226,
+        Face::Kh,
+        20,
+        chrome::GRAY,
+    ));
+    let reason: &[&str] = match why {
+        NotRemoved::NoRadio => &["This device has no radio", "to tell the group with."],
+        NotRemoved::Mesh(Unremovable::NoTime) => &[
+            "The group's time is not known yet.",
+            "It comes from GPS or a member.",
+        ],
+        NotRemoved::Mesh(Unremovable::Underway) => &[
+            "Another removal is under way.",
+            "Try again after its switch.",
+        ],
+        NotRemoved::Mesh(Unremovable::Changed) => &["This id holds another device now."],
+        NotRemoved::Mesh(Unremovable::Unsaved) => &["The request could not be stored."],
+        NotRemoved::Mesh(Unremovable::NoRandom) => &["No random source for a new key."],
+    };
+    for (i, line) in reason.iter().enumerate() {
+        list.text(parts::centred(
+            line,
+            parts::CENTRE,
+            271 + 24 * i as i32,
+            Face::Sans,
+            17,
+            chrome::GRAY,
+        ));
+    }
+    let underway =
+        why == NotRemoved::Mesh(Unremovable::Underway) && mesh.removals.current.is_some();
+    parts::button(
+        list,
+        FOOTER,
+        if underway {
+            "VIEW REQUEST"
+        } else {
+            "VIEW GROUP"
+        },
+        true,
+    );
+}
+
+/// A member a removal under way will remove at its switch: still a member until then.
+fn pending_member(
+    list: &mut List,
+    id: u8,
+    member: &MemberView,
+    removal: &RemovalView,
+    now: Micros,
+    font: &FontdueRenderer<'static, Color>,
+) {
+    parts::back(list);
+    parts::title(list, "MEMBER", font);
+    parts::meta(list, &removals::device_caption(id, &member.device));
+    let (contact, _) = direct(member, false, now, list);
+    let seen = position(member, now, list);
+    removals::target(
+        list,
+        &member.name,
+        &removals::upper(&format(format_args!("{seen} / {contact}"))),
+        font,
+    );
+    list.text(parts::centred(
+        "REMOVAL PENDING",
+        parts::CENTRE,
+        224,
+        Face::Kh,
+        22,
+        chrome::ORANGE,
+    ));
+    let switch = match removal.stage {
+        RemovalStage::Pending {
+            switch: Some(at), ..
+        } => format(format_args!(
+            "SWITCH IN {}",
+            removals::switch_in(at, now, list)
+        )),
+        _ => format(format_args!("SWITCH TIME UNAVAILABLE")),
+    };
+    list.text(parts::centred(
+        &switch,
+        parts::CENTRE,
+        265,
+        Face::Mono,
+        17,
+        chrome::WHITE,
+    ));
+    list.text(parts::centred(
+        "Still a member until the switch.",
+        parts::CENTRE,
+        306,
+        Face::Sans,
+        17,
+        chrome::WHITE,
+    ));
+    parts::button(list, FOOTER, "VIEW REQUEST", true);
 }
 
 fn entry(list: &mut List, role: Role, mesh: &MeshView) {
@@ -1673,11 +1951,7 @@ fn peer(pairing: &PairingView) -> layout::Line {
 
 fn pairing(list: &mut List, session: &Session, mesh: &MeshView, now: Micros) {
     let caption = session.caption();
-    let Some(pairing) = session.view(mesh) else {
-        // Asked for, and not yet taken up: the role's first screen, with no time to count.
-        return discovery(list, session, mesh, None, now);
-    };
-    if let Some(refused) = pairing.refused {
+    if let Some(refused) = session.refused(mesh) {
         let ending = match refused {
             Refused::InGroup => Ending {
                 big: "IN A GROUP",
@@ -1703,6 +1977,10 @@ fn pairing(list: &mut List, session: &Session, mesh: &MeshView, now: Micros) {
         };
         return outcome(list, caption, &ending, None);
     }
+    let Some(pairing) = session.view(mesh) else {
+        // Asked for, and not yet taken up: the role's first screen, with no time to count.
+        return discovery(list, session, mesh, None, now);
+    };
     let cancel = (!session.cancelled).then_some("CANCEL");
     match pairing.phase {
         Phase::Found if session.role == Role::Add => {
@@ -2231,15 +2509,16 @@ fn learned_line(learned: u32) -> layout::Line {
 /// once it ended.
 fn refresh(list: &mut List, session: u32, mesh: &MeshView, now: Micros) {
     let shown = mesh.refresh.filter(|refresh| refresh.session == session);
-    let (refresh, until) = match shown {
-        // Asked for, and not yet taken up: all its time is still to come.
-        None => (None, now as At + REFRESH_US),
+    let listening = match shown {
+        // Asked for, and not yet taken up.
+        None => None,
         Some(refresh) => match refresh.phase {
-            RefreshPhase::Listening { until } => (Some(refresh), until),
+            RefreshPhase::Listening { until } => Some((refresh, until)),
             _ => return refresh_result(list, &refresh, now),
         },
     };
-    let (heard, learned) = refresh.map_or((0, 0), |refresh| (refresh.heard, refresh.learned));
+    let (heard, learned) =
+        listening.map_or((0, 0), |(refresh, _)| (refresh.heard, refresh.learned));
     head(
         list,
         "GROUP",
@@ -2257,10 +2536,10 @@ fn refresh(list: &mut List, session: u32, mesh: &MeshView, now: Micros) {
         15,
         chrome::WHITE,
     );
-    let left = if refresh.is_some() {
-        time_left(until, now, list)
-    } else {
-        time_left(until, until as Micros, list)
+    let left = match listening {
+        Some((_, until)) => time_left(until, now, list),
+        // All its time is still to come.
+        None => format(format_args!("{}", words::countdown(REFRESH_US, 0).0)),
     };
     list.fill(LEFT_SLAB, chrome::WHITE);
     list.text(
@@ -2563,4 +2842,47 @@ fn recovery_screen(list: &mut List, recovery: &RecoveryView, now: Micros) {
             action: Some("VIEW GROUP"),
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::gesture::Drag;
+
+    /// Drags a list of `rows` on MEMBERS up by `by` and lets it settle.
+    fn dragged(rows: usize, by: i32) -> i32 {
+        let mut scroll = Scroll::default();
+        let start = Point::new(233, 380);
+        let drag = |up: i32| Drag {
+            start,
+            current: start - Point::new(0, up),
+            velocity: (0.0, 0.0),
+        };
+        scroll.handle(&GestureEvent::Down(start), rows, 0, MEMBER_ROWS);
+        scroll.handle(&GestureEvent::DragStart(drag(10)), rows, 0, MEMBER_ROWS);
+        scroll.handle(&GestureEvent::DragMove(drag(by)), rows, 0, MEMBER_ROWS);
+        scroll.handle(&GestureEvent::DragEnd(drag(by)), rows, 0, MEMBER_ROWS);
+        let mut now = 0;
+        while scroll.step(rows, now, MEMBER_ROWS) {
+            now += 16_667;
+        }
+        scroll.offset
+    }
+
+    #[test]
+    fn a_list_dragged_to_its_end_rests_there() {
+        for rows in [2, 8] {
+            assert_eq!(
+                dragged(rows, 1_000),
+                Scroll::max(rows, MEMBER_ROWS),
+                "{rows} rows"
+            );
+        }
+        assert_eq!(dragged(2, 10), 0, "a short drag settles back");
+        assert_eq!(
+            dragged(8, 120),
+            ROW,
+            "between rows it settles on the nearer"
+        );
+    }
 }

@@ -36,7 +36,7 @@ look is in [`design/`](design/README.md).
 - It has no battery fitted. The PMIC reports none present, so the clock shows no battery reading,
   and a charging gauge shows only with a synthetic battery, as `bench/charge-fault-draw` gives.
 - From a shell without a TTY, `cargo run --release` flashes but its monitor fails ("Failed to
-  initialize input reader"). Flash with
+  initialize input reader"). Flash from `firmware/` with
   `espflash flash --partition-table partitions.csv --port <by-id> <elf>`, then capture with
   `timeout N espflash monitor --non-interactive -L defmt --elf <elf> --port <by-id> > file`.
   That is a reset read. Filter the file after the capture ends: a pipeline under `timeout`

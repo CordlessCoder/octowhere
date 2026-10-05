@@ -86,7 +86,7 @@ def main():
     parser.add_argument("arguments", nargs="*")
     parser.add_argument("--ms", type=int, default=300, help="a swipe's length")
     parser.add_argument("--probe", default="303a:1001")
-    parser.add_argument("--elf", default="target/xtensa-esp32s3-none-elf/release/octowhere")
+    parser.add_argument("--elf", default="firmware/target/xtensa-esp32s3-none-elf/release/octowhere")
     args = parser.parse_args()
 
     address = symbols(args.elf, [PATH, GO, FRAMEBUFFERS])

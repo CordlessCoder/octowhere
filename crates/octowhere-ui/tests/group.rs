@@ -9,7 +9,7 @@ use octowhere_ui::{
     ui::{
         group::{
             sim::{self, PeerUser, Sim},
-            view::{Done, End, MeshView, Phase, Reason, Role},
+            view::{Done, End, MeshView, Phase, Reason, Refusal, Refused, Role},
         },
         rest::{Rest, Timeout},
         screens::{PeripheralState, Screen},
@@ -134,6 +134,45 @@ fn nothing_asks_the_mesh_to_pair_before_start() {
         view(&driver).pairing.as_ref().map(|pairing| pairing.role),
         Some(Role::Add)
     );
+}
+
+/// The group screen with no simulated mesh, on the view `mesh`, which the test then changes.
+fn hub_on(mesh: MeshView) -> Driver<'static> {
+    let mut driver = Driver::on(Screen::Clock);
+    driver.stage = Stage::new(PeripheralState {
+        timeout: Timeout::Never,
+        ..PeripheralState::default()
+    });
+    driver.stage.show(Screen::Clock);
+    driver.wait(600_000);
+    driver.stage.set_mesh(mesh);
+    driver.wait(100_000);
+    open_group(&mut driver);
+    driver
+}
+
+#[test]
+fn a_refused_pairing_says_why_and_goes_back_to_the_group() {
+    let mut driver = hub_on(MeshView {
+        radio: true,
+        ..MeshView::default()
+    });
+    tap(&mut driver, 156, 353);
+    tap(&mut driver, 233, 353);
+    driver.stage.update_mesh(|mesh| {
+        mesh.sessions = 1;
+        mesh.refusal = Some(Refusal {
+            session: 1,
+            role: Role::Add,
+            refused: Refused::NoRandom,
+        });
+    });
+    driver.wait(100_000);
+    for line in ["UNAVAILABLE", "NO RANDOM SOURCE FOR KEYS"] {
+        assert!(shows(&driver, line), "{line}: {:?}", shown(&driver));
+    }
+    tap(&mut driver, ACTION.0, ACTION.1);
+    assert!(!shows(&driver, "UNAVAILABLE"), "{:?}", shown(&driver));
 }
 
 #[test]
@@ -476,6 +515,29 @@ fn a_refresh_runs_in_the_background_and_shows_its_result_once() {
     tap(&mut driver, ACTION.0, ACTION.1);
     tap(&mut driver, STRIP.0, STRIP.1);
     assert!(shows(&driver, "START REFRESH"), "{:?}", shown(&driver));
+}
+
+#[test]
+fn a_refresh_shows_its_whole_time_until_the_mesh_takes_it_up() {
+    let mut driver = awake_hub(Some(8));
+    tap(&mut driver, MEMBERS.0, MEMBERS.1);
+    tap(&mut driver, STRIP.0, STRIP.1);
+    let left: Rc<RefCell<Vec<String>>> = Rc::default();
+    let watching = Rc::clone(&left);
+    driver.observe(move |stage, _| {
+        if stage.group_text().any(|line| line == "LISTENING") {
+            watching.borrow_mut().extend(
+                stage
+                    .group_text()
+                    .filter(|line| line.contains(':'))
+                    .map(String::from),
+            );
+        }
+    });
+    tap(&mut driver, ACTION.0, ACTION.1);
+    let left = left.borrow();
+    assert!(!left.is_empty());
+    assert!(left.iter().all(|left| left == "02:15"), "{left:?}");
 }
 
 #[test]

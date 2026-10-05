@@ -217,12 +217,16 @@ A node needs a timebase to place slots: GPS time from its own fix, or another no
 when that node's packets arrive. The owner chose this over running slots on the RTC, whose whole
 seconds two nodes can disagree on (2026-10-01). Every header names the sender's timebase:
 
-- **Source.** GPS, or a node's own clock.
+- **Source.** GPS, a node's clock started from its RTC's UTC, or a node's clock started from
+  its boot, by a node whose RTC held no time.
 - **Root.** For a node's clock, the id of the node that started it.
 - **Hops.** How many receptions the sender is from the root: 0 for a node timing from its own fix,
   and for a root.
 
-GPS ranks above any node's clock, and between node clocks the lower root id ranks higher.
+GPS ranks above any node's clock, a clock started from UTC above one started from a boot, and of
+two clocks alike the lower root id ranks higher (owner, 2026-10-04). A clock started from a boot
+counts its seconds from 1970, so ranked by its root alone it took a whole group there, and every
+node, those whose RTCs held the time too, refused records stamped in 2026 as an hour ahead.
 
 - **Taking a timebase.** A node that hears a packet from a timebase ranked above its own adopts
   it: it sets its clock from the packet's arrival, and takes the sender's root and its hops plus
@@ -232,6 +236,20 @@ GPS ranks above any node's clock, and between node clocks the lower root id rank
   at its own id takes it back as its root: it is the node's own clock, kept by the others while
   it restarted. Without that, it would follow its own clock through them as a ghost root, until
   each found the root lost.
+- **Replays.** A packet's timing says where its sender's clock stood when it was sent, so a
+  recording replayed later moves a clock by its age (owner, 2026-10-04):
+  - A node whose RTC holds the time refuses a timebase more than 5 minutes from it, and one
+    started from a boot. An RTC drifts a couple of seconds a day, so the bound holds for months
+    without a fix.
+  - A packet that would move a clock the node already has by more than a slot's guard waits,
+    held, for a second that agrees within the guard: from another sender, or from the same in a
+    later round, within four rounds, past a lone neighbour's floor round. The node listens
+    throughout those four rounds, since on a clock apart from the sender's its windows need not
+    meet the next packet. A replay of two recorded packets still gets through, within the
+    bound where the node has one.
+  - A node's first timebase is no move of a clock it has, so only the bound guards it.
+  Replayed an hour on, a packet had set a node's clock an hour back, which the node then kept as
+  its own root; in a sweep round it lost the sender for about 340 s.
 - **Arrival timing.** A sender starts its packet at its slot's start, and its id and the header's
   base timestamp name the slot. The receiver takes the time `DIO0` signals RxDone, subtracts the
   packet's airtime, and has that slot's start on its own timer. The latencies on both sides, the
@@ -253,7 +271,10 @@ GPS ranks above any node's clock, and between node clocks the lower root id rank
   falls on each of the floor's three rounds in turn. A fix ends a node's first sweep at once. A
   node keeps transmitting in its own slots during a sweep.
 - **Starting one.** A node that hears nobody in its first sweep starts its own timebase from its
-  RTC's time, as its root. Groups started this way merge as their sweeps find each other, to the
+  RTC's time, as its root, or from its boot if its RTC holds no time. A node whose clock was
+  started from its boot takes UTC from a timebase started from UTC, for its own records' and
+  messages' stamps; the RTC is GNSS's alone to set (owner, 2026-10-04). Without one it stamps
+  its records 0, which lose every merge. Groups started this way merge as their sweeps find each other, to the
   lowest root. A node that gets a fix moves to GPS time, and the nodes timing from it find it again
   at their next sweep.
 - **Refreshing.** REFRESH DEVICES on the screens starts the same three-round sweep at once
@@ -271,6 +292,11 @@ GPS ranks above any node's clock, and between node clocks the lower root id rank
   (`docs/logs/lora/sweeps-and-notices-2026-10-03/`).
 - **Ageing.** A node's own GPS time counts as GPS while a fix has refined it within 30 minutes.
   After that the node ranks as its own root, so a node with a live fix takes the group over.
+
+A node that restarted with no UTC while a removal was pending hears a group that has switched
+only under the key it is to switch to. It takes nothing else from such a packet, but moves to its
+clock if it outranks its own: without that it stayed on its boot clock, where the switch round it
+stored never came.
 
 A node's clock is UTC only as well as its root's RTC was. Its own entries need a fix, so they are
 always stamped in GPS time; it relays another's entry only when the entry's stamp fits the 12-bit
@@ -375,7 +401,7 @@ Header, 8 bytes, encrypted:
 | timebase source: 0 GPS, 1 a node's clock | 1 |
 | timebase root, for a node's clock | 5 |
 | hops from the timebase's root | 5 |
-| flags: bit 0 a notice, the rest reserved | 4 |
+| flags: bit 0 a notice, bit 1 a node's clock started from its boot, the rest reserved | 4 |
 | base timestamp, timebase seconds | 32 |
 | slot phase, reserved for CAD | 8 |
 
@@ -391,6 +417,7 @@ header still is one.
 | request | 32-bit set of the ids whose member records the sender asks for |
 | member | id, X25519 public key, join time, change time, hardware address, then a name of 1 to 16 printable ASCII characters; 47 to 63 bytes |
 | gone | id, X25519 public key and change time of a member that left or was removed; 37 bytes |
+| on key | id, generation and the member's signature that it is on that generation's key; 67 bytes |
 | message | see "Messages" |
 | messages digest | 32 bits of a hash of the messages the sender holds (see "Messages") |
 | summary | the messages the sender holds from each origin, to be sent what it lacks (see "Messages") |
@@ -477,7 +504,7 @@ A message record carries:
 | sequence number | 4 | per origin, never reused, never 0 |
 | previous | 4 | the origin's sequence number before this one, 0 for none |
 | timestamp | 4 | timebase seconds, set by the origin, copied by relays |
-| body | rest | a kind byte and what it holds; to one member, sealed (see "Private messages") |
+| body | rest | a kind byte and what it holds; to one member, sealed (see "Private messages"); a key message's seal is followed by its generation and its remover's signature (see "Signatures") |
 
 A message to one member is always private. The kinds are text, an acknowledgement, a new group
 key, and a removal.
@@ -493,7 +520,8 @@ key, and a removal.
 - **Digest.** A packet carries a messages digest while its sender holds a message: 32 bits of
   a hash over the origin and sequence number of each one not yet past the horizon. A message
   passes the horizon at a round's start, the same for every node on a timebase, so two nodes'
-  digests agree when they hold the same messages.
+  digests agree when they hold the same messages. A node judges that against its own clock,
+  not the time in the header of the packet that carried the message.
 - **Summary.** A node whose digest has differed from a neighbour's in two of that neighbour's
   packets running sends a summary in its next packet: for each origin, the oldest and newest
   sequence numbers it holds, and those it knows it lacks between them. A message names the
@@ -534,8 +562,9 @@ since the header and record are under the group key.
   origin, because it names the message in every node's store. It is persisted in flash in
   reserved blocks of 64, and a boot skips to the next block, so a crash wastes numbers rather
   than reusing them. A new block starts no lower than the clock's second, so a device given a
-  freed id starts above every number its last holder used. It belongs to the device, not the
-  group, so leaving keeps it.
+  freed id starts above every number its last holder used. A clock past 2100 counts as 2100
+  there, so that a timebase set far ahead cannot use up the numbers left. It belongs to the
+  device, not the group, so leaving keeps it.
 
 ### Removing a member
 
@@ -544,57 +573,102 @@ Owner, 2026-10-03, except where it says otherwise.
 - **Who.** Any member can remove any other, as any member can add one. The new key reaches
   each member sealed under the key it shares with the remover, so each knows who asked.
 - **Confirming.** Each device's user is shown who asked to remove whom, and can decline until
-  the switch. A device whose user declines ignores the removal and stays on the old key, so a
-  member removing another out of malice can be overruled; its group can then remove the
-  remover. A device whose user does not answer switches with the group. One that learns of
-  the removal late switches three rounds after it learns of it, at the earliest, so that its
-  user can always decline.
-- **The new key.** The remover makes a random group key and sends it to each remaining member
-  as a private message, a key message, with its generation, one past the current key's, the
-  round the group switches at, counted on its timebase, and the id and SHA-256 fingerprint of
-  the member removed. The remover sends two a packet, so the switch is as many rounds away as
-  its key messages and the removal message take, and four more: the round it is in, and three
-  for hops. That is about 6 minutes for 8 members, 15 for 32. Until then the removed device
-  still reads everything. The remover reserves every sequence number its key messages need
-  before it starts, and a remover that restarts before they have gone sends them again.
-  Adding a device is refused while a removal is under way, since it would get the key the
-  group is leaving.
+  the switch, or for a day after it (owner, 2026-10-03). A device whose user declines ignores
+  the removal and stays on the old key, so a member removing another out of malice can be
+  overruled; its group can then remove the remover. A device whose user does not answer
+  switches with the group. One that learns of the removal late switches three rounds after it
+  learns of it, at the earliest.
+- **Declining after the switch.** A device keeps the key it switched from for a day after its
+  own switch, and declining goes back to it. It forgets what it learned since, so that it does
+  not pass the removed member what the group shared without it: every other node's position,
+  the messages stamped from the group's switch round, and the records of every id that changed
+  since its own switch, other than its own, the removed member's among them. The removed member
+  and the nodes that never switched send those again as they hold them. Only the last removal
+  switched to can be declined this way, and not while another is under way. The user names the
+  member, so a removal that arrives meanwhile is not declined in its place. The remover cannot
+  decline its own, but can decline a rival that wins over it. A rival that wins after the
+  switch keeps the key before both, and the day the first switch gave; one that removes nobody
+  gives the member back and leaves nothing to decline. Any other key that removes nobody leaves
+  the last removal to decline, so that no member can take the day away with an empty removal.
+  The members that switched have heard the device on the new key, so they send it no key
+  message again.
+- **The new key.** The remover makes a random group key and sends it to each remaining member as
+  a private message, a key message, with its generation, one past the current key's, the round
+  the group switches at, counted on its timebase, the id and SHA-256 fingerprint of the
+  member removed, and the fingerprint of the key it replaces (owner, 2026-10-04). The remover
+  signs each (see "Signatures") and sends one a packet, so the
+  switch is as many rounds away as its key messages and the removal message take, and four more:
+  the round it is in, and three for hops. That is about 8 minutes for 8 members, 27 for 32.
+  Until then the removed device still reads everything. The remover reserves every sequence
+  number its key messages need before it starts, and a remover that restarts before they have
+  gone sends them again. Adding a device is refused while a removal is under way, since it would
+  get the key the group is leaving. A node ignores a key message whose switch round is further
+  off than a removal from a group of 32 needs, which would leave the removal pending for good,
+  or whose member removed is neither a member nor a gone record it holds (owner, 2026-10-03).
+  A node takes a key only on the key it names as replaced. It keeps one that names another
+  unread, and tries it again once it has switched: a member that missed several switches takes
+  them in order, and one still on a key a rival won over waits for the winner (owner,
+  2026-10-04).
 - **The switch.** Before it nodes send under the old key, and from it under the new one, in the
   order the new key gives (see "Shuffled slots"). Every node tries both keys on receive, but
-  after the switch merges nothing that arrives under the old key. Such a packet only shows that
-  its sender missed the change. A node holding that member's key message sends it again, in a
-  packet under the old key, when the member next listens for its slot there. The removed
-  device can see that packet but cannot open the key inside. Key messages are held past the
+  after the switch merges nothing that arrives under the old key but the key messages of its
+  own generation, rivals of its key. Anything else in such a packet only shows that its sender
+  missed the change. Before its own switch a node takes nothing from a packet under
+  the new key either: it still sends under the old key, which the removed device reads, and
+  its slot order is still the old key's, so the packet's timing says nothing about its clock.
+  A node holding the key message of the generation after the one a member is on sends it
+  again, in a packet under that member's key, in its own slot of that key's order in the next
+  sweep round. Every member listens throughout a sweep round, whichever key it is on, and one
+  that switched to a rival key listens in that order in no other (owner, 2026-10-04). A member
+  on a key a rival won over is sent the winner's key message instead, of the same generation. The removed device can
+  see that packet but cannot open the key inside. Key messages are kept for this past the
   message horizon while the old key is, but are left out of the digest after it. A member that
   missed the switch sends in the old order; nodes on the new key hear it in a sweep round,
   where they listen throughout, within about 10 minutes. A node sends a member its key
-  message this way at most three times for each old key: one that declined never takes it,
-  and is not acknowledged, so that it would otherwise draw one every sweep round.
-- **The old key** is kept with no time limit, until every remaining member has been heard
-  under the new one; a node keeps the four newest such keys. A member can be away for any length of time and come back without pairing
-  again. While some are not heard, a node sends a header under the old key in its slot of each
-  sweep round, so parts of the group that switched to different keys still hear each other.
+  message this way again only after a gap of sweep rounds that doubles with each send, up to
+  64 sweep rounds, about ten hours, and never stops while it keeps the old key (owner,
+  2026-10-04): one that declined never takes it, and is not acknowledged, so that it would
+  otherwise draw one every sweep round. A node sent it three times at most before, so that
+  anyone replaying one packet the member sent under the old key, which needs no key, spent
+  every send before the member was back. A packet under an old key whose base timestamp is
+  more than 5 minutes from the node's clock sends nothing at all, its key message or the
+  removal notice, when both clocks are UTC.
+- **The old key** is kept with no time limit, until every remaining member has said it is on
+  the new one; a member a later removal takes, or that leaves, is no longer waited for. A
+  member says so in an on-key record it signs over its id, the generation and the new key
+  itself, which it sends in its first three packets after the switch, and again at start-up,
+  and in its sweep rounds' packets for a day after either (owner, 2026-10-04). A node checks
+  one only while it waits for that member, about 32 ms on the board. A packet's sender id
+  proved nothing: any member could send one empty packet under the new key with an absent
+  member's id, and every node stopped waiting for it and dropped the key its catch-up needed. A
+  node keeps the four newest such keys. A member can be away for any length of time and come
+  back without pairing again. While some are not heard, a node sends a header under the old key
+  in its slot of each sweep round, so parts of the group that switched to different keys still
+  hear each other.
 - **The removed device** is sent a private message saying it was removed and by whom. Its
   screen shows that, and it does not leave the group by itself, so a stolen device that removes
   everyone else cannot take them out of their group. The remover sends it only after the
-  switch, under the old key, at its own slot in that key's order, where the removed device
-  still listens, and again when it hears the device under the old key, three times in all.
+  switch, under the old key, at its own slot in that key's order in a sweep round, where the
+  removed device still listens, and again when it hears the device under the old key, three
+  times in all.
   Told before the switch, the device could answer by removing its remover, and the two keys
-  would be rivals that the lower hash settles.
+  would be rivals, and it would win with a lower id than its remover's.
 - **Its record.** At the switch every node replaces the removed member's record with a gone
   record, as of the start of the switch round, so every node's is the same. Its id is free
   for the next pairing at once.
 - **Two at once.** Two removals made apart at the same time make two keys of one generation.
-  The one whose key has the lower SHA-256 wins wherever both are known, even after a switch
-  to the other, and the other remover makes its removal again under it once the member it
-  removed is back (proposed, 2026-10-03). A node that switched to the losing key gives that
-  member its id back, and its record returns from the nodes that never took that key. A key
-  one generation ahead is taken as a removal to show. One further ahead is taken only by a
-  node that has heard no member on its key for seven rounds, as a member that missed two
-  switches has not; otherwise a member could skip past every other removal with a key of a
-  generation nobody else holds. One of an earlier generation is stale.
+  The one whose remover has the lower id wins wherever both are known, and of one remover's
+  two, the one with the lower SHA-256 (owner, 2026-10-04; the lower hash alone before). It
+  wins even after a switch to the other: a node takes a rival from a packet under the key both
+  replace, and the nodes that switched to the winner send it to the members on the loser. The
+  other remover makes its removal again under the winner once the member it removed is back.
+  A node that switched to the losing key puts back the record of the member that key removed,
+  as the node held it before that switch (owner, 2026-10-04). One of an earlier generation is
+  stale. The simulator's rival scenarios stage these (`crates/octowhere-sim`).
 - **What is kept across a restart.** A pending removal, the old keys and which members each
-  still waits for. The key messages themselves are in the message store, so a restarted node
+  still waits for, and the key kept to decline the last removal after its switch; the record of
+  the member the last switch removed, the key the group's key replaced, and the removals this
+  device makes again after a rival won over them. The key messages themselves are in the message store, so a restarted node
   gets them back from its neighbours within the horizon.
 
 ## Time and freshness
@@ -617,10 +691,11 @@ What absolute timestamps do introduce is an unbounded top end. An entry stamped 
 wins every merge permanently, and a node with a bad clock causes that by accident, not just an
 attacker. So:
 
-- Reject entries and messages more than an hour ahead of local time. The gate is the PCF85063A
-  oscillator-stop flag, already read in [`src/peripherals/rtc.rs`](../src/peripherals/rtc.rs) and
-  exposed as `oscillator_stopped()`. A node with OS set skips the check and re-evaluates on its
-  first fix.
+- Reject entries and messages more than an hour ahead of local time. A node on a clock started
+  from a boot skips the check, since its clock is not UTC. The RTC's oscillator-stop flag
+  (`oscillator_stopped()` in
+  [`crates/octowhere-peripherals/src/rtc.rs`](../crates/octowhere-peripherals/src/rtc.rs)) is
+  what makes the firmware report no RTC time, and so start such a clock.
 - Drop entries past the retention horizon. Old positions are not worth relaying.
 
 An hour of margin passes a node whose RTC has free-run for a year. The margin only has to exceed
@@ -632,8 +707,53 @@ One group key, which every member encrypts and decrypts packets with, and a pair
 pair of members, for private message bodies.
 
 A group key proves membership, not identity: a compromised node can forge any other node's entry.
-Per-node authenticity would need Ed25519 signatures at 64 bytes each, which does not fit the payload
-budget. Revocation is a group rekey.
+Revocation is a group rekey.
+
+### Signatures
+
+Decided by the owner on 2026-10-03, after a review showed that any key holder could replace a
+member's public key with its own. The review's case: such a key holder is then sent that
+member's private messages, and is the one sealed that member's key message when a removal
+comes. Being built.
+
+- **One key.** A device's identity is an Ed25519 key pair, from a 32-byte seed it stores. Its
+  X25519 key for pairwise keys and pairing is derived from it, as libsodium does: the secret
+  from the seed's expanded scalar, and the public key by converting the Ed25519 public key,
+  which anyone can do. So a record names one public key, and nobody can pair another device's
+  X25519 key with a signing key of their own (owner, choosing this over a separate signing key
+  beside the X25519 one, which left that gap). Using one key for both is analysed in IACR
+  eprint 2021/509. Every device's key pair changed once with this, so devices paired before it
+  pair again.
+- **Member records.** A member signs its own record: its id, public key, joining and change
+  times, MAC and name, after the domain string `octowhere member`. A node checks the signature
+  against the record's public key before the record changes anything. A device is the same
+  device only by its public key, so a record replaces a held one only if the held key signed
+  it, and a MAC proves nothing. A device signs its record again whenever it changes: a rename,
+  or moving to another id. A record is about 127 bytes, so a packet carries one instead of
+  three, and a full table resync takes about three times as many rounds.
+- **Pairing.** The joining device's record is the first one made of it, so the joining device
+  signs it: the welcome gives it its id and the time the adding device dates the record, it
+  builds the same record the adding device built, and it returns the signature with its last
+  acknowledgement. The adding device checks it before storing the member. The welcome carries
+  every other record with its signature.
+- **Gone records.** One that a device sends as it leaves is signed by that device, after the
+  domain string `octowhere gone`, over its id, public key and time. One that a removal makes is
+  made by every node at its own switch, carries no signature, and is never sent. A node takes a
+  gone record from another node only if it is signed; a pairing's welcome carries both kinds.
+- **Lost keys.** A device that lost its keys, through a flash erase, pairs again as a new
+  member at a new id. Its old record stays until a member removes it.
+- **Key messages.** A key message carries its generation in the clear and its remover's
+  signature, after the domain string `octowhere key`, over the message's origin, destination,
+  sequence number, previous, timestamp, generation and sealed body. A relay checks it against
+  the origin's record, and keeps for catch-up only those from the member that removed for that
+  generation, as the relay learned it from its own key message. One signed key message takes a
+  packet's room for two unsigned ones, so a removal's switch is further off: about 8 minutes
+  for 8 members and 27 for 32, against 6 and 15.
+- **Catch-up.** A node keeps, for each member still waited for, the key message of each
+  generation after the one it is on, past the message horizon, while it keeps the old key. A
+  member heard under an old key is sent the key message for the generation after it, under that
+  key, so it takes one generation at a time, and is shown and can decline each removal in turn.
+  The kept messages are in RAM only (owner).
 
 ### Pairing
 
@@ -705,7 +825,8 @@ transcript. A key whose shared secret is not contributory ends the pairing.
   part is never acknowledged has not added the member, and says the outcome is unknown. If the
   joining device did store the group, its own member record reaches the adding device through the
   mesh, at the id it was given. A device that was founding the group has no group to hear that
-  under, so it listens throughout for 10 minutes under the founded group's key instead. A packet
+  under, so it listens throughout for 10 minutes under the founded group's key instead, as it
+  does when its own write of the group failed after it sent done. A packet
   under that key shows the joining device stored the group, and the founding device then stores
   it, and takes it up only once the write lands. A failed write is tried again every 10 s while
   the wait lasts. The joining device is heard within about 3½ minutes: it waits 30 s for
@@ -745,7 +866,7 @@ The eFuse base MAC is the stable hardware identity, used to recognise a re-pair 
 device rather than issuing a second id.
 
 Group key, id, member table and the sequence-number block persist in a flash partition, not the
-SD card, which is removable. They are in the settings' ekv database (`src/settings.rs`): the group
+SD card, which is removable. They are in the settings' ekv database (`firmware/src/settings.rs`): the group
 key and this device's id under one key, each member's record under its own, and this device's
 X25519 secret and name apart from the group, each value behind a one-byte version. A device keeps
 its name and key pair when it leaves a group, and CLEAR SETTINGS keeps all of it (owner,
@@ -843,21 +964,31 @@ protocol does not need this.
   packet of the other, since a notice brings the lower one over: up to about 30 minutes for
   idle nodes (`docs/logs/lora/founding-and-listening-2026-10-02/`). A node that hears nobody
   sends every round, which leaves it one sweep.
-- The clock takes every packet whose timebase ranks above its own or is closer to its root
-  (`Clock::arrival`), with no check that the packet fits. Outside a sweep, the window holds the
-  error to the guard. In a sweep, a replayed packet can set the clock anywhere, and the node
-  recovers only at its lost sweep, about 10 rounds later; a replayed notice forces a sweep.
-  Refining only within the guard, and adopting only on two packets that agree, would close it.
-  Jamming does more harm more easily, so it waits.
+- A replay of two recorded packets still moves a clock, within 5 minutes where the node's RTC
+  holds the time and anywhere where it does not ("Replays" above). A replayed notice forces a
+  three-round sweep, and a replayed packet a four-round one while it is held; neither moves the
+  clock. Jamming does more harm more easily.
 - A member being removed can still see that a removal is under way before the switch: key
   messages are marked as such, and none comes to it. Firmware changed to act on that can
-  remove its remover first, and the lower of the two keys' hashes then decides which removal
-  holds. Each device's user is shown both and can decline the one they do not want.
-- For step 5, two answers from the owner: the cell's capacity and how long the device should
-  last on it, which set the floor, the sweeps and how far CAD has to go; and when both boards
-  can have a GPS fix at once, which CAD's two measurements need.
+  remove its remover first. The lower remover's id decides which removal holds (owner,
+  2026-10-04, once the simulator staged rivals): it cannot be ground, as the lower hash could
+  in about 2^16 tries, but the lowest ids, the founder's first, win every race. Each device's
+  user is shown both and can decline the one they do not want. Bounding a key message's switch
+  round and refusing a key that names no member stop the cheapest uses (owner, 2026-10-03).
+- Two parts of a group apart, one of which removes twice while the other removes once, stay on
+  different keys when the other's removal wins over the first part's first. A node does not go
+  back past a switch it made, which would undo the removals after it, as declining after a
+  switch does. The simulator's `parts_apart_through_two_removals_settle_once_they_meet`,
+  ignored for now, stages it.
+- For step 5: the power budget is two days on a cell of about 1,000 mAh (owner, 2026-10-03),
+  which sets the floor, the sweeps and how far CAD has to go. CAD's two measurements need both
+  boards with a GPS fix at once, which will not be possible for a while, so step 5 waits
+  behind the simulator and the next design round (owner, 2026-10-03).
 - A shorter floor once CAD is measured (see "CAD is required at this size").
 - Measuring GNSS time sync (see "Time sync").
+- Contention in place of slots (owner, 2026-10-04), for message latency and to drop the slot
+  timing. It waits on measuring what the rest of the device draws
+  ([`POWER-INVESTIGATION.md`](POWER-INVESTIGATION.md)).
 
 ## Deferred
 

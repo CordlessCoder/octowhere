@@ -46,6 +46,11 @@ later decisions are in this brief's "as built" sections.
 
 ## This round
 
+This round's brief, `design/handoffs/MESH-FEATURES-ROUND-BRIEF-2026-10-03.md`, sends every open
+item at once: where the other members are, messages, removing a member, a GNSS fault at run
+time, where outlined text belongs, and what the BOOT key does. The owner scopes it with the
+design agent.
+
 The last round added the radio to the start-up's self-test, a REFRESH DEVICES control to the
 group screens, and a founder's wait for the device it added. Its brief is
 `design/handoffs/REFRESH-AND-RADIO-ROUND-BRIEF-2026-10-03.md`, and the owner approved its
@@ -105,7 +110,7 @@ the panel. Touch targets are no smaller than about 10 mm.
 
 | Layer | Screens |
 | --- | --- |
-| Pager | Clock face, compass. A ring of two that wraps |
+| Pager | Clock face, compass, member face. A ring of three that wraps |
 | Sheet | Settings panel, over whichever face it was opened from |
 | Second level, under the panel | Zone picker (two steps), brightness and timeout editors, device page, replay chooser, clear-settings confirm |
 | Before the pager | Start-up: the self-test, then the identity and the logo card, or the fault screen |
@@ -158,7 +163,8 @@ the panel. Touch targets are no smaller than about 10 mm.
 Captures drawn by the firmware's own code come from `crates/octowhere-ui/examples/render.rs`,
 which also lays a frame of each state out in `screen-atlas.png`, kept in
 `context/screen-captures/`, by section like the design's screen family board.
-It draws the faces' stills and `panel-rest`, `settings-always-on`, `panel-end`,
+It draws the faces' stills, the member face's, the messages' and the removals' states
+(`members-*`, `messages-*`, `removal-*`), and `panel-rest`, `settings-always-on`, `panel-end`,
 `panel-scrolling`, `panel-pulling`, `panel-device`, `panel-device-end`, `settings-brightness`,
 `settings-timeout`, `settings-clear`, `picker-offset`,
 `picker-zone`, `power-off`, `power-off-sliding` and `power-off-confirmed`, and the start-up's `startup-selftest-*`, `startup-frame-*` and `startup-fault-*`;
@@ -247,17 +253,22 @@ K1 (`design/renderer/concept/family-pass-v1-out/clock-K1-*`) on the round 4 spec
 ## Settings as built
 
 S1 has four rows on each of two pages. Each row keeps its action and live value from the older
-panel; the rules, index, label and smaller icon follow the selected S1 layout. Row names are
+panel; the rules, index, label and smaller icon follow the selected S1 layout, except that a
+rule between two rows spans the wider of them (`DECISIONS.md` 30). Row names are
 KH Interference Bold 20, and the values Fraktion Mono Bold 20 (the 2026-09-30 update). The
-outer arcs' halftone follows the S1 prototype's law (`settings_study.py`): an 8 px grid inside
-radius 219, 43 % of points in the two lobes beside the rows and 9 % elsewhere, none over the
-title, the hint or the rows' block, drawn with the firmware's hash rather than the prototype's
-random points. Each mark takes one of three purples, `#180A36`, `#250C54` and `#371374`, by
+halftone follows the S1 prototype's law (`settings_study.py`): an 8 px grid inside radius 219,
+43 % of points in the two lobes beside the rows and 9 % elsewhere, drawn with the firmware's
+hash rather than the prototype's random points. Since `DECISIONS.md` 31 the density eases from
+the lobes' to the rest's over 56 px, and on the panel the halftone runs under the rows, kept
+off only the title and the hint, with the rows' text blended over it; the screens the panel
+opens keep the rows' block clear as S1 did. Each mark takes one of three purples, `#180A36`, `#250C54` and `#371374`, by
 how dense the halftone is where it lies, spread a little by its own number: quiet marks mix the
 darker two, lobe marks the brighter two. The prototype picks its purples at random and draws
 solid marks 6 px square; the firmware's solid mark stays 4 px, inset, as on the clock and the
 identity. The halftone breathes while the panel rests, as decision 4a has it. A changing value
-damages only its row; a page drag redraws the panel. The existing 420 ms entry cadence now
+damages only its row; a page drag redraws the panel, which took about 40 ms a frame on the
+board once the text blended, against the 33 ms frame
+(`docs/logs/display/settings-halftone-2026-10-04/`). The existing 420 ms entry cadence now
 reveals the rows on page 1.
 
 D3 puts the offset, zone, brightness, timeout and replay selection on a violet field with black
@@ -320,7 +331,9 @@ two hand-offs:
   (TRANSFER FAILED) are red. Contact lost before the transfer says KEY EXCHANGE DID NOT FINISH.
   The other device's reported mismatch shows PEER DECLINED, as the paired render has it; its
   timeout shows TIME EXPIRED and its failed store SAVE FAILED. The mesh's refusals show IN A
-  GROUP and UNAVAILABLE (no random source).
+  GROUP and UNAVAILABLE (no random source), and, added with the mesh's removals (2026-10-03)
+  and drawn on IN A GROUP's layout without a render, REMOVING in orange: A MEMBER IS BEING
+  REMOVED / ADD ONCE THE KEY HAS CHANGED, for an ADD while a removal is under way.
 - **NO RADIO** shows when START is tapped without a radio. Leaving first checks the radio
   before it erases anything.
 - **Keyboard.** SAVE returns to where the keyboard opened once the write lands, and an
@@ -371,6 +384,200 @@ where they match, and the atlas's GROUP + NAME, PAIRING and REFRESH + RECOVERY s
 framebuffers through a pairing, a rename and a cover are in
 `docs/logs/lora/pairing-screens-2026-10-02/`. Typing on the 39 px keys with a finger is
 accurate and responsive (owner, 2026-10-02). Nobody has judged legibility on the panel yet.
+
+## Events as built
+
+The 2026-10-04 hand-off's Events drawer is `crates/octowhere-ui/src/ui/drawer/`, over the
+events in `ui/events.rs`. An upward drag on a face opens it and a pull down from the top of its
+list closes it. Its list, details, management page, toasts and unread arc follow the hand-off's
+geometry, measured on its targets (`examples/render/events.rs` renders them, named after the
+targets). The Messages root beside it is the inbox ("Messages as built"). The
+backdrop is the settings panel's halftone, breathing on the 10 s cycle and kept 2 px clear of
+every text's ink. Where the build chose what the hand-off left open:
+
+- **Capacity.** 16 events in RAM, lost at a restart. A new event takes the place of the oldest
+  settled one, a read one first; an event still going on is never dropped.
+- **One event each.** A GNSS incident runs from the module stopping to its answering again, a
+  refresh from its start to its result. The user is told of a new incident, its escalation to
+  a fault, the module answering again and a refresh's end: each marks the event unread, moves
+  it to the top, and shows a toast. The second and third resets update the incident quietly. A
+  refresh started on this device begins read. A refresh a pairing stops shows REFRESH STOPPED,
+  which has no render.
+- **Order.** Running operations first, then the latest told-of change first.
+- **GNSS.** The GNSS task's own recovery drives it: RECOVERING when it finds the module stuck (8
+  failed reads, or 10 s without NMEA) and resets it, at most once a minute; GNSS FAULT once
+  three resets have each been followed by the module being found stuck again; RESPONDING when
+  NMEA returns, fix or not. LAST RESPONSE and LAST FIX are the task's own times. A debugger
+  halting the core for 10 s looks the same to the task, and starts an incident.
+- **Toasts.** One at a time, 5 s untouched. A newer one replaces it and keeps the rest the first
+  woke the screen from, to return to. One that comes while a finger is down waits for the lift.
+  None shows during the start-up, the power-off, or while the drawer is open, whose list shows
+  the event. Any touch off the toast ends it and keeps the screen awake; a tap on it opens its
+  event's detail. The compact toast shows while the name's keyboard shows. The 600 ms typing
+  pause the hand-off proposed is not built. The toast's inside is black, where the render lets
+  the face's halftone show through.
+- **Read.** Opening a detail reads its event; a toast timing out reads nothing. MARK ALL READ
+  reads events alone, while there are no messages. The unread arc shows while any event is
+  unread, over the faces, the panel's screens and the always-on face, and not in the drawer.
+- **Halftone.** The firmware's scatter keeps its hollow and solid marks, where the renders draw
+  4 px solid marks only.
+
+## Messages as built
+
+The 2026-10-04 hand-off's messages are `crates/octowhere-ui/src/ui/drawer/messages.rs`, the
+Messages root and the screens it opens: a conversation, SEND TO, the draft on the keyboard and
+its review. They follow the hand-off's geometry, taken from its renderer
+(`examples/render/messages.rs` renders them, named after the targets). The node keeps what the
+screens show of the messages (`MessagesView` in `octowhere-node`'s `view`, kept by its `inbox`),
+and the firmware lends the stage a copy in PSRAM. Where the build chose what the hand-off left
+open:
+
+- **What shows.** Every message this device can read: its own, the group's, and those to it,
+  for as long as the store holds them. A conversation is the group's, or this device's with one
+  member's device. The node tags each message with the other member's device and name as it
+  took the message, so a device paired in at the id a removed member freed starts a
+  conversation of its own and is never shown as the writer of the removed member's messages
+  (owner, 2026-10-04).
+- **How far a message has gone.** QUEUED until a packet of this device's carries it, SENT once
+  one has, HEARD RELAYED once another member's packet has, DELIVERED once its destination
+  acknowledged it, which only a private message is. A message to someone in reach of its
+  origin is never relayed, since the origin's own packet reached everyone it would be relayed
+  to, so it can go from SENT to DELIVERED. Another member's message is RECEIVED.
+- **After a restart.** Messages that come back from another member are not news: they are
+  never unread and never told of. Another member's shows RECOVERED; this device's own shows how
+  far it had gone, from what came back with it.
+- **Order.** Conversations newest first, and a conversation's messages newest first, as the
+  fixtures have them. Scrolled down, a conversation keeps the message at the top in place as
+  newer ones come.
+- **Read.** A message counts as read once its whole row has shown in its open conversation for
+  a second. Opening the inbox, an event or a toast reads nothing. The node keeps the read
+  state, and a restart loses it.
+- **Events.** One event a conversation while it has unread messages. A newer message marks it
+  unread, moves it to the top and shows a toast; reading the messages reads it. Opening it opens
+  the conversation. MARK ALL READ reads events only, and the management page says so: messages
+  stay unread, and the unread arc with them.
+- **Toast.** MESSAGE and the conversation's name, then "New private message.", or for the group
+  "New message from" its sender. Never the words. A tap opens the conversation.
+- **Drafts.** One at a time. CANCEL, and closing the drawer, keep it until it is sent; WRITE to
+  the same conversation takes it up again, and WRITE to another starts afresh and drops it.
+  REVIEW is unavailable while the draft is blank, and SEND sends once and opens the
+  conversation.
+- **Wrapping.** A message's body breaks at spaces within 250 px, and inside a word too long for
+  a line; rows grow to hold it, and it is never cut. An inbox preview is cut with an ellipsis at
+  270 px.
+- **Names.** In capitals, in KH Interference Bold and Fraktion Mono. A title too wide at 26 px
+  is cut with an ellipsis; the caption under it gives the member's id. The draft has no
+  caption, so a long name there shows only its start. A member's current name shows wherever
+  its device is still a member, at any id.
+- **A removed member.** Its conversation keeps the name its device had, its caption reads
+  PRIVATE / REMOVED, and WRITE is unavailable. In the group's conversation its messages' sender
+  reads its name and / REMOVED, in gray. Neither has a render: take it to the next design
+  round.
+
+## Removal as built
+
+The 2026-10-04 hand-off's removal and rekey screens are `crates/octowhere-ui/src/ui/drawer/removals.rs`,
+in the drawer, and in the group screens (`ui/group/mod.rs`): REMOVE's confirmation, this device's
+request under way, a member awaiting its switch, and why REMOVE cannot go ahead. They follow the
+hand-off's geometry, taken from its renderer (`examples/render/removals.rs` renders them, named
+after the targets). The node shows the removals as `RemovalsView` in `octowhere-node`'s `view`:
+the removal under way, or the last this device switched to or declined; a rival of it that
+lost; and the notice that this device was removed. Where the build chose what the hand-off left
+open:
+
+- **Identity.** A request is named by its new key's fingerprint, and its target by its device's:
+  the first eight bytes of SHA-256 over the device's public key, which the key message carries.
+  REMOVE asks to remove the device at an id, and the node refuses if the id holds another device
+  by then. A decline names its request by the key.
+- **REMOVE.** Opens the slide, or says why it cannot: no radio, or another removal under way,
+  with VIEW REQUEST to it. The node answers every request: started, or why not (no timebase, a
+  removal under way, the id holds another device, its key messages' sequence numbers not
+  stored, no random source). Once the slide is done, back and CANCEL do nothing until the answer
+  comes. Started, the screen is REMOVING, which counts down.
+- **Countdown.** The switch's time on the node's timebase. Without one it reads UNAVAILABLE, and
+  nothing estimates it. The rail under this device's own countdown is the time since the request
+  out of the time to its switch.
+- **Events.** One event per request, by its key, from the request to its outcome. Another
+  member's request is told of when it comes and when this device switches to it; the countdown
+  changes quietly. This device's own begins read. An event cannot be dismissed or cleared while
+  its request waits for its switch, or while it can be declined. Being removed is an event of its
+  own, told once.
+- **Declining.** Before the switch, until it. After it, until a day after this device's switch,
+  from the undo the node stores; the node marks it ended when the day is up. Never this device's
+  own request. A later removal replacing it ends it too, and says so. After a restart, a switch
+  that can still be declined shows again once the node has a timebase, as a new event, since
+  events live in RAM.
+- **The decline's slide.** Revalidated every step against the request as it is. A switch under
+  the confirmation starts the slide again and changes the text to what declining costs after
+  it, so a slide begun before the switch cannot finish after it. A request that can no longer be
+  declined goes back to its detail. Both slides keep the leave slider's rules: a drag that
+  starts on the handle, 90 % of the travel, and a 160 ms ease back.
+- **Rivals.** While the node shows a losing rival beside the winner, either one's event opens
+  TWO REQUESTS, the winner first and the one opened selected. A tap selects a row, and VIEW
+  REQUEST opens it.
+- **Removed.** CLOSE goes back to the Events list, and LEAVE GROUP opens the group screens' leave
+  confirmation. Nothing leaves on its own.
+- **Pending member.** A member a removal under way will remove shows the 08 layout in place of
+  its detail, and VIEW REQUEST opens the drawer at the request. Other members keep the detail
+  the pairing round designed, with REMOVE in orange.
+- **Without renders.** DETAILS (the device's and the request's fingerprints in full, and the
+  switch), DECLINED HERE, a losing rival's detail, REMOVE UNAVAILABLE, and the removal events'
+  rows and toasts. They are in the same style; the atlas's REMOVAL AND REKEY row has them.
+- **Long names.** A sentence that a long name would run off the glass names nobody instead
+  ("The member was removed from this group."). Titles, captions and the events' rows and
+  toasts are cut with an ellipsis, and the removed member's name in large type drops from
+  35 px to 28 px before it is cut.
+- **Captions.** The drawer's 12 px caption under every title, where the removal renders set it
+  at 11 px.
+- **Host.** The scripted mesh (`group::sim`) runs a removal with an eight-minute switch and a day
+  to decline.
+
+## Member face as built
+
+The 2026-10-04 hand-off's spatial member face is `crates/octowhere-ui/src/ui/members.rs`, the
+third face in the pager's ring, after the compass. It follows the hand-off's geometry, measured
+on its targets (`examples/render/members.rs` renders them, named after the targets). Where the
+build chose what the hand-off left open:
+
+- **True heading.** The compass's magnetic heading plus the declination where the device last
+  had a fix, in the clock's year, from the World Magnetic Model 2025 (`declination` in
+  `octowhere-motion`). It counts only while the compass is calibrated, not held near upright
+  and not disturbed, and the clock is trusted. Otherwise the face is NORTH UP / NO HEADING. The
+  model holds from 2025 to 2030 and gives nothing within 0.1° of a pole; after 2030 the face
+  stays north up until the model is updated. The heading moves in whole degrees and holds until
+  the reading is 0.75° from it, so a device at rest does not flicker between two.
+- **Own position.** The current fix's. Without one the face shows NO OWN FIX, with the
+  selected member's last coordinates and their age, and no nodes or distances. It never stands
+  an old position of its own in.
+- **Members' positions.** Each member's newest, until the protocol's table would drop it,
+  4,095 s (68 min) after it was observed. One received while this device had no UTC shows its
+  age as `--`, and UNKNOWN in the middle.
+- **Freshness glyph.** The solid square under 5 minutes, the hourglass after: the hand-off's
+  proposal, taken as it stands.
+- **Selection.** The freshest position first, then whichever member was chosen while it has a
+  position. A tap within 160 px of the centre, inside the rim labels, or on the coordinates'
+  box, selects the next member by id. Nodes are not touch targets.
+- **Crowding.** Members whose rim labels would come within 6 px of each other share one node at
+  their bearings' mean, labelled with the member it shows and how many more it holds:
+  `05 +2 / 23S`. It shows the selected member if it holds it, and otherwise the freshest. The
+  neighbours that overlap most merge first. Selection steps through every member, so each can
+  be shown on its own with its exact bearing in the middle. A shared node stands at the mean,
+  not at any one member's bearing. The hand-off left 32 members open, and there is no render of
+  this.
+- **Distance.** Whole metres below a kilometre, kilometres to a tenth below 100 km and whole
+  kilometres beyond, the figure shrinking from 39 px to fit 100 px. The name shrinks from 25 px
+  to 14 px to fit the left column, and is cut short past that.
+- **Direct contact.** NEVER, in `GRAY`, for a member this device has not heard itself.
+- **Without a group.** The no-positions layout, with NO GROUP and VIEW GROUP, which opens the
+  group screen. VIEW MEMBERS and VIEW GROUP open their screens over the panel, as the drawer's
+  VIEW MEMBERS does.
+- **N.** `LIME` in both orientations, where true north lies on screen.
+- **Motion.** Sampled every 20 ms while the face shows, as for the compass. Turning the device
+  counts as use for the timeout.
+- **Cost.** A heading change turns the grid and every node, so each degree of turn redraws the
+  whole face. A still face redraws only the ages that change. On a board, a still ring stepped
+  and drew in about 2 ms; the full redraw while turning has not been measured
+  (`docs/logs/display/members-2026-10-04/`).
 
 ## The compass's states and changes, as built
 
@@ -470,7 +677,7 @@ interpreted them:
   clock face shows NO DATA without the clock, a failed touch controller leaves the device
   without touch, and without the radio the device keeps its name and can leave its group.
 - **Deadlines.** POWER 200 ms, CLOCK 200 ms, TOUCH 600 ms (its start-up waits 220 ms),
-  MOTION 500 ms, MAGNET 500 ms, GNSS 1.5 s to answer and 4.5 s with a reset, RADIO 200 ms.
+  MOTION 500 ms, MAGNET 500 ms, GNSS 1.5 s to answer and 4.5 s with a reset, RADIO 500 ms.
 - **Seven parts in six rows** (2026-10-03). As the radio's check starts, the list scrolls up a
   row over 160 ms, the settle every sliding surface shares, timed by the clock. Each row is as
   wide as where its middle is: 342 px across the middle four places, 302 px at either end,
@@ -507,6 +714,12 @@ interpreted them:
   line, 172 px. After a failed boot the second line still reads `SELF TEST n/7 OK`, as the
   owner chose over `n/7 FAIL`, which is 194 px and would not fit. Its fractional edges are blended
   rather than rounded, and each row of set modules is one span, so no seam shows between them.
+- **The barcode builds in** as the charging gauge's slices do (owner, 2026-10-01, after
+  `DECISIONS.md` entry 24), where the design shows it whole from its frame: from frame 21 a
+  solid as long as the bars closes in on their middle over 13 frames along the flight curve,
+  three frames later a seed grows there for three frames and splits into the end bars, which fly
+  out to their places over 13 frames, and each inner bar appears on the logo's frame nearest its
+  place. The bars rest from frame 58, inside the frames the identity redraws whole.
 - **The pluses** replace the ticks: 7 px arms, 1 px thick, 10 px out from the title's ink
   corners, at (23, 167) and (442, 298), with the ticks' flicker.
 - **The scatter's gap** runs from row 163 to 340, clear of the taller title and row.
@@ -537,7 +750,8 @@ interpreted them:
   crosses a pixel, as the design's 4× renders sample.
 - **The title's coverage** is built once per start-up, filled and hollow, a few glyphs a frame
   over the opening, and freed when the card starts. Rasterizing the 112 px glyphs every frame
-  cost more than a frame. It holds about 92 KB of the internal heap while the identity plays.
+  cost more than a frame. It is kept as runs of coverage, a glyph at a time, and holds about
+  37 KB of the internal heap while the identity plays.
 - **The card's lime page** runs to the glass's edge, where the design's stops at radius 232,
   since the frame clears straight to lime rather than painting a disc over black.
 - **The UTC digits** show dashes (`000 000 111 000 000`) when the clock has no time or its
@@ -672,7 +886,20 @@ velocity. It sees a second contact but no gesture uses one.
 | --- | --- | --- |
 | A face | A drag at least as sideways as vertical | Turns the page |
 | A face | A downward drag, with the downward movement at least twice the sideways movement | Opens the panel over the face |
-| A face | Any other drag (mostly downward but under two to one, or mostly upward); any tap | Nothing |
+| A face | An upward drag, with the upward movement at least twice the sideways movement | Opens the Events drawer over the face |
+| A face | Any other drag (under two to one either way); a tap but on the member face | Nothing |
+| Member face | A tap within 160 px of the centre, or on the coordinates' box | Selects the next member with a position |
+| Member face | A tap on VIEW MEMBERS or VIEW GROUP | Opens the member list or the group screen over the panel |
+| Toast | A tap | Opens its event's detail in the drawer |
+| Drawer root | A drag more sideways than vertical | Moves between Events and Messages, as the panel's sheet does |
+| Drawer root | A vertical drag in the list | Scrolls it, a pixel at a time; a downward pull with the list at its top closes the drawer |
+| Drawer root | A tap on the chevron, a row, OPTIONS | Closes the drawer, opens the event, opens the management page |
+| Drawer child | A tap on the back arrow or a button | Goes back, or acts |
+| REMOVE, DECLINE | A drag that starts on the handle and lets go past 90 % of the track | Asks the mesh to remove the member, or to decline the request; anything short eases back |
+| TWO REQUESTS | A tap on a row | Selects that request |
+| Messages root, SEND TO | A tap on a row | Opens the conversation, or a draft to that destination |
+| Conversation, SEND TO, review | A vertical drag | Scrolls it, a pixel at a time |
+| Draft | A tap on a key, or in the field | Types, or moves the caret to the nearest place in the two lines showing |
 | Panel | A tap on a row of the visible page | Opens it |
 | Panel | A drag at least as sideways as vertical | Moves between the two pages, then snaps |
 | Panel | An upward drag | Closes the panel |
@@ -717,21 +944,29 @@ plumbing it is firmware work. There are three grades.
      pitch and roll in whole degrees, and a `disturbed` flag.
    - Battery: presence, percentage and voltage. Power: charging, and whether USB is present.
      Until the power controller first answers, the battery reads as unknown (`--`).
-   - GNSS: fix, satellites in use and in view, and the last fix's position.
+   - GNSS: fix, satellites in use and in view, HDOP, and the last fix's position.
+   - The local magnetic declination where the device last had a fix, from the World Magnetic
+     Model 2025, for a true heading.
    - The display brightness, and the firmware version (`0.1.0`, the crate's version string).
    - Touch contacts and the cover report.
    - From the mesh: this device's name and hardware address, and whether the radio answered
      at boot; the stored group's members with their ids, names, addresses and join times, when
-     each was last heard directly and when its newest position was observed; how the last
-     leave or rename went; and the pairing under way, with its role, phase, deadline, the
+     each was last heard directly and where and when its newest position was observed; the
+     messages this device can read, with how far each has gone and whether it is unread; the
+     removals: who asked to remove which device, by its fingerprint, the switch's time, whether
+     this device switched, declined or can still decline and until when, a rival that lost, and
+     who removed this device; how the last leave, rename or removal asked for went; and the
+     pairing under way, with its role, phase, deadline, the
      devices found, the other device's address and its name once sent, the code, and the
      group's size and this device's id once the pairing holds them.
 2. **Known to the firmware, not passed to the screens:** GNSS time to the millisecond, fix
    quality, and when the clock was last set from GNSS. Also the compass calibration's internals.
-   From the mesh: the members' positions themselves, the timebase, and the packets' signal.
+   From the mesh: the timebase, and the packets' signal; other members' private messages,
+   which it cannot read; and which members have been heard on a removal's new key.
 3. **Does not exist:** raise to wake, or any wake but a double tap or the power key (the
-   IMU's wake-on-motion and the BOOT key are unused); a 12-hour clock (ruled out by the clock spec); units, languages, sounds or vibration; removing a member,
-   Wi-Fi or Bluetooth; alarms, timers, step counting and notifications.
+   IMU's wake-on-motion and the BOOT key are unused); a 12-hour clock (ruled out by the clock
+   spec); units, languages, sounds or vibration; Wi-Fi or Bluetooth; alarms, timers, step
+   counting; and an uncertainty for a position: HDOP alone does not give one.
 
 ## Settings
 
@@ -910,15 +1145,20 @@ Colours come only from these tokens. Each is a swatch from the reference board e
 
 | Token | Hex | Role |
 | --- | --- | --- |
-| `LIME` | `#C0FE04` | The identity and its card |
+| `LIME` | `#C0FE04` | The identity and its card; on the member face, orientation and the selected member |
 | `RED` | `#F24723` | Faults only |
 | `ORANGE` | `#F1710D` | Attention: calibrating, interference, a stopped clock, the clear confirm; the compass's `N` |
 | `PURPLE` | `#5500E4` | The identity's scatter |
 | `BLUE` | `#409DE4` | A live, valid reading's status icon |
-| `VIOLET` | `#B32BE5` | The active choice in D3 settings screens |
+| `VIOLET` | `#B32BE5` | The active choice in D3 settings screens; on the member face, the age of direct contact |
 | `GRAY` | `#888E98` | Frames, rules, minor marks, captions, secondary text, a mode in force, an unconfirmed value |
 | `WHITE` | `#D2D3D6` | Primary text, major marks, neutral bands and slabs, field rules |
 | `BLACK` | `#000000` | The field; knockout text and symbols on saturated fills |
+
+The 2026-10-04 hand-off adds four values that are not on the board and carry no status:
+`TRACK` (`#30343A`) for rules, scroll and progress tracks, `DISABLED` (`#444952`) for a control
+that cannot be used yet, and the member face's grid, `GRID_LINE` (`#0C1521`) and `GRID_MARK`
+(`#4B628B`).
 
 A new colour is allowed if it comes from the reference board. Its unused swatches:
 

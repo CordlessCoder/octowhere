@@ -3,18 +3,14 @@ name = "octowhere-host-tests"
 version = "0.1.0"
 edition = "2024"
 
-[workspace]
-
 [dependencies]
 critical-section = { version = "1.2.0", features = ["std"] }
 embassy-sync = "0.8.0"
-embassy-time = "0.5.1"
-embedded-graphics = "0.8.2"
-embedded-graphics-core = "0.4.1"
+heapless = "0.9.3"
+octowhere-ui = { path = "../crates/octowhere-ui" }
+
+[dev-dependencies]
 embedded-hal = "1.0"
 embedded-hal-async = "1.0"
 futures = { version = "0.3.32", default-features = false, features = ["async-await", "executor"] }
-heapless = "0.9.3"
 lc76g = { path = "../crates/lc76g" }
-octowhere-ui = { path = "../crates/octowhere-ui" }
-libm = "0.2.16"

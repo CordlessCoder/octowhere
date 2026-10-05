@@ -2,8 +2,8 @@
 //! repository root:
 //!
 //! ```text
-//! xz -dc docs/logs/compass/<file> | cargo +stable run --manifest-path host-tests/Cargo.toml \
-//!   --target x86_64-unknown-linux-gnu --example replay_calibration
+//! xz -dc docs/logs/compass/<file> | cargo run -p octowhere-host-tests \
+//!   --example replay_calibration
 //! ```
 //!
 //! It prints each calibration event; `VERBOSE=1` prints every sample. A `[COMPASS]
@@ -16,7 +16,7 @@ use std::io::BufRead;
 
 use octowhere_host_tests::compass::{AxisMap, Calibration, CalibrationEvent, HardIron};
 
-/// `MAG_AXES` in `src/main.rs`.
+/// `MAG_AXES` in `firmware/src/main.rs`.
 const MAG_AXES: AxisMap = AxisMap([(0, -1.0), (1, -1.0), (2, 1.0)]);
 
 fn comp(line: &str) -> Option<[f32; 3]> {

@@ -1,10 +1,9 @@
 //! Renders every screen in each of its states, to 466×466 PNGs through the firmware's own
 //! drawing code, and lays a frame of each state out in `screen-atlas.png` with the revision that
-//! drew it, so two revisions' atlases compare tile for tile. From the repository root:
+//! drew it, so two revisions' atlases compare tile for tile:
 //!
 //! ```text
-//! cargo +stable run --manifest-path crates/octowhere-ui/Cargo.toml \
-//!   --target x86_64-unknown-linux-gnu --example render -- [out-dir]
+//! cargo run -p octowhere-ui --example render -- [out-dir]
 //! ```
 //!
 //! The output directory defaults to `target/renders` under the crate. The readings are
@@ -12,8 +11,16 @@
 
 #[path = "render/atlas.rs"]
 mod atlas;
+#[path = "render/events.rs"]
+mod events;
 #[path = "render/group.rs"]
 mod group;
+#[path = "render/members.rs"]
+mod members;
+#[path = "render/messages.rs"]
+mod messages;
+#[path = "render/removals.rs"]
+mod removals;
 
 use std::{collections::HashMap, fs::File, io::BufWriter, path::PathBuf};
 
@@ -50,16 +57,11 @@ fn main() {
         roll_deg: -12,
         disturbed: false,
     };
-    let mut frames: Vec<(String, Stage)> = Screen::ALL
-        .iter()
-        .map(|&screen| {
-            let name = match screen {
-                Screen::Clock => "clock",
-                Screen::Compass => "compass-heading",
-            };
-            (name.into(), stage(screen, calibrated))
-        })
-        .collect();
+    // The member face's states are drawn in `members`.
+    let mut frames: Vec<(String, Stage)> = vec![
+        ("clock".into(), stage(Screen::Clock, calibrated)),
+        ("compass-heading".into(), stage(Screen::Compass, calibrated)),
+    ];
     for (name, compass) in [
         ("no-data", CompassView::default()),
         (
@@ -258,6 +260,17 @@ fn main() {
     for (name, stage) in frames {
         let mut fb = FB::boxed();
         stage.draw(&mut *fb);
+        let path = out.join(format!("{name}.png"));
+        write_png(&fb, &path);
+        println!("{}", path.display());
+        drawn.insert(name, fb);
+    }
+    for (name, fb) in events::frames()
+        .into_iter()
+        .chain(members::frames())
+        .chain(messages::frames())
+        .chain(removals::frames())
+    {
         let path = out.join(format!("{name}.png"));
         write_png(&fb, &path);
         println!("{}", path.display());
@@ -647,6 +660,7 @@ fn sensors() -> Sensors {
             in_use: 9,
             in_view: 14,
             position: Some((533_498_000, -62_603_000)),
+            ..Gnss::default()
         },
     }
 }

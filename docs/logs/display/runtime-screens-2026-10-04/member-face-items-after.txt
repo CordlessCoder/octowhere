@@ -1,0 +1,13 @@
+80.671592 [INFO ] [ITEMS] screen=members backdrop=35212us text=17360us/9 fill=331us/4 path=0us/0 polygon=0us/0 arc=18470us/1 turned=557us/1
+80.756827 [INFO ] [ITEMS] screen=members backdrop=35537us text=16312us/9 fill=340us/4 path=0us/0 polygon=0us/0 arc=18100us/1 turned=549us/1
+92.194061 [INFO ] [ITEMS] screen=members backdrop=39453us text=12636us/13 fill=36us/1 path=2440us/4 polygon=0us/0 arc=16566us/2 turned=1160us/2
+92.280624 [INFO ] [ITEMS] screen=members backdrop=30620us text=11907us/13 fill=52us/1 path=5379us/4 polygon=0us/0 arc=12424us/2 turned=1313us/2
+92.357677 [INFO ] [ITEMS] screen=members backdrop=23750us text=7823us/13 fill=4us/1 path=662us/4 polygon=0us/0 arc=13698us/2 turned=589us/2
+92.425720 [INFO ] [ITEMS] screen=members backdrop=22347us text=8783us/13 fill=2us/1 path=38us/4 polygon=0us/0 arc=8635us/2 turned=224us/2
+92.485380 [INFO ] [ITEMS] screen=members backdrop=16107us text=5055us/13 fill=1us/1 path=48us/4 polygon=0us/0 arc=11512us/2 turned=314us/2
+92.546086 [INFO ] [ITEMS] screen=members backdrop=16114us text=8116us/13 fill=1us/1 path=28us/4 polygon=0us/0 arc=9328us/2 turned=276us/2
+92.606338 [INFO ] [ITEMS] screen=members backdrop=7125us text=2329us/13 fill=1us/1 path=25us/4 polygon=0us/0 arc=6305us/2 turned=210us/2
+92.645027 [INFO ] [ITEMS] screen=members backdrop=1344us text=5553us/13 fill=8us/1 path=35us/4 polygon=0us/0 arc=3072us/2 turned=384us/2
+92.713871 [INFO ] [ITEMS] screen=members backdrop=16us text=22254us/5 fill=0us/0 path=472us/1 polygon=0us/0 arc=0us/0 turned=0us/0
+96.239406 [INFO ] [ITEMS] screen=members backdrop=39613us text=13440us/13 fill=44us/1 path=4984us/4 polygon=0us/0 arc=15820us/2 turned=1347us/2
+96.351283 [INFO ] [ITEMS] screen=members backdrop=37689us text=11651us/13 fill=46us/1 path=5082us/4 polygon=0us/0 arc=30098us/2 turned=1402us/2

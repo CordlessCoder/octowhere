@@ -120,6 +120,16 @@ main {
   .device { position: static; }
 }
 
+/* Several devices take the page's width above the controls, which lay out in columns. */
+main.several { grid-template-columns: minmax(0, 1fr); }
+main.several .device { position: static; width: 100%; }
+main.several .controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  align-items: start;
+}
+main.several .log-module { grid-column: 1 / -1; }
+
 /* --- The stage: the device on unlit black, with registration marks at its corners ---------- */
 
 .stage {
@@ -129,6 +139,28 @@ main {
   padding: 20px;
   background: var(--black);
 }
+
+.units { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px 20px; }
+
+.unit { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+
+/* The label says which device is which, and marks the one the controls act on. */
+.unit-label {
+  display: none;
+  width: calc(var(--panel) * 600 / 466);
+  margin: 0;
+  padding: 6px 0 0;
+  border-top: 2px solid var(--rule);
+  font: 500 12px/1.4 var(--mono);
+  color: var(--gray);
+}
+
+.several .unit-label { display: grid; grid-template-columns: auto 1fr; gap: 0 10px; }
+.unit-number { grid-row: span 2; color: var(--white); font: 800 22px/1 var(--sans); font-stretch: 125%; }
+.unit-name { color: var(--white); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.unit-group { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.unit.selected .unit-label { border-top-color: var(--lime); }
+.unit.selected .unit-number { color: var(--lime); }
 
 .mark {
   position: absolute;
@@ -148,7 +180,7 @@ main {
   height: calc(var(--panel) * 600 / 466);
 }
 
-#panel, #damage, .off, .loading {
+.panel, .damage, .off, .loading {
   position: absolute;
   left: calc(var(--panel) * 67 / 466);
   top: calc(var(--panel) * 67 / 466);
@@ -157,19 +189,22 @@ main {
   border-radius: 50%;
 }
 
-#panel {
+/* Until the module loads, over the first device's glass. */
+.loading { left: calc(20px + var(--panel) * 67 / 466); top: calc(20px + var(--panel) * 67 / 466); }
+
+.panel {
   background: var(--black);
   touch-action: none;
   cursor: pointer;
   image-rendering: auto;
 }
 
-#panel.pixelated { image-rendering: pixelated; }
+.panel.pixelated { image-rendering: pixelated; }
 
-#panel.corners, #damage.corners { border-radius: 0; }
+.panel.corners, .damage.corners { border-radius: 0; }
 
-#damage { pointer-events: none; image-rendering: pixelated; }
-#damage[hidden] { display: none; }
+.damage { pointer-events: none; image-rendering: pixelated; }
+.damage[hidden] { display: none; }
 
 .keys {
   position: absolute;
@@ -503,6 +538,48 @@ select option { background: var(--ground); }
 
 .check input:checked { background: var(--white); border-color: var(--white); }
 .check:hover input { border-color: var(--white); }
+
+/* --- Mesh ----------------------------------------------------------------------------------- */
+
+.note { margin: 0; color: var(--gray); font-size: 13px; line-height: 1.45; }
+.note[hidden], .air[hidden], .log-module[hidden] { display: none; }
+
+.air { display: flex; flex-direction: column; gap: 14px; }
+/* Seven speeds share one line. */
+#speed .rail button { flex: 1 1 0; padding: 8px 2px; }
+.links { display: flex; flex-direction: column; gap: 6px; }
+
+/* The link matrix: a row per sender, a column per receiver, numbered as the devices are. */
+.matrix { display: grid; gap: 4px; justify-content: start; }
+
+.matrix span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: 500 12px/1 var(--mono);
+  color: var(--gray);
+}
+
+.matrix button { width: 34px; height: 34px; padding: 0; position: relative; }
+.matrix button::after { content: ""; position: absolute; inset: 6px; }
+.matrix button[data-state="1"]::after { background: var(--white); }
+.matrix button[data-state="2"]::after { background: linear-gradient(to right, var(--white) 50%, transparent 50%); }
+.matrix .self { border: 0; }
+
+.log {
+  margin: 0;
+  height: 280px;
+  overflow: auto;
+  padding: 8px 10px;
+  background: var(--black);
+  border: 1px solid var(--rule);
+  font: 400 11px/1.5 var(--mono);
+  color: var(--gray);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.log .warn { color: var(--orange); }
 
 /* --- Footer -------------------------------------------------------------------------------- */
 

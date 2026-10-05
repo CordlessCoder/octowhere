@@ -75,7 +75,7 @@
 
 ## Pin map
 
-GPIO numbers were removed from [`src/board.rs`](../src/board.rs) because esp-hal takes typed
+GPIO numbers were removed from [`firmware/src/board.rs`](../firmware/src/board.rs) because esp-hal takes typed
 peripheral singletons and a `u8` can never reach it. Two of those constants had already drifted
 without anything noticing: `RTC_INT` claimed GPIO39, which is the display reset, and `TP_I2C_ADDR`
 claimed `0x38`, the FT6236 address, where the CST9217 driver uses `0x5A`. The table below is
@@ -86,8 +86,8 @@ transcribed from the binding sites in `main.rs`, which are the live record.
 | LCD SCLK | GPIO38 | `with_sck` |
 | LCD SIO0–SIO3 | GPIO4, GPIO5, GPIO6, GPIO7 | `with_sio0`–`with_sio3` |
 | LCD CS | GPIO12 | `Output` into `QspiBus` |
-| LCD TE | GPIO13 | `Input` into `Co5300Display` |
-| LCD reset | GPIO39 | `Output` into `Co5300Display` |
+| LCD TE | GPIO13 | `Input` into `co5300::Co5300` |
+| LCD reset | GPIO39 | `Output` into `co5300::Co5300` |
 | I2C SDA / SCL | GPIO15 / GPIO14 | `with_sda` / `with_scl` |
 | Touch reset / INT | GPIO40 / GPIO11 | `touch_rst` / `touch_int` |
 | IMU INT2 | GPIO21 | `imu_int2` |

@@ -1,17 +1,21 @@
-//! The name keyboard: every printable ASCII character over four views, a draft edited at a
-//! caret, and SAVE and CANCEL. A key acts when the finger lifts inside the key it came down on.
-//! Its geometry is the hand-off's `KEYBOARD-VIEWS.json`.
+//! The keyboard: every printable ASCII character over four views, a draft edited at a caret, and
+//! CANCEL, DELETE and SAVE for a name, or REVIEW for a message. A key acts when the finger lifts
+//! inside the key it came down on. Its geometry is the pairing hand-off's `KEYBOARD-VIEWS.json`,
+//! and a message's field and buttons the 2026-10-04 hand-off's.
 
 use embedded_graphics::{prelude::Point, primitives::Rectangle};
 use heapless::Vec;
 
 use super::{
-    layout::{Align, Face, List, Text, Vertical, rect},
-    view::{NAME_LEN, Name},
+    layout::{Align, Face, List, Text, Vertical, format, rect},
+    view::{NAME_LEN, Name, TEXT_MAX, Text as Message},
 };
 use crate::{
     chrome::{self, Color, FontdueRenderer},
-    ui::{gesture::GestureEvent, text::style},
+    ui::{
+        gesture::GestureEvent,
+        text::{style, wrap},
+    },
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -38,10 +42,36 @@ enum Action {
     Char(u8),
     Delete,
     Cancel,
+    /// SAVE for a name, REVIEW for a message.
     Save,
     Mode(Mode),
     /// Shows the current case, and switches to the other.
     Case,
+}
+
+/// What the draft is.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Field {
+    /// A name, from the saved one.
+    Name(Name),
+    Message,
+}
+
+impl Field {
+    fn capacity(self) -> usize {
+        match self {
+            Self::Name(_) => NAME_LEN,
+            Self::Message => TEXT_MAX,
+        }
+    }
+
+    /// Where a tap moves the caret.
+    fn area(self) -> Rectangle {
+        match self {
+            Self::Name(_) => FIELD,
+            Self::Message => MESSAGE_FIELD,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -58,6 +88,12 @@ const KEY_WIDTH: i32 = 39;
 const KEY_HEIGHT: i32 = 53;
 /// The name field, which a tap moves the caret in.
 const FIELD: Rectangle = rect(78, 75, 388, 106);
+/// A message's field: two lines that follow the caret.
+const MESSAGE_FIELD: Rectangle = rect(78, 64, 388, 107);
+const MESSAGE_LEFT: i32 = 88;
+const MESSAGE_WIDTH: f32 = 290.0;
+const MESSAGE_TOPS: [i32; 2] = [70, 89];
+const MESSAGE_SIZE: u8 = 14;
 const NAME_TOP: i32 = 82;
 const CARET_TOP: i32 = 102;
 const CENTRE: i32 = 233;
@@ -80,7 +116,7 @@ fn row(keys: &mut Vec<Key, KEYS>, chars: &str, left: i32, top: i32) {
     }
 }
 
-fn keys(mode: Mode) -> Vec<Key, KEYS> {
+fn keys(mode: Mode, field: Field) -> Vec<Key, KEYS> {
     let mut keys = Vec::new();
     let key = |rect, label, action, size| Key {
         rect,
@@ -124,9 +160,18 @@ fn keys(mode: Mode) -> Vec<Key, KEYS> {
             row(&mut keys, "}~", 194, second);
         }
     }
-    _ = keys.push(key(rect(84, 112, 182, 150), "CANCEL", Action::Cancel, 15));
-    _ = keys.push(key(rect(184, 112, 282, 150), "DELETE", Action::Delete, 14));
-    _ = keys.push(key(rect(284, 112, 382, 150), "SAVE", Action::Save, 18));
+    match field {
+        Field::Name(_) => {
+            _ = keys.push(key(rect(84, 112, 182, 150), "CANCEL", Action::Cancel, 15));
+            _ = keys.push(key(rect(184, 112, 282, 150), "DELETE", Action::Delete, 14));
+            _ = keys.push(key(rect(284, 112, 382, 150), "SAVE", Action::Save, 18));
+        }
+        Field::Message => {
+            _ = keys.push(key(rect(86, 114, 180, 148), "CANCEL", Action::Cancel, 12));
+            _ = keys.push(key(rect(186, 114, 280, 148), "DELETE", Action::Delete, 12));
+            _ = keys.push(key(rect(286, 114, 380, 148), "REVIEW", Action::Save, 12));
+        }
+    }
     let (left, right) = match mode {
         Mode::Upper | Mode::Lower => (
             ("123", Action::Mode(Mode::Numbers), 15),
@@ -152,6 +197,50 @@ fn keys(mode: Mode) -> Vec<Key, KEYS> {
     keys
 }
 
+/// Where to tap to type `text` on a message keyboard showing `mode`, switching modes as it goes,
+/// for scripts and tests. A character no key types is left out.
+#[must_use]
+pub fn taps(text: &str, mut mode: Mode) -> heapless::Vec<Point, 512> {
+    let find = |mode: Mode, action: Action| {
+        keys(mode, Field::Message)
+            .into_iter()
+            .find(|key| key.action == action)
+            .map(|key| key.rect.center())
+    };
+    let mut taps = heapless::Vec::new();
+    for c in text.bytes() {
+        let Some(target) = [Mode::Lower, Mode::Upper, Mode::Numbers, Mode::Symbols]
+            .into_iter()
+            .find(|&each| find(each, Action::Char(c)).is_some())
+        else {
+            continue;
+        };
+        if find(mode, Action::Char(c)).is_none() {
+            while mode != target {
+                let (action, next) = match (mode, target) {
+                    (Mode::Upper | Mode::Lower, Mode::Numbers | Mode::Symbols) => {
+                        (Action::Mode(target), target)
+                    }
+                    (Mode::Numbers, Mode::Symbols) | (Mode::Symbols, Mode::Numbers) => {
+                        (Action::Mode(target), target)
+                    }
+                    (Mode::Numbers | Mode::Symbols, _) => (Action::Mode(Mode::Upper), Mode::Upper),
+                    (Mode::Upper, _) => (Action::Case, Mode::Lower),
+                    (Mode::Lower, _) => (Action::Case, Mode::Upper),
+                };
+                if let Some(point) = find(mode, action) {
+                    _ = taps.push(point);
+                }
+                mode = next;
+            }
+        }
+        if let Some(point) = find(mode, Action::Char(c)) {
+            _ = taps.push(point);
+        }
+    }
+    taps
+}
+
 /// What the line under the keys says instead of the count.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Note {
@@ -169,12 +258,14 @@ pub enum Outcome {
     Save(Name),
     /// SAVE with the saved name unchanged, which needs no write.
     Unchanged,
+    /// REVIEW: this message, to read through before it is sent.
+    Review(Message),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Keyboard {
-    original: Name,
-    draft: Vec<u8, NAME_LEN>,
+    field: Field,
+    draft: Vec<u8, TEXT_MAX>,
     /// The boundary the next character goes in at, 0 to the draft's length.
     cursor: usize,
     mode: Mode,
@@ -189,7 +280,7 @@ impl Keyboard {
     pub fn new(name: Name) -> Self {
         let draft = Vec::from_slice(name.as_bytes()).unwrap_or_default();
         Self {
-            original: name,
+            field: Field::Name(name),
             cursor: draft.len(),
             draft,
             mode: Mode::Upper,
@@ -198,10 +289,17 @@ impl Keyboard {
         }
     }
 
-    /// The saved name the draft started from.
+    /// An empty message, in lower case.
     #[must_use]
-    pub fn original(&self) -> Name {
-        self.original
+    pub fn message() -> Self {
+        Self {
+            field: Field::Message,
+            draft: Vec::new(),
+            cursor: 0,
+            mode: Mode::Lower,
+            held: None,
+            note: None,
+        }
     }
 
     /// Shows that the draft is being saved, and holds the keys until [`Keyboard::resume`].
@@ -215,7 +313,7 @@ impl Keyboard {
     }
 
     #[must_use]
-    pub fn is_saving(&self) -> bool {
+    fn is_saving(&self) -> bool {
         self.note == Some(Note::Saving)
     }
 
@@ -227,7 +325,7 @@ impl Keyboard {
         if self.is_saving() {
             return Outcome::Stay;
         }
-        let keys = keys(self.mode);
+        let keys = keys(self.mode, self.field);
         let under = |point: Point| keys.iter().position(|key| key.rect.contains(point));
         match *event {
             GestureEvent::Down(point) => {
@@ -251,8 +349,8 @@ impl Keyboard {
                 {
                     return self.act(keys[index].action);
                 }
-                if FIELD.contains(point) {
-                    self.cursor = self.boundary_at(point.x, font);
+                if self.field.area().contains(point) {
+                    self.cursor = self.boundary_at(point, font);
                 }
             }
             GestureEvent::None => {}
@@ -264,7 +362,9 @@ impl Keyboard {
         self.note = None;
         match action {
             Action::Char(c) => {
-                if self.draft.insert(self.cursor, c).is_ok() {
+                if self.draft.len() < self.field.capacity()
+                    && self.draft.insert(self.cursor, c).is_ok()
+                {
                     self.cursor += 1;
                 } else {
                     self.note = Some(Note::Full);
@@ -283,14 +383,19 @@ impl Keyboard {
                     .iter()
                     .rposition(|&c| c != b' ')
                     .map_or(0, |last| last + 1);
-                let Some(name) = Name::new(&self.draft[..end]) else {
-                    self.note = Some(Note::Blank);
-                    return Outcome::Stay;
-                };
-                return if name == self.original {
-                    Outcome::Unchanged
-                } else {
-                    Outcome::Save(name)
+                return match self.field {
+                    Field::Name(original) => match Name::new(&self.draft[..end]) {
+                        None => {
+                            self.note = Some(Note::Blank);
+                            Outcome::Stay
+                        }
+                        Some(name) if name == original => Outcome::Unchanged,
+                        Some(name) => Outcome::Save(name),
+                    },
+                    // REVIEW is unavailable while the draft has nothing but spaces.
+                    Field::Message => {
+                        Message::new(&self.draft[..end]).map_or(Outcome::Stay, Outcome::Review)
+                    }
                 };
             }
             Action::Mode(mode) => self.mode = mode,
@@ -309,6 +414,11 @@ impl Keyboard {
         core::str::from_utf8(&self.draft).unwrap_or_default()
     }
 
+    /// Whether REVIEW has something to show.
+    fn reviewable(&self) -> bool {
+        self.draft.iter().any(|&c| c != b' ')
+    }
+
     fn name_style(font: &FontdueRenderer<'static, Color>) -> FontdueRenderer<'static, Color> {
         style(font, chrome::WHITE, 18, Face::Mono.index())
     }
@@ -325,14 +435,118 @@ impl Keyboard {
         self.pen_left(font) + libm::roundf(before) as i32
     }
 
-    /// The boundary nearest column `x`.
-    fn boundary_at(&self, x: i32, font: &FontdueRenderer<'static, Color>) -> usize {
-        (0..=self.draft.len())
-            .min_by_key(|&index| (self.boundary_x(index, font) - x).abs())
-            .unwrap_or(0)
+    /// The boundary nearest `point`.
+    fn boundary_at(&self, point: Point, font: &FontdueRenderer<'static, Color>) -> usize {
+        match self.field {
+            Field::Name(_) => (0..=self.draft.len())
+                .min_by_key(|&index| (self.boundary_x(index, font) - point.x).abs())
+                .unwrap_or(0),
+            Field::Message => {
+                let style = Self::message_style(font);
+                let lines = self.message_lines(&style);
+                let first = self.first_line(&lines);
+                let row = ((point.y - MESSAGE_FIELD.top_left.y) / 22).clamp(0, 1) as usize;
+                let Some(line) = lines.get(first + row) else {
+                    return self.draft.len();
+                };
+                (line.start..=line.end)
+                    .min_by_key(|&index| {
+                        let x =
+                            MESSAGE_LEFT as f32 + style.advance(&self.draft()[line.start..index]);
+                        (libm::roundf(x) as i32 - point.x).abs()
+                    })
+                    .unwrap_or(line.end)
+            }
+        }
     }
 
-    pub fn draw(&self, font: &FontdueRenderer<'static, Color>, list: &mut List) {
+    fn message_style(font: &FontdueRenderer<'static, Color>) -> FontdueRenderer<'static, Color> {
+        style(
+            font,
+            chrome::WHITE,
+            u32::from(MESSAGE_SIZE),
+            Face::Mono.index(),
+        )
+    }
+
+    /// The draft's lines, as wrapped in its field. An empty draft has one, empty.
+    fn message_lines(
+        &self,
+        style: &FontdueRenderer<'static, Color>,
+    ) -> heapless::Vec<core::ops::Range<usize>, { crate::ui::text::LINES }> {
+        let mut lines = wrap(style, self.draft(), MESSAGE_WIDTH);
+        if lines.is_empty() {
+            _ = lines.push(0..0);
+        }
+        lines
+    }
+
+    /// The line the caret is on: the first that ends at or past it.
+    fn caret_line(&self, lines: &[core::ops::Range<usize>]) -> usize {
+        lines
+            .iter()
+            .position(|line| line.end >= self.cursor)
+            .unwrap_or(lines.len() - 1)
+    }
+
+    /// The first of the two lines the field shows, which keep the caret's in view.
+    fn first_line(&self, lines: &[core::ops::Range<usize>]) -> usize {
+        self.caret_line(lines).saturating_sub(1)
+    }
+
+    /// Draws the keyboard, under `title` for a message.
+    pub fn draw(&self, font: &FontdueRenderer<'static, Color>, list: &mut List, title: &str) {
+        match self.field {
+            Field::Name(_) => self.draw_name(font, list),
+            Field::Message => self.draw_message(font, list, title),
+        }
+        self.draw_keys(list);
+    }
+
+    fn draw_message(&self, font: &FontdueRenderer<'static, Color>, list: &mut List, title: &str) {
+        list.centred(title, CENTRE, 28, Face::Title, 26, chrome::WHITE);
+        list.outline(MESSAGE_FIELD, chrome::GRAY);
+        let style = Self::message_style(font);
+        let lines = self.message_lines(&style);
+        let first = self.first_line(&lines);
+        let caret = self.caret_line(&lines);
+        for (row, line) in lines.iter().enumerate().skip(first).take(2) {
+            let top = MESSAGE_TOPS[row - first];
+            let baseline = top + super::super::text::cap(&style);
+            let text = &self.draft()[line.clone()];
+            if !text.is_empty() {
+                list.text(
+                    Text::new(text, Face::Mono, MESSAGE_SIZE, chrome::WHITE)
+                        .at(MESSAGE_LEFT, top)
+                        .align(Align::Pen)
+                        .vertical(Vertical::Cap),
+                );
+            }
+            if row == caret {
+                let before = &self.draft()[line.start..self.cursor.clamp(line.start, line.end)];
+                let x = MESSAGE_LEFT + libm::roundf(style.advance(before)) as i32;
+                list.fill(rect(x, baseline + 1, x + 8, baseline + 3), chrome::WHITE);
+            }
+        }
+        let status = match self.note {
+            Some(Note::Full) => format(format_args!("{TEXT_MAX}/{TEXT_MAX} / MESSAGE IS FULL")),
+            _ => format(format_args!(
+                "{:03}/{TEXT_MAX} / REVIEW BEFORE SEND",
+                self.draft.len()
+            )),
+        };
+        list.centred(&status, CENTRE, 436, Face::Mono, 10, chrome::GRAY);
+        list.centred(
+            self.mode.caption(),
+            CENTRE,
+            400,
+            Face::Mono,
+            12,
+            chrome::VIOLET,
+        );
+    }
+
+    fn draw_name(&self, font: &FontdueRenderer<'static, Color>, list: &mut List) {
         list.centred("MY NAME", CENTRE, 30, Face::Title, 27, chrome::WHITE);
         list.outline(FIELD, chrome::GRAY);
         if self.draft.is_empty() {
@@ -354,15 +568,41 @@ impl Keyboard {
             rect(caret, CARET_TOP, caret + 2, CARET_TOP + 3),
             chrome::VIOLET,
         );
-        for (index, key) in keys(self.mode).iter().enumerate() {
+        list.centred(
+            self.mode.caption(),
+            CENTRE,
+            400,
+            Face::Mono,
+            12,
+            chrome::VIOLET,
+        );
+        let status = match self.note {
+            Some(Note::Full) => format(format_args!("{NAME_LEN}/{NAME_LEN} / NAME IS FULL")),
+            Some(Note::Blank) => format(format_args!("A NAME NEEDS A CHARACTER")),
+            Some(Note::Saving) => format(format_args!("SAVING")),
+            None => format(format_args!(
+                "{:02}/{NAME_LEN} / TAP NAME",
+                self.draft.len()
+            )),
+        };
+        list.centred(&status, CENTRE, 435, Face::Mono, 11, chrome::GRAY);
+    }
+
+    fn draw_keys(&self, list: &mut List) {
+        let message = self.field == Field::Message;
+        for (index, key) in keys(self.mode, self.field).iter().enumerate() {
             let pressed = self.held == Some((index, true));
             let color = match key.action {
                 Action::Case => chrome::VIOLET,
+                Action::Save if message && !self.reviewable() => chrome::DISABLED,
+                Action::Save if message => chrome::LIME,
                 Action::Char(_) | Action::Save => chrome::WHITE,
                 Action::Delete | Action::Cancel | Action::Mode(_) => chrome::GRAY,
             };
             let outline = if pressed || key.action == Action::Case {
                 chrome::VIOLET
+            } else if message && key.action == Action::Save {
+                color
             } else {
                 chrome::GRAY
             };
@@ -383,26 +623,6 @@ impl Keyboard {
                     .on(fill),
             );
         }
-        list.centred(
-            self.mode.caption(),
-            CENTRE,
-            400,
-            Face::Mono,
-            12,
-            chrome::VIOLET,
-        );
-        let status = match self.note {
-            Some(Note::Full) => {
-                super::layout::format(format_args!("{NAME_LEN}/{NAME_LEN} / NAME IS FULL"))
-            }
-            Some(Note::Blank) => super::layout::format(format_args!("A NAME NEEDS A CHARACTER")),
-            Some(Note::Saving) => super::layout::format(format_args!("SAVING")),
-            None => super::layout::format(format_args!(
-                "{:02}/{NAME_LEN} / TAP NAME",
-                self.draft.len()
-            )),
-        };
-        list.centred(&status, CENTRE, 435, Face::Mono, 11, chrome::GRAY);
     }
 }
 
@@ -414,7 +634,7 @@ mod tests {
     fn every_printable_character_has_a_key() {
         let mut found = [false; 95];
         for mode in [Mode::Upper, Mode::Lower, Mode::Numbers, Mode::Symbols] {
-            for key in keys(mode) {
+            for key in keys(mode, Field::Message) {
                 if let Action::Char(c) = key.action {
                     found[usize::from(c - b' ')] = true;
                 }
@@ -426,7 +646,7 @@ mod tests {
     #[test]
     fn no_two_keys_overlap() {
         for mode in [Mode::Upper, Mode::Lower, Mode::Numbers, Mode::Symbols] {
-            let keys = keys(mode);
+            let keys = keys(mode, Field::Message);
             for (i, a) in keys.iter().enumerate() {
                 for b in &keys[i + 1..] {
                     assert!(
@@ -442,7 +662,7 @@ mod tests {
 
     /// Presses the key labelled `label`, or the case key for `Aa`.
     fn press(keyboard: &mut Keyboard, label: &str) -> Outcome {
-        let key = keys(keyboard.mode)
+        let key = keys(keyboard.mode, keyboard.field)
             .into_iter()
             .find(|key| match key.action {
                 Action::Case => label == "Aa",
@@ -515,8 +735,8 @@ mod tests {
             chrome::FONTS,
         );
         let mut keyboard = Keyboard::new(Name::new(b"A").unwrap());
-        let q = keys(Mode::Upper)[0].rect.center();
-        let w = keys(Mode::Upper)[1].rect.center();
+        let q = keys(Mode::Upper, keyboard.field)[0].rect.center();
+        let w = keys(Mode::Upper, keyboard.field)[1].rect.center();
         keyboard.handle(&GestureEvent::Down(q), &font);
         let drag = crate::ui::gesture::Drag {
             start: q,

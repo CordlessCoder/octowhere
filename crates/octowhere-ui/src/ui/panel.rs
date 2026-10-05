@@ -11,7 +11,7 @@ use heapless::String;
 use super::{
     clock_screen,
     icon::{self, Glyph, Tile},
-    reveal::{Reveal, draw_revealed, revealed_bounds},
+    reveal::{Reveal, draw_revealed},
     scatter::{Field, Law, Look, Scatter, Tones},
     screens::PeripheralState,
     text::{self, style},
@@ -24,7 +24,8 @@ use crate::chrome::{
 /// Distance between the two complete pages during a sideways drag.
 pub const PAGE_WIDTH: i32 = 466;
 pub const MAX_SCROLL: i32 = PAGE_WIDTH;
-const RULE_TOP: [i32; 4] = [83, 160, 227, 294];
+/// Each row's top rule, then the rule under the last.
+const RULE_TOP: [i32; 5] = [83, 160, 227, 294, 370];
 const RULE_LEFT: [i32; 4] = [83, 57, 57, 83];
 const RULE_RIGHT: [i32; 4] = [383, 409, 409, 383];
 const CENTER: Point = Point::new(233, 233);
@@ -37,8 +38,9 @@ const MARKER_PITCH: i32 = 16;
 pub const HINT: &str = "DRAG UP TO CLOSE";
 const HINT_TOP: i32 = 406;
 /// The S1 prototype's halftone (`settings_study.py`): an 8 px grid inside radius 219, dense in
-/// two lobes beside the rows and sparse elsewhere, and none over the title, the hint or the
-/// rows' block. Its marks' purples brighten with the density.
+/// two lobes beside the rows and sparse elsewhere, and none over the title or the hint. The
+/// density eases out of the lobes, and the panel's rows lie over it (owner, 2026-10-04). Its
+/// marks' purples brighten with the density.
 const SCATTER: Scatter = Scatter {
     origin: Point::new(24, 24),
     gap: None,
@@ -58,6 +60,7 @@ const SCATTER: Scatter = Scatter {
             ],
             quiet: 0.09,
             peak: LOBE,
+            reach: 56.0,
         },
     }],
 };
@@ -67,11 +70,15 @@ const SCATTER_LOOK: Look = Look {
     facing: 0.0,
     density: 1.0,
 };
-/// No mark's top-left may lie over the title, the hint or the rows' block; a mark is left out
-/// when it meets one of these.
-const SCATTER_CLEAR: [Rectangle; 3] = [
+/// A mark is left out when it meets the title or the hint.
+const PANEL_CLEAR: [Rectangle; 2] = [
     Rectangle::new(Point::new(109, 0), Size::new(254, 83)),
     Rectangle::new(Point::new(118, 376), Size::new(236, 90)),
+];
+/// The screens the panel opens keep the rows' block clear too.
+const SCREEN_CLEAR: [Rectangle; 3] = [
+    PANEL_CLEAR[0],
+    PANEL_CLEAR[1],
     Rectangle::new(Point::new(85, 88), Size::new(302, 283)),
 ];
 
@@ -142,7 +149,11 @@ impl Cell {
             ),
             Point::new(
                 page_left(self.page(), scroll) + RULE_RIGHT[row],
-                if row == 3 { 370 } else { RULE_TOP[row + 1] - 1 },
+                if row == 3 {
+                    RULE_TOP[4]
+                } else {
+                    RULE_TOP[row + 1] - 1
+                },
             ),
         )
     }
@@ -415,7 +426,7 @@ fn draw_cell<D: CoverageTarget<Color = Color>>(
         &index,
         pen,
         Reveal::of(accents.index[i], 2),
-        &mut OnBackground::new(&mut *target, chrome::BLACK),
+        &mut *target,
     )?;
     let style = name_style(font);
     let name = cell.name();
@@ -425,7 +436,7 @@ fn draw_cell<D: CoverageTarget<Color = Color>>(
         name,
         pen,
         Reveal::of(accents.name[i], name.len()),
-        &mut OnBackground::new(&mut *target, chrome::BLACK),
+        &mut *target,
     )?;
     let mut value = String::<24>::new();
     if let Some(tag) = content.tag {
@@ -434,11 +445,7 @@ fn draw_cell<D: CoverageTarget<Color = Color>>(
     _ = value.push_str(&content.value);
     let style = value_style(font, content.value_color);
     let pen = Point::new(x + 45, text::baseline_for_ink_top(&style, &value, top + 38));
-    style.draw_on_baseline(
-        &value,
-        pen,
-        &mut OnBackground::new(&mut *target, chrome::BLACK),
-    )?;
+    style.draw_on_baseline(&value, pen, &mut *target)?;
     let marker = Rectangle::new(Point::new(x, top + 12), Size::new(3, 16));
     target.fill_solid(
         &marker,
@@ -450,7 +457,8 @@ fn draw_cell<D: CoverageTarget<Color = Color>>(
     )
 }
 
-/// The rules, drawn out from the middle to `progress` of their length.
+/// The rules, drawn out from the middle to `progress` of their length. Each spans the wider of
+/// the rows it lies between (owner, 2026-10-03).
 fn draw_rules<D: CoverageTarget<Color = Color>>(
     scroll: i32,
     progress: u8,
@@ -461,22 +469,17 @@ fn draw_rules<D: CoverageTarget<Color = Color>>(
     }
     for page in 0..=1 {
         let shift = page_left(page, scroll);
-        for row in 0..4 {
-            let start = shift + RULE_LEFT[row];
-            let end = shift + RULE_RIGHT[row];
+        for (rule, top) in RULE_TOP.into_iter().enumerate() {
+            let (above, below) = (rule.saturating_sub(1), rule.min(3));
+            let start = shift + RULE_LEFT[above].min(RULE_LEFT[below]);
+            let end = shift + RULE_RIGHT[above].max(RULE_RIGHT[below]);
             let width = ((end - start) as i64 * i64::from(progress) / 255) as i32;
+            let left = start + (end - start - width) / 2;
             target.fill_solid(
-                &Rectangle::new(Point::new(start, RULE_TOP[row]), Size::new(width as u32, 1)),
+                &Rectangle::new(Point::new(left, top), Size::new(width as u32, 1)),
                 chrome::shade(chrome::GRAY, 145),
             )?;
         }
-        target.fill_solid(
-            &Rectangle::new(
-                Point::new(shift + 83, 370),
-                Size::new((300 * i32::from(progress) / 255) as u32, 1),
-            ),
-            chrome::shade(chrome::GRAY, 145),
-        )?;
     }
     Ok(())
 }
@@ -491,18 +494,54 @@ fn scatter_looks(accents: &Accents) -> [Look; 1] {
     }]
 }
 
-/// The scatter the panel and the screens it opens share, at `accents`' bloom and breath.
+/// The scatter the screens the panel opens draw, clear of their middle.
 pub fn draw_scatter<D: CoverageTarget<Color = Color>>(
     accents: &Accents,
     target: &mut D,
 ) -> Result<(), D::Error> {
-    SCATTER.draw_clear_of(&scatter_looks(accents), &SCATTER_CLEAR, target)
+    SCATTER.draw_clear_of(&scatter_looks(accents), &SCREEN_CLEAR, target)
+}
+
+/// The scatter breathing at `breath`, clear of `clear`, as the 2026-10-04 screens draw it
+/// behind their text.
+pub fn draw_breathing_scatter<D: CoverageTarget<Color = Color>>(
+    breath: u8,
+    clear: &[Rectangle],
+    target: &mut D,
+) -> Result<(), D::Error> {
+    let accents = Accents {
+        breath,
+        ..Accents::FULL
+    };
+    SCATTER.draw_clear_of(&scatter_looks(&accents), clear, target)
+}
+
+/// Marks the breathing scatter's marks that differ between two breaths and clearings.
+pub fn breathing_scatter_damage(
+    before: (u8, &[Rectangle]),
+    after: (u8, &[Rectangle]),
+    damage: &mut chrome::Dirty,
+) {
+    let looks = |breath| {
+        scatter_looks(&Accents {
+            breath,
+            ..Accents::FULL
+        })
+    };
+    SCATTER.changed_between(
+        (&looks(before.0), before.1),
+        (&looks(after.0), after.1),
+        damage,
+    );
 }
 
 /// Marks the scatter's marks that differ between `before` and `after`.
 pub fn scatter_damage(before: &Accents, after: &Accents, damage: &mut chrome::Dirty) {
-    let shown = |accents| SCATTER.shown_clear_of(&scatter_looks(accents), &SCATTER_CLEAR);
-    SCATTER.changed(&shown(before), &shown(after), damage);
+    SCATTER.changed_between(
+        (&scatter_looks(before), &PANEL_CLEAR),
+        (&scatter_looks(after), &PANEL_CLEAR),
+        damage,
+    );
 }
 
 pub fn draw<D: CoverageTarget<Color = Color>>(
@@ -512,7 +551,7 @@ pub fn draw<D: CoverageTarget<Color = Color>>(
     font: &FontdueRenderer<'static, Color>,
     target: &mut D,
 ) -> Result<(), D::Error> {
-    draw_scatter(&accents, target)?;
+    SCATTER.draw_clear_of(&scatter_looks(&accents), &PANEL_CLEAR, target)?;
     {
         let rows = &mut Window::new(
             &mut *target,
@@ -581,15 +620,6 @@ pub fn cell_changed(cell: Cell, before: &PeripheralState, after: &PeripheralStat
     content(cell, before) != content(cell, after)
 }
 
-/// Everything the title and hint can cover, at any stage of their reveals.
-#[must_use]
-pub fn text_damage(font: &FontdueRenderer<'static, Color>) -> [Rectangle; 2] {
-    [
-        revealed_bounds(&title_style(font), TITLE, title_pen(font)),
-        revealed_bounds(&hint_style(font), HINT, hint_pen(font)),
-    ]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -623,6 +653,22 @@ mod tests {
         assert_eq!(cell_at(Point::new(300, 260), MAX_SCROLL), Some(Cell::Name));
         assert_eq!(cell_at(Point::new(420, 100), 0), None);
         assert_eq!(cell_at(Point::new(150, 30), 0), None);
+    }
+
+    #[test]
+    fn rules_draw_out_from_the_middle() {
+        let mut fb = chrome::FB::boxed();
+        draw_rules(0, 128, &mut *fb).unwrap();
+        for top in RULE_TOP {
+            let lit: std::vec::Vec<i32> = (0..PAGE_WIDTH)
+                .filter(|&x| fb.pixel(Point::new(x, top)) != Some(chrome::BLACK))
+                .collect();
+            let (first, last) = (lit[0], lit[lit.len() - 1]);
+            assert!(
+                (first + last).abs_diff(PAGE_WIDTH - 1) <= 1,
+                "the rule at {top} spans {first}..={last}"
+            );
+        }
     }
 
     #[test]

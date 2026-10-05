@@ -6,15 +6,16 @@
 #
 # dist/index.html also opens straight from disk.
 #
-# It needs a stable Rust with the wasm32-unknown-unknown target, which rust-toolchain.toml
-# here asks rustup for. wasm-opt from binaryen shrinks the module further when it is on the path.
+# It needs a nightly Rust with the wasm32-unknown-unknown target, which the repository's
+# rust-toolchain.toml asks rustup for. wasm-opt from binaryen shrinks the module further when it
+# is on the path.
 set -euo pipefail
 cd "$(dirname "$0")"
 
-cargo build --release --locked
+cargo build --profile web --locked --target wasm32-unknown-unknown
 rm -rf dist
 mkdir dist
-module=target/wasm32-unknown-unknown/release/ui_web.wasm
+module=../../target/wasm32-unknown-unknown/web/ui_web.wasm
 if command -v wasm-opt >/dev/null; then
     # The features Rust's wasm32-unknown-unknown target enables by default.
     wasm-opt -O3 --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext \

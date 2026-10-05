@@ -8,25 +8,26 @@
 //! has one chance in a million.
 //!
 //! Once both users confirm, the adding device sends the group in parts sealed under a key from
-//! the X25519 secret, and the joining device acknowledges each. The joining device stores the
-//! group before it acknowledges the last part. The adding device stores the new member on that
-//! acknowledgement, then says it is done.
+//! the X25519 secret, and the joining device acknowledges each. The joining device signs its own
+//! record in the group and stores the group before it acknowledges the last part, and that
+//! acknowledgement carries the signature. The adding device checks it, stores the new member,
+//! then says it is done. The keys exchanged are Ed25519 identities, with X25519 derived from
+//! them (`identity`).
 //!
 //! [`Pairing`] is the exchange without a radio: the caller passes it each frame heard, sends the
 //! frames [`Pairing::poll`] returns, and stores the group when the phase is [`Phase::Storing`].
 //! Times are microseconds on the caller's timer.
 
+use crate::IDS;
+pub use crate::identity::Identity;
+use crate::identity::{SIGNATURE_LEN, dh_public};
+use crate::members::{Group, MAC_LEN, Member, Name, PUBLIC_LEN, RECORD_MAX_LEN, Slot, stamp};
+use crate::seal::{self, Key, SIV_LEN};
+use alloc::boxed::Box;
+
 use hkdf::Hkdf;
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
-use x25519_dalek::PublicKey;
-pub use x25519_dalek::StaticSecret;
-
-use crate::IDS;
-use crate::members::{
-    GONE_LEN, Gone, Group, MAC_LEN, Member, Name, PUBLIC_LEN, RECORD_MAX_LEN, Slot,
-};
-use crate::seal::{self, Key, SIV_LEN};
 
 /// 2 added the key's generation and gone records to the group's transfer.
 pub const VERSION: u8 = 2;
@@ -71,15 +72,18 @@ mod body {
 }
 
 const SESSION_LEN: usize = 8;
+/// Version, kind, the joining device's key and hardware address.
+const ANNOUNCE_LEN: usize = 2 + 32 + MAC_LEN;
 /// Version, kind, the joining and adding devices' keys, the commitment, the adding device's
 /// hardware address.
 const OFFER_LEN: usize = 2 + 32 + 32 + 32 + MAC_LEN;
+/// Version, kind, session and nonce: the joining device's nonce, and the adding device's reveal
+/// of its own.
+const NONCE_FRAME_LEN: usize = 2 + SESSION_LEN + NONCE_LEN;
 /// Version, kind and session.
 const SEALED_HEADER: usize = 2 + SESSION_LEN;
 const PART_HEADER: usize = 3;
 const PART_DATA: usize = MAX_FRAME - SEALED_HEADER - SIV_LEN - PART_HEADER;
-/// The group key, the joining device's id, the member count, and each member's record with its
-/// length.
 /// The key, its generation, the joining device's id, the count, then each slot's record behind
 /// its length.
 const WELCOME_MAX: usize = 32 + 2 + 2 + IDS as usize * (1 + RECORD_MAX_LEN);
@@ -205,18 +209,25 @@ impl Phase {
     }
 }
 
-/// A device's long-term identity.
-#[derive(Clone)]
-pub struct Identity {
-    pub secret: StaticSecret,
-    pub mac: [u8; MAC_LEN],
-    pub name: Name,
+/// Where a pairing is: its [`Phase`] without the code and the parts' progress, which the
+/// pairing holds once for every phase that shows them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Stage {
+    Searching,
+    Found,
+    Connecting,
+    Compare,
+    Waiting,
+    Transfer,
+    Storing,
+    Finishing,
+    Done(Done),
+    Ended(End),
 }
 
-impl Identity {
-    #[must_use]
-    pub fn public(&self) -> [u8; PUBLIC_LEN] {
-        PublicKey::from(&self.secret).to_bytes()
+impl Stage {
+    fn is_final(self) -> bool {
+        matches!(self, Self::Done(_) | Self::Ended(_))
     }
 }
 
@@ -234,7 +245,7 @@ pub struct Pairing {
     public: [u8; PUBLIC_LEN],
     nonce: [u8; NONCE_LEN],
     jitter: u32,
-    phase: Phase,
+    stage: Stage,
     /// When the phase times out.
     deadline: i64,
     /// When the next frame goes out, and how long after it the one after.
@@ -258,8 +269,9 @@ pub struct Pairing {
     group: Option<Group>,
     new_id: u8,
     returning: bool,
-    utc: u32,
-    blob: [u8; WELCOME_MAX],
+    utc: Option<u32>,
+    /// On the heap, for the stack's sake: a welcome for a full group is kilobytes.
+    blob: Box<[u8; WELCOME_MAX]>,
     blob_len: usize,
     /// Parts acknowledged, on the adding device; received, on the joining one.
     parts_done: u8,
@@ -275,7 +287,7 @@ impl Pairing {
             public: me.public(),
             nonce,
             jitter,
-            phase: Phase::Searching,
+            stage: Stage::Searching,
             deadline: now + SEARCH_US,
             due: None,
             every: None,
@@ -294,8 +306,8 @@ impl Pairing {
             group: None,
             new_id: 0,
             returning: false,
-            utc: 0,
-            blob: [0; WELCOME_MAX],
+            utc: None,
+            blob: Box::new([0; WELCOME_MAX]),
             blob_len: 0,
             parts_done: 0,
             parts: 0,
@@ -311,15 +323,21 @@ impl Pairing {
         pairing
     }
 
-    /// Starts listening for a device to add to `group`, at UTC `utc`, which dates the new
-    /// member's record. A device in no group passes one [`Group::found`] gave it. `nonce` must be
+    /// Starts listening for a device to add to `group`, at UTC `utc` if known, which dates the
+    /// new member's record. A device in no group passes one [`Group::found`] gave it. `nonce` must be
     /// random. A full group ends at once, with nothing sent.
     #[must_use]
-    pub fn add(me: &Identity, group: Group, nonce: [u8; NONCE_LEN], now: i64, utc: u32) -> Self {
+    pub fn add(
+        me: &Identity,
+        group: Group,
+        nonce: [u8; NONCE_LEN],
+        now: i64,
+        utc: Option<u32>,
+    ) -> Self {
         let mut pairing = Self::new(Role::Add, me, nonce, now);
         pairing.utc = utc;
         if group.is_full() {
-            pairing.phase = Phase::Ended(End::Full);
+            pairing.stage = Stage::Ended(End::Full);
             pairing.deadline = now;
         }
         pairing.group = Some(group);
@@ -333,13 +351,27 @@ impl Pairing {
 
     #[must_use]
     pub fn phase(&self) -> Phase {
-        self.phase
+        match self.stage {
+            Stage::Searching => Phase::Searching,
+            Stage::Found => Phase::Found,
+            Stage::Connecting => Phase::Connecting,
+            Stage::Compare => Phase::Compare { code: self.code },
+            Stage::Waiting => Phase::Waiting { code: self.code },
+            Stage::Transfer => Phase::Transfer {
+                done: self.parts_done,
+                total: self.parts,
+            },
+            Stage::Storing => Phase::Storing,
+            Stage::Finishing => Phase::Finishing,
+            Stage::Done(done) => Phase::Done(done),
+            Stage::Ended(end) => Phase::Ended(end),
+        }
     }
 
     /// When the phase times out, while it can.
     #[must_use]
     pub fn deadline(&self) -> Option<i64> {
-        (!self.phase.is_final() && self.phase != Phase::Storing).then_some(self.deadline)
+        (!self.stage.is_final() && self.stage != Stage::Storing).then_some(self.deadline)
     }
 
     /// Adding: the hardware addresses of the devices announcing, in the order first heard.
@@ -361,7 +393,7 @@ impl Pairing {
             Role::Add => self.their_name,
             Role::Join => {
                 let group = self.group.as_ref()?;
-                let id = group.by_mac(&self.peer?.mac)?;
+                let id = group.by_public(&self.peer?.public)?;
                 group.member(id).map(|member| member.name)
             }
         }
@@ -373,6 +405,11 @@ impl Pairing {
         self.group.as_ref()
     }
 
+    /// Takes the group out of a pairing that is over.
+    pub fn take_group(&mut self) -> Option<Group> {
+        self.group.take()
+    }
+
     /// Adding: whether the joining device's user has confirmed the code.
     #[must_use]
     pub fn peer_accepted(&self) -> bool {
@@ -382,13 +419,13 @@ impl Pairing {
     /// Whether the pairing has nothing left to send or wait for.
     #[must_use]
     pub fn is_over(&self, now: i64) -> bool {
-        self.phase.is_final() && self.due.is_none() && now >= self.deadline
+        self.stage.is_final() && self.due.is_none() && now >= self.deadline
     }
 
     /// When [`Pairing::poll`] next has something to do.
     #[must_use]
     pub fn wake_at(&self) -> i64 {
-        let deadline = if self.phase == Phase::Storing {
+        let deadline = if self.stage == Stage::Storing {
             i64::MAX
         } else {
             self.deadline
@@ -409,7 +446,7 @@ impl Pairing {
     }
 
     fn end(&mut self, end: End, tell: Option<Reason>, now: i64) {
-        self.phase = Phase::Ended(end);
+        self.stage = Stage::Ended(end);
         self.tell = tell.filter(|_| self.key.is_some());
         self.ends_left = 0;
         self.due = None;
@@ -422,7 +459,7 @@ impl Pairing {
 
     /// Adding: picks the candidate at `index` in [`Pairing::candidates`].
     pub fn choose(&mut self, index: usize, now: i64) {
-        if self.role != Role::Add || self.phase != Phase::Found {
+        if self.role != Role::Add || self.stage != Stage::Found {
             return;
         }
         let Some(candidate) = self.candidates.iter().flatten().nth(index).copied() else {
@@ -431,18 +468,18 @@ impl Pairing {
         self.peer = Some(candidate);
         self.commitment = commitment(&self.nonce, &self.public, &candidate.public);
         self.session = session(&candidate.public, &self.public);
-        self.phase = Phase::Connecting;
+        self.stage = Stage::Connecting;
         self.deadline = now + STALL_US;
         self.send_now(now, Some(RETRY_US));
     }
 
     /// This user confirmed that the codes match.
     pub fn accept(&mut self, now: i64) {
-        let Phase::Compare { code } = self.phase else {
+        let Stage::Compare = self.stage else {
             return;
         };
         self.accepted_here = true;
-        self.phase = Phase::Waiting { code };
+        self.stage = Stage::Waiting;
         match self.role {
             Role::Join => self.send_now(now, Some(RETRY_US)),
             Role::Add if self.accepted_there => self.start_transfer(now),
@@ -452,7 +489,7 @@ impl Pairing {
 
     /// This user declined the code, or reported that the codes differ.
     pub fn reject(&mut self, mismatch: bool, now: i64) {
-        if matches!(self.phase, Phase::Compare { .. } | Phase::Waiting { .. }) {
+        if matches!(self.stage, Stage::Compare | Stage::Waiting) {
             let (end, reason) = if mismatch {
                 (End::Mismatch, Reason::Mismatch)
             } else {
@@ -464,31 +501,31 @@ impl Pairing {
 
     /// This user cancelled. Once the group is being stored, it is too late to.
     pub fn cancel(&mut self, now: i64) {
-        if !self.phase.is_final() && !matches!(self.phase, Phase::Storing | Phase::Finishing) {
+        if !self.stage.is_final() && !matches!(self.stage, Stage::Storing | Stage::Finishing) {
             self.end(End::Cancelled, Some(Reason::Cancelled), now);
         }
     }
 
     /// Takes the outcome of storing [`Pairing::group`].
     pub fn stored(&mut self, ok: bool, now: i64) {
-        if self.phase != Phase::Storing {
+        if self.stage != Stage::Storing {
             return;
         }
         match (self.role, ok) {
             (Role::Join, true) => {
-                self.phase = Phase::Finishing;
+                self.stage = Stage::Finishing;
                 self.deadline = now + STALL_US;
                 self.send_now(now, Some(RETRY_US));
             }
             (Role::Join, false) => self.end(End::StoreFailed, Some(Reason::StoreFailed), now),
             (Role::Add, ok) => {
-                self.phase = if ok {
-                    Phase::Done(Done::Added {
+                self.stage = if ok {
+                    Stage::Done(Done::Added {
                         id: self.new_id,
                         returning: self.returning,
                     })
                 } else {
-                    Phase::Ended(End::StoreFailed)
+                    Stage::Ended(End::StoreFailed)
                 };
                 // The joining device has the group either way; telling it so lets it stop.
                 self.deadline = now + LINGER_US;
@@ -509,7 +546,7 @@ impl Pairing {
             Some(every) if len.is_some() => Some(now + every + self.jitter()),
             _ => None,
         };
-        if matches!(self.phase, Phase::Ended(_)) && self.ends_left > 0 {
+        if matches!(self.stage, Stage::Ended(_)) && self.ends_left > 0 {
             self.ends_left -= 1;
             if self.ends_left == 0 {
                 self.due = None;
@@ -519,55 +556,53 @@ impl Pairing {
     }
 
     fn time_out(&mut self, now: i64) {
-        if self.role == Role::Add && matches!(self.phase, Phase::Searching | Phase::Found) {
+        if self.role == Role::Add && matches!(self.stage, Stage::Searching | Stage::Found) {
             for slot in &mut self.candidates {
                 if slot.is_some_and(|c| now - c.last > CANDIDATE_US) {
                     *slot = None;
                 }
             }
-            self.phase = if self.candidates.iter().any(Option::is_some) {
-                Phase::Found
+            self.stage = if self.candidates.iter().any(Option::is_some) {
+                Stage::Found
             } else {
-                Phase::Searching
+                Stage::Searching
             };
         }
-        if now < self.deadline || self.phase == Phase::Storing {
+        if now < self.deadline || self.stage == Stage::Storing {
             return;
         }
-        match self.phase {
-            Phase::Searching | Phase::Found => self.end(End::NotFound, None, now),
-            Phase::Connecting => self.end(End::Lost, None, now),
-            Phase::Compare { .. } | Phase::Waiting { .. } => {
+        match self.stage {
+            Stage::Searching | Stage::Found => self.end(End::NotFound, None, now),
+            Stage::Connecting => self.end(End::Lost, None, now),
+            Stage::Compare | Stage::Waiting => {
                 self.end(End::TimedOut, Some(Reason::TimedOut), now);
             }
-            Phase::Transfer { .. }
-                if self.role == Role::Add && self.parts_done + 1 == self.parts =>
-            {
+            Stage::Transfer if self.role == Role::Add && self.parts_done + 1 == self.parts => {
                 self.end(End::Unconfirmed, None, now);
             }
-            Phase::Transfer { .. } => self.end(End::Lost, None, now),
-            Phase::Finishing => {
-                self.phase = Phase::Done(Done::Joined {
+            Stage::Transfer => self.end(End::Lost, None, now),
+            Stage::Finishing => {
+                self.stage = Stage::Done(Done::Joined {
                     id: self.new_id,
                     confirmed: false,
                 });
                 self.due = None;
             }
-            Phase::Storing | Phase::Done(_) | Phase::Ended(_) => {}
+            Stage::Storing | Stage::Done(_) | Stage::Ended(_) => {}
         }
     }
 
     /// Writes the frame the phase sends.
     fn frame(&mut self, out: &mut [u8; MAX_FRAME]) -> Option<usize> {
         out[0] = VERSION;
-        match (self.role, self.phase) {
-            (Role::Join, Phase::Searching) => {
+        match (self.role, self.stage) {
+            (Role::Join, Stage::Searching) => {
                 out[1] = kind::ANNOUNCE;
                 out[2..34].copy_from_slice(&self.public);
                 out[34..40].copy_from_slice(&self.me.mac);
-                Some(40)
+                Some(ANNOUNCE_LEN)
             }
-            (Role::Add, Phase::Connecting) => {
+            (Role::Add, Stage::Connecting) => {
                 let peer = self.peer?;
                 out[1] = kind::OFFER;
                 out[2..34].copy_from_slice(&peer.public);
@@ -576,19 +611,19 @@ impl Pairing {
                 out[98..104].copy_from_slice(&self.me.mac);
                 Some(OFFER_LEN)
             }
-            (Role::Join, Phase::Connecting) => {
+            (Role::Join, Stage::Connecting) => {
                 out[1] = kind::NONCE;
                 out[2..10].copy_from_slice(&self.session);
                 out[10..26].copy_from_slice(&self.nonce);
-                Some(26)
+                Some(NONCE_FRAME_LEN)
             }
-            (Role::Add, Phase::Compare { .. } | Phase::Waiting { .. }) => {
+            (Role::Add, Stage::Compare | Stage::Waiting) => {
                 out[1] = kind::REVEAL;
                 out[2..10].copy_from_slice(&self.session);
                 out[10..26].copy_from_slice(&self.nonce);
-                Some(26)
+                Some(NONCE_FRAME_LEN)
             }
-            (Role::Join, Phase::Waiting { .. }) => {
+            (Role::Join, Stage::Waiting) => {
                 let name = self.me.name;
                 let name = name.as_bytes();
                 let mut body = [0; 1 + 16];
@@ -596,7 +631,7 @@ impl Pairing {
                 body[1..1 + name.len()].copy_from_slice(name);
                 self.seal(out, &body[..1 + name.len()])
             }
-            (Role::Add, Phase::Transfer { .. }) => {
+            (Role::Add, Stage::Transfer) => {
                 let index = self.parts_done;
                 let start = usize::from(index) * PART_DATA;
                 let end = (start + PART_DATA).min(self.blob_len);
@@ -607,13 +642,26 @@ impl Pairing {
                 body[3..3 + end - start].copy_from_slice(&self.blob[start..end]);
                 self.seal(out, &body[..3 + end - start])
             }
-            (Role::Join, Phase::Transfer { .. } | Phase::Finishing) => {
-                self.seal(out, &[body::ACK, self.parts_done.wrapping_sub(1)])
+            (Role::Join, Stage::Transfer | Stage::Finishing) => {
+                let mut ack = [0; 2 + SIGNATURE_LEN];
+                ack[..2].copy_from_slice(&[body::ACK, self.parts_done.wrapping_sub(1)]);
+                // The last part's carries this device's signature of its own record.
+                match self
+                    .group
+                    .as_ref()
+                    .filter(|_| self.parts_done == self.parts)
+                {
+                    Some(group) => {
+                        ack[2..].copy_from_slice(&group.me().signature);
+                        self.seal(out, &ack)
+                    }
+                    None => self.seal(out, &ack[..2]),
+                }
             }
-            (Role::Add, Phase::Done(_) | Phase::Ended(End::StoreFailed)) => {
+            (Role::Add, Stage::Done(_) | Stage::Ended(End::StoreFailed)) => {
                 self.seal(out, &[body::DONE])
             }
-            (_, Phase::Ended(_)) => {
+            (_, Stage::Ended(_)) => {
                 let reason = self.tell?;
                 self.seal(out, &[body::END, reason.to_byte()])
             }
@@ -636,22 +684,29 @@ impl Pairing {
             return;
         }
         match (self.role, frame[1]) {
-            (Role::Add, kind::ANNOUNCE) if frame.len() == 40 => self.announced(frame, now),
+            (Role::Add, kind::ANNOUNCE) if frame.len() == ANNOUNCE_LEN => {
+                self.announced(frame, now)
+            }
             (Role::Join, kind::OFFER) if frame.len() == OFFER_LEN => self.offered(frame, now),
-            (Role::Add, kind::NONCE) if frame.len() == 26 => self.nonce_heard(frame, now),
-            (Role::Join, kind::REVEAL) if frame.len() == 26 => self.revealed(frame, now),
+            (Role::Add, kind::NONCE) if frame.len() == NONCE_FRAME_LEN => {
+                self.nonce_heard(frame, now)
+            }
+            (Role::Join, kind::REVEAL) if frame.len() == NONCE_FRAME_LEN => {
+                self.revealed(frame, now)
+            }
             (_, kind::SEALED) => self.sealed(frame, now),
             _ => {}
         }
     }
 
     fn announced(&mut self, frame: &[u8], now: i64) {
-        if !matches!(self.phase, Phase::Searching | Phase::Found) {
+        if !matches!(self.stage, Stage::Searching | Stage::Found) {
             return;
         }
         let public: [u8; PUBLIC_LEN] = frame[2..34].try_into().expect("32 bytes");
         let mac: [u8; MAC_LEN] = frame[34..40].try_into().expect("6 bytes");
-        if public == self.public {
+        // One with this device's MAC would be given this device's id, and its record.
+        if public == self.public || mac == self.me.mac {
             return;
         }
         if let Some(known) = self
@@ -677,11 +732,11 @@ impl Pairing {
             self.candidates
                 .sort_unstable_by_key(|c| c.map_or(i64::MAX, |c| c.first));
         }
-        self.phase = Phase::Found;
+        self.stage = Stage::Found;
     }
 
     fn offered(&mut self, frame: &[u8], now: i64) {
-        if self.phase != Phase::Searching || frame[2..34] != self.public {
+        if self.stage != Stage::Searching || frame[2..34] != self.public {
             return;
         }
         let public: [u8; PUBLIC_LEN] = frame[34..66].try_into().expect("32 bytes");
@@ -693,7 +748,7 @@ impl Pairing {
         });
         self.commitment = frame[66..98].try_into().expect("32 bytes");
         self.session = session(&self.public, &public);
-        self.phase = Phase::Connecting;
+        self.stage = Stage::Connecting;
         self.deadline = now + STALL_US;
         self.send_now(now, Some(RETRY_US));
     }
@@ -702,26 +757,26 @@ impl Pairing {
         if frame[2..10] != self.session {
             return;
         }
-        match self.phase {
-            Phase::Connecting => {
+        match self.stage {
+            Stage::Connecting => {
                 let peer = self.peer.expect("chosen before connecting");
                 self.their_nonce = frame[10..26].try_into().expect("16 bytes");
                 if !self.derive(&peer.public, &peer.public, &self.public.clone()) {
                     self.end(End::Inauthentic, None, now);
                     return;
                 }
-                self.phase = Phase::Compare { code: self.code };
+                self.stage = Stage::Compare;
                 self.deadline = now + COMPARE_US;
                 self.send_now(now, None);
             }
             // The reveal was lost.
-            Phase::Compare { .. } | Phase::Waiting { .. } => self.send_now(now, None),
+            Stage::Compare | Stage::Waiting => self.send_now(now, None),
             _ => {}
         }
     }
 
     fn revealed(&mut self, frame: &[u8], now: i64) {
-        if self.phase != Phase::Connecting || frame[2..10] != self.session {
+        if self.stage != Stage::Connecting || frame[2..10] != self.session {
             return;
         }
         let peer = self.peer.expect("offered before connecting");
@@ -735,7 +790,7 @@ impl Pairing {
             self.end(End::Inauthentic, None, now);
             return;
         }
-        self.phase = Phase::Compare { code: self.code };
+        self.stage = Stage::Compare;
         self.deadline = now + COMPARE_US;
         self.due = None;
     }
@@ -743,7 +798,10 @@ impl Pairing {
     /// Works out the code and the session key from the other device's key, the joining and
     /// adding devices' keys, and both nonces. Returns false for a key no honest device has.
     fn derive(&mut self, theirs: &[u8; 32], joining: &[u8; 32], adding: &[u8; 32]) -> bool {
-        let shared = self.me.secret.diffie_hellman(&PublicKey::from(*theirs));
+        let Some(theirs) = dh_public(theirs) else {
+            return false;
+        };
+        let shared = self.me.dh().diffie_hellman(&theirs);
         if !shared.was_contributory() {
             return false;
         }
@@ -789,8 +847,8 @@ impl Pairing {
         };
         match (self.role, what) {
             (_, body::END)
-                if !self.phase.is_final()
-                    && !matches!(self.phase, Phase::Storing | Phase::Finishing) =>
+                if !self.stage.is_final()
+                    && !matches!(self.stage, Stage::Storing | Stage::Finishing) =>
             {
                 if let Some(reason) = rest.first().copied().and_then(Reason::from_byte) {
                     self.end(End::Peer(reason), None, now);
@@ -802,15 +860,15 @@ impl Pairing {
                 }
                 self.accepted_there = true;
                 self.their_name = Name::new(rest);
-                if matches!(self.phase, Phase::Waiting { .. }) && self.accepted_here {
+                if matches!(self.stage, Stage::Waiting) && self.accepted_here {
                     self.start_transfer(now);
                 }
             }
             (Role::Add, body::ACK) => self.acknowledged(rest, now),
             (Role::Join, body::PART) => self.part(rest, now),
             (Role::Join, body::DONE) => {
-                if matches!(self.phase, Phase::Finishing | Phase::Done(_)) {
-                    self.phase = Phase::Done(Done::Joined {
+                if matches!(self.stage, Stage::Finishing | Stage::Done(_)) {
+                    self.stage = Stage::Done(Done::Joined {
                         id: self.new_id,
                         confirmed: true,
                     });
@@ -824,58 +882,81 @@ impl Pairing {
 
     fn start_transfer(&mut self, now: i64) {
         let peer = self.peer.expect("chosen before the transfer");
-        let mut group = self.group.clone().expect("an adding device has a group");
-        let Some(id) = group.id_for(&peer.mac) else {
+        let group = self.group.as_mut().expect("an adding device has a group");
+        let Some(id) = group.id_for(&peer.public) else {
             self.end(End::Full, None, now);
             return;
         };
-        self.returning = group.by_mac(&peer.mac).is_some();
+        self.returning = group.by_public(&peer.public).is_some();
         self.new_id = id;
+        // The joining device signs this, and only this, once it has the group.
         group.enrol(
             id,
             Member {
                 public: peer.public,
-                joined: self.utc,
-                changed: self.utc,
+                joined: stamp(self.utc),
+                changed: stamp(self.utc),
                 mac: peer.mac,
                 name: self.their_name.unwrap_or_else(|| Name::from_mac(&peer.mac)),
+                signature: [0; SIGNATURE_LEN],
             },
         );
-        self.blob_len = welcome(&group, id, &mut self.blob);
+        self.blob_len = welcome(group, id, &mut self.blob);
         self.parts = self.blob_len.div_ceil(PART_DATA) as u8;
         self.parts_done = 0;
-        self.group = Some(group);
-        self.phase = Phase::Transfer {
-            done: 0,
-            total: self.parts,
-        };
+        self.stage = Stage::Transfer;
         self.deadline = now + STALL_US;
         self.send_now(now, Some(RETRY_US));
     }
 
     fn acknowledged(&mut self, rest: &[u8], now: i64) {
         let Some(&index) = rest.first() else { return };
-        match self.phase {
-            Phase::Transfer { .. } if index == self.parts_done => {
+        match self.stage {
+            Stage::Transfer if index == self.parts_done => {
+                if self.parts_done + 1 == self.parts {
+                    let signed = rest
+                        .get(1..)
+                        .and_then(|signature| signature.try_into().ok())
+                        .is_some_and(|signature| self.signed_by_joiner(signature));
+                    if !signed {
+                        self.end(End::Inauthentic, Some(Reason::StoreFailed), now);
+                        return;
+                    }
+                }
                 self.parts_done += 1;
                 if self.parts_done == self.parts {
-                    self.phase = Phase::Storing;
+                    self.stage = Stage::Storing;
                     self.due = None;
                 } else {
-                    self.phase = Phase::Transfer {
-                        done: self.parts_done,
-                        total: self.parts,
-                    };
+                    self.stage = Stage::Transfer;
                     self.deadline = now + STALL_US;
                     self.send_now(now, Some(RETRY_US));
                 }
             }
             // The joining device missed the done.
-            Phase::Done(_) | Phase::Ended(End::StoreFailed) if index + 1 == self.parts => {
+            Stage::Done(_) | Stage::Ended(End::StoreFailed) if index + 1 == self.parts => {
                 self.send_now(now, None);
             }
             _ => {}
         }
+    }
+
+    /// Puts the joining device's `signature` on its record, if it signed the record this device
+    /// made of it.
+    fn signed_by_joiner(&mut self, signature: [u8; SIGNATURE_LEN]) -> bool {
+        let id = self.new_id;
+        let Some(group) = &mut self.group else {
+            return false;
+        };
+        let Some(mut record) = group.member(id).copied() else {
+            return false;
+        };
+        record.signature = signature;
+        if !record.verify(id) {
+            return false;
+        }
+        group.enrol(id, record);
+        true
     }
 
     fn part(&mut self, rest: &[u8], now: i64) {
@@ -883,9 +964,8 @@ impl Pairing {
             return;
         };
         let (index, total) = (*index, *total);
-        let phase = self.phase;
-        match phase {
-            Phase::Waiting { .. } | Phase::Transfer { .. } if index == self.parts_done => {
+        match self.stage {
+            Stage::Waiting | Stage::Transfer if index == self.parts_done => {
                 if total == 0
                     || (index > 0 && total != self.parts)
                     || usize::from(total) * PART_DATA > WELCOME_MAX + PART_DATA
@@ -900,27 +980,27 @@ impl Pairing {
                 self.parts = total;
                 self.deadline = now + STALL_US;
                 if self.parts_done < total {
-                    self.phase = Phase::Transfer {
-                        done: self.parts_done,
-                        total,
-                    };
+                    self.stage = Stage::Transfer;
                     self.send_now(now, None);
                     return;
                 }
                 match read_welcome(&self.blob[..self.blob_len]) {
-                    Some(group)
-                        if group.me().public == self.public && group.me().mac == self.me.mac =>
+                    Some(mut group)
+                        if group.me().public == self.public
+                            && group.me().mac == self.me.mac
+                            && group.me().name == self.me.name =>
                     {
+                        group.sign_own(&self.me);
                         self.new_id = group.own();
                         self.group = Some(group);
-                        self.phase = Phase::Storing;
+                        self.stage = Stage::Storing;
                         self.due = None;
                     }
                     _ => self.end(End::Malformed, Some(Reason::StoreFailed), now),
                 }
             }
             // The acknowledgement was lost.
-            Phase::Transfer { .. } if index < self.parts_done => {
+            Stage::Transfer if index < self.parts_done => {
                 self.send_now(now, None);
             }
             _ => {}
@@ -952,21 +1032,12 @@ fn welcome(group: &Group, id: u8, out: &mut [u8; WELCOME_MAX]) -> usize {
     let mut count = 0;
     let mut len = 36;
     for slot_id in 0..IDS {
-        let n = match group.slot(slot_id) {
-            Some(Slot::Member(member)) => {
-                let mut record = [0; RECORD_MAX_LEN];
-                let n = member.encode(slot_id, &mut record);
-                out[len + 1..len + 1 + n].copy_from_slice(&record[..n]);
-                n
-            }
-            Some(Slot::Gone(gone)) => {
-                let mut record = [0; GONE_LEN];
-                gone.encode(slot_id, &mut record);
-                out[len + 1..len + 1 + GONE_LEN].copy_from_slice(&record);
-                GONE_LEN
-            }
-            None => continue,
+        let Some(slot) = group.slot(slot_id) else {
+            continue;
         };
+        let mut record = [0; RECORD_MAX_LEN];
+        let n = slot.encode(slot_id, &mut record);
+        out[len + 1..len + 1 + n].copy_from_slice(&record[..n]);
         out[len] = n as u8;
         len += 1 + n;
         count += 1;
@@ -975,8 +1046,7 @@ fn welcome(group: &Group, id: u8, out: &mut [u8; WELCOME_MAX]) -> usize {
     len
 }
 
-/// Reads what [`welcome`] wrote. A gone record is shorter than any member record, which tells
-/// them apart.
+/// Reads what [`welcome`] wrote.
 fn read_welcome(blob: &[u8]) -> Option<Group> {
     let key = Key::new(blob.get(..32)?.try_into().ok()?);
     let generation = u16::from_le_bytes(blob.get(32..34)?.try_into().ok()?);
@@ -987,13 +1057,7 @@ fn read_welcome(blob: &[u8]) -> Option<Group> {
     for _ in 0..count {
         let (&n, after) = rest.split_first()?;
         let (record, after) = after.split_at_checked(usize::from(n))?;
-        let (id, slot) = if record.len() == GONE_LEN {
-            let (id, gone) = Gone::decode(record)?;
-            (id, Slot::Gone(gone))
-        } else {
-            let (id, member) = Member::decode(record)?;
-            (id, Slot::Member(member))
-        };
+        let (id, slot) = Slot::decode(record)?;
         slots[usize::from(id)] = Some(slot);
         rest = after;
     }
@@ -1006,16 +1070,54 @@ fn read_welcome(blob: &[u8]) -> Option<Group> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::members::tests::member;
+    use crate::members::{GONE_LEN, Gone, tests::member};
+
+    /// The welcome as [`welcome`] wrote it before slots had one encoding.
+    fn welcome_as_first_written(group: &Group, id: u8) -> alloc::vec::Vec<u8> {
+        let mut out = alloc::vec![0; 36];
+        out[..32].copy_from_slice(group.key().bytes());
+        out[32..34].copy_from_slice(&group.generation().to_le_bytes());
+        out[34] = id;
+        let mut count = 0;
+        for slot_id in 0..IDS {
+            let record = match group.slot(slot_id) {
+                Some(Slot::Member(member)) => {
+                    let mut record = [0; RECORD_MAX_LEN];
+                    let n = member.encode(slot_id, &mut record);
+                    record[..n].to_vec()
+                }
+                Some(Slot::Gone(gone)) => {
+                    let mut record = [0; GONE_LEN];
+                    gone.encode(slot_id, &mut record);
+                    record.to_vec()
+                }
+                None => continue,
+            };
+            out.push(record.len() as u8);
+            out.extend_from_slice(&record);
+            count += 1;
+        }
+        out[35] = count;
+        out
+    }
+
+    #[test]
+    fn a_welcome_keeps_its_bytes() {
+        let mut slots = [None; IDS as usize];
+        slots[0] = Some(Slot::Member(member(1, 100)));
+        slots[2] = Some(Slot::Gone(Gone::unsigned(member(2, 0).public, 200)));
+        slots[31] = Some(Slot::Member(member(3, 300)));
+        let group = Group::restore(Key::new([6; 32]), 9, 0, slots).unwrap();
+        let mut blob = [0; WELCOME_MAX];
+        let len = welcome(&group, 31, &mut blob);
+        assert_eq!(blob[..len], welcome_as_first_written(&group, 31));
+    }
 
     #[test]
     fn a_transfer_keeps_the_generation_and_gone_records() {
         let mut slots = [None; IDS as usize];
         slots[0] = Some(Slot::Member(member(1, 100)));
-        slots[2] = Some(Slot::Gone(Gone {
-            public: [2; 32],
-            changed: 200,
-        }));
+        slots[2] = Some(Slot::Gone(Gone::unsigned(member(2, 0).public, 200)));
         slots[31] = Some(Slot::Member(member(3, 300)));
         let group = Group::restore(Key::new([6; 32]), 9, 0, slots).unwrap();
         let mut blob = [0; WELCOME_MAX];
@@ -1033,26 +1135,12 @@ mod tests {
 
     fn identity(n: u8) -> Identity {
         let mac = [0x10, 0, 0, 0, 0x1c, n];
-        Identity {
-            secret: StaticSecret::from([n; 32]),
-            mac,
-            name: Name::from_mac(&mac),
-        }
-    }
-
-    fn as_member(me: &Identity) -> Member {
-        Member {
-            public: me.public(),
-            joined: UTC - 100,
-            changed: UTC - 100,
-            mac: me.mac,
-            name: me.name,
-        }
+        Identity::new([n; 32], mac, Name::from_mac(&mac))
     }
 
     /// A group founded by `adder`, with members at the other `ids`.
     fn group(adder: &Identity, ids: &[u8]) -> Group {
-        let mut group = Group::found(Key::new([9; 32]), as_member(adder));
+        let mut group = Group::found(Key::new([9; 32]), adder, Some(UTC - 100));
         for &id in ids {
             group.enrol(id, member(100 + id, UTC - 50));
         }
@@ -1124,7 +1212,7 @@ mod tests {
     #[test]
     fn a_device_joins_an_existing_group() {
         let (a, j) = (identity(1), identity(2));
-        let mut adder = Pairing::add(&a, group(&a, &[1, 3]), [1; 16], 0, UTC);
+        let mut adder = Pairing::add(&a, group(&a, &[1, 3]), [1; 16], 0, Some(UTC));
         let mut joiner = Pairing::join(&j, [2; 16], 0);
         let mut codes = None;
         run(
@@ -1178,8 +1266,8 @@ mod tests {
     #[test]
     fn a_device_in_no_group_founds_one() {
         let (a, j) = (identity(1), identity(2));
-        let founded = Group::found(Key::new([4; 32]), as_member(&a));
-        let mut adder = Pairing::add(&a, founded, [1; 16], 0, UTC);
+        let founded = Group::found(Key::new([4; 32]), &a, Some(UTC - 100));
+        let mut adder = Pairing::add(&a, founded, [1; 16], 0, Some(UTC));
         let mut joiner = Pairing::join(&j, [2; 16], 0);
         run(
             &mut adder,
@@ -1205,7 +1293,13 @@ mod tests {
     #[test]
     fn it_survives_losing_frames() {
         let (a, j) = (identity(1), identity(2));
-        let mut adder = Pairing::add(&a, group(&a, &[1, 2, 3, 4, 5, 6, 7, 8, 9]), [1; 16], 0, UTC);
+        let mut adder = Pairing::add(
+            &a,
+            group(&a, &[1, 2, 3, 4, 5, 6, 7, 8, 9]),
+            [1; 16],
+            0,
+            Some(UTC),
+        );
         let mut joiner = Pairing::join(&j, [2; 16], 0);
         let mut n = 0;
         let lose_every_third = |_: From, _: Phase, _: &[u8]| {
@@ -1237,7 +1331,7 @@ mod tests {
     fn a_full_group_is_spread_over_parts() {
         let (a, j) = (identity(1), identity(2));
         let ids: [u8; 30] = core::array::from_fn(|i| i as u8 + 1);
-        let mut adder = Pairing::add(&a, group(&a, &ids), [1; 16], 0, UTC);
+        let mut adder = Pairing::add(&a, group(&a, &ids), [1; 16], 0, Some(UTC));
         let mut joiner = Pairing::join(&j, [2; 16], 0);
         let mut most = 0;
         run(
@@ -1267,10 +1361,10 @@ mod tests {
     #[test]
     fn a_device_in_the_middle_shows_each_side_a_different_code() {
         let (a, j, m) = (identity(1), identity(2), identity(3));
-        let mut adder = Pairing::add(&a, group(&a, &[]), [1; 16], 0, UTC);
+        let mut adder = Pairing::add(&a, group(&a, &[]), [1; 16], 0, Some(UTC));
         let mut joiner = Pairing::join(&j, [2; 16], 0);
         // The device in the middle adds the joining device, and joins the adding one.
-        let mut m_add = Pairing::add(&m, group(&m, &[]), [3; 16], 0, UTC);
+        let mut m_add = Pairing::add(&m, group(&m, &[]), [3; 16], 0, Some(UTC));
         let mut m_join = Pairing::join(&m, [4; 16], 0);
         let mut out = [0; MAX_FRAME];
         for step in 0..3_000 {
@@ -1301,7 +1395,7 @@ mod tests {
     #[test]
     fn a_tampered_reveal_reaching_the_joining_device_is_refused() {
         let (a, j) = (identity(1), identity(2));
-        let mut adder = Pairing::add(&a, group(&a, &[]), [1; 16], 0, UTC);
+        let mut adder = Pairing::add(&a, group(&a, &[]), [1; 16], 0, Some(UTC));
         let mut joiner = Pairing::join(&j, [2; 16], 0);
         let mut out = [0; MAX_FRAME];
         for step in 0..1_000 {
@@ -1329,7 +1423,7 @@ mod tests {
             (false, End::Declined, End::Peer(Reason::Declined)),
         ] {
             let (a, j) = (identity(1), identity(2));
-            let mut adder = Pairing::add(&a, group(&a, &[]), [1; 16], 0, UTC);
+            let mut adder = Pairing::add(&a, group(&a, &[]), [1; 16], 0, Some(UTC));
             let mut joiner = Pairing::join(&j, [2; 16], 0);
             run(
                 &mut adder,
@@ -1357,7 +1451,7 @@ mod tests {
     #[test]
     fn nothing_found_ends_the_search() {
         let a = identity(1);
-        let mut adder = Pairing::add(&a, group(&a, &[]), [1; 16], 0, UTC);
+        let mut adder = Pairing::add(&a, group(&a, &[]), [1; 16], 0, Some(UTC));
         let mut out = [0; MAX_FRAME];
         assert_eq!(adder.poll(SEARCH_US - 1, &mut out), None);
         assert_eq!(adder.phase(), Phase::Searching);
@@ -1369,7 +1463,7 @@ mod tests {
     #[test]
     fn a_code_left_unconfirmed_times_out() {
         let (a, j) = (identity(1), identity(2));
-        let mut adder = Pairing::add(&a, group(&a, &[]), [1; 16], 0, UTC);
+        let mut adder = Pairing::add(&a, group(&a, &[]), [1; 16], 0, Some(UTC));
         let mut joiner = Pairing::join(&j, [2; 16], 0);
         let ended = run(
             &mut adder,
@@ -1396,14 +1490,36 @@ mod tests {
     fn a_full_group_sends_nothing() {
         let a = identity(1);
         let ids: [u8; 31] = core::array::from_fn(|i| i as u8 + 1);
-        let mut adder = Pairing::add(&a, group(&a, &ids), [1; 16], 0, UTC);
+        let mut adder = Pairing::add(&a, group(&a, &ids), [1; 16], 0, Some(UTC));
         assert_eq!(adder.phase(), Phase::Ended(End::Full));
         assert_eq!(adder.poll(0, &mut [0; MAX_FRAME]), None);
         assert!(adder.is_over(0));
     }
 
     #[test]
-    fn a_returning_device_gets_its_old_id() {
+    fn the_joining_device_signs_its_own_record() {
+        let (a, j) = (identity(1), identity(2));
+        let mut adder = Pairing::add(&a, group(&a, &[1]), [1; 16], 0, Some(UTC));
+        let mut joiner = Pairing::join(&j, [2; 16], 0);
+        run(
+            &mut adder,
+            &mut joiner,
+            60_000 * MS,
+            |_, _, _| true,
+            users,
+            (true, true),
+        );
+        let Phase::Done(Done::Added { id, .. }) = adder.phase() else {
+            panic!("added: {:?}", adder.phase());
+        };
+        let theirs = adder.group().unwrap().member(id).unwrap();
+        assert_eq!(theirs.public, j.public());
+        assert!(theirs.verify(id));
+        assert_eq!(joiner.group().unwrap().member(id), Some(theirs));
+    }
+
+    #[test]
+    fn a_device_with_a_known_mac_and_a_new_key_is_a_new_member() {
         let (a, j) = (identity(1), identity(2));
         let mut old = group(&a, &[1, 2]);
         old.enrol(
@@ -1413,7 +1529,38 @@ mod tests {
                 ..member(55, UTC - 999)
             },
         );
-        let mut adder = Pairing::add(&a, old, [1; 16], 0, UTC);
+        let mut adder = Pairing::add(&a, old, [1; 16], 0, Some(UTC));
+        let mut joiner = Pairing::join(&j, [2; 16], 0);
+        run(
+            &mut adder,
+            &mut joiner,
+            60_000 * MS,
+            |_, _, _| true,
+            users,
+            (true, true),
+        );
+        assert_eq!(
+            adder.phase(),
+            Phase::Done(Done::Added {
+                id: 3,
+                returning: false
+            })
+        );
+    }
+
+    #[test]
+    fn a_returning_device_gets_its_old_id() {
+        let (a, j) = (identity(1), identity(2));
+        let mut old = group(&a, &[1, 2]);
+        old.enrol(
+            5,
+            Member {
+                public: j.public(),
+                mac: j.mac,
+                ..member(55, UTC - 999)
+            },
+        );
+        let mut adder = Pairing::add(&a, old, [1; 16], 0, Some(UTC));
         let mut joiner = Pairing::join(&j, [2; 16], 0);
         run(
             &mut adder,
@@ -1437,7 +1584,7 @@ mod tests {
     #[test]
     fn a_lost_last_acknowledgement_leaves_each_side_saying_so() {
         let (a, j) = (identity(1), identity(2));
-        let mut adder = Pairing::add(&a, group(&a, &[]), [1; 16], 0, UTC);
+        let mut adder = Pairing::add(&a, group(&a, &[]), [1; 16], 0, Some(UTC));
         let mut joiner = Pairing::join(&j, [2; 16], 0);
         run(
             &mut adder,
@@ -1461,7 +1608,7 @@ mod tests {
     #[test]
     fn a_store_that_fails_is_reported_to_the_other_device() {
         let (a, j) = (identity(1), identity(2));
-        let mut adder = Pairing::add(&a, group(&a, &[]), [1; 16], 0, UTC);
+        let mut adder = Pairing::add(&a, group(&a, &[]), [1; 16], 0, Some(UTC));
         let mut joiner = Pairing::join(&j, [2; 16], 0);
         run(
             &mut adder,
@@ -1479,7 +1626,7 @@ mod tests {
     fn a_cancel_during_the_transfer_reaches_the_other_device() {
         let (a, j) = (identity(1), identity(2));
         let ids: [u8; 20] = core::array::from_fn(|i| i as u8 + 1);
-        let mut adder = Pairing::add(&a, group(&a, &ids), [1; 16], 0, UTC);
+        let mut adder = Pairing::add(&a, group(&a, &ids), [1; 16], 0, Some(UTC));
         let mut joiner = Pairing::join(&j, [2; 16], 0);
         run(
             &mut adder,
@@ -1499,9 +1646,23 @@ mod tests {
     }
 
     #[test]
+    fn a_device_announcing_the_adders_own_mac_is_not_listed() {
+        let a = identity(1);
+        let mut adder = Pairing::add(&a, group(&a, &[]), [1; 16], 0, Some(UTC));
+        let mut out = [0; MAX_FRAME];
+        let mut twin = identity(2);
+        twin.mac = a.mac;
+        let mut joiner = Pairing::join(&twin, [2; 16], 0);
+        let len = joiner.poll(0, &mut out).unwrap();
+        adder.receive(&mut out[..len], 0);
+        assert_eq!(adder.candidates().count(), 0);
+        assert_eq!(adder.phase(), Phase::Searching);
+    }
+
+    #[test]
     fn the_adding_device_lists_every_device_announcing() {
         let a = identity(1);
-        let mut adder = Pairing::add(&a, group(&a, &[]), [1; 16], 0, UTC);
+        let mut adder = Pairing::add(&a, group(&a, &[]), [1; 16], 0, Some(UTC));
         let mut out = [0; MAX_FRAME];
         for (n, at) in [(2, 0), (3, 500 * MS)] {
             let mut joiner = Pairing::join(&identity(n), [n; 16], at);

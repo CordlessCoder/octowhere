@@ -1,3 +1,3 @@
-# Overrides the repository's firmware target, so a plain `cargo build` here builds the module.
+# A build started here is for the page.
 [build]
 target = "wasm32-unknown-unknown"

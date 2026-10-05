@@ -1,14 +1,12 @@
 //! What a node knows of every id's position, which ids it has heard, and what its next packet
 //! carries.
 
-use crate::IDS;
 use crate::packet::{Entry, MAX_DELTA};
 use crate::schedule::{is_floor, is_sweep_round};
+use crate::{AHEAD_S, IDS, Ids};
 
 /// An id heard within this many rounds is a neighbour.
 pub const NEIGHBOUR_ROUNDS: i64 = 7;
-/// How far ahead of the node's own clock an entry may be stamped.
-pub const AHEAD_S: u32 = 3_600;
 /// An entry this much newer than the one last sent for its id is worth sending again, as is one
 /// that moved [`MOVED_M`]: a floor period, so a still node's entry stays current.
 pub const NEWER_S: u32 = 135;
@@ -125,6 +123,21 @@ impl Table {
         }
     }
 
+    /// Drops every other id's entry, and which ids were heard, as declining a removal after its
+    /// switch does, so that the member brought back is not sent what the group shared without
+    /// it. The nodes that never switched send theirs again. Returns how many entries.
+    pub fn forget_others(&mut self) -> usize {
+        let mut forgotten = 0;
+        for id in (0..SLOTS).filter(|&id| id != usize::from(self.own)) {
+            if self.entries[id].take().is_some() {
+                forgotten += 1;
+            }
+            self.sent[id] = None;
+            self.heard[id] = None;
+        }
+        forgotten
+    }
+
     /// Records a packet from `id` in `round`.
     pub fn heard(&mut self, id: u8, round: i64) {
         let last = &mut self.heard[usize::from(id)];
@@ -134,14 +147,14 @@ impl Table {
         *last = Some(round);
     }
 
-    /// The ids heard within the last [`NEIGHBOUR_ROUNDS`] before `round`, as a set.
+    /// The ids heard within the last [`NEIGHBOUR_ROUNDS`] before `round`.
     #[must_use]
-    pub fn neighbours(&self, round: i64) -> u32 {
+    pub fn neighbours(&self, round: i64) -> Ids {
         (0..IDS)
             .filter(|&id| {
                 self.heard[usize::from(id)].is_some_and(|last| round - last < NEIGHBOUR_ROUNDS)
             })
-            .fold(0, |set, id| set | 1 << id)
+            .collect()
     }
 
     /// Takes what a packet from `sender` heard in `round` carried, after its entries were
@@ -154,11 +167,11 @@ impl Table {
         &mut self,
         sender: u8,
         carried: &[Option<u32>; SLOTS],
-        neighbours: u32,
+        neighbours: Ids,
         round: i64,
     ) -> bool {
-        let mine = self.neighbours(round) & !(1 << sender | 1 << self.own);
-        if mine & !neighbours != 0 {
+        let mine = self.neighbours(round).without(sender).without(self.own);
+        if !(mine & !neighbours).is_empty() {
             return false;
         }
         for (id, stamp) in carried.iter().enumerate() {
@@ -193,7 +206,7 @@ impl Table {
         is_floor(round, self.own)
             || is_sweep_round(round)
             || self.appeared
-            || self.neighbours(round) == 0
+            || self.neighbours(round).is_empty()
             || self.entries().any(|entry| self.is_fresh(entry))
     }
 
@@ -201,13 +214,13 @@ impl Table {
     /// order: this node's own, those worth sending ahead of the rotation newest first, then the
     /// rest in rotation. Returns how many it picked.
     pub fn digest(&self, base: u32, out: &mut [Entry]) -> usize {
-        let mut picked = 0u32;
+        let mut picked = Ids::EMPTY;
         let mut n = 0;
-        let mut take = |entry: &Entry, picked: &mut u32, n: &mut usize| {
-            if *n < out.len() && *picked & 1 << entry.id == 0 && entry.fits_below(base) {
+        let mut take = |entry: &Entry, picked: &mut Ids, n: &mut usize| {
+            if *n < out.len() && !picked.contains(entry.id) && entry.fits_below(base) {
                 out[*n] = *entry;
                 *n += 1;
-                *picked |= 1 << entry.id;
+                picked.insert(entry.id);
             }
         };
         if let Some(own) = self.entry(self.own) {
@@ -316,8 +329,8 @@ mod tests {
         let mut table = Table::new(0);
         table.heard(5, 100);
         table.heard(9, 106);
-        assert_eq!(table.neighbours(106), 1 << 5 | 1 << 9);
-        assert_eq!(table.neighbours(107), 1 << 9);
+        assert_eq!(table.neighbours(106), Ids::of(5).with(9));
+        assert_eq!(table.neighbours(107), Ids::of(9));
     }
 
     #[test]
@@ -421,9 +434,9 @@ mod tests {
         carried[7] = Some(1_000);
         assert!(table.wants_to_send(quiet), "7's position is news");
 
-        table.covered_by(4, &carried, 1 << 1, 100);
+        table.covered_by(4, &carried, Ids::of(1), 100);
         assert!(table.wants_to_send(quiet), "4 does not report hearing 7");
-        table.covered_by(4, &carried, 1 << 7, 100);
+        table.covered_by(4, &carried, Ids::of(7), 100);
         assert!(
             !table.wants_to_send(quiet),
             "4 reached everyone this node hears"
@@ -431,7 +444,7 @@ mod tests {
 
         table.merge(entry(7, 2_000, NORTH), None);
         carried[7] = Some(1_000);
-        table.covered_by(4, &carried, 1 << 7, 100);
+        table.covered_by(4, &carried, Ids::of(7), 100);
         assert!(table.wants_to_send(quiet), "4 carried an older entry");
         assert!(
             table.wants_to_send(table_floor(1)),
@@ -447,7 +460,7 @@ mod tests {
         table.sent(&[]);
         table.merge(entry(4, 1_000, DUBLIN), None);
         carried[4] = Some(1_000);
-        table.covered_by(4, &carried, 0, 100);
+        table.covered_by(4, &carried, Ids::EMPTY, 100);
         assert!(!table.wants_to_send(2));
     }
 
@@ -455,7 +468,7 @@ mod tests {
     fn a_new_neighbour_is_news_whatever_its_packet_carried() {
         let mut table = Table::new(1);
         table.heard(4, 100);
-        table.covered_by(4, &[None; SLOTS], 0, 100);
+        table.covered_by(4, &[None; SLOTS], Ids::EMPTY, 100);
         assert!(table.wants_to_send(2));
     }
 
@@ -470,5 +483,18 @@ mod tests {
         table.merge(entry(5, 5_000 - MAX_DELTA - 1, DUBLIN), None);
         let mut out = [entry(0, 0, 0); 4];
         assert_eq!(table.digest(5_000, &mut out), 0);
+    }
+
+    #[test]
+    fn declining_a_removal_after_its_switch_forgets_the_positions_of_others() {
+        let mut table = Table::new(0);
+        table.set_own(entry(0, 2_000, DUBLIN));
+        table.merge(entry(1, 999, DUBLIN), None);
+        table.merge(entry(2, 1_000, DUBLIN), None);
+        table.heard(1, 3);
+        assert_eq!(table.forget_others(), 2);
+        assert!(table.entry(1).is_none() && table.entry(2).is_none());
+        assert_eq!(table.neighbours(3), Ids::EMPTY, "nor which were heard");
+        assert!(table.entry(0).is_some(), "its own position stays");
     }
 }

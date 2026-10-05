@@ -8,7 +8,7 @@
 //! frame-by-frame timing is in its `renderer/concept/startup_s1_g17.py` and
 //! `startup-g19-matched/matched_scatter.py`.
 
-use alloc::{vec, vec::Vec};
+use alloc::boxed::Box;
 use core::fmt::Write as _;
 
 use embedded_graphics::{
@@ -19,6 +19,7 @@ use embedded_graphics::{
 };
 
 use super::{
+    charging::{self, MAX_BARS, Span},
     clock::ClockView,
     scatter::{Field, Law, Look, Scatter, Shown, Tones},
     screens, smooth,
@@ -27,7 +28,7 @@ use super::{
 };
 use crate::chrome::{
     self, Color, CoverageTarget, Dirty, FontdueRenderer, INTERFERENCE, INTERFERENCE_BOLD, MARATYPE,
-    OnBackground,
+    OnBackground, Part, Recording,
 };
 
 /// The identity's frames, then the card's.
@@ -194,8 +195,12 @@ const DENSE: f32 = 0.71;
 /// From this frame only the scatter's turns and the clock's digits change. Before it, a frame
 /// redraws everything.
 const SETTLED: u32 = PIN_FROM + 11;
-const _: () =
-    assert!(ARMS_UNTIL <= SETTLED && FLICKER_FROM + 11 <= SETTLED && ROW_FROM + 5 <= SETTLED);
+const _: () = assert!(
+    ARMS_UNTIL <= SETTLED
+        && FLICKER_FROM + 11 <= SETTLED
+        && ROW_FROM + 5 <= SETTLED
+        && ROW_FROM + charging::BUILD_IN_FRAMES <= SETTLED
+);
 
 /// How a flickering element shows, some frames after its flicker starts: on for two, off for
 /// two, on for one, off for two, on for two, partly on for two, then on.
@@ -295,6 +300,7 @@ pub fn draw_identity<D: CoverageTarget<Color = Color>>(
     answered: usize,
     context: &Context<'_>,
     font: &FontdueRenderer<'static, Color>,
+    title: &TitleSlot,
     target: &mut D,
 ) -> Result<(), D::Error> {
     screens::clear(target)?;
@@ -302,13 +308,13 @@ pub fn draw_identity<D: CoverageTarget<Color = Color>>(
         // The opening costs little, so it builds the title a few pieces a frame for the frames
         // after it.
         let pieces = (frame as usize + 1) * TITLE_PIECES / OPEN_FRAMES as usize;
-        Title::take(pieces, font).keep();
+        title.built(pieces, font);
         return draw_opening(frame, font, target);
     }
     scatter().draw(&looks(frame), target)?;
     let field = &mut OnBackground::new(&mut *target, chrome::BLACK);
     draw_marks(frame, field)?;
-    draw_title(frame, font, field)?;
+    draw_title(frame, font, title, field)?;
     draw_row(frame, answered, context, font, field)?;
 
     let lime = |lit: Lit| match lit {
@@ -554,76 +560,60 @@ fn smoothstep(v: f32) -> f32 {
     v * v * (3.0 - 2.0 * v)
 }
 
-/// The title's coverage, filled and hollow, worked out on the first frame that draws it and
+/// The title's coverage, each glyph filled and hollow, worked out over the opening's frames and
 /// kept until the card: rasterizing 112 px glyphs, and hollowing them, every frame cost more
 /// than a frame. The hollow title's glyphs are placed as the type-in places them one at a time.
 struct Title {
-    area: Rectangle,
     /// The filled word's ink, which the partly lit frames slice.
     ink: Rectangle,
-    filled: Vec<u8>,
-    hollow: Vec<u8>,
-    /// Each glyph's columns in the hollow title.
-    glyphs: [core::ops::Range<i32>; WORD.len()],
+    coverage: Recording,
+    /// The [`TITLE_PIECES`] recorded so far, each glyph filled, then each hollow.
+    pieces: heapless::Vec<Part, TITLE_PIECES>,
     /// Where each glyph's pen sits.
     pens: [Point; WORD.len()],
-    /// How many of the [`TITLE_PIECES`] are drawn into the buffers: each glyph filled, then each
-    /// hollow.
-    built: usize,
 }
 
 /// The pieces of work that build the title: each glyph filled, then each glyph hollow.
 const TITLE_PIECES: usize = 2 * WORD.len();
+/// What the title's coverage takes, reserved whole when it begins: a recording that grows needs
+/// its old and new blocks at once, and the start-up's heap may not hold both.
+const TITLE_BYTES: usize = 36_660;
 
-static TITLE: embassy_sync::blocking_mutex::Mutex<
-    embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex,
-    core::cell::RefCell<Option<Title>>,
-> = embassy_sync::blocking_mutex::Mutex::new(core::cell::RefCell::new(None));
+/// Holds the title between the frames that build and draw it. The start-up owns it, so one cut
+/// short lets the title go with the rest of its state.
+#[derive(Default)]
+pub struct TitleSlot(core::cell::RefCell<Option<Box<Title>>>);
 
-/// A coverage buffer over `area` that text draws into, each layer over the last.
-struct Coverage<'a> {
-    area: Rectangle,
-    cells: &'a mut [u8],
-}
+impl TitleSlot {
+    /// Lets the title's coverage go, once the identity is over.
+    pub fn forget(&self) {
+        self.0.borrow_mut().take();
+    }
 
-impl Dimensions for Coverage<'_> {
-    fn bounding_box(&self) -> Rectangle {
-        self.area
+    /// The title, begun if it was not, built to `pieces`.
+    fn built(
+        &self,
+        pieces: usize,
+        font: &FontdueRenderer<'static, Color>,
+    ) -> core::cell::RefMut<'_, Title> {
+        core::cell::RefMut::map(self.0.borrow_mut(), |slot| {
+            let title = slot.get_or_insert_with(|| Box::new(Title::new(font)));
+            title.build(pieces, font);
+            &mut **title
+        })
     }
 }
 
-impl Coverage<'_> {
-    fn add(&mut self, x: i32, y: i32, cover: u8) {
-        let (dx, dy) = (x - self.area.top_left.x, y - self.area.top_left.y);
-        if (0..self.area.size.width as i32).contains(&dx)
-            && (0..self.area.size.height as i32).contains(&dy)
-        {
-            let cell = &mut self.cells[(dy * self.area.size.width as i32 + dx) as usize];
-            *cell = cell.saturating_add(((255 - u16::from(*cell)) * u16::from(cover) / 255) as u8);
-        }
+/// A copy starts without the title, which the frames that draw it build again.
+impl Clone for TitleSlot {
+    fn clone(&self) -> Self {
+        Self::default()
     }
 }
 
-impl DrawTarget for Coverage<'_> {
-    type Color = Color;
-    type Error = core::convert::Infallible;
-
-    fn draw_iter<I: IntoIterator<Item = Pixel<Color>>>(
-        &mut self,
-        pixels: I,
-    ) -> Result<(), Self::Error> {
-        for Pixel(point, _) in pixels {
-            self.add(point.x, point.y, u8::MAX);
-        }
-        Ok(())
-    }
-}
-
-impl CoverageTarget for Coverage<'_> {
-    fn blend_row(&mut self, x: i32, y: i32, coverage: &[u8], _: Color) {
-        for (i, &cover) in coverage.iter().enumerate() {
-            self.add(x + i as i32, y, cover);
-        }
+impl core::fmt::Debug for TitleSlot {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("TitleSlot").finish_non_exhaustive()
     }
 }
 
@@ -634,137 +624,91 @@ impl Title {
             text::pen_x_for_ink_centre(&filled, WORD, CENTER.x as f32),
             text::baseline_for_ink_middle(&filled, WORD, CENTER.y as f32),
         );
-        let pens: [Point; WORD.len()] = core::array::from_fn(|i| {
-            pen + Point::new(libm::roundf(filled.advance(&WORD[..i])) as i32, 0)
-        });
-        let area = pens
-            .iter()
-            .enumerate()
-            .fold(filled.baseline_bounds(WORD, pen), |area, (i, &at)| {
-                let glyph = filled.baseline_bounds(&WORD[i..=i], at);
-                let corner = |r: &Rectangle| r.bottom_right().unwrap_or(r.top_left);
-                Rectangle::with_corners(
-                    area.top_left.component_min(glyph.top_left),
-                    corner(&area).component_max(corner(&glyph)),
-                )
-            })
-            .offset(1);
-        let cells = area.size.width as usize * area.size.height as usize;
         Self {
-            area,
             ink: filled.baseline_bounds(WORD, pen),
-            filled: vec![0; cells],
-            hollow: vec![0; cells],
-            glyphs: core::array::from_fn(|i| {
-                let ink = filled.baseline_bounds(&WORD[i..=i], pens[i]);
-                ink.top_left.x..ink.top_left.x + ink.size.width as i32
+            coverage: Recording::with_capacity(TITLE_BYTES),
+            pieces: heapless::Vec::new(),
+            pens: core::array::from_fn(|i| {
+                pen + Point::new(libm::roundf(filled.advance(&WORD[..i])) as i32, 0)
             }),
-            pens,
-            built: 0,
         }
     }
 
-    /// Draws the pieces up to `pieces` into the buffers, if they are not yet.
+    /// Records the pieces up to `pieces`, if they are not yet.
     fn build(&mut self, pieces: usize, font: &FontdueRenderer<'static, Color>) {
         let style = style(font, chrome::LIME, WORD_PX, MARATYPE);
-        while self.built < pieces.min(TITLE_PIECES) {
-            let i = self.built % WORD.len();
+        while self.pieces.len() < pieces.min(TITLE_PIECES) {
+            let i = self.pieces.len() % WORD.len();
             let (glyph, at) = (&WORD[i..=i], self.pens[i]);
-            if self.built < WORD.len() {
-                let cells = &mut Coverage {
-                    area: self.area,
-                    cells: &mut self.filled,
-                };
-                let _ = style.draw_on_baseline(glyph, at, cells);
+            let _ = if self.pieces.len() < WORD.len() {
+                style.draw_on_baseline(glyph, at, &mut self.coverage)
             } else {
-                let cells = &mut Coverage {
-                    area: self.area,
-                    cells: &mut self.hollow,
-                };
-                let _ = style.draw_hollow_on_baseline(glyph, at, HOLLOW, cells);
-            }
-            self.built += 1;
+                style.draw_hollow_on_baseline(glyph, at, HOLLOW, &mut self.coverage)
+            };
+            let _ = self.pieces.push(self.coverage.part());
         }
+        debug_assert!(
+            self.coverage.len() <= TITLE_BYTES,
+            "the title took {} bytes, past the {TITLE_BYTES} reserved",
+            self.coverage.len(),
+        );
     }
 
-    /// Takes the title out of its slot, begun if there was none, and builds it to `pieces`. Put
-    /// it back with [`Title::keep`].
-    fn take(pieces: usize, font: &FontdueRenderer<'static, Color>) -> Self {
-        let mut title = TITLE
-            .lock(|title| title.borrow_mut().take())
-            .unwrap_or_else(|| Self::new(font));
-        title.build(pieces, font);
-        title
+    fn filled(&self) -> &[Part] {
+        &self.pieces[..WORD.len()]
     }
 
-    fn keep(self) {
-        TITLE.lock(|slot| *slot.borrow_mut() = Some(self));
+    fn hollow(&self) -> &[Part] {
+        &self.pieces[WORD.len()..]
     }
 
-    /// Blends `columns` of `cells` onto the target in `color`.
+    /// Blends `columns` of `glyphs` onto the target in `color`.
     fn draw<D: CoverageTarget<Color = Color>>(
         &self,
-        cells: &[u8],
+        glyphs: &[Part],
         columns: core::ops::Range<i32>,
         color: Color,
         target: &mut D,
     ) {
-        let left = self.area.top_left.x;
-        let (from, to) = (
-            columns.start.max(left),
-            columns.end.min(left + self.area.size.width as i32),
-        );
-        if from >= to {
-            return;
-        }
-        let height = self.area.size.height;
-        if !target.visible(&Rectangle::new(
-            Point::new(from, self.area.top_left.y),
-            Size::new((to - from) as u32, height),
-        )) {
-            return;
-        }
-        let width = self.area.size.width as usize;
-        for (row, line) in cells.chunks_exact(width).enumerate() {
-            let line = &line[(from - left) as usize..(to - left) as usize];
-            target.blend_row(from, self.area.top_left.y + row as i32, line, color);
+        for glyph in glyphs {
+            self.coverage.draw(glyph, columns.clone(), color, target);
         }
     }
-}
-
-/// Lets the title's coverage go, once the identity is over.
-fn forget_title() {
-    TITLE.lock(|title| title.borrow_mut().take());
 }
 
 fn draw_title<D: CoverageTarget<Color = Color>>(
     frame: u32,
     font: &FontdueRenderer<'static, Color>,
+    title: &TitleSlot,
     target: &mut D,
 ) -> Result<(), D::Error> {
-    // Out of the lock while it draws, so drawing holds no critical section.
-    let title = Title::take(TITLE_PIECES, font);
+    let title = title.built(TITLE_PIECES, font);
     let all = i32::MIN..i32::MAX;
     match lit(frame, FLICKER_FROM) {
         Lit::Before => {
             let ms = frame as f32 * FRAME_MS;
-            for (i, columns) in title.glyphs.iter().enumerate() {
+            for (i, glyph) in title.hollow().iter().enumerate() {
                 let k = smoothstep((ms - TYPE_FROM - i as f32 * INTERVAL) / RISE);
                 if k <= 0.0 {
                     break;
                 }
                 let color = chrome::shade(chrome::LIME, libm::roundf(f32::from(DIM) * k) as u8);
-                title.draw(&title.hollow, columns.clone(), color, target);
+                title.draw(core::slice::from_ref(glyph), all.clone(), color, target);
             }
         }
-        Lit::Off => title.draw(&title.hollow, all, chrome::shade(chrome::LIME, DIM), target),
-        Lit::On => title.draw(&title.filled, all, chrome::LIME, target),
+        Lit::Off => title.draw(
+            title.hollow(),
+            all,
+            chrome::shade(chrome::LIME, DIM),
+            target,
+        ),
+        Lit::On => title.draw(title.filled(), all, chrome::LIME, target),
         Lit::Partial => {
             let ink = title.ink;
             for fraction in SLICES {
                 let left = ink.top_left.x + libm::roundf(ink.size.width as f32 * fraction) as i32;
                 title.draw(
-                    &title.filled,
+                    title.filled(),
                     left..left + SLICE as i32,
                     chrome::LIME,
                     target,
@@ -772,7 +716,6 @@ fn draw_title<D: CoverageTarget<Color = Color>>(
             }
         }
     }
-    title.keep();
     Ok(())
 }
 
@@ -799,12 +742,22 @@ fn draw_row<D: CoverageTarget<Color = Color>>(
         }
     };
     let scale = BARCODE_WIDTH / startup::bars_advance(context.firmware) as f32;
+    // The barcode builds in as the charging gauge's slices do (owner, 2026-10-01).
+    let rest: heapless::Vec<Span, MAX_BARS> = startup::bars(context.firmware)
+        .map(|(at, width)| Span {
+            left: at as f32,
+            width: width as f32,
+        })
+        .take(MAX_BARS)
+        .collect();
+    let mut bars = heapless::Vec::new();
+    charging::build_in(frame - ROW_FROM, &rest, &mut bars);
     let digits = startup::utc_digits(context.clock);
     for band in 0..5 {
         line.fill(0);
-        for (at, width) in startup::bars(context.firmware) {
-            let from = ROW_LEFT + at as f32 * scale;
-            add(&mut line, from, from + width as f32 * scale);
+        for bar in &bars {
+            let from = ROW_LEFT + bar.left * scale;
+            add(&mut line, from, from + bar.width * scale);
         }
         // Each run of set modules is one span, since two edges meeting mid-pixel would leave a
         // seam.
@@ -951,11 +904,12 @@ impl<T: CoverageTarget> CoverageTarget for Stripes<'_, T> {
 
 pub fn draw_card<D: CoverageTarget<Color = Color>>(
     frame: u32,
+    title: &TitleSlot,
     target: &mut D,
 ) -> Result<(), D::Error> {
     // The lime frames clear to the page's colour rather than painting it over black.
     let page = matches!(frame, 0..9 | 17);
-    forget_title();
+    title.forget();
     screens::clear_to(target, if page { chrome::LIME } else { chrome::BLACK })?;
     let (pin, scaled) = (Pin::impact(1.0), Pin::impact(CARD_SCALE));
     match frame {

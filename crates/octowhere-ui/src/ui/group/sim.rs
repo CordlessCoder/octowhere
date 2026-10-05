@@ -5,8 +5,9 @@
 use heapless::Vec;
 
 use super::view::{
-    Answer, At, Done, End, GroupView, IDS, Mac, MemberView, MeshView, Name, PairingView, Phase,
-    Position, Reason, RecoveryPhase, RecoveryView, RefreshPhase, RefreshView, Request, Role,
+    Answer, At, Carriage, Decline, Done, End, GroupView, IDS, Mac, MemberView, MeshView,
+    MessageView, MessagesView, Name, PairingView, Phase, Position, Reason, RecoveryPhase,
+    RecoveryView, RefreshPhase, RefreshView, RemovalStage, RemovalView, Request, Role, Unremovable,
 };
 use crate::ui::gesture::Micros;
 
@@ -15,9 +16,9 @@ const SEARCH: Micros = 120 * SECOND;
 const COMPARE: Micros = 60 * SECOND;
 const STALL: Micros = 30 * SECOND;
 /// A refresh's three rounds.
-pub const REFRESH: Micros = 135 * SECOND;
+const REFRESH: Micros = 135 * SECOND;
 /// How long a founding listens for the joining device.
-pub const RECOVERY: Micros = 600 * SECOND;
+const RECOVERY: Micros = 600 * SECOND;
 
 /// What the user of the other device does with the code.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -70,17 +71,83 @@ pub struct Sim {
     pub refresh_learns: bool,
     /// When a founding's wait ends.
     recovery_until: Option<Micros>,
+    /// The refreshes started, which number them, as the node's do.
+    refreshes: u32,
     next: Option<(Micros, Next)>,
     changed: bool,
+    messages: alloc::boxed::Box<MessagesView>,
+    /// The number the next message shown takes.
+    next_message: u32,
+    /// What happens to a message next, and when: it goes further, or its destination replies.
+    carried: Vec<(Micros, u32, Carried), 16>,
+    messages_changed: bool,
+    /// The member the last switch removed, to put back if it is declined.
+    removed: Option<(u8, MemberView)>,
 }
 
-pub const PEER_MAC: Mac = [0x48, 0xa1, 0xb2, 0xc3, 0x8c, 0x91];
-pub const OWN_MAC: Mac = [0x48, 0xa1, 0xb2, 0xc3, 0x7a, 0x2f];
+/// A message as [`Sim::arrive`] adds it: from `from` to `to`, sent `ago` before now.
+#[derive(Clone, Copy, Debug)]
+pub struct Arrival<'t> {
+    pub from: u8,
+    pub to: Option<u8>,
+    pub text: &'t str,
+    pub ago: Micros,
+    pub carriage: Carriage,
+    pub unread: bool,
+}
+
+/// What happens to a message sent from here.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Carried {
+    Goes(Carriage),
+    /// The member it went to privately answers.
+    Answered,
+}
+
+/// How long after it is queued a message goes out, is heard relayed, and for a private one is
+/// acknowledged, and its destination answers.
+const SENT_AFTER: Micros = 2 * SECOND;
+const RELAYED_AFTER: Micros = 6 * SECOND;
+const DELIVERED_AFTER: Micros = 10 * SECOND;
+const ANSWERED_AFTER: Micros = 20 * SECOND;
+/// How long after a removal starts its switch comes, as for a group of eight, and how long after
+/// the switch it can be declined.
+pub const SWITCH_AFTER: Micros = 8 * 60 * SECOND;
+const DECLINE_FOR: Micros = 86_400 * SECOND;
+
+const PEER_MAC: Mac = [0x48, 0xa1, 0xb2, 0xc3, 0x8c, 0x91];
+const OWN_MAC: Mac = [0x48, 0xa1, 0xb2, 0xc3, 0x7a, 0x2f];
 const CODE: u32 = 482_731;
 const PARTS: u8 = 2;
 
+/// A synthetic fingerprint for the device with address `mac`.
+fn device(mac: &Mac) -> [u8; 8] {
+    let mut device = [0x5a; 8];
+    for (i, byte) in mac.iter().enumerate() {
+        device[i] ^= byte.rotate_left(i as u32 + 1);
+        device[7 - i] = device[7 - i].wrapping_mul(31).wrapping_add(*byte);
+    }
+    device
+}
+
 fn name(text: &str) -> Name {
     Name::new(text.as_bytes()).expect("a fixture name is printable")
+}
+
+/// Dublin, where this device stands, in degrees × 10⁷.
+const DUBLIN: (i32, i32) = (533_498_000, -62_603_000);
+
+/// Where member `id` stands: spread round Dublin at bearings a golden angle apart, further out
+/// each, so that their bearings and distances differ.
+fn around(id: u8) -> (i32, i32) {
+    let metres = 180.0 * f32::from(id);
+    let (sin, cos) = libm::sincosf((137.5 * f32::from(id)).to_radians());
+    let north = metres * cos / 111_320.0;
+    let east = metres * sin / (111_320.0 * libm::cosf(53.35_f32.to_radians()));
+    (
+        DUBLIN.0 + (north * 1e7) as i32,
+        DUBLIN.1 + (east * 1e7) as i32,
+    )
 }
 
 /// A group of `count` members with this device at id 0, heard and placed at varied times
@@ -106,15 +173,18 @@ pub fn group(count: u8, now: Micros) -> GroupView {
             MemberView {
                 name: Name::from_mac(&OWN_MAC),
                 mac: OWN_MAC,
+                device: device(&OWN_MAC),
                 joined: Some(seconds(86_400 * 3)),
                 heard: None,
                 position: Position::At(seconds(12)),
+                coordinates: Some(DUBLIN),
             }
         } else {
             let pattern = usize::from(id - 1) % NAMES.len();
             MemberView {
                 name: name(NAMES[pattern]),
                 mac,
+                device: device(&mac),
                 joined: Some(seconds(86_400 + 3600 * i64::from(id))),
                 heard: match pattern {
                     0 => Some(seconds(8)),
@@ -130,6 +200,7 @@ pub fn group(count: u8, now: Micros) -> GroupView {
                     3 => Position::Unknown,
                     _ => Position::At(seconds(60 * i64::from(id))),
                 },
+                coordinates: (pattern != 2).then(|| around(id)),
             }
         };
         members[usize::from(id)] = Some(member);
@@ -155,9 +226,234 @@ impl Sim {
             joiner_heard_after: Some(215 * SECOND),
             refresh_learns: false,
             recovery_until: None,
+            refreshes: 0,
             next: None,
             changed: true,
+            messages: MessagesView::boxed(),
+            next_message: 1,
+            carried: Vec::new(),
+            messages_changed: true,
+            removed: None,
         }
+    }
+
+    /// The removal of member `removed` that member `remover` asks for at `now`, with its switch
+    /// `switch_in` later, as the mesh shows it.
+    fn removal(&self, remover: u8, removed: u8, switch_in: Micros, now: Micros) -> RemovalView {
+        let member = |id: u8| {
+            self.view
+                .group
+                .as_ref()
+                .and_then(|group| group.member(id))
+                .copied()
+        };
+        let name =
+            |id: u8| member(id).map_or_else(|| Name::from_mac(&[0, 0, 0, 0, 0, id]), |m| m.name);
+        let mut key = [0x4b; 8];
+        key[0] = remover;
+        key[1] = removed;
+        key[2..].copy_from_slice(&now.to_be_bytes()[2..]);
+        RemovalView {
+            key,
+            remover,
+            remover_name: name(remover),
+            removed,
+            removed_name: name(removed),
+            device: member(removed).map_or([0; 8], |member| member.device),
+            stage: RemovalStage::Pending {
+                since: now as At,
+                switch: Some((now + switch_in) as At),
+            },
+        }
+    }
+
+    /// Member `remover` asks to remove member `removed`, its switch `switch_in` from `now`.
+    /// Another request under way becomes its rival and loses.
+    pub fn request_removal(&mut self, remover: u8, removed: u8, switch_in: Micros, now: Micros) {
+        let removal = self.removal(remover, removed, switch_in, now);
+        if let Some(mut lost) = self
+            .view
+            .removals
+            .current
+            .filter(|current| matches!(current.stage, RemovalStage::Pending { .. }))
+        {
+            lost.stage = RemovalStage::Lost;
+            self.view.removals.rival = Some(lost);
+        }
+        self.view.removals.current = Some(removal);
+        self.changed = true;
+    }
+
+    /// A rival of the removal under way that lost to it: member `remover` asked to remove
+    /// member `removed`.
+    pub fn losing_rival(&mut self, remover: u8, removed: u8, now: Micros) {
+        let mut rival = self.removal(remover, removed, 0, now);
+        rival.stage = RemovalStage::Lost;
+        self.view.removals.rival = Some(rival);
+        self.changed = true;
+    }
+
+    /// Member `by` removed this device, and its notice arrives at `now`.
+    pub fn removed_by(&mut self, by: u8, now: Micros) {
+        let name = self
+            .view
+            .group
+            .as_ref()
+            .and_then(|group| group.member(by))
+            .map_or_else(
+                || Name::from_mac(&[0, 0, 0, 0, 0, by]),
+                |member| member.name,
+            );
+        self.view.removals.removed_by = Some((by, name, now as At));
+        self.changed = true;
+    }
+
+    /// Switches to the removal under way at `now`: its member goes, and another member's can be
+    /// declined for a day.
+    fn switch(&mut self, now: Micros) {
+        let own = self.view.group.as_ref().map_or(0, |group| group.own);
+        let Some(current) = &mut self.view.removals.current else {
+            return;
+        };
+        let decline = if current.remover == own {
+            Decline::Own
+        } else {
+            Decline::Until((now + DECLINE_FOR) as At)
+        };
+        current.stage = RemovalStage::Switched {
+            at: now as At,
+            decline,
+        };
+        let removed = current.removed;
+        if let Some(group) = &mut self.view.group
+            && let Some(member) = group.members[usize::from(removed)].take()
+        {
+            self.removed = Some((removed, member));
+        }
+        self.changed = true;
+    }
+
+    #[must_use]
+    pub fn messages(&self) -> &MessagesView {
+        &self.messages
+    }
+
+    /// Whether the messages changed since the last call.
+    pub fn messages_changed(&mut self) -> bool {
+        core::mem::take(&mut self.messages_changed)
+    }
+
+    /// Adds a message as though it had come, at `now`.
+    pub fn arrive(&mut self, arrival: Arrival, now: Micros) -> u32 {
+        let id = self.next_message;
+        self.next_message += 1;
+        let Arrival {
+            from,
+            to,
+            text,
+            ago,
+            carriage,
+            unread,
+        } = arrival;
+        let mut message = MessageView::new(id, now as At - ago as At, from, to, text.as_bytes());
+        message.seq = id;
+        message.carriage = carriage;
+        message.unread = unread;
+        // The other member, as the node names it: the sender, or the recipient of this
+        // device's own.
+        if let Some(group) = &self.view.group {
+            let peer = if from == group.own { to } else { Some(from) };
+            if let Some(member) = peer.and_then(|id| group.member(id)) {
+                message.set_peer(member.device, member.name);
+            }
+        }
+        self.messages.push(message);
+        self.messages_changed = true;
+        id
+    }
+
+    /// The design's conversations, with the members at ids 1 and 2: the group's and one with
+    /// each, some unread, at `now`.
+    pub fn conversations(&mut self, now: Micros) {
+        let own = self.view.group.as_ref().map_or(0, |group| group.own);
+        let minute = 60 * SECOND;
+        self.arrive(
+            Arrival {
+                from: 2,
+                to: None,
+                text: "Meet at the bridge.",
+                ago: minute,
+                carriage: Carriage::Received,
+                unread: true,
+            },
+            now,
+        );
+        self.arrive(
+            Arrival {
+                from: own,
+                to: None,
+                text: "I will bring the spare cells.",
+                ago: 2 * minute,
+                carriage: Carriage::Relayed,
+                unread: false,
+            },
+            now,
+        );
+        self.arrive(
+            Arrival {
+                from: 1,
+                to: None,
+                text: "North path is clear.",
+                ago: 4 * minute,
+                carriage: Carriage::Received,
+                unread: false,
+            },
+            now,
+        );
+        self.arrive(
+            Arrival {
+                from: 1,
+                to: Some(own),
+                text: "Take the north path. I will wait at the turn.",
+                ago: 2 * minute,
+                carriage: Carriage::Received,
+                unread: true,
+            },
+            now,
+        );
+        self.arrive(
+            Arrival {
+                from: own,
+                to: Some(1),
+                text: "On my way.",
+                ago: 3 * minute,
+                carriage: Carriage::Delivered,
+                unread: false,
+            },
+            now,
+        );
+        self.arrive(
+            Arrival {
+                from: 1,
+                to: Some(own),
+                text: "See you there.",
+                ago: 8 * minute,
+                carriage: Carriage::Received,
+                unread: false,
+            },
+            now,
+        );
+        self.arrive(
+            Arrival {
+                from: own,
+                to: Some(2),
+                text: "On my way.",
+                ago: 8 * minute,
+                carriage: Carriage::Delivered,
+                unread: false,
+            },
+            now,
+        );
     }
 
     #[must_use]
@@ -233,7 +529,6 @@ impl Sim {
                     peer: None,
                     peer_name: None,
                     group,
-                    refused: None,
                 });
                 if role == Role::Add && self.view.group.as_ref().is_some_and(GroupView::is_full) {
                     self.end(End::Full);
@@ -269,6 +564,7 @@ impl Sim {
                     self.view.group = None;
                     self.view.refresh = None;
                     self.view.recovery = None;
+                    self.view.removals = Default::default();
                     self.next = None;
                 }
                 self.answer(Answer::Left(ok));
@@ -282,9 +578,9 @@ impl Sim {
                         .refresh
                         .is_some_and(|refresh| refresh.is_listening()) =>
             {
-                let session = self.view.refresh.map_or(1, |refresh| refresh.session + 1);
+                self.refreshes += 1;
                 self.view.refresh = Some(RefreshView {
-                    session,
+                    session: self.refreshes,
                     phase: RefreshPhase::Listening {
                         until: (now + REFRESH) as At,
                     },
@@ -292,6 +588,86 @@ impl Sim {
                     learned: 0,
                 });
                 self.next = Some((now + 20 * SECOND, Next::RefreshHears(1)));
+            }
+            Request::Send { to, text } => {
+                let own = self.view.group.as_ref().map_or(0, |group| group.own);
+                let id = self.arrive(
+                    Arrival {
+                        from: own,
+                        to,
+                        text: text.as_str(),
+                        ago: 0,
+                        carriage: Carriage::Queued,
+                        unread: false,
+                    },
+                    now,
+                );
+                let mut later = [
+                    Some((SENT_AFTER, Carried::Goes(Carriage::Sent))),
+                    Some((RELAYED_AFTER, Carried::Goes(Carriage::Relayed))),
+                    to.map(|_| (DELIVERED_AFTER, Carried::Goes(Carriage::Delivered))),
+                    to.map(|_| (ANSWERED_AFTER, Carried::Answered)),
+                ];
+                for (after, carried) in later.iter_mut().flatten() {
+                    _ = self.carried.push((now + *after, id, *carried));
+                }
+            }
+            Request::Read(id) => {
+                if let Some(message) = self.messages.get_mut(id) {
+                    message.unread = false;
+                    self.messages_changed = true;
+                }
+            }
+            Request::Remove { id, device } => {
+                let own = self.view.group.as_ref().map_or(0, |group| group.own);
+                let member = self
+                    .view
+                    .group
+                    .as_ref()
+                    .and_then(|group| group.member(id))
+                    .filter(|member| id != own && member.device == device);
+                let underway =
+                    self.view.removals.current.is_some_and(|current| {
+                        matches!(current.stage, RemovalStage::Pending { .. })
+                    });
+                let started = if member.is_none() {
+                    Err(Unremovable::Changed)
+                } else if underway {
+                    Err(Unremovable::Underway)
+                } else if self.store_fails {
+                    Err(Unremovable::Unsaved)
+                } else {
+                    Ok(())
+                };
+                if started.is_ok() {
+                    self.view.removals.current = Some(self.removal(own, id, SWITCH_AFTER, now));
+                }
+                self.answer(Answer::Removing(started));
+            }
+            Request::Keep { key } => {
+                let own = self.view.group.as_ref().map_or(0, |group| group.own);
+                if let Some(current) = &mut self.view.removals.current
+                    && current.key == key
+                    && current.remover != own
+                {
+                    match current.stage {
+                        RemovalStage::Pending { .. } => {
+                            current.stage = RemovalStage::Declined { at: now as At };
+                        }
+                        RemovalStage::Switched {
+                            decline: Decline::Until(until),
+                            ..
+                        } if now as At <= until => {
+                            current.stage = RemovalStage::Declined { at: now as At };
+                            if let (Some((id, member)), Some(group)) =
+                                (self.removed.take(), &mut self.view.group)
+                            {
+                                group.members[usize::from(id)] = Some(member);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
             }
             Request::Rename(name) => {
                 let ok = !self.store_fails;
@@ -353,12 +729,61 @@ impl Sim {
                 self.wait_for_joiner(now);
             }
         }
+        match self.view.removals.current.map(|current| current.stage) {
+            Some(RemovalStage::Pending {
+                switch: Some(switch),
+                ..
+            }) if now as At >= switch => self.switch(now),
+            Some(RemovalStage::Switched {
+                at,
+                decline: Decline::Until(until),
+            }) if now as At > until => {
+                if let Some(current) = &mut self.view.removals.current {
+                    current.stage = RemovalStage::Switched {
+                        at,
+                        decline: Decline::Expired,
+                    };
+                }
+                self.removed = None;
+                self.changed = true;
+            }
+            _ => {}
+        }
         while let Some((at, next)) = self.next
             && now >= at
         {
             self.next = None;
             self.changed = true;
             self.advance(next, at);
+        }
+        while let Some(at) = self.carried.iter().position(|&(due, ..)| now >= due) {
+            let (_, id, carried) = self.carried.remove(at);
+            let Some(message) = self.messages.get(id).copied() else {
+                continue;
+            };
+            match carried {
+                Carried::Goes(carriage) => {
+                    if let Some(message) = self.messages.get_mut(id) {
+                        message.carriage = carriage;
+                    }
+                }
+                Carried::Answered => {
+                    if let Some(to) = message.to {
+                        self.arrive(
+                            Arrival {
+                                from: to,
+                                to: Some(message.from),
+                                text: "Got it.",
+                                ago: 0,
+                                carriage: Carriage::Received,
+                                unread: true,
+                            },
+                            now,
+                        );
+                    }
+                }
+            }
+            self.messages_changed = true;
         }
         core::mem::take(&mut self.changed)
     }
@@ -450,9 +875,11 @@ impl Sim {
                         group.members[usize::from(id)] = Some(MemberView {
                             name: name("Ana's Watch 2"),
                             mac: PEER_MAC,
+                            device: device(&PEER_MAC),
                             joined: Some(now as At),
                             heard: None,
                             position: Position::Never,
+                            coordinates: None,
                         });
                         let count = group.count() as u8;
                         if let Some(pairing) = self.pairing() {
@@ -472,9 +899,11 @@ impl Sim {
                         let me = MemberView {
                             name: self.view.name,
                             mac: self.view.mac,
+                            device: device(&self.view.mac),
                             joined: Some(now as At),
                             heard: None,
                             position: Position::Never,
+                            coordinates: None,
                         };
                         joined.members[2] = Some(me);
                         if let Some(pairing) = self.pairing() {
@@ -520,9 +949,11 @@ impl Sim {
                     group.members[usize::from(id)] = Some(MemberView {
                         name: name("Fell Runner"),
                         mac: [0x48, 0xa1, 0xb2, 0xc3, 0x22, id],
+                        device: device(&[0x48, 0xa1, 0xb2, 0xc3, 0x22, id]),
                         joined: Some(now as At - 3_600 * SECOND as At),
                         heard: None,
                         position: Position::Never,
+                        coordinates: None,
                     });
                     if let Some(refresh) = &mut self.view.refresh {
                         refresh.learned |= 1 << id;
@@ -552,9 +983,11 @@ impl Sim {
                 group.members[1] = Some(MemberView {
                     name: name("Ana's Watch 2"),
                     mac: PEER_MAC,
+                    device: device(&PEER_MAC),
                     joined: Some(now as At),
                     heard: Some(now as At),
                     position: Position::Never,
+                    coordinates: None,
                 });
                 self.view.group = Some(group);
                 self.set_recovery(RecoveryPhase::Stored);

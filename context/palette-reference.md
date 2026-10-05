@@ -61,6 +61,10 @@ board value except `BLACK`.
 | `FAULT_YELLOW` | `#ECDB0B` | R2C1 | the fault screen's ticker, the fault word (2026-09-27 update) |
 | `HALFTONE` | `#180A36`, `#250C54`, `#371374` | none | the settings halftone's marks, darker where sparse (2026-09-30 update) |
 | `COMPASS_NOISE` | `#040B1D` to `#2558AA`, six levels | none | the compass field's blue noise, from the design's `compass_noise.py` (2026-09-30 update) |
+| `TRACK` | `#30343A` | none | the 2026-10-04 screens' rules, scroll and progress tracks, with no status meaning |
+| `DISABLED` | `#444952` | none | a control that cannot be used yet (2026-10-04) |
+| `GRID_LINE` | `#0C1521` | none | the member face's grid lines, which keep to true north (2026-10-04) |
+| `GRID_MARK` | `#4B628B` | none | the member face's marks where its grid lines cross (2026-10-04) |
 
 The roles are the design's, from
 [`design/docs/OCTOWHERE-COLOR-ROLES.md`](design/docs/OCTOWHERE-COLOR-ROLES.md), which also

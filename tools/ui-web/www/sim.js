@@ -1,11 +1,13 @@
 "use strict";
 
-// Runs the stage in octowhere-ui.wasm on the browser's clock: the pointer is the touchscreen,
-// the keys on the bezel and the controls are the board's keys and readings.
+// Runs the stages in octowhere-ui.wasm on the browser's clock: the pointer is the touchscreen,
+// the keys on the bezel and the controls are the board's keys and readings. With several
+// devices, each runs the firmware's mesh node on a simulated radio between them, and the
+// controls act on the one selected.
 
 const READING = {
   heading: 0, pitch: 1, roll: 2, calibration: 3, disturbed: 4, live: 5, upright: 6,
-  zone: 7, clock: 8, supply: 9, fix: 10, spinning: 11, level: 12,
+  zone: 7, clock: 8, supply: 9, fix: 10, spinning: 11, level: 12, receiver: 13,
 };
 // The power controller's long press, and how long PWR is held to power the board on.
 const LONG_MS = 1000;
@@ -15,17 +17,23 @@ const BEZEL = 600;
 // The keys: where each sits, clockwise from the top in degrees, and how far it spans.
 const KEYS = { power: 45, boot: 135 };
 const HALF_SPAN = 9;
+// The radio's speeds, as the module numbers them, and the log lines the page keeps.
+const SPEEDS = [1, 2, 5, 10, 30, 60, 120];
+const LOG_LINES = 400;
 
-const canvas = document.getElementById("panel");
-const context = canvas.getContext("2d");
 const hint = document.getElementById("hint");
-const off = document.getElementById("off");
+const unitsElement = document.getElementById("units");
+const template = document.getElementById("unit-template");
 
 const held = { power: false, boot: false, cover: false };
 const pointer = { down: false, x: 0, y: 0, id: null };
 let wasm;
-let image;
 let lastStatus = -1;
+// Each device's elements: its glass, the damage view over it, its keys and its powered-off
+// cover.
+let units = [];
+let selected = 0;
+let several = false;
 
 function arc(inner, outer, place, span) {
   const point = (radius, degrees) => {
@@ -40,16 +48,15 @@ function arc(inner, outer, place, span) {
   return `M${x0} ${y0} L${x1} ${y1} A${outer} ${outer} 0 0 1 ${x2} ${y2} L${x3} ${y3} A${inner} ${inner} 0 0 0 ${x0} ${y0}Z`;
 }
 
-// The keys as arcs of the bezel, as the desktop simulator draws them, with a larger area to
-// press and a fill that grows towards the long press.
-for (const key of document.querySelectorAll(".key")) {
-  const place = KEYS[key.dataset.key];
-  key.querySelector(".hit").setAttribute("d", arc(226, 290, place, HALF_SPAN + 8));
-  key.querySelector(".arc").setAttribute("d", arc(236, 244, place, HALF_SPAN));
-  const angle = (place * Math.PI) / 180;
-  const text = key.querySelector("text");
-  text.setAttribute("x", 270 * Math.sin(angle));
-  text.setAttribute("y", -270 * Math.cos(angle));
+// Runs `read` with device `n` selected in the module, for the exports that read one device.
+function on(n, read) {
+  if (n === selected) return read();
+  wasm.select(n);
+  try {
+    return read();
+  } finally {
+    wasm.select(selected);
+  }
 }
 
 // --- Holding the board's keys, from the bezel, the buttons or the keyboard -----------------
@@ -64,8 +71,16 @@ function hold(name, source, down) {
   if (now === held[name]) return;
   held[name] = now;
   since[name] = now ? performance.now() : undefined;
+  const bezel = units[selected]?.root;
   for (const element of document.querySelectorAll(`[data-key="${name}"], [data-hold="${name}"]`)) {
-    element.classList.toggle("held", now);
+    const key = element.closest(".unit");
+    element.classList.toggle("held", now && (!key || key === bezel));
+  }
+}
+
+function releaseAll() {
+  for (const name of Object.keys(sources)) {
+    for (const source of [...sources[name]]) hold(name, source, false);
   }
 }
 
@@ -77,9 +92,10 @@ function capture(element, event) {
   } catch {}
 }
 
-function pressable(element, name) {
+function pressable(element, name, before) {
   element.addEventListener("pointerdown", (event) => {
     event.preventDefault();
+    before?.();
     capture(element, event);
     hold(name, `pointer${event.pointerId}`, true);
   });
@@ -89,6 +105,7 @@ function pressable(element, name) {
   element.addEventListener("keydown", (event) => {
     if ((event.key === " " || event.key === "Enter") && !event.repeat) {
       event.preventDefault();
+      before?.();
       hold(name, "focus", true);
     }
   });
@@ -98,7 +115,6 @@ function pressable(element, name) {
   element.addEventListener("blur", () => hold(name, "focus", false));
 }
 
-for (const key of document.querySelectorAll(".key")) pressable(key, key.dataset.key);
 for (const button of document.querySelectorAll("[data-hold]")) {
   const progress = document.createElement("span");
   progress.className = "progress";
@@ -106,8 +122,8 @@ for (const button of document.querySelectorAll("[data-hold]")) {
   pressable(button, button.dataset.hold);
 }
 
-// How far a held key is towards its long press, or PWR towards powering on, on the bezel and
-// the buttons.
+// How far a held key is towards its long press, or PWR towards powering on, on the selected
+// device's bezel and the buttons.
 function showProgress() {
   const off = lastStatus >= 0 && (lastStatus & 16) !== 0;
   for (const name of ["power", "boot"]) {
@@ -118,37 +134,117 @@ function showProgress() {
     }
     // Just outside the key, from its first edge clockwise, as far as the press has gone.
     const span = HALF_SPAN * part;
-    const fill = document.querySelector(`.key[data-key="${name}"] .fill`);
-    fill.setAttribute("d", part > 0 ? arc(246, 250, KEYS[name] - HALF_SPAN + span, span) : "");
+    units.forEach((unit, n) => {
+      const fill = unit.root.querySelector(`.key[data-key="${name}"] .fill`);
+      const shown = n === selected && part > 0;
+      fill.setAttribute("d", shown ? arc(246, 250, KEYS[name] - HALF_SPAN + span, span) : "");
+    });
   }
 }
 
-// --- The touchscreen -----------------------------------------------------------------------
+// --- The devices ---------------------------------------------------------------------------
 
-function place(event) {
+// Gives device `n` the pointer and the controls.
+function choose(n) {
+  if (n === selected || n >= units.length) return;
+  releaseAll();
+  selected = n;
+  wasm.focus(n);
+  units.forEach((unit, i) => unit.root.classList.toggle("selected", i === n));
+  lastStatus = -1;
+  sync();
+  showShift();
+}
+
+function makeUnit(n) {
+  const root = template.content.firstElementChild.cloneNode(true);
+  const canvas = root.querySelector(".panel");
+  const damage = root.querySelector(".damage");
+  const unit = {
+    root,
+    canvas,
+    context: canvas.getContext("2d"),
+    image: null,
+    damage,
+    damageContext: damage.getContext("2d"),
+    off: root.querySelector(".off"),
+    flushes: [],
+    name: root.querySelector(".unit-name"),
+    group: root.querySelector(".unit-group"),
+  };
+  root.querySelector(".unit-number").textContent = String(n + 1);
+  canvas.setAttribute("aria-label", `Device ${n + 1}'s touchscreen`);
+  // The keys as arcs of the bezel, as the desktop simulator draws them, with a larger area to
+  // press and a fill that grows towards the long press.
+  for (const key of root.querySelectorAll(".key")) {
+    const place = KEYS[key.dataset.key];
+    key.querySelector(".hit").setAttribute("d", arc(226, 290, place, HALF_SPAN + 8));
+    key.querySelector(".arc").setAttribute("d", arc(236, 244, place, HALF_SPAN));
+    const angle = (place * Math.PI) / 180;
+    const text = key.querySelector("text");
+    text.setAttribute("x", 270 * Math.sin(angle));
+    text.setAttribute("y", -270 * Math.cos(angle));
+    pressable(key, key.dataset.key, () => choose(n));
+  }
+  canvas.addEventListener("pointerdown", (event) => {
+    if (pointer.id !== null) return;
+    event.preventDefault();
+    choose(n);
+    capture(canvas, event);
+    pointer.id = event.pointerId;
+    pointer.down = true;
+    place(event, canvas);
+  });
+  canvas.addEventListener("pointermove", (event) => {
+    if (event.pointerId === pointer.id) place(event, canvas);
+  });
+  for (const type of ["pointerup", "pointercancel"]) {
+    canvas.addEventListener(type, (event) => {
+      if (event.pointerId !== pointer.id) return;
+      pointer.id = null;
+      pointer.down = false;
+    });
+  }
+  root.querySelector(".power-on").addEventListener("click", () => {
+    if (several) {
+      choose(n);
+      wasm.reset(1);
+    } else {
+      start(true);
+    }
+  });
+  return unit;
+}
+
+// Lays out `count` devices, the first selected.
+function layoutUnits(count) {
+  releaseAll();
+  units = [];
+  for (let n = 0; n < count; n++) units.push(makeUnit(n));
+  unitsElement.replaceChildren(...units.map((unit) => unit.root));
+  several = count > 1;
+  selected = 0;
+  units[0].root.classList.add("selected");
+  document.querySelector("main").classList.toggle("several", several);
+  document.getElementById("air").hidden = !several;
+  document.getElementById("scripted-note").hidden = several;
+  document.getElementById("log-module").hidden = !several;
+  logLines = [];
+  showLog();
+  buildMatrix(count);
+  for (const button of document.querySelectorAll("#device-count button")) {
+    button.setAttribute("aria-checked", String(Number(button.dataset.value) === count));
+  }
+  showCorners();
+  showDamageView();
+  resize();
+}
+
+function place(event, canvas) {
   const box = canvas.getBoundingClientRect();
   const size = canvas.width;
   pointer.x = ((event.clientX - box.left) / box.width) * size;
   pointer.y = ((event.clientY - box.top) / box.height) * size;
-}
-
-canvas.addEventListener("pointerdown", (event) => {
-  if (pointer.id !== null) return;
-  event.preventDefault();
-  capture(canvas, event);
-  pointer.id = event.pointerId;
-  pointer.down = true;
-  place(event);
-});
-canvas.addEventListener("pointermove", (event) => {
-  if (event.pointerId === pointer.id) place(event);
-});
-for (const type of ["pointerup", "pointercancel"]) {
-  canvas.addEventListener(type, (event) => {
-    if (event.pointerId !== pointer.id) return;
-    pointer.id = null;
-    pointer.down = false;
-  });
 }
 
 // --- The readings --------------------------------------------------------------------------
@@ -181,8 +277,10 @@ for (const select of document.querySelectorAll("select[data-reading]")) {
   select.addEventListener("change", () => wasm.set(Number(select.dataset.reading), Number(select.value)));
 }
 for (const group of document.querySelectorAll(".segmented")) {
+  for (const button of group.querySelectorAll("button")) button.setAttribute("role", "radio");
+}
+for (const group of document.querySelectorAll(".segmented[data-reading]")) {
   for (const button of group.querySelectorAll("button")) {
-    button.setAttribute("role", "radio");
     button.addEventListener("click", () => {
       wasm.set(Number(group.dataset.reading), Number(button.dataset.value));
       sync();
@@ -190,8 +288,8 @@ for (const group of document.querySelectorAll(".segmented")) {
   }
 }
 
-// Puts the controls where the readings are, since the stage changes some of them itself and
-// the keyboard changes the rest.
+// Puts the controls where the selected device's readings are, since the stage changes some of
+// them itself and the keyboard changes the rest.
 function sync() {
   for (const [name, format] of sliders) {
     const input = document.getElementById(name);
@@ -206,7 +304,7 @@ function sync() {
   for (const select of document.querySelectorAll("select[data-reading]")) {
     select.value = String(wasm.get(Number(select.dataset.reading)));
   }
-  for (const group of document.querySelectorAll(".segmented")) {
+  for (const group of document.querySelectorAll(".segmented[data-reading]")) {
     const value = wasm.get(Number(group.dataset.reading));
     for (const button of group.querySelectorAll("button")) {
       button.setAttribute("aria-checked", String(Number(button.dataset.value) === value));
@@ -231,8 +329,10 @@ const GLYPHS = {
   arrow: [0b00100, 0b01110, 0b10101, 0b00100, 0b00100],
   gnss: [0b00100, 0b01010, 0b10101, 0b01010, 0b00100],
   battery: [0b01110, 0b11111, 0b10001, 0b11111, 0b11111],
-  // The page's own, in the same grammar: pixel shift's nine places.
+  // The page's own, in the same grammar: pixel shift's nine places, devices apart, and lines.
   shift: [0b10101, 0b00000, 0b10101, 0b00000, 0b10101],
+  mesh: [0b11000, 0b11000, 0b00011, 0b11011, 0b11000],
+  log: [0b11111, 0b00000, 0b11100, 0b00000, 0b11110],
 };
 
 // Drawn as the firmware's icon tiles are: a frame a quarter of the module, at least 2 px, round
@@ -299,17 +399,154 @@ function showReadings() {
 // What shows and how it rests, by the status's bits, for the state strip.
 const VIEW_NAMES = [
   null, "SETTINGS", "BRIGHTNESS", "DEVICE", "CLEAR", "TIME ZONE", "REPLAY", "TIMEOUT", "ALWAYS ON",
-  "POWER OFF", "GROUP",
+  "POWER OFF", "GROUP", "EVENTS", "MESSAGES", "EVENT", "MANAGE HISTORY", "CONVERSATION",
+  "SEND TO", "DRAFT", "REVIEW", "REQUEST DETAILS", "DECLINE", "TWO REQUESTS",
 ];
 const RESTS = ["AWAKE", "DIMMING", "ALWAYS ON", "DARK"];
+const FACES = ["CLOCK", "COMPASS", "MEMBERS"];
 
 function showState(status) {
   let screen;
   if (status & 16) screen = "--";
   else if (status & 1) screen = "START-UP";
-  else screen = VIEW_NAMES[(status >> 5) & 15] ?? (status & 8 ? "COMPASS" : "CLOCK");
+  else screen = VIEW_NAMES[(status >> 5) & 31] ?? FACES[(status >> 10) & 3];
   document.getElementById("state-screen").textContent = screen;
   document.getElementById("state-rest").textContent = status & 16 ? "POWERED OFF" : RESTS[(status >> 1) & 3];
+}
+
+// --- The mesh: devices, speed, links and the nodes' log ------------------------------------
+
+const deviceCount = document.getElementById("device-count");
+for (const button of deviceCount.querySelectorAll("button")) {
+  button.addEventListener("click", () => startDevices(Number(button.dataset.value), false));
+}
+document.getElementById("in-group").addEventListener("change", () => {
+  if (several) startDevices(units.length, false);
+});
+
+const speedRail = document.querySelector("#speed .rail");
+SPEEDS.forEach((speed, index) => {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.setAttribute("role", "radio");
+  button.textContent = `${speed}×`;
+  button.title = speed === 1 ? "As fast as the page's clock" : `${speed} seconds of the radio's time a second`;
+  button.addEventListener("click", () => {
+    wasm.set_speed(index);
+    showMesh();
+  });
+  speedRail.append(button);
+});
+
+const LINK_NAMES = ["out of reach", "in reach", "lossy"];
+const matrix = document.getElementById("matrix");
+
+function buildMatrix(count) {
+  matrix.replaceChildren();
+  matrix.style.gridTemplateColumns = `repeat(${count + 1}, 34px)`;
+  matrix.append(document.createElement("span"));
+  for (let to = 0; to < count; to++) {
+    const label = document.createElement("span");
+    label.textContent = String(to + 1);
+    matrix.append(label);
+  }
+  for (let from = 0; from < count; from++) {
+    const label = document.createElement("span");
+    label.textContent = String(from + 1);
+    matrix.append(label);
+    for (let to = 0; to < count; to++) {
+      const cell = document.createElement("button");
+      cell.type = "button";
+      if (from === to) {
+        cell.className = "self";
+        cell.disabled = true;
+        cell.setAttribute("aria-hidden", "true");
+      } else {
+        cell.dataset.from = String(from);
+        cell.dataset.to = String(to);
+        cell.addEventListener("click", () => {
+          wasm.cycle_link(from, to);
+          showMesh();
+        });
+      }
+      matrix.append(cell);
+    }
+  }
+}
+
+function readText() {
+  return new TextDecoder().decode(new Uint8Array(wasm.memory.buffer, wasm.text(), wasm.text_len()));
+}
+
+const clockText = (seconds) => {
+  const s = Math.floor(seconds);
+  return `${String(Math.floor(s / 3600)).padStart(2, "0")}:${String(Math.floor(s / 60) % 60).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+};
+
+// Each device's group as its node holds it, the radio's speed and time, and the links.
+function showMesh() {
+  if (!several) {
+    document.getElementById("mesh-reading").textContent = "SCRIPTED";
+    return;
+  }
+  units.forEach((unit, n) => {
+    const [name, group] = on(n, () => {
+      wasm.describe();
+      return readText().split("\n");
+    });
+    unit.name.textContent = name;
+    unit.group.textContent = group;
+  });
+  const speed = wasm.speed();
+  document.getElementById("mesh-reading").textContent =
+    `${SPEEDS[speed]}×  ${clockText(wasm.air_seconds())}`;
+  speedRail.querySelectorAll("button").forEach((button, index) => {
+    button.setAttribute("aria-checked", String(index === speed));
+  });
+  for (const cell of matrix.querySelectorAll("button[data-from]")) {
+    const state = wasm.link(Number(cell.dataset.from), Number(cell.dataset.to));
+    cell.dataset.state = String(state);
+    cell.setAttribute("aria-label", `Device ${Number(cell.dataset.from) + 1} to device ${Number(cell.dataset.to) + 1}: ${LINK_NAMES[state]}`);
+  }
+}
+
+document.getElementById("reset-device").addEventListener("click", () => {
+  wasm.reset(1);
+  lastStatus = -1;
+});
+
+const log = document.getElementById("log");
+const logSelected = document.getElementById("log-selected");
+let logLines = [];
+logSelected.addEventListener("change", showLog);
+
+// Takes the lines the nodes logged since the last call.
+function pullLog() {
+  wasm.take_log();
+  const text = readText();
+  if (!text) return;
+  for (const line of text.split("\n")) {
+    if (!line) continue;
+    const [device, level, message] = line.split("\t");
+    logLines.push({ device: Number(device), level, message });
+  }
+  if (logLines.length > LOG_LINES) logLines = logLines.slice(-LOG_LINES);
+  showLog();
+}
+
+function showLog() {
+  const atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 4;
+  const shown = logLines.filter((line) => !logSelected.checked || line.device === selected + 1);
+  log.replaceChildren(
+    ...shown.map((line) => {
+      const row = document.createElement("div");
+      if (line.level === "WARN" || line.level === "ERROR") row.className = "warn";
+      row.textContent = `${line.device}  ${line.message}`;
+      return row;
+    }),
+  );
+  document.getElementById("log-reading").textContent = `${shown.length} LINES`;
+  if (atEnd) log.scrollTop = log.scrollHeight;
 }
 
 // --- Pixel shift and the damage view ---------------------------------------------------------
@@ -342,7 +579,7 @@ shiftAuto.addEventListener("change", () => {
   showShift();
 });
 
-const signed = (value) => (value > 0 ? `+${value}` : value < 0 ? `\u2212${-value}` : "0");
+const signed = (value) => (value > 0 ? `+${value}` : value < 0 ? `−${-value}` : "0");
 
 function showShift() {
   const state = wasm.shift_state();
@@ -361,18 +598,18 @@ function showShift() {
 
 // The flushes as the firmware's damage-debug outlines them, each fading over this long.
 const DAMAGE_FADE_MS = 600;
-const damage = document.getElementById("damage");
-const damageContext = damage.getContext("2d");
 const damageView = document.getElementById("damage-view");
-let flushes = [];
 let lastFlush = null;
-damage.hidden = true;
-damageView.addEventListener("change", () => {
-  damage.hidden = !damageView.checked;
-  flushes = [];
-});
 
-function recordFlush(now) {
+function showDamageView() {
+  for (const unit of units) {
+    unit.damage.hidden = !damageView.checked;
+    unit.flushes = [];
+  }
+}
+damageView.addEventListener("change", showDamageView);
+
+function recordFlush(unit, n, now) {
   const count = wasm.flushed_count();
   if (count === 0) return;
   const runs = new Int32Array(wasm.memory.buffer, wasm.flushed(), count * 4);
@@ -383,18 +620,19 @@ function recordFlush(now) {
     rects.push(rect);
     pixels += rect[2] * rect[3];
   }
-  lastFlush = { count, pixels };
-  if (damageView.checked) flushes.push({ at: now, rects });
+  if (n === selected) lastFlush = { count, pixels };
+  if (damageView.checked) unit.flushes.push({ at: now, rects });
 }
 
-function drawDamage(now) {
+function drawDamage(unit, now) {
   if (!damageView.checked) return;
-  flushes = flushes.filter((flush) => now - flush.at < DAMAGE_FADE_MS);
+  const { damage, damageContext } = unit;
+  unit.flushes = unit.flushes.filter((flush) => now - flush.at < DAMAGE_FADE_MS);
   damageContext.clearRect(0, 0, damage.width, damage.height);
   const full = (w, h) => w === damage.width && h === damage.height;
-  flushes.forEach((flush, index) => {
+  unit.flushes.forEach((flush, index) => {
     const fade = 1 - (now - flush.at) / DAMAGE_FADE_MS;
-    const latest = index === flushes.length - 1;
+    const latest = index === unit.flushes.length - 1;
     for (const [x, y, w, h] of flush.rects) {
       // Only the latest regions are filled, so a run of flushes does not wash the panel out.
       damageContext.strokeStyle = `rgba(255, 255, 255, ${fade})`;
@@ -447,6 +685,10 @@ document.addEventListener("keydown", (event) => {
   }
   const step = event.shiftKey ? 1 : 5;
   const nudge = (name, by) => set(name, wasm.get(READING[name]) + by);
+  const speedBy = (by) => {
+    wasm.set_speed(Math.max(0, Math.min(SPEEDS.length - 1, wasm.speed() + by)));
+    showMesh();
+  };
   const actions = {
     arrowleft: () => nudge("heading", -step),
     arrowright: () => nudge("heading", step),
@@ -462,6 +704,7 @@ document.addEventListener("keydown", (event) => {
     r: () => cycle("clock", [0, 1, 2, 3]),
     z: () => cycle("zone", [0, 1, 2, 3]),
     g: () => toggle("fix"),
+    n: () => cycle("receiver", [0, 1, 2, 3, 4]),
     b: () => cycle("supply", [0, 1, 2]),
     "-": () => nudge("level", -step),
     _: () => nudge("level", -step),
@@ -469,15 +712,25 @@ document.addEventListener("keydown", (event) => {
     "+": () => nudge("level", step),
     f: () => {
       damageView.checked = !damageView.checked;
-      damageView.dispatchEvent(new Event("change"));
+      showDamageView();
     },
     m: () => {
       const corners = document.getElementById("corners");
       corners.checked = !corners.checked;
-      corners.dispatchEvent(new Event("change"));
+      showCorners();
     },
     p: screenshot,
   };
+  if (several) {
+    // A finger stays with the device it went down on.
+    for (let n = 0; n < units.length; n++) actions[String(n + 1)] = () => pointer.down || choose(n);
+    actions["["] = () => speedBy(-1);
+    actions["]"] = () => speedBy(1);
+    actions.x = () => {
+      wasm.reset(1);
+      lastStatus = -1;
+    };
+  }
   const action = actions[key];
   if (!action) return;
   event.preventDefault();
@@ -488,51 +741,59 @@ document.addEventListener("keyup", (event) => {
   const name = HOLD_KEYS[event.key.toLowerCase()];
   if (name) hold(name, "keyboard", false);
 });
-window.addEventListener("blur", () => {
-  for (const name of Object.keys(sources)) {
-    for (const source of [...sources[name]]) hold(name, source, false);
-  }
-});
+window.addEventListener("blur", releaseAll);
 
 // --- View ----------------------------------------------------------------------------------
 
-document.getElementById("corners").addEventListener("change", (event) => {
-  canvas.classList.toggle("corners", event.target.checked);
-  damage.classList.toggle("corners", event.target.checked);
-});
+const corners = document.getElementById("corners");
+
+function showCorners() {
+  for (const unit of units) {
+    unit.canvas.classList.toggle("corners", corners.checked);
+    unit.damage.classList.toggle("corners", corners.checked);
+  }
+}
+corners.addEventListener("change", showCorners);
 
 function screenshot() {
-  canvas.toBlob((blob) => {
+  units[selected].canvas.toBlob((blob) => {
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
-    link.download = "octowhere.png";
+    link.download = several ? `octowhere-${selected + 1}.png` : "octowhere.png";
     link.click();
     URL.revokeObjectURL(link.href);
   });
 }
 document.getElementById("screenshot").addEventListener("click", screenshot);
 
-// The panel at a whole number of device pixels per panel pixel, which keeps its pixels square
-// and sharp, unless that would leave it much smaller than the room it has; then it fills the
-// room, scaled smoothly.
+// The panels at a whole number of device pixels per panel pixel, which keeps their pixels
+// square and sharp, unless that would leave them much smaller than the room they have; then
+// they fill the room, scaled smoothly.
 function resize() {
   const main = document.querySelector("main");
   const ratio = window.devicePixelRatio || 1;
   const style = getComputedStyle(main);
   const inner = main.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
   const columns = style.gridTemplateColumns.split(" ").length > 1;
-  // Beside the controls, the device keeps room for them; above them it takes the width. The
-  // stage pads it by 20 px a side, and on a wide screen the hint, the state strip and the
-  // view controls stay in sight below it.
-  const width = (columns ? inner - 24 - 360 : inner) - 40;
-  const height = columns ? window.innerHeight - 210 : Infinity;
-  const room = Math.min(width, height);
+  const count = Math.max(1, units.length);
+  // Beside the controls, one device keeps room for them; above them, the devices take the
+  // width, side by side. The stage pads them by 20 px a side, and on a wide screen the hint,
+  // the state strip and the view controls stay in sight below.
+  let room;
+  if (count > 1) {
+    const width = (inner - 40 - (count - 1) * 20) / count;
+    room = Math.min(width, window.innerHeight - 260);
+  } else {
+    const width = (columns ? inner - 24 - 360 : inner) - 40;
+    const height = columns ? window.innerHeight - 210 : Infinity;
+    room = Math.min(width, height);
+  }
   const roomPanel = Math.max(120, (room * 466) / BEZEL);
   const scale = Math.floor((roomPanel * ratio) / 466);
   const whole = scale >= 1 && scale * 466 >= 0.8 * roomPanel * ratio;
   const css = whole ? (scale * 466) / ratio : roomPanel;
   document.documentElement.style.setProperty("--panel", `${css}px`);
-  canvas.classList.toggle("pixelated", whole && scale >= 2);
+  for (const unit of units) unit.canvas.classList.toggle("pixelated", whole && scale >= 2);
   reserveHint();
 }
 
@@ -543,8 +804,8 @@ function reserveHint() {
   const padding = parseFloat(getComputedStyle(hint).paddingTop) * 2;
   hint.style.minHeight = "0";
   let lines = 1;
-  for (const text of [...Object.values(HINTS), ...VIEWS.filter(Boolean)]) {
-    hint.textContent = text;
+  for (const text of [...Object.values(HINTS), ...VIEWS.filter(Boolean), GROUP_SEVERAL]) {
+    hint.textContent = several ? `Device 4. ${text}` : text;
     lines = Math.max(lines, Math.round((hint.offsetHeight - padding) / lineHeight));
   }
   hint.textContent = shown;
@@ -561,11 +822,12 @@ const HINTS = {
   alwaysOn: "Resting on the always-on face. Double-tap the screen to wake it.",
   dark: "The screen is off. Double-tap it to wake it.",
   powered: "Powered off. Hold PWR for half a second to power it on.",
-  clock: "The clock. Swipe sideways for the compass, or drag down from the top for settings.",
-  compass: "The compass. Turn it with the heading control, or swipe back to the clock.",
+  clock: "The clock. Swipe sideways for the compass, drag down from the top for settings, or up for events.",
+  compass: "The compass. Turn it with the heading control, or swipe sideways for the clock or the members.",
+  members: "Where the group's members are, on a ring that turns with the heading. Tap the middle for the next member.",
 };
 
-// What shows over the faces, by the status's bits 5–8.
+// What shows over the faces, by the status's bits 5–9.
 const VIEWS = [
   null,
   "Settings. Tap a cell to change it, swipe sideways for the second page, or drag up to close.",
@@ -578,13 +840,27 @@ const VIEWS = [
   "Always on. Drag to choose the face's level, or OFF to let the screen go dark, then tap.",
   "Power off. Slide the handle into the target to power off, or tap CANCEL. It cancels after 10 s.",
   "Group and name. The other device is simulated: after START it appears, shows the same code and confirms it.",
+  "Events. Tap one for its detail, swipe left for messages, or drag down from the top to close.",
+  "Messages. Tap a conversation, or NEW MESSAGE to write one. Swipe right for events.",
+  "An event. DISMISS removes it once it has settled, and a removal's request offers DECLINE; the arrow at the top goes back.",
+  "Manage history. Mark every event read, or clear the read ones that have settled.",
+  "A conversation, newest first. A message counts read once it has shown whole for a second. WRITE answers.",
+  "Send to. Choose the group or one member.",
+  "A draft. Type with the keys on the screen, then REVIEW. CANCEL keeps it for later.",
+  "Review. Read it through, then SEND, or EDIT to go back to it.",
+  "A removal's request in full: the device it removes and the key that names it.",
+  "Declining a removal. Slide the handle into the target to keep the member on this device, or tap CANCEL.",
+  "Two removals that compete. Tap one to select it, then VIEW REQUEST.",
 ];
+const GROUP_SEVERAL =
+  "Group and name. The other devices run real nodes: ADD on one and JOIN on another, then confirm the same code on both.";
 
 function showStatus(status) {
   if (status === lastStatus) return;
   lastStatus = status;
   const rest = (status >> 1) & 3;
-  const view = VIEWS[(status >> 5) & 15];
+  const viewIndex = (status >> 5) & 31;
+  const view = several && viewIndex === 10 ? GROUP_SEVERAL : VIEWS[viewIndex];
   let text;
   if (status & 16) text = HINTS.powered;
   else if (status & 1) text = HINTS.starting;
@@ -592,43 +868,74 @@ function showStatus(status) {
   else if (rest === 2) text = HINTS.alwaysOn;
   else if (rest === 3) text = HINTS.dark;
   else if (view) text = view;
-  else text = status & 8 ? HINTS.compass : HINTS.clock;
-  hint.textContent = text;
-  off.hidden = !(status & 16);
+  else text = [HINTS.clock, HINTS.compass, HINTS.members][(status >> 10) & 3];
+  hint.textContent = several ? `Device ${selected + 1}. ${text}` : text;
   showState(status);
 }
 
 // --- Running -------------------------------------------------------------------------------
 
-function start(startUp) {
-  wasm.start(startUp ? 1 : 0);
+function prepare() {
   const size = wasm.size();
-  canvas.width = canvas.height = size;
-  image = context.createImageData(size, size);
+  for (const unit of units) {
+    unit.canvas.width = unit.canvas.height = size;
+    unit.damage.width = unit.damage.height = size;
+    unit.image = unit.context.createImageData(size, size);
+  }
   lastStatus = -1;
   sync();
+  showMesh();
+}
+
+// One device on the scripted mesh.
+function start(startUp) {
+  wasm.start(startUp ? 1 : 0);
+  if (units.length !== 1) layoutUnits(1);
+  prepare();
+}
+
+// Several devices on the simulated radio, or one when `count` is 1.
+function startDevices(count, startUp) {
+  if (count <= 1) {
+    start(startUp);
+    return;
+  }
+  wasm.start_devices(count, document.getElementById("in-group").checked ? 1 : 0, Date.now() / 1000);
+  layoutUnits(count);
+  prepare();
 }
 
 let lastSync = 0;
+let lastLog = 0;
 
 function frame(now) {
   const controls = (held.power ? 1 : 0) | (held.boot ? 2 : 0) | (held.cover ? 4 : 0);
-  const result = wasm.step(now, Date.now() / 1000, pointer.x, pointer.y, pointer.down ? 1 : 0, controls);
-  if (result & 1) {
-    const size = canvas.width;
-    image.data.set(new Uint8ClampedArray(wasm.memory.buffer, wasm.pixels(), size * size * 4));
-    context.putImageData(image, 0, 0);
-  }
-  canvas.style.filter = `brightness(${wasm.light()})`;
-  recordFlush(now);
-  drawDamage(now);
+  const changed = wasm.step(now, Date.now() / 1000, pointer.x, pointer.y, pointer.down ? 1 : 0, controls);
+  const size = wasm.size();
+  units.forEach((unit, n) => {
+    on(n, () => {
+      if (changed & (1 << n)) {
+        unit.image.data.set(new Uint8ClampedArray(wasm.memory.buffer, wasm.pixels(), size * size * 4));
+        unit.context.putImageData(unit.image, 0, 0);
+      }
+      unit.canvas.style.filter = `brightness(${wasm.light()})`;
+      unit.off.hidden = !(wasm.status() & 16);
+      recordFlush(unit, n, now);
+    });
+    drawDamage(unit, now);
+  });
   showStatus(wasm.status());
   showProgress();
   if (now - lastSync > 200) {
     sync();
     showShift();
     showDamageStats();
+    showMesh();
     lastSync = now;
+  }
+  if (several && now - lastLog > 250) {
+    pullLog();
+    lastLog = now;
   }
   requestAnimationFrame(frame);
 }
@@ -714,11 +1021,25 @@ async function load() {
   requestAnimationFrame(frame);
 }
 
-document.getElementById("replay").addEventListener("click", () => start(true));
-document.getElementById("skip").addEventListener("click", () => start(false));
-document.getElementById("power-on").addEventListener("click", () => start(true));
+// With several devices these reset the selected one, whose node keeps what it stored.
+document.getElementById("replay").addEventListener("click", () => {
+  if (several) {
+    wasm.reset(1);
+    lastStatus = -1;
+  } else {
+    start(true);
+  }
+});
+document.getElementById("skip").addEventListener("click", () => {
+  if (several) {
+    wasm.reset(0);
+    lastStatus = -1;
+  } else {
+    start(false);
+  }
+});
 
-resize();
+layoutUnits(1);
 // The page's fonts change how the hints wrap once they arrive.
 document.fonts?.ready.then(reserveHint);
 load().catch((error) => {

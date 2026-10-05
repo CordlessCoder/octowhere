@@ -4,8 +4,6 @@ version = "0.1.0"
 edition = "2024"
 description = "Screens, drawing and input handling for octowhere, free of board dependencies"
 
-[workspace]
-
 [features]
 default = ["boundaries"]
 # The time zones' boundaries, for finding the zone under a position (`tz::Database::locate`).
@@ -13,7 +11,7 @@ default = ["boundaries"]
 boundaries = ["octowhere-tz/boundaries"]
 # `Framebuffer::alloc` into a caller's allocator. Needs a nightly compiler.
 allocator-api = []
-defmt = ["dep:defmt", "octowhere-motion/defmt", "octowhere-mesh/defmt"]
+defmt = ["dep:defmt", "octowhere-motion/defmt", "octowhere-mesh/defmt", "octowhere-node/defmt"]
 
 [dependencies]
 defmt = { version = "1.1.1", optional = true }
@@ -28,6 +26,7 @@ libm = "0.2.16"
 octowhere-tz = { path = "../tz", default-features = false }
 octowhere-motion = { path = "../octowhere-motion" }
 octowhere-mesh = { path = "../octowhere-mesh" }
+octowhere-node = { path = "../octowhere-node" }
 
 [dev-dependencies]
 critical-section = { version = "1.2.0", features = ["std"] }

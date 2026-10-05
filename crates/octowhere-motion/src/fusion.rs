@@ -290,7 +290,7 @@ impl Fusion {
         }
     }
 
-    /// Heading and tilt as [`super::compass::attitude`] defines them.
+    /// Heading and tilt, as [`Attitude`] defines them.
     #[must_use]
     pub fn attitude(&self) -> Option<Attitude> {
         let q = self.orientation?;

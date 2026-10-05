@@ -5,7 +5,7 @@
 use core::fmt::Write as _;
 
 use embedded_graphics::{
-    prelude::{Point, Size},
+    prelude::{Point, Size, Transform},
     primitives::Rectangle,
 };
 use heapless::{String, Vec};
@@ -13,7 +13,7 @@ use heapless::{String, Vec};
 use super::super::{
     gesture::Micros,
     icon::Glyph,
-    panel,
+    members, panel, stroke,
     text::{self, style},
 };
 use crate::chrome::{
@@ -21,7 +21,9 @@ use crate::chrome::{
     INTERFERENCE_BOLD, OnBackground, SHAPIRO, Window,
 };
 
-pub type Line = String<36>;
+/// The most characters a list's text holds.
+pub const LINE: usize = 48;
+pub type Line = String<LINE>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Face {
@@ -53,6 +55,8 @@ pub enum Align {
     Left,
     /// Ink centred on `x`.
     Centre,
+    /// Ink ends on `x`.
+    Right,
     /// The pen starts on `x`, so that a caret can be placed between characters.
     Pen,
 }
@@ -131,6 +135,7 @@ impl Text {
         let x = match self.align {
             Align::Left => text::pen_x_for_ink_left(style, &self.text, x),
             Align::Centre => text::pen_x_for_ink_centre(style, &self.text, x as f32),
+            Align::Right => text::pen_x_for_ink_right(style, &self.text, x),
             Align::Pen => x,
         };
         let baseline = match self.vertical {
@@ -150,7 +155,70 @@ pub enum Shape {
     Boxed(Rectangle, Color, Color),
     /// The status glyph in its frame, in a colour.
     Glyph(Glyph, Color),
+    Path(Path),
+    /// The polygon through a path's points, filled; its width is unused.
+    Polygon(Path),
+    Arc(Arc),
+    Turned(Turned),
 }
+
+/// Text centred on `center` and turned clockwise by `angle` tenths of a degree, as the member
+/// face's labels are turned along its ring.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Turned {
+    pub text: Line,
+    pub face: Face,
+    pub size: u8,
+    pub color: Color,
+    pub center: Point,
+    pub angle: i16,
+}
+
+impl Turned {
+    fn style(&self, font: &FontdueRenderer<'static, Color>) -> FontdueRenderer<'static, Color> {
+        style(font, self.color, u32::from(self.size), self.face.index())
+    }
+}
+
+/// Straight segments through `points`, in quarter pixels, `width` quarter pixels wide.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Path {
+    pub points: Vec<(i16, i16), 6>,
+    pub width: u8,
+    pub color: Color,
+}
+
+/// An arc about `center`, `radius` quarter pixels to the middle of its `width`, over `span`
+/// tenths of a degree clockwise from the right.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Arc {
+    pub center: Point,
+    pub radius: u16,
+    pub width: u8,
+    pub span: (i16, i16),
+    pub color: Color,
+}
+
+/// What a list draws under its items.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Backdrop {
+    /// The settings panel's scatter, clear of the screen's middle.
+    #[default]
+    Panel,
+    /// The same scatter breathing at a level, clear of every text's ink by 2 px, as the
+    /// 2026-10-04 screens have it.
+    Breathing(u8),
+    /// The member face's grid, turned this many degrees anticlockwise so that it keeps to
+    /// true north.
+    Grid(u16),
+    /// Nothing: the items lie over whatever was drawn before them.
+    None,
+}
+
+/// How far the breathing scatter keeps from a text's ink.
+const INK_CLEAR: u32 = 2;
+/// The most texts a breathing scatter keeps clear of.
+const CLEARS: usize = 48;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Item {
@@ -160,16 +228,17 @@ pub struct Item {
 }
 
 /// The status glyph's frame, and where its modules start.
-pub const GLYPH: Rectangle = Rectangle::new(Point::new(342, 96), Size::new_equal(42));
+const GLYPH: Rectangle = Rectangle::new(Point::new(342, 96), Size::new_equal(42));
 const GLYPH_MODULE: i32 = 6;
 
-const ITEMS: usize = 100;
+const ITEMS: usize = 128;
 
 /// One screen's drawing.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct List {
     items: Vec<Item, ITEMS>,
     clip: Option<Rectangle>,
+    backdrop: Backdrop,
     /// When the screen next changes on its own: a countdown or an age reaching its next value.
     due: Option<Micros>,
 }
@@ -184,6 +253,21 @@ impl List {
         self.items.clear();
         self.clip = None;
         self.due = None;
+        self.backdrop = Backdrop::Panel;
+    }
+
+    pub fn set_backdrop(&mut self, backdrop: Backdrop) {
+        self.backdrop = backdrop;
+    }
+
+    /// The boxes the breathing scatter keeps clear of: every text's ink, grown by 2 px.
+    fn clears(&self, font: &FontdueRenderer<'static, Color>) -> Vec<Rectangle, CLEARS> {
+        self.items
+            .iter()
+            .filter(|item| matches!(item.shape, Shape::Text(_)))
+            .map(|item| bounds(item, font).offset(INK_CLEAR as i32))
+            .take(CLEARS)
+            .collect()
     }
 
     #[must_use]
@@ -231,6 +315,28 @@ impl List {
         self.push(Shape::Glyph(glyph, color));
     }
 
+    /// Straight segments through `points`, in quarter pixels, `width` quarter pixels wide.
+    pub fn path(&mut self, points: &[(i16, i16)], width: u8, color: Color) {
+        self.push(Shape::Path(Path {
+            points: points.iter().copied().take(6).collect(),
+            width,
+            color,
+        }));
+    }
+
+    /// The polygon through `points`, in quarter pixels, filled.
+    pub fn polygon(&mut self, points: &[(i16, i16)], color: Color) {
+        self.push(Shape::Polygon(Path {
+            points: points.iter().copied().take(6).collect(),
+            width: 0,
+            color,
+        }));
+    }
+
+    pub fn arc(&mut self, arc: Arc) {
+        self.push(Shape::Arc(arc));
+    }
+
     /// Text whose ink is centred on column `x` and starts on row `top`, over black.
     pub fn centred(&mut self, text: &str, x: i32, top: i32, face: Face, size: u8, color: Color) {
         self.push(Shape::Text(Text::new(text, face, size, color).at(x, top)));
@@ -249,12 +355,43 @@ impl List {
         self.push(Shape::Text(text));
     }
 
+    /// Moves every item from the `start`th on, and its clip, `dx` pixels across, as a page that
+    /// slides sideways.
+    pub fn shift_from(&mut self, start: usize, dx: i32) {
+        if dx == 0 {
+            return;
+        }
+        let quarter = (dx * 4) as i16;
+        for item in self.items.iter_mut().skip(start) {
+            item.clip = item.clip.map(|clip| clip.translate(Point::new(dx, 0)));
+            match &mut item.shape {
+                Shape::Text(text) => text.x += dx as i16,
+                Shape::Fill(rect, _) | Shape::Boxed(rect, ..) => {
+                    *rect = rect.translate(Point::new(dx, 0));
+                }
+                Shape::Glyph(..) => {}
+                Shape::Path(path) | Shape::Polygon(path) => {
+                    path.points.iter_mut().for_each(|(x, _)| *x += quarter);
+                }
+                Shape::Arc(arc) => arc.center.x += dx,
+                Shape::Turned(turned) => turned.center.x += dx,
+            }
+        }
+    }
+
     pub fn draw<D: CoverageTarget<Color = Color>>(
         &self,
         font: &FontdueRenderer<'static, Color>,
         target: &mut D,
     ) -> Result<(), D::Error> {
-        panel::draw_scatter(&panel::Accents::FULL, target)?;
+        match self.backdrop {
+            Backdrop::Panel => panel::draw_scatter(&panel::Accents::FULL, target)?,
+            Backdrop::Breathing(breath) => {
+                panel::draw_breathing_scatter(breath, &self.clears(font), target)?;
+            }
+            Backdrop::Grid(turn) => members::draw_grid(turn, target)?,
+            Backdrop::None => {}
+        }
         for item in &self.items {
             match item.clip {
                 Some(clip) => draw_shape(
@@ -276,6 +413,17 @@ impl List {
         font: &FontdueRenderer<'static, Color>,
         damage: &mut Dirty,
     ) {
+        match (before.backdrop, self.backdrop) {
+            (Backdrop::Panel, Backdrop::Panel) | (Backdrop::None, Backdrop::None) => {}
+            (Backdrop::Grid(was), Backdrop::Grid(is)) if was == is => {}
+            (Backdrop::Breathing(was), Backdrop::Breathing(is)) => {
+                let (old, new) = (before.clears(font), self.clears(font));
+                if (was, &old) != (is, &new) {
+                    panel::breathing_scatter_damage((was, &old), (is, &new), damage);
+                }
+            }
+            _ => damage.make_full(),
+        }
         for item in &before.items {
             if !self.items.contains(item) {
                 damage.add(bounds(item, font));
@@ -302,9 +450,21 @@ fn line(text: &str) -> Line {
 /// Formats into a [`Line`], cut off at its length.
 #[must_use]
 pub fn format(args: core::fmt::Arguments<'_>) -> Line {
-    let mut line = Line::new();
-    _ = line.write_fmt(args);
-    line
+    /// Takes what fits of each piece: a `Line` refuses a whole piece that does not fit.
+    struct Cut(Line);
+    impl core::fmt::Write for Cut {
+        fn write_str(&mut self, text: &str) -> core::fmt::Result {
+            for c in text.chars() {
+                if self.0.push(c).is_err() {
+                    break;
+                }
+            }
+            Ok(())
+        }
+    }
+    let mut cut = Cut(Line::new());
+    _ = cut.write_fmt(args);
+    cut.0
 }
 
 fn bounds(item: &Item, font: &FontdueRenderer<'static, Color>) -> Rectangle {
@@ -317,6 +477,14 @@ fn bounds(item: &Item, font: &FontdueRenderer<'static, Color>) -> Rectangle {
         }
         Shape::Fill(rect, _) | Shape::Boxed(rect, ..) => *rect,
         Shape::Glyph(..) => GLYPH,
+        Shape::Path(path) | Shape::Polygon(path) => {
+            stroke::path_bounds(&path.points, path.width).unwrap_or(Rectangle::zero())
+        }
+        Shape::Arc(arc) => stroke::arc_bounds(arc.center, arc.radius, arc.width, arc.span),
+        Shape::Turned(turned) => {
+            let reach = libm::ceilf(turned.style(font).rotated_reach(&turned.text)) as u32;
+            Rectangle::with_center(turned.center, Size::new_equal(2 * reach + 3))
+        }
     };
     match item.clip {
         Some(clip) => area.intersection(&clip),
@@ -350,6 +518,26 @@ fn draw_shape<D: CoverageTarget<Color = Color>>(
                 }
             }
             Ok(())
+        }
+        Shape::Path(path) => {
+            stroke::draw_path(&path.points, path.width, path.color, target);
+            Ok(())
+        }
+        Shape::Polygon(path) => {
+            stroke::fill_polygon(&path.points, path.color, target);
+            Ok(())
+        }
+        Shape::Arc(arc) => {
+            stroke::draw_arc(
+                arc.center, arc.radius, arc.width, arc.span, arc.color, target,
+            );
+            Ok(())
+        }
+        Shape::Turned(turned) => {
+            let (sin, cos) = libm::sincosf((f32::from(turned.angle) / 10.0).to_radians());
+            turned
+                .style(font)
+                .draw_rotated(&turned.text, turned.center, cos, sin, target)
         }
     }
 }

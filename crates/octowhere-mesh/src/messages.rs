@@ -5,16 +5,14 @@
 use bytemuck::Zeroable;
 use hkdf::Hkdf;
 use sha2::{Digest, Sha256};
-use x25519_dalek::{PublicKey, StaticSecret};
 
-use crate::IDS;
-use crate::members::{MISMATCHES, PUBLIC_LEN};
+use crate::identity::{Identity, SIGNATURE_LEN, dh_public, verify};
+use crate::members::{Mismatches, PUBLIC_LEN};
 use crate::seal::{self, Inauthentic, Key, SIV_LEN};
+use crate::{AHEAD_S, IDS, Ids};
 
 /// How long every node holds a message, from its timestamp.
 pub const HORIZON_S: u32 = 24 * 60 * 60;
-/// A message stamped further ahead of a node's clock than this is refused.
-pub const AHEAD_S: u32 = 60 * 60;
 /// The most messages a store holds.
 pub const CAPACITY: usize = 256;
 pub const TEXT_MAX: usize = 160;
@@ -31,6 +29,10 @@ pub const BLOCK: u32 = 64;
 const TO_GROUP: u8 = 0x80;
 /// A key message, which nodes keep past the horizon while they keep the old key.
 const KEY_MESSAGE: u8 = 0x40;
+/// What a key message's signature covers, before the record it signs.
+const KEY_DOMAIN: &[u8] = b"octowhere key";
+/// What follows a key message's seal: its generation, in the clear, and its remover's signature.
+pub const KEY_TAIL: usize = 2 + SIGNATURE_LEN;
 const ID_MASK: u8 = 0x1f;
 
 /// What a body holds, in its first byte; sealed with the rest in a private message.
@@ -57,13 +59,14 @@ pub enum To {
 #[derive(Clone, Copy, PartialEq, Eq, Zeroable)]
 #[repr(C)]
 pub struct Message {
-    /// Never 0, which marks an empty place in a store.
-    pub seq: u32,
+    /// Never 0, which marks an empty place in a store. The seal binds it and `origin`, so
+    /// neither changes after sealing.
+    pub(crate) seq: u32,
     /// The origin's sequence number before this one, 0 for none known.
-    pub prev: u32,
+    pub(crate) prev: u32,
     /// Timebase seconds the origin sent it at.
-    pub stamp: u32,
-    pub origin: u8,
+    pub(crate) stamp: u32,
+    pub(crate) origin: u8,
     dest: u8,
     len: u8,
     body: [u8; BODY_MAX],
@@ -96,8 +99,43 @@ impl defmt::Format for Message {
     }
 }
 
+impl core::fmt::Display for Message {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        write!(
+            f,
+            "{}/{} to {:?} len={}",
+            self.origin,
+            self.seq,
+            self.to(),
+            self.len
+        )
+    }
+}
+
 /// What a node knows of a message by: its origin and sequence number.
-pub type Name = (u8, u32);
+pub type MessageId = (u8, u32);
+
+impl Message {
+    #[must_use]
+    pub fn seq(&self) -> u32 {
+        self.seq
+    }
+
+    #[must_use]
+    pub fn prev(&self) -> u32 {
+        self.prev
+    }
+
+    #[must_use]
+    pub fn stamp(&self) -> u32 {
+        self.stamp
+    }
+
+    #[must_use]
+    pub fn origin(&self) -> u8 {
+        self.origin
+    }
+}
 
 impl Message {
     /// A message to the whole group, `body` its kind and what it holds. `None` when the body is
@@ -108,10 +146,92 @@ impl Message {
     }
 
     /// A private message to `dest`, `plain` its kind and what it holds, sealed under the key
-    /// the two members share. A key message is marked for keeping.
+    /// the two members share.
+    #[must_use]
+    pub fn private(
+        origin: u8,
+        dest: u8,
+        seq: u32,
+        prev: u32,
+        stamp: u32,
+        plain: &[u8],
+        key: &Key,
+    ) -> Option<Self> {
+        Self::sealed(origin, dest, false, seq, prev, stamp, plain, key)
+    }
+
+    /// A key message to `dest`: the key in `plain`, sealed as a private message is, then the
+    /// key's `generation` in the clear, and the signature of `me`, the remover, over the record
+    /// up to it. Relays check the signature against the origin's record; the generation tells
+    /// them which removal it is for.
     #[must_use]
     #[allow(clippy::too_many_arguments)]
-    pub fn private(
+    pub fn key(
+        origin: u8,
+        dest: u8,
+        seq: u32,
+        prev: u32,
+        stamp: u32,
+        generation: u16,
+        plain: &[u8],
+        key: &Key,
+        me: &Identity,
+    ) -> Option<Self> {
+        let mut message = Self::sealed(origin, dest, true, seq, prev, stamp, plain, key)?;
+        let sealed = usize::from(message.len);
+        if sealed + KEY_TAIL > BODY_MAX {
+            return None;
+        }
+        message.body[sealed..sealed + 2].copy_from_slice(&generation.to_be_bytes());
+        message.len = (sealed + 2) as u8;
+        let (signed, len) = message.key_signed();
+        let signature = me.sign(&[&signed[..len]]);
+        message.body[sealed + 2..sealed + KEY_TAIL].copy_from_slice(&signature);
+        message.len = (sealed + KEY_TAIL) as u8;
+        Some(message)
+    }
+
+    /// A key message's generation, which it carries in the clear.
+    #[must_use]
+    pub fn generation(&self) -> Option<u16> {
+        let tail = self.key_tail()?;
+        Some(u16::from_be_bytes([self.body[tail], self.body[tail + 1]]))
+    }
+
+    /// Whether a key message carries the signature of the member whose public key is `public`,
+    /// which must be its origin's.
+    #[must_use]
+    pub fn verify_key(&self, public: &[u8; PUBLIC_LEN]) -> bool {
+        let Some(tail) = self.key_tail() else {
+            return false;
+        };
+        let signature: [u8; SIGNATURE_LEN] = self.body[tail + 2..tail + KEY_TAIL]
+            .try_into()
+            .expect("the tail's signature");
+        let mut unsigned = *self;
+        unsigned.len = (tail + 2) as u8;
+        let (signed, len) = unsigned.key_signed();
+        verify(public, &[&signed[..len]], &signature)
+    }
+
+    /// Where a key message's tail starts: the end of its seal.
+    fn key_tail(&self) -> Option<usize> {
+        let tail = usize::from(self.len).checked_sub(KEY_TAIL)?;
+        (self.is_key() && tail >= SIV_LEN).then_some(tail)
+    }
+
+    /// What a key message's signature covers: the record as it stands, before the signature.
+    fn key_signed(&self) -> ([u8; KEY_DOMAIN.len() + FIXED_LEN + BODY_MAX], usize) {
+        let mut out = [0; KEY_DOMAIN.len() + FIXED_LEN + BODY_MAX];
+        out[..KEY_DOMAIN.len()].copy_from_slice(KEY_DOMAIN);
+        let len = self.encode(&mut out[KEY_DOMAIN.len()..]);
+        (out, KEY_DOMAIN.len() + len)
+    }
+
+    /// `plain` sealed for `dest`, bound to the record's origin, destination, key message's mark
+    /// and number.
+    #[allow(clippy::too_many_arguments)]
+    fn sealed(
         origin: u8,
         dest: u8,
         key_message: bool,
@@ -163,7 +283,7 @@ impl Message {
     }
 
     #[must_use]
-    pub fn name(&self) -> Name {
+    pub fn name(&self) -> MessageId {
         (self.origin, self.seq)
     }
 
@@ -180,8 +300,12 @@ impl Message {
         key: &Key,
         out: &'a mut [u8; BODY_MAX],
     ) -> Result<&'a [u8], Inauthentic> {
-        let len = usize::from(self.len);
-        out[..len].copy_from_slice(self.body());
+        let len = if self.is_key() {
+            self.key_tail().ok_or(Inauthentic)?
+        } else {
+            usize::from(self.len)
+        };
+        out[..len].copy_from_slice(&self.body[..len]);
         seal::open_bound(key, &self.associated(), &mut out[..len])
     }
 
@@ -233,22 +357,27 @@ impl Message {
     }
 }
 
+/// The latest timebase second a block of sequence numbers starts from, 2100-01-01: past it, a
+/// clock is taken to be wrong.
+pub const LATEST_S: u32 = 4_102_444_800;
+
 /// Whether `text` can be a message's text: 1 to [`TEXT_MAX`] printable ASCII characters.
 #[must_use]
 pub fn is_text(text: &[u8]) -> bool {
     (1..=TEXT_MAX).contains(&text.len()) && text.iter().all(|&c| (0x20..0x7f).contains(&c))
 }
 
-/// The key two members' private messages are sealed under: 256 bits of HKDF-SHA256 over their
-/// X25519 shared secret, bound to both public keys. `None` for a key whose shared secret is not
+/// The key two members' private messages are sealed under: 256 bits of HKDF-SHA256 over the
+/// shared secret of the X25519 keys their identities give, bound to both identities' public
+/// keys. `None` for a public key that is no identity's, or a shared secret that is not
 /// contributory.
 #[must_use]
-pub fn pairwise(me: &StaticSecret, theirs: &[u8; PUBLIC_LEN]) -> Option<Key> {
-    let shared = me.diffie_hellman(&PublicKey::from(*theirs));
+pub fn pairwise(me: &Identity, theirs: &[u8; PUBLIC_LEN]) -> Option<Key> {
+    let shared = me.dh().diffie_hellman(&dh_public(theirs)?);
     if !shared.was_contributory() {
         return None;
     }
-    let mine = PublicKey::from(me).to_bytes();
+    let mine = me.public();
     let (low, high) = if mine <= *theirs {
         (mine, *theirs)
     } else {
@@ -276,7 +405,7 @@ impl Default for Pairwise {
 
 impl Pairwise {
     /// The key shared with the member `id`, whose public key is `theirs`.
-    pub fn key(&mut self, me: &StaticSecret, id: u8, theirs: &[u8; PUBLIC_LEN]) -> Option<&Key> {
+    pub fn key(&mut self, me: &Identity, id: u8, theirs: &[u8; PUBLIC_LEN]) -> Option<&Key> {
         let held = self.keys.get_mut(usize::from(id))?;
         if held.as_ref().is_none_or(|(public, _)| public != theirs) {
             *held = Some((*theirs, pairwise(me, theirs)?));
@@ -307,26 +436,28 @@ pub struct Store {
     messages: [Message; CAPACITY],
     /// The places holding a message to be sent, as bits.
     unsent: [u32; CAPACITY / 32],
+    /// The places holding a message this node has yet to take, as bits.
+    unread: [u32; CAPACITY / 32],
     /// The exclusive or of each message's hash.
     digest: u32,
 }
 
 /// 32 bits of SHA-256 over a message's origin and sequence number.
-fn hash((origin, seq): Name) -> u32 {
+fn hash((origin, seq): MessageId) -> u32 {
     let seq = seq.to_be_bytes();
     let hash: [u8; 32] = Sha256::digest([origin, seq[0], seq[1], seq[2], seq[3]]).into();
     u32::from_be_bytes([hash[0], hash[1], hash[2], hash[3]])
 }
 
 impl Store {
-    fn place(&self, (origin, seq): Name) -> Option<usize> {
+    fn place(&self, (origin, seq): MessageId) -> Option<usize> {
         self.messages
             .iter()
             .position(|held| held.seq == seq && held.origin == origin)
     }
 
     #[must_use]
-    pub fn get(&self, name: Name) -> Option<&Message> {
+    pub fn get(&self, name: MessageId) -> Option<&Message> {
         self.place(name).map(|at| &self.messages[at])
     }
 
@@ -388,6 +519,7 @@ impl Store {
         self.digest ^= hash(self.messages[at].name());
         self.messages[at] = Message::zeroed();
         self.unsent[at / 32] &= !(1 << (at % 32));
+        self.unread[at / 32] &= !(1 << (at % 32));
     }
 
     /// Drops the messages past the horizon at `now`, the timebase second a round started at,
@@ -402,8 +534,44 @@ impl Store {
         }
     }
 
+    /// Drops the messages stamped at `since` or later, as declining a removal after its switch
+    /// does. Returns how many.
+    pub fn forget_since(&mut self, since: u32) -> usize {
+        let mut forgotten = 0;
+        for at in 0..CAPACITY {
+            let held = &self.messages[at];
+            if held.seq != 0 && held.stamp >= since {
+                self.remove(at);
+                forgotten += 1;
+            }
+        }
+        forgotten
+    }
+
+    /// Marks a message held as one this node has yet to take, to try again.
+    pub fn mark_unread(&mut self, name: MessageId) {
+        if let Some(at) = self.place(name) {
+            self.unread[at / 32] |= 1 << (at % 32);
+        }
+    }
+
+    /// Counts a message as taken.
+    pub fn read(&mut self, name: MessageId) {
+        if let Some(at) = self.place(name) {
+            self.unread[at / 32] &= !(1 << (at % 32));
+        }
+    }
+
+    /// The first message marked unread from place `from` on, with its place.
+    #[must_use]
+    pub fn unread_from(&self, from: usize) -> Option<(usize, &Message)> {
+        (from..CAPACITY)
+            .find(|&at| self.unread[at / 32] & 1 << (at % 32) != 0)
+            .map(|at| (at, &self.messages[at]))
+    }
+
     /// Marks a message held to be sent.
-    pub fn mark(&mut self, name: Name) {
+    pub fn mark(&mut self, name: MessageId) {
         if let Some(at) = self.place(name) {
             self.unsent[at / 32] |= 1 << (at % 32);
         }
@@ -411,7 +579,7 @@ impl Store {
 
     /// Counts a message as sent: a packet carried it, or one that reached this node's
     /// neighbours did.
-    pub fn sent(&mut self, name: Name) {
+    pub fn sent(&mut self, name: MessageId) {
         if let Some(at) = self.place(name) {
             self.unsent[at / 32] &= !(1 << (at % 32));
         }
@@ -450,13 +618,13 @@ impl Store {
         if out.len() < 4 {
             return (0, first);
         }
-        let mut covered = 0u32;
+        let mut covered = Ids::EMPTY;
         let mut len = 4;
         let mut next = first;
         for origin in (0..IDS).map(|at| (first + at) % IDS) {
             next = origin;
             let Some(first) = self.next_from(origin, 0) else {
-                covered |= 1 << origin;
+                covered.insert(origin);
                 continue;
             };
             let start = len;
@@ -478,11 +646,11 @@ impl Store {
             }
             out[start + 5..start + 9].copy_from_slice(&newest.to_be_bytes());
             out[start + 9] = holes as u8;
-            covered |= 1 << origin;
+            covered.insert(origin);
         }
-        out[..4].copy_from_slice(&covered.to_le_bytes());
+        out[..4].copy_from_slice(&covered.bits().to_le_bytes());
         // A summary that covered every origin starts the next from the same one.
-        if covered == u32::MAX {
+        if covered == Ids::ALL {
             next = first;
         }
         (len, next)
@@ -493,7 +661,7 @@ impl Store {
         let Some(covered) = summary.get(..4) else {
             return;
         };
-        let covered = u32::from_le_bytes(covered.try_into().expect("four bytes"));
+        let covered = Ids::from_bits(u32::from_le_bytes(covered.try_into().expect("four bytes")));
         let mut entries: [Option<&[u8]>; IDS as usize] = [None; IDS as usize];
         let mut rest = &summary[4..];
         while let Some(&origin) = rest.first() {
@@ -507,7 +675,7 @@ impl Store {
         }
         for at in 0..CAPACITY {
             let held = &self.messages[at];
-            if held.seq == 0 || covered & 1 << held.origin == 0 {
+            if held.seq == 0 || !covered.contains(held.origin) {
                 continue;
             }
             if lacks(entries[usize::from(held.origin)], held.seq) {
@@ -536,28 +704,20 @@ fn lacks(entry: Option<&[u8]>, seq: u32) -> bool {
 /// Which neighbours' messages differ from this node's, and whether a summary is to go out.
 #[derive(Clone, Debug, Default)]
 pub struct Summaries {
-    /// For each id, how many of its packets running carried a digest unlike this node's.
-    mismatched: [u8; IDS as usize],
+    mismatched: Mismatches,
     pending: bool,
     /// The origin the next summary starts from.
     next: u8,
 }
 
 impl Summaries {
-    /// Takes a packet from `sender` with the messages digest it carried, 0 for none, and the
-    /// summary it carried. A summary is answered only where the two stores differ.
-    pub fn heard(&mut self, store: &mut Store, sender: u8, theirs: u32, summary: Option<&[u8]>) {
+    /// Takes the messages digest a packet from `sender` carried, 0 for none, as an empty store
+    /// has, and answers the summary it carried by marking what `store` holds and the sender
+    /// lacks to send, where the two stores differ.
+    pub fn answer(&mut self, store: &mut Store, sender: u8, theirs: u32, summary: Option<&[u8]>) {
         let ours = store.digest();
-        if let Some(mismatched) = self.mismatched.get_mut(usize::from(sender)) {
-            if theirs == ours {
-                *mismatched = 0;
-            } else {
-                *mismatched += 1;
-                if *mismatched >= MISMATCHES {
-                    self.pending = true;
-                    *mismatched = 0;
-                }
-            }
+        if self.mismatched.count(sender, theirs == ours) {
+            self.pending = true;
         }
         if let Some(summary) = summary
             && theirs != ours
@@ -608,7 +768,8 @@ impl Sequence {
     /// The block to store before `count` more numbers can be taken, when the one held has fewer,
     /// at timebase second `now`: where it starts and the end to store. A new block starts no
     /// lower than `now`, so a device that takes a freed id starts above every number its last
-    /// holder used, as long as that one sent fewer than one message a second.
+    /// holder used, as long as that one sent fewer than one message a second. A clock set past
+    /// [`LATEST_S`] counts as that, so that it cannot spend the numbers left.
     #[must_use]
     pub fn to_reserve(&self, count: u32, now: u32) -> Option<(u32, u32)> {
         if self.reserved - self.next >= count {
@@ -616,7 +777,7 @@ impl Sequence {
         }
         // Numbers left in the block held are used first; a fresh block may start higher.
         let start = if self.next == self.reserved {
-            self.next.max(now)
+            self.next.max(now.min(LATEST_S))
         } else {
             self.next
         };
@@ -655,6 +816,8 @@ mod tests {
     use std::boxed::Box;
 
     use super::*;
+    use crate::members::tests::key;
+    use crate::members::tests::key as key_of;
 
     const NOW: u32 = 1_790_000_000;
 
@@ -671,16 +834,18 @@ mod tests {
         let key = Key::new([4; 32]);
         for message in [
             text(3, 7, 6, NOW),
-            Message::private(2, 9, true, 70, 0, NOW, &[kind::KEY; 48], &key).unwrap(),
+            Message::private(2, 9, 70, 0, NOW, &[kind::TEXT; 48], &key).unwrap(),
+            Message::key(2, 9, 71, 70, NOW, 4, &[kind::KEY; 48], &key, &key_of(2)).unwrap(),
         ] {
             let mut out = [0; FIXED_LEN + BODY_MAX];
             let len = message.encode(&mut out);
             assert_eq!(len + 2, message.record_len());
             assert_eq!(Message::decode(&out[..len]), Some(message));
         }
-        let private = Message::private(2, 9, true, 70, 0, NOW, b"\x03secret", &key).unwrap();
+        let private = Message::private(2, 9, 70, 0, NOW, b"\x01secret", &key).unwrap();
         assert_eq!(private.to(), To::Member(9));
-        assert!(private.is_key());
+        assert!(!private.is_key());
+        assert_eq!(private.generation(), None);
         assert!(!text(3, 7, 6, NOW).is_key());
         assert_eq!(text(3, 7, 6, NOW).to(), To::Group);
         assert!(
@@ -691,20 +856,42 @@ mod tests {
     }
 
     #[test]
-    fn a_private_message_opens_only_for_its_pair_and_unaltered() {
-        let (a, b, c) = (
-            StaticSecret::from([1; 32]),
-            StaticSecret::from([2; 32]),
-            StaticSecret::from([3; 32]),
+    fn a_key_message_carries_its_generation_and_its_removers_signature() {
+        let (remover, dest) = (key(1), key(2));
+        let shared = pairwise(&remover, &dest.public()).unwrap();
+        let plain = [kind::KEY; 48];
+        let message = Message::key(1, 2, 9, 8, NOW, 5, &plain, &shared, &remover).unwrap();
+        assert!(message.is_key());
+        assert_eq!(message.to(), To::Member(2));
+        assert_eq!(message.generation(), Some(5));
+        assert!(message.verify_key(&remover.public()));
+        assert!(!message.verify_key(&dest.public()), "another member's key");
+        let mut out = [0; BODY_MAX];
+        assert_eq!(message.open(&shared, &mut out), Ok(&plain[..]));
+        let mut moved = message;
+        moved.stamp += 1;
+        assert!(!moved.verify_key(&remover.public()), "bound to its record");
+        let mut regenerated = message;
+        let tail = usize::from(regenerated.len) - KEY_TAIL;
+        regenerated.body[tail + 1] ^= 1;
+        assert!(!regenerated.verify_key(&remover.public()));
+        assert_eq!(
+            regenerated.open(&shared, &mut out),
+            Ok(&plain[..]),
+            "the seal is apart"
         );
-        let public = |s: &StaticSecret| PublicKey::from(s).to_bytes();
+    }
+
+    #[test]
+    fn a_private_message_opens_only_for_its_pair_and_unaltered() {
+        let (a, b, c) = (key(1), key(2), key(3));
+        let public = |identity: &Identity| identity.public();
         let ab = pairwise(&a, &public(&b)).unwrap();
         assert!(
             pairwise(&b, &public(&a)).unwrap() == ab,
             "both ends work out the same key"
         );
-        let message =
-            Message::private(1, 2, false, 5, 4, NOW, b"\x01meet at the car", &ab).unwrap();
+        let message = Message::private(1, 2, 5, 4, NOW, b"\x01meet at the car", &ab).unwrap();
         let mut out = [0; BODY_MAX];
         assert_eq!(message.open(&ab, &mut out), Ok(&b"\x01meet at the car"[..]));
         let ac = pairwise(&a, &public(&c)).unwrap();
@@ -886,9 +1073,6 @@ mod tests {
         let covered = u32::from_le_bytes(summary[..4].try_into().unwrap());
         assert_eq!(covered, 1 << 29 | 1 << 30 | 1 << 31 | 1 | 1 << 1);
         assert_eq!(next, 2, "it wraps round");
-        a.sent((30, 1));
-        let mut lacking = store();
-        lacking.answer(&summary[..len]);
         b.answer(&summary[..len]);
         assert!(!b.has_unsent(), "a holds 30/1 too");
 
@@ -907,15 +1091,15 @@ mod tests {
         s.insert(text(1, 1, 0, NOW), NOW);
         let ours = s.digest();
         let mut summaries = Summaries::default();
-        summaries.heard(&mut s, 3, ours ^ 1, None);
+        summaries.answer(&mut s, 3, ours ^ 1, None);
         assert!(!summaries.pending());
-        summaries.heard(&mut s, 3, ours, None);
-        summaries.heard(&mut s, 3, ours ^ 1, None);
+        summaries.answer(&mut s, 3, ours, None);
+        summaries.answer(&mut s, 3, ours ^ 1, None);
         assert!(
             !summaries.pending(),
             "a match between starts the count again"
         );
-        summaries.heard(&mut s, 3, ours ^ 1, None);
+        summaries.answer(&mut s, 3, ours ^ 1, None);
         assert!(summaries.pending());
         summaries.sent(0);
         assert!(!summaries.pending());
@@ -929,9 +1113,9 @@ mod tests {
         let ours = s.digest();
         let mut summaries = Summaries::default();
         let empty = [0xff, 0xff, 0xff, 0xff];
-        summaries.heard(&mut s, 3, ours, Some(&empty));
+        summaries.answer(&mut s, 3, ours, Some(&empty));
         assert!(!s.has_unsent());
-        summaries.heard(&mut s, 3, 0, Some(&empty));
+        summaries.answer(&mut s, 3, 0, Some(&empty));
         assert!(s.has_unsent());
     }
 
@@ -976,5 +1160,45 @@ mod tests {
         assert_eq!(fresh.to_reserve(70, 0), Some((1, 1 + 2 * BLOCK)));
         fresh.reserved((1, 1 + 2 * BLOCK));
         assert!((0..70).all(|_| fresh.take().is_some()));
+    }
+
+    #[test]
+    fn a_message_marked_unread_is_found_until_read_or_gone() {
+        let mut held = store();
+        held.insert(text(1, 5, 0, NOW), NOW);
+        held.insert(text(2, 7, 0, NOW), NOW);
+        held.mark_unread((2, 7));
+        let (at, message) = held.unread_from(0).unwrap();
+        assert_eq!(message.name(), (2, 7));
+        assert!(held.unread_from(at + 1).is_none());
+        held.read((2, 7));
+        assert!(held.unread_from(0).is_none());
+        held.mark_unread((1, 5));
+        held.expire(NOW + HORIZON_S, |_| {});
+        assert!(held.unread_from(0).is_none(), "past the horizon");
+    }
+
+    #[test]
+    fn a_clock_far_ahead_leaves_numbers_to_take() {
+        let mut sequence = Sequence::new(Some(65));
+        let block = sequence.to_reserve(1, u32::MAX - 50).unwrap();
+        assert_eq!(block, (LATEST_S, LATEST_S + BLOCK));
+        sequence.reserved(block);
+        assert!((0..BLOCK).all(|_| sequence.take().is_some()));
+        let next = sequence.to_reserve(1, u32::MAX - 50).unwrap();
+        assert_eq!(next, (LATEST_S + BLOCK, LATEST_S + 2 * BLOCK));
+    }
+
+    #[test]
+    fn declining_a_removal_after_its_switch_forgets_the_messages_since() {
+        let mut held = store();
+        held.insert(text(1, 5, 0, NOW - 10), NOW);
+        held.insert(text(2, 7, 0, NOW), NOW);
+        assert_eq!(held.forget_since(NOW), 1);
+        assert!(held.get((1, 5)).is_some());
+        assert!(held.get((2, 7)).is_none());
+        let mut before = store();
+        before.insert(text(1, 5, 0, NOW - 10), NOW);
+        assert_eq!(held.digest(), before.digest());
     }
 }

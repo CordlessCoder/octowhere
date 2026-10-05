@@ -90,7 +90,7 @@ pub struct Effects {
 pub enum Next {
     Stay,
     Panel,
-    Open(Page),
+    Open(alloc::boxed::Box<Page>),
     /// Close the panel and play the start-up again, as chosen.
     ReplayStartUp(Replay),
 }
@@ -608,13 +608,15 @@ impl Device {
                 if (LIST_TOP..=LIST_BOTTOM).contains(&point.y)
                     && self.clear_box().contains(point) =>
             {
-                return Next::Open(Page::Clear(Clear::default()));
+                return Next::Open(alloc::boxed::Box::new(Page::Clear(Clear::default())));
             }
             GestureEvent::Tap(point)
                 if (LIST_TOP..=LIST_BOTTOM).contains(&point.y)
                     && self.replay_box().contains(point) =>
             {
-                return Next::Open(Page::Replay(ReplayChooser::default()));
+                return Next::Open(alloc::boxed::Box::new(Page::Replay(
+                    ReplayChooser::default(),
+                )));
             }
             _ => {}
         }
@@ -996,7 +998,7 @@ impl ReplayChooser {
     fn handle(&mut self, event: &GestureEvent) -> Next {
         match self.stepper.handle(event, Replay::ALL.len()) {
             Step::Stay => Next::Stay,
-            Step::Cancel => Next::Open(Page::Device(Device::default())),
+            Step::Cancel => Next::Open(alloc::boxed::Box::new(Page::Device(Device::default()))),
             Step::Choose(index) => Next::ReplayStartUp(Replay::ALL[index]),
         }
     }
@@ -1299,7 +1301,7 @@ impl Clear {
         }
         match *event {
             GestureEvent::Tap(point) if in_top_cap(point) => {
-                Next::Open(Page::Device(Device::default()))
+                Next::Open(alloc::boxed::Box::new(Page::Device(Device::default())))
             }
             _ => Next::Stay,
         }

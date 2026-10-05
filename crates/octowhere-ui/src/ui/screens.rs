@@ -11,7 +11,9 @@ use super::{
     clock::ClockView,
     clock_screen,
     compass::CompassView,
-    compass_screen, panel,
+    compass_screen,
+    group::layout::List,
+    panel,
     rest::{AlwaysOn, Timeout},
 };
 use crate::{
@@ -23,11 +25,13 @@ use crate::{
 pub enum Screen {
     Clock,
     Compass,
+    /// Where the group's members are.
+    Members,
 }
 
 impl Screen {
     /// Every screen, in the order the pager visits them.
-    pub const ALL: [Self; 2] = [Self::Clock, Self::Compass];
+    pub const ALL: [Self; 3] = [Self::Clock, Self::Compass, Self::Members];
 
     #[must_use]
     pub fn next(self) -> Self {
@@ -65,6 +69,23 @@ pub struct Gnss {
     pub in_view: u8,
     /// The last fix's latitude and longitude, in 1e-7 degrees.
     pub position: Option<(i32, i32)>,
+    /// The horizontal dilution of precision the module reports, in thousandths.
+    pub hdop_milli: Option<u32>,
+    pub health: GnssHealth,
+}
+
+/// Whether the GNSS receiver answers, as the task that reads it finds: it resets a receiver that
+/// stops answering, at most once a minute, until it answers again.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct GnssHealth {
+    /// The receiver stopped answering, and the task is resetting it.
+    pub recovering: bool,
+    /// Resets since it last answered that did not bring it back.
+    pub failed_resets: u8,
+    /// When it last answered, and when it last gave a fix, on the stage's clock.
+    pub last_response: Option<u64>,
+    pub last_fix: Option<u64>,
 }
 
 /// The readings the screens show.
@@ -123,8 +144,10 @@ pub struct State {
     pub panel_accents: panel::Accents,
 }
 
+/// Draws `state`, with the member face from `members` where it shows.
 pub fn render<D>(
     state: State,
+    members: Option<&List>,
     font: &chrome::FontdueRenderer<'static, Color>,
     target: &mut D,
 ) -> Result<(), D::Error>
@@ -168,7 +191,7 @@ where
     if state.sheet >= height {
         return Ok(());
     }
-    render_page(state, state.offset, font, target)?;
+    render_page(state, members, state.offset, font, target)?;
     if let Some((screen, offset)) = state.neighbour {
         render_page(
             // A page crossing into view has not settled, so its accents have not begun.
@@ -178,6 +201,7 @@ where
                 clock_accents: clock_screen::Accents::HIDDEN,
                 ..state
             },
+            members,
             offset,
             font,
             target,
@@ -296,6 +320,7 @@ fn fill_around<D: DrawTarget<Color = Color>>(
 /// Draws one screen shifted right by `offset`, clipped to the part of it that is on the panel.
 fn render_page<D>(
     state: State,
+    members: Option<&List>,
     offset: i32,
     font: &chrome::FontdueRenderer<'static, Color>,
     target: &mut D,
@@ -321,5 +346,6 @@ where
         Screen::Compass => {
             compass_screen::draw(&peripherals.compass, state.compass_accents, font, target)
         }
+        Screen::Members => members.map_or(Ok(()), |list| list.draw(font, target)),
     }
 }

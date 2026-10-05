@@ -12,7 +12,7 @@ use embedded_graphics::{
 };
 use fontdue::{PathEvent, Transform, raster::Raster, rasterize_path_clipped};
 
-use crate::chrome::CoverageTarget;
+use crate::chrome::{self, CoverageTarget};
 
 /// The coverage of a pixel whose centre lies `inside` units inside an edge, with a one-pixel
 /// ramp across it.
@@ -157,11 +157,11 @@ impl DiscRows {
 
 /// Fills the polygon through `corners`, then draws it turned by each number of quarters
 /// clockwise about `center` whose bit is set in `quarters`, bit 0 unturned, so one fill serves
-/// all four. `raster` and `coverage` are scratch, reused across calls.
+/// all four. `raster` and `scratch` are reused across calls.
 pub fn polygon_quarters<D: CoverageTarget>(
     target: &mut D,
     raster: &mut Raster<'static>,
-    coverage: &mut Vec<u8>,
+    scratch: &mut Vec<u8>,
     corners: &[(f32, f32)],
     center: Point,
     quarters: u8,
@@ -195,6 +195,7 @@ pub fn polygon_quarters<D: CoverageTarget>(
         return;
     }
     raster.resize(width, height);
+    chrome::fits(width, height);
     let path = corners.iter().enumerate().map(|(index, &(x, y))| {
         if index == 0 {
             PathEvent::MoveTo([x, y])
@@ -208,12 +209,12 @@ pub fn polygon_quarters<D: CoverageTarget>(
         Transform::IDENTITY,
         (-left as f32, -top as f32),
     );
-    coverage.clear();
-    raster
-        .get_bitmap_iter()
-        .for_each(|covered| coverage.push(covered));
+    // The fill's coverage, then a row or column of it turned.
+    scratch.clear();
+    scratch.extend(raster.get_bitmap_iter());
+    scratch.resize(width * height + width.max(height), 0);
+    let (coverage, line) = scratch.split_at_mut(width * height);
 
-    let mut line = Vec::with_capacity(width.max(height));
     // A clockwise quarter turn takes the pixel at offset (dx, dy) to (-1 - dy, dx), so each turn
     // of the fill is still whole rows: its own rows, reversed, or its columns.
     for (row, pixels) in coverage.chunks_exact(width).enumerate() {
@@ -222,24 +223,31 @@ pub fn polygon_quarters<D: CoverageTarget>(
             target.blend_row(center.x + dx0, center.y + dy, pixels, color);
         }
         if turned(2) {
-            line.clear();
-            line.extend(pixels.iter().rev());
-            target.blend_row(center.x - 1 - dx1, center.y - 1 - dy, &line, color);
+            let line = &mut line[..width];
+            for (to, &from) in line.iter_mut().zip(pixels.iter().rev()) {
+                *to = from;
+            }
+            target.blend_row(center.x - 1 - dx1, center.y - 1 - dy, line, color);
         }
     }
     if !turned(1) && !turned(3) {
         return;
     }
+    let line = &mut line[..height];
     for column in 0..width {
         let dx = dx0 + column as i32;
-        line.clear();
-        line.extend(coverage[column..].iter().step_by(width));
+        for (to, &from) in line
+            .iter_mut()
+            .zip(coverage[column..].iter().step_by(width))
+        {
+            *to = from;
+        }
         if turned(3) {
-            target.blend_row(center.x + dy0, center.y - 1 - dx, &line, color);
+            target.blend_row(center.x + dy0, center.y - 1 - dx, line, color);
         }
         line.reverse();
         if turned(1) {
-            target.blend_row(center.x - 1 - dy1, center.y + dx, &line, color);
+            target.blend_row(center.x - 1 - dy1, center.y + dx, line, color);
         }
     }
 }

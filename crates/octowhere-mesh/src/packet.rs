@@ -1,10 +1,12 @@
 //! The plaintext a packet seals: the header, then records, each a type byte, a length byte and a
 //! body. `seal` puts the synthetic IV in front of it.
 
-use crate::bits::{BitReader, BitWriter, Full};
-use crate::members::{GONE_LEN, Gone, Member, RECORD_MAX_LEN, Slot};
-use crate::messages::{BODY_MAX, FIXED_LEN, Message};
-use crate::seal::SIV_LEN;
+pub use crate::bits::Full;
+use crate::bits::{BitReader, BitWriter};
+use crate::members::{Gone, Member, RECORD_MAX_LEN, Slot};
+use crate::messages::Message;
+use crate::rekey::{ON_KEY_LEN, OnKey};
+use crate::seal::{self, Key, SIV_LEN};
 
 pub const VERSION: u8 = 1;
 /// The radio's largest payload.
@@ -18,6 +20,8 @@ pub mod record {
     pub const NEIGHBOURS: u8 = 2;
     pub const MEMBER: u8 = 3;
     pub const MESSAGE: u8 = 4;
+    // 5 was an acknowledgement record, since taken out. It is not used again, so that a node
+    // built with it never misreads another record.
     /// A digest of the sender's member table.
     pub const MEMBERS: u8 = 6;
     /// The ids whose member records the sender asks for.
@@ -28,6 +32,8 @@ pub mod record {
     pub const SUMMARY: u8 = 9;
     /// A member that left or was removed.
     pub const GONE: u8 = 10;
+    /// A member's signed word that it is on the key of a generation.
+    pub const ON_KEY: u8 = 11;
 }
 
 /// Where a node's clock comes from.
@@ -35,20 +41,41 @@ pub mod record {
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Source {
     Gps,
-    /// A clock the node with this id started, with no fix anywhere upstream.
+    /// A clock the node with this id started from its RTC's UTC, with no fix anywhere upstream.
     Node(u8),
+    /// A clock the node with this id started from its boot, holding neither UTC nor a fix.
+    Boot(u8),
 }
 
 impl Source {
-    /// Whether nodes on `other` should move to this one: GPS ranks above any node's clock, and a
-    /// lower root above a higher one.
+    /// Whether nodes on `other` should move to this one: GPS ranks above any node's clock, one
+    /// started from UTC above one started from a boot, and of two alike the lower root.
     #[must_use]
     pub fn outranks(self, other: Self) -> bool {
-        match (self, other) {
-            (Self::Gps, Self::Node(_)) => true,
-            (Self::Node(root), Self::Node(theirs)) => root < theirs,
-            (_, Self::Gps) => false,
+        self.rank() < other.rank()
+    }
+
+    fn rank(self) -> (u8, u8) {
+        match self {
+            Self::Gps => (0, 0),
+            Self::Node(root) => (1, root),
+            Self::Boot(root) => (2, root),
         }
+    }
+
+    /// The id of the node that started the clock, unless it is GPS.
+    #[must_use]
+    pub fn root(self) -> Option<u8> {
+        match self {
+            Self::Gps => None,
+            Self::Node(root) | Self::Boot(root) => Some(root),
+        }
+    }
+
+    /// Whether its time is UTC, as well as its root's RTC kept it.
+    #[must_use]
+    pub fn is_utc(self) -> bool {
+        !matches!(self, Self::Boot(_))
     }
 }
 
@@ -89,11 +116,24 @@ pub struct Header {
 }
 
 impl Header {
+    /// The header of a packet from `sender` on `timebase`, whose slot starts in second `base`.
+    #[must_use]
+    pub fn new(sender: u8, timebase: Timebase, base: u32) -> Self {
+        Self {
+            sender,
+            timebase,
+            base,
+            phase: 0,
+            notice: false,
+        }
+    }
+
     fn encode(&self, out: &mut [u8; HEADER_LEN]) {
         let (source, root) = match self.timebase.source {
             Source::Gps => (0, 0),
-            Source::Node(root) => (1, root),
+            Source::Node(root) | Source::Boot(root) => (1, root),
         };
+        let boot = matches!(self.timebase.source, Source::Boot(_));
         let mut writer = BitWriter::new(out);
         for (value, bits) in [
             (u64::from(VERSION), 4),
@@ -101,7 +141,7 @@ impl Header {
             (source, 1),
             (u64::from(root), 5),
             (u64::from(self.timebase.hops), 5),
-            (u64::from(self.notice), 4),
+            (u64::from(self.notice) | u64::from(boot) << 1, 4),
             (u64::from(self.base), 32),
             (u64::from(self.phase), 8),
         ] {
@@ -131,6 +171,8 @@ impl Header {
             timebase: Timebase {
                 source: if source == 0 {
                     Source::Gps
+                } else if flags & 2 != 0 {
+                    Source::Boot(root)
                 } else {
                     Source::Node(root)
                 },
@@ -294,6 +336,9 @@ pub const NEIGHBOURS_LEN: usize = WORD_LEN;
 /// Writes a packet's plaintext: the header, then records in the order they are added.
 pub struct Builder<'a> {
     buf: &'a mut [u8],
+    /// Where in `buf` the plaintext starts.
+    start: usize,
+    /// The plaintext's length so far.
     len: usize,
     base: u32,
 }
@@ -301,11 +346,16 @@ pub struct Builder<'a> {
 impl<'a> Builder<'a> {
     /// Starts a plaintext in `buf`, which holds at most [`MAX_PLAIN`] of it.
     pub fn new(buf: &'a mut [u8], header: &Header) -> Self {
+        Self::at(buf, 0, header)
+    }
+
+    fn at(buf: &'a mut [u8], start: usize, header: &Header) -> Self {
         let mut bytes = [0; HEADER_LEN];
         header.encode(&mut bytes);
-        buf[..HEADER_LEN].copy_from_slice(&bytes);
+        buf[start..start + HEADER_LEN].copy_from_slice(&bytes);
         Self {
             buf,
+            start,
             len: HEADER_LEN,
             base: header.base,
         }
@@ -314,7 +364,7 @@ impl<'a> Builder<'a> {
     /// The bytes left for records.
     #[must_use]
     pub fn room(&self) -> usize {
-        self.buf.len().min(MAX_PLAIN) - self.len
+        (self.buf.len() - self.start).min(MAX_PLAIN) - self.len
     }
 
     /// The most entries a positions record can hold in what is left.
@@ -327,16 +377,30 @@ impl<'a> Builder<'a> {
         ((room - 2) * 8 / ENTRY_BITS).min(255 * 8 / ENTRY_BITS)
     }
 
-    fn word(&mut self, kind: u8, value: u32) -> Result<(), Full> {
-        if self.room() < WORD_LEN {
+    /// Writes a record of `kind` with a body of `len` bytes, which `write` fills. Nothing counts
+    /// as written unless `write` succeeds.
+    fn record(
+        &mut self,
+        kind: u8,
+        len: usize,
+        write: impl FnOnce(&mut [u8]) -> Result<(), Full>,
+    ) -> Result<(), Full> {
+        if len > 255 || 2 + len > self.room() {
             return Err(Full);
         }
-        let at = self.len;
+        let at = self.start + self.len;
         self.buf[at] = kind;
-        self.buf[at + 1] = 4;
-        self.buf[at + 2..at + 6].copy_from_slice(&value.to_le_bytes());
-        self.len += WORD_LEN;
+        self.buf[at + 1] = len as u8;
+        write(&mut self.buf[at + 2..at + 2 + len])?;
+        self.len += 2 + len;
         Ok(())
+    }
+
+    fn word(&mut self, kind: u8, value: u32) -> Result<(), Full> {
+        self.record(kind, WORD_LEN - 2, |body| {
+            body.copy_from_slice(&value.to_le_bytes());
+            Ok(())
+        })
     }
 
     pub fn neighbours(&mut self, heard: u32) -> Result<(), Full> {
@@ -358,94 +422,105 @@ impl<'a> Builder<'a> {
 
     /// Writes a summary [`Store::summary`] wrote.
     pub fn summary(&mut self, summary: &[u8]) -> Result<(), Full> {
-        if summary.len() > 255 || 2 + summary.len() > self.room() {
-            return Err(Full);
-        }
-        let at = self.len;
-        self.buf[at] = record::SUMMARY;
-        self.buf[at + 1] = summary.len() as u8;
-        self.buf[at + 2..at + 2 + summary.len()].copy_from_slice(summary);
-        self.len += 2 + summary.len();
-        Ok(())
+        self.record(record::SUMMARY, summary.len(), |body| {
+            body.copy_from_slice(summary);
+            Ok(())
+        })
     }
 
     pub fn message(&mut self, message: &Message) -> Result<(), Full> {
-        if message.record_len() > self.room() {
-            return Err(Full);
-        }
-        let mut body = [0; FIXED_LEN + BODY_MAX];
-        let len = message.encode(&mut body);
-        let at = self.len;
-        self.buf[at] = record::MESSAGE;
-        self.buf[at + 1] = len as u8;
-        self.buf[at + 2..at + 2 + len].copy_from_slice(&body[..len]);
-        self.len += 2 + len;
-        Ok(())
+        self.record(record::MESSAGE, message.record_len() - 2, |body| {
+            message.encode(body);
+            Ok(())
+        })
     }
 
     /// Writes a positions record of `entries`, each of which must fit below the base timestamp.
     pub fn positions(&mut self, entries: &[Entry]) -> Result<(), Full> {
-        let len = positions_len(entries.len());
-        if entries.is_empty() || len > self.room() || len - 2 > 255 {
+        if entries.is_empty() {
             return Err(Full);
         }
-        let at = self.len;
-        self.buf[at] = record::POSITIONS;
-        self.buf[at + 1] = (len - 2) as u8;
-        let mut writer = BitWriter::new(&mut self.buf[at + 2..at + len]);
-        for entry in entries {
-            assert!(
-                entry.fits_below(self.base),
-                "an entry must fit below the base"
-            );
-            entry.encode(self.base, &mut writer)?;
-        }
-        self.len += len;
-        Ok(())
+        let base = self.base;
+        self.record(
+            record::POSITIONS,
+            positions_len(entries.len()) - 2,
+            |body| {
+                let mut writer = BitWriter::new(body);
+                for entry in entries {
+                    assert!(entry.fits_below(base), "an entry must fit below the base");
+                    entry.encode(base, &mut writer)?;
+                }
+                Ok(())
+            },
+        )
     }
 
     /// Writes a member record for `id`.
     pub fn member(&mut self, id: u8, member: &Member) -> Result<(), Full> {
-        let mut body = [0; RECORD_MAX_LEN];
-        let len = member.encode(id, &mut body);
-        if 2 + len > self.room() {
-            return Err(Full);
-        }
-        let at = self.len;
-        self.buf[at] = record::MEMBER;
-        self.buf[at + 1] = len as u8;
-        self.buf[at + 2..at + 2 + len].copy_from_slice(&body[..len]);
-        self.len += 2 + len;
-        Ok(())
+        self.slot(id, &Slot::Member(*member))
     }
 
     /// Writes a gone record for `id`.
     pub fn gone(&mut self, id: u8, gone: &Gone) -> Result<(), Full> {
-        if 2 + GONE_LEN > self.room() {
-            return Err(Full);
-        }
-        let mut body = [0; GONE_LEN];
-        gone.encode(id, &mut body);
-        let at = self.len;
-        self.buf[at] = record::GONE;
-        self.buf[at + 1] = GONE_LEN as u8;
-        self.buf[at + 2..at + 2 + GONE_LEN].copy_from_slice(&body);
-        self.len += 2 + GONE_LEN;
-        Ok(())
+        self.slot(id, &Slot::Gone(*gone))
+    }
+
+    pub fn on_key(&mut self, on_key: &OnKey) -> Result<(), Full> {
+        self.record(record::ON_KEY, ON_KEY_LEN, |body| {
+            on_key.encode(body.try_into().expect("an on-key record's length"));
+            Ok(())
+        })
     }
 
     /// Writes what the slot at `id` holds: a member record or a gone record.
     pub fn slot(&mut self, id: u8, slot: &Slot) -> Result<(), Full> {
-        match slot {
-            Slot::Member(member) => self.member(id, member),
-            Slot::Gone(gone) => self.gone(id, gone),
-        }
+        let kind = match slot {
+            Slot::Member(_) => record::MEMBER,
+            Slot::Gone(_) => record::GONE,
+        };
+        let mut bytes = [0; RECORD_MAX_LEN];
+        let len = slot.encode(id, &mut bytes);
+        self.record(kind, len, |body| {
+            body.copy_from_slice(&bytes[..len]);
+            Ok(())
+        })
     }
 
     /// The plaintext's length.
     #[must_use]
     pub fn finish(self) -> usize {
         self.len
+    }
+}
+
+/// A packet whose plaintext a [`Builder`] writes behind the room for its synthetic IV, and which
+/// is sealed under a key as it finishes.
+pub struct Sealing<'a>(Builder<'a>);
+
+impl<'a> Sealing<'a> {
+    /// Starts a packet in `packet`, which holds at most [`MAX_PACKET`] of it.
+    pub fn new(packet: &'a mut [u8], header: &Header) -> Self {
+        Self(Builder::at(packet, SIV_LEN, header))
+    }
+
+    /// Seals the packet under `key`, and returns its length.
+    #[must_use]
+    pub fn seal(self, key: &Key) -> usize {
+        seal::seal(key, self.0.buf, self.0.len)
+    }
+}
+
+impl<'a> core::ops::Deref for Sealing<'a> {
+    type Target = Builder<'a>;
+
+    fn deref(&self) -> &Builder<'a> {
+        &self.0
+    }
+}
+
+impl core::ops::DerefMut for Sealing<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 
@@ -495,6 +570,7 @@ pub enum Record<'a> {
     Request(u32),
     Member(u8, Member),
     Gone(u8, Gone),
+    OnKey(OnKey),
     Message(Message),
     /// A digest of the messages the sender holds.
     Messages(u32),
@@ -547,6 +623,10 @@ impl<'a> Iterator for Records<'a> {
                 Some((id, gone)) => Record::Gone(id, gone),
                 None => Record::Other(kind, body),
             },
+            record::ON_KEY => match OnKey::decode(body) {
+                Some(on_key) => Record::OnKey(on_key),
+                None => Record::Other(kind, body),
+            },
             _ => Record::Other(kind, body),
         })
     }
@@ -576,6 +656,10 @@ impl Iterator for Positions<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::members::{
+        GONE_LEN,
+        tests::{left, signed},
+    };
 
     fn header() -> Header {
         Header {
@@ -602,6 +686,49 @@ mod tests {
         assert!(matches!(records.next(), Some(Record::Members(0xdead_beef))));
         assert!(matches!(records.next(), Some(Record::Request(0x8000_0010))));
         assert!(records.next().is_none());
+    }
+
+    #[test]
+    fn a_slot_record_keeps_its_bytes() {
+        let member = signed(3, 4, 120);
+        let gone = left(5, 6, 130);
+        let mut member_body = [0; RECORD_MAX_LEN];
+        let member_len = member.encode(3, &mut member_body);
+        let mut gone_body = [0; GONE_LEN];
+        gone.encode(5, &mut gone_body);
+        for (id, slot, kind, body) in [
+            (
+                3,
+                Slot::Member(member),
+                record::MEMBER,
+                &member_body[..member_len],
+            ),
+            (5, Slot::Gone(gone), record::GONE, &gone_body[..]),
+        ] {
+            let mut buf = [0; MAX_PLAIN];
+            let mut builder = Builder::new(&mut buf, &header());
+            builder.slot(id, &slot).unwrap();
+            let len = builder.finish();
+            assert_eq!(buf[HEADER_LEN..HEADER_LEN + 2], [kind, body.len() as u8]);
+            assert_eq!(buf[HEADER_LEN + 2..len], *body);
+        }
+    }
+
+    #[test]
+    fn a_sealed_packet_is_the_plaintext_sealed() {
+        let key = Key::new([7; 32]);
+        let mut by_hand = [0; MAX_PACKET];
+        let mut builder = Builder::new(&mut by_hand[SIV_LEN..], &header());
+        builder.neighbours(0x8000_0011).unwrap();
+        let plain_len = builder.finish();
+        let len = seal::seal(&key, &mut by_hand, plain_len);
+
+        let mut sealed = [0; MAX_PACKET];
+        let mut sealing = Sealing::new(&mut sealed, &header());
+        sealing.neighbours(0x8000_0011).unwrap();
+        assert_eq!(sealing.room(), MAX_PLAIN - HEADER_LEN - WORD_LEN);
+        assert_eq!(sealing.seal(&key), len);
+        assert_eq!(sealed[..len], by_hand[..len]);
     }
 
     #[test]
@@ -711,6 +838,7 @@ mod tests {
         let gone = Gone {
             public: [3; 32],
             changed: 1_790_000_002,
+            signature: [7; 64],
         };
         let mut buf = [0; MAX_PLAIN];
         let mut builder = Builder::new(&mut buf, &header());
@@ -722,6 +850,38 @@ mod tests {
             plain.records().next(),
             Some(Record::Gone(30, read)) if read == gone
         ));
+    }
+
+    #[test]
+    fn a_boot_clock_survives_the_header_beside_a_notice() {
+        let header = Header {
+            timebase: Timebase {
+                source: Source::Boot(3),
+                hops: 2,
+            },
+            notice: true,
+            ..header()
+        };
+        let mut bytes = [0; HEADER_LEN];
+        header.encode(&mut bytes);
+        assert_eq!(Header::decode(&bytes), Ok(header));
+    }
+
+    #[test]
+    fn clocks_rank_gps_then_utc_then_boot_and_lower_roots_first() {
+        let order = [
+            Source::Gps,
+            Source::Node(0),
+            Source::Node(5),
+            Source::Boot(0),
+            Source::Boot(5),
+        ];
+        for (i, higher) in order.iter().enumerate() {
+            for lower in &order[i + 1..] {
+                assert!(higher.outranks(*lower), "{higher:?} over {lower:?}");
+                assert!(!lower.outranks(*higher), "{lower:?} under {higher:?}");
+            }
+        }
     }
 
     #[test]

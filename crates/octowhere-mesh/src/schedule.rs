@@ -11,10 +11,12 @@ use aes::{
 use hkdf::Hkdf;
 use sha2::Sha256;
 
-use crate::{IDS, seal::Key};
+use crate::{IDS, Ids, seal::Key};
 
 /// A round: every id's slot once.
 pub const ROUND_US: i64 = 45_000_000;
+/// A round in whole seconds.
+pub const ROUND_S: u32 = (ROUND_US / 1_000_000) as u32;
 /// The time from one slot's start to the next's.
 pub const SLOT_US: i64 = ROUND_US / IDS as i64;
 /// A node transmits in every round of this many whose index matches its id's, whether or not it
@@ -34,6 +36,24 @@ pub fn round_at(t: i64) -> i64 {
     t.div_euclid(ROUND_US)
 }
 
+/// The round holding `t` as removals store and send rounds.
+#[must_use]
+pub fn stored_round_at(t: i64) -> u32 {
+    round_at(t) as u32
+}
+
+/// The whole second holding `t`, as a header's base, a record and a message are stamped.
+#[must_use]
+pub fn second_at(t: i64) -> u32 {
+    t.div_euclid(1_000_000) as u32
+}
+
+/// The second the round holding `t` starts at.
+#[must_use]
+pub fn round_start_s(t: i64) -> u32 {
+    second_at(round_at(t) * ROUND_US)
+}
+
 /// Whether `id` transmits in `round` with nothing new to say.
 #[must_use]
 pub fn is_floor(round: i64, id: u8) -> bool {
@@ -44,12 +64,6 @@ pub fn is_floor(round: i64, id: u8) -> bool {
 #[must_use]
 pub fn is_sweep_round(round: i64) -> bool {
     round.rem_euclid(SWEEP_EVERY) == 0
-}
-
-/// A packet's base timestamp: the whole second its slot starts in.
-#[must_use]
-pub fn base_of(start: i64) -> u32 {
-    start.div_euclid(1_000_000) as u32
 }
 
 /// Each id's place in a round, from 0 for the first slot.
@@ -134,14 +148,13 @@ impl Schedule {
         }
     }
 
-    /// The id and start of the first slot starting at or after `t` of an id in the set `ids`,
-    /// or `None` for an empty set.
+    /// The id and start of the first slot starting at or after `t` of an id in `ids`, or `None`
+    /// for an empty set.
     #[must_use]
-    pub fn next_slot_in(&self, t: i64, ids: u32) -> Option<(u8, i64)> {
+    pub fn next_slot_in(&self, t: i64, ids: Ids) -> Option<(u8, i64)> {
         let round = round_at(t);
         [round, round + 1].into_iter().find_map(|round| {
-            (0..IDS)
-                .filter(|&id| ids & 1 << id != 0)
+            ids.iter()
                 .map(|id| (id, self.slot_start(round, id)))
                 .filter(|&(_, start)| start >= t)
                 .min_by_key(|&(_, start)| start)
@@ -228,18 +241,18 @@ mod tests {
     #[test]
     fn the_next_slot_in_a_set_is_the_soonest_of_its_ids() {
         let schedule = schedule(7);
-        let ids = 1 << 3 | 1 << 9 | 1 << 20;
+        let ids = Ids::of(3).with(9).with(20);
         let t = 100 * ROUND_US + ROUND_US / 2;
         let (id, start) = schedule.next_slot_in(t, ids).unwrap();
-        assert!(start >= t && ids & 1 << id != 0);
+        assert!(start >= t && ids.contains(id));
         // No id in the set has a slot between `t` and the one found.
         for other in [3, 9, 20] {
             let (_, next) = schedule.next_slot(t, other);
             assert!(next >= start, "{other}");
         }
-        assert_eq!(schedule.next_slot_in(t, 0), None);
+        assert_eq!(schedule.next_slot_in(t, Ids::EMPTY), None);
         let (_, only) = schedule.next_slot(t, 5);
-        assert_eq!(schedule.next_slot_in(t, 1 << 5), Some((5, only)));
+        assert_eq!(schedule.next_slot_in(t, Ids::of(5)), Some((5, only)));
     }
 
     #[test]
@@ -248,7 +261,7 @@ mod tests {
         for id in 0..IDS {
             for round in [0, 1, 37_000_000] {
                 let start = schedule.slot_start(round, id);
-                assert_eq!(schedule.named_slot(base_of(start), id), start);
+                assert_eq!(schedule.named_slot(second_at(start), id), start);
             }
         }
     }

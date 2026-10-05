@@ -198,6 +198,7 @@ pub struct Startup {
     identity_from: Option<Micros>,
     /// A demonstration: its outcomes are scripted, not reported, and it says so.
     demo: bool,
+    title: identity::TitleSlot,
 }
 
 /// Where the sequence is.
@@ -272,6 +273,7 @@ impl Startup {
             skipped: false,
             identity_from: Some(now),
             demo: false,
+            title: identity::TitleSlot::default(),
         }
     }
 
@@ -293,7 +295,13 @@ impl Startup {
             skipped: false,
             identity_from: None,
             demo: true,
+            title: identity::TitleSlot::default(),
         }
+    }
+
+    /// Lets the identity's title go, for a sequence that is over but kept.
+    pub fn forget_title(&self) {
+        self.title.forget();
     }
 
     /// Whether this is the boot itself, rather than a replay or a demonstration.
@@ -525,10 +533,15 @@ where
             };
             draw_self_test(&cells, scroll, &version, font, target)
         }
-        View::Identity(frame) => {
-            identity::draw_identity(frame, startup.answered(), context, font, target)
-        }
-        View::Card(frame) => identity::draw_card(frame, target),
+        View::Identity(frame) => identity::draw_identity(
+            frame,
+            startup.answered(),
+            context,
+            font,
+            &startup.title,
+            target,
+        ),
+        View::Card(frame) => identity::draw_card(frame, &startup.title, target),
         View::Fault(frame) if frame < FAULT_FRAMES => {
             draw_fault(frame, startup, context.firmware, font, true, target)
         }
@@ -1147,7 +1160,7 @@ fn draw_fault<D: CoverageTarget<Color = Color>>(
         let period = libm::roundf(style.advance(&line)) as i32;
         let mut pen = (-TICKER_SPEED * frame).rem_euclid(period) - period;
         while pen < 466 {
-            style.draw_stretched(&line, Point::new(pen, baseline), 1.0, &mut strip)?;
+            style.draw_on_baseline(&line, Point::new(pen, baseline), &mut strip)?;
             pen += period;
         }
         strip.finish();
@@ -1656,15 +1669,15 @@ mod tests {
         assert_eq!(widths(22)[6], (92, 374));
     }
 
-    /// The fault screen rasterizes its giant name a glyph at a time, at half size, into a raster
-    /// of its own with four bytes a pixel on the internal heap. A 140 KB raster for the full
-    /// size failed to allocate there.
+    /// The fault screen rasterizes its giant name a glyph at a time, at half size, and draws it
+    /// doubled. The raster made at boot must hold the largest of those glyphs, since growing it
+    /// there can fail.
     #[test]
-    fn every_giant_glyph_rasters_within_40_kb() {
+    fn every_giant_glyph_fits_the_raster_reserved_at_boot() {
         let font = chrome::FONTS[SHAPIRO];
         for c in Part::ALL.into_iter().flat_map(|part| part.name().chars()) {
             let metrics = font.metrics(c, (NAME_PX / 2) as f32);
-            assert!(metrics.width * metrics.height * 4 < 40_000, "{c}");
+            chrome::fits(metrics.width, metrics.height);
         }
     }
 

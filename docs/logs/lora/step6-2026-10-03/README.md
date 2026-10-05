@@ -137,6 +137,76 @@ added it again at its old id (`returning: true`).
 - **The old key dropped.** `1a38` heard `1c1c` on the new key and dropped the old one at
   349.8 s, and `1c1c` dropped its own at 623.3 s.
 
+## CRC errors between these boards
+
+In these runs `1c1c` received 37 of `1a38`'s packets intact and 12 with a CRC error, at -17 to
+-30 dBm; a failed packet's length is not logged. `1a38` received all 35 of `1c1c`'s, at about
+-10 dBm. Overload alone would fail the stronger link first. On 2026-10-02 the errors
+ran the other way, at about 1% (`docs/logs/lora/crc-2026-10-02/`). Every loss here was made
+good by the protocol: summaries, member record requests and catching up a member on its old
+key. Whether `1a38`'s transmitter or `1c1c`'s receiver is at fault, or how the boards sit on
+the bench, is not looked into.
+
+## A late learner's clock
+
+`pending-clock-1a38.log` and `pending-clock-1c1c.log`, on the first build of declining after
+the switch, where a node with a removal pending still took packets under the new key.
+
+- **Missed.** `1a38` removed a phantom at 347.0 s and sent `1c1c` its key message at 375.7 s
+  in a 122-byte packet, which `1c1c` never received: its log has neither the packet nor a CRC
+  error. `1a38` switched to generation 7 at 534.4 s.
+- **Caught up.** In sweep round 39800776 `1a38` heard `1c1c` under generation 6 and sent it its
+  key message under that key at 926.9 s. `1c1c` showed the removal as pending until round
+  39800779.
+- **The clock.** At 939.5 s `1c1c` opened a packet from `1a38` under the key it was about to
+  switch to, timed it against the old key's slot order, found it 32.3 s early, and moved its
+  clock by that. It switched at 997.1 s and heard nothing from `1a38` until 1347.4 s, when a
+  packet 33.7 s late moved the clock back. A group text `1a38` sent at 998.4 s did not reach
+  it in that time. A node with a removal pending now takes nothing from a packet under the new
+  key, neither its content nor its timing.
+
+## Declining after the switch
+
+`decline-late-1a38.log`, `decline-late-1c1c.log` and `decline-late-restart-1c1c.log`, on the
+fixed build. `1c1c` was deaf for 255 s from just before `1a38` removed a phantom, so that it
+learned of the removal late.
+
+- **The removal.** `1a38` enrolled a phantom at id 2 and sent a group text at 302.7 s, which
+  `1c1c` showed at 347.5 s. It removed the phantom at 352.4 s and switched to generation 8 at
+  562.3 s, storing the group and its removals in one write.
+- **Learned late.** `1a38` sent `1c1c` its key message under generation 7 in sweep round
+  39800826, at 874.6 s. `1c1c` showed it at 870.7 s on its own clock and acknowledged it. It
+  switched three rounds on, at 963.3 s, and could decline until round 39802749, 1,920 rounds
+  later.
+- **Its clock held.** `1a38`'s group text from after the switch reached `1c1c` 15 s after its
+  switch, 129 µs from where it expected it.
+- **Declined.** At 980.1 s `1c1c` declined the phantom's removal (`pair-inject keep 2`). It went
+  back to generation 7 and forgot the phantom's gone record and two messages: the group text and
+  its own acknowledgement, both stamped after the group's switch. It stored the group and its
+  removals in one write. `1a38` had dropped generation 7 about 4 s before, on hearing `1c1c`
+  under generation 8, so the two boards no longer hear each other: `1c1c` logs `1a38`'s packets
+  as not its group's.
+- **After a restart** `1c1c` came back on generation 7 with nothing to decline, and a second
+  `keep 2` found nothing.
+
+## Declining after a switch both boards made
+
+`final-1a38.log`, `final-1c1c.log` and `final-restart-1c1c.log`, on the build of `14b8402`.
+`1c1c` first left the group it had kept by declining, and paired again at id 1
+(`returning: true`).
+
+- **Both switched.** `1a38` removed a phantom at 190.2 s, and `1c1c` showed the removal at
+  244.5 s. Both switched to generation 9 at the start of round 39800864, and each stored the
+  group and its removals in one write.
+- **Declined.** `1c1c` took a group text from after the switch, then declined the phantom's
+  removal 28 s after its switch. It went back to generation 8 and forgot the phantom's gone
+  record and the text.
+- **Still waited for.** `1a38` had not heard `1c1c` under generation 9 in those 28 s, so it
+  still kept generation 8 for it. In round 39800865 it sent `1c1c` its key message under that
+  key. `1c1c` already held the message and took nothing from it.
+- **After a restart** `1c1c` came back on generation 8 with nothing to decline. It then left
+  and paired again, and the boards end as one group on generation 9.
+
 ## Not run on the boards
 
 - Two removals at once, and the lower key winning after a switch to the higher, need three
@@ -144,5 +214,7 @@ added it again at its old id (`returning: true`).
 - A member sent its key message three times under an old key and no more: `1c1c` declining
   showed the catch-ups, on the build before the limit.
 - The REMOVING refusal of a pairing was seen in the log only, not on the panel.
+- A packet under the key to switch to, while a removal is pending: none reached `1c1c` in the
+  late run, so the new path that ignores it did not run.
 - Messages longer than a few words, a full store, and summaries too short for every origin:
   the crate's tests cover them (`messages.rs`).
