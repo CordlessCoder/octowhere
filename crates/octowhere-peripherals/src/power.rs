@@ -236,19 +236,6 @@ impl<I: I2c> Axp2101Power<I> {
     pub fn read_chip_id(&mut self) -> impl Future<Output = Result<u8, I::Error>> {
         self.read_reg(REG_IC_TYPE)
     }
-
-    /// Read raw STATUS2 (charge / WLTF / BATFET states).
-    pub fn read_status2(&mut self) -> impl Future<Output = Result<u8, I::Error>> {
-        self.read_reg(REG_STATUS2)
-    }
-
-    /// Disable power ADC channels we don't actively use on the watchface
-    /// (TS pin + die temp) to shave a few hundred µA off ADC refresh.
-    /// Keep VBAT+VBUS+VSYS enabled so battery UI still works.
-    pub fn trim_adc_channels(&mut self) -> impl Future<Output = Result<(), I::Error>> {
-        // Keep VBAT, VBUS and VSYS enabled; disable TS and die temperature.
-        self.write_reg(REG_ADC_ENABLE, ADC_VBAT | ADC_VBUS | ADC_VSYS)
-    }
 }
 
 fn is_charging_status(status: u8) -> bool {

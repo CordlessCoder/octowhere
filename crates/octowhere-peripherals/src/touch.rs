@@ -38,24 +38,6 @@ const READ_BUF_SIZE: usize = MAX_FINGER_NUM * 5 + 5;
 
 const ACK_VALUE: u8 = 0xAB;
 
-#[repr(u8)]
-#[derive(Debug, Clone, Copy)]
-pub enum Cst9217RunMode {
-    Normal = 0x00,
-    LowPower = 0x01,
-    DeepSleep = 0x02,
-    Wakeup = 0x03,
-    DebugDiff = 0x04,
-    DebugRawdata = 0x05,
-    Factory = 0x06,
-    DebugInfo = 0x07,
-    UpdateFw = 0x08,
-    FactoryHighdrv = 0x10,
-    FactoryLowdrv = 0x11,
-    FactoryShort = 0x12,
-    Lpscan = 0x13,
-}
-
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Cst9217Config {
     pub swap_xy: bool,
@@ -181,29 +163,8 @@ impl<I: I2c, RST, INT, DELAY> Cst9217<I, INT, RST, DELAY> {
             config: Default::default(),
         }
     }
-    pub fn with_address(mut self, addr: u8) -> Self {
-        self.addr = addr;
-        self
-    }
     pub fn set_config(&mut self, config: Cst9217Config) {
         self.config = config;
-    }
-    pub async fn sleep(&mut self) -> Result<(), I::Error> {
-        self.set_mode(Cst9217RunMode::DebugInfo).await?;
-        self.i2c
-            .write(self.addr, &REG_SLEEP_MODE.to_be_bytes())
-            .await
-    }
-    pub async fn set_mode(&mut self, mode: Cst9217RunMode) -> Result<(), I::Error> {
-        let write = match mode {
-            Cst9217RunMode::Normal => REG_NORMAL_MODE,
-            Cst9217RunMode::DebugDiff => REG_DIFF_MODE,
-            Cst9217RunMode::DebugRawdata => REG_RAW_MODE,
-            Cst9217RunMode::DebugInfo => REG_DEBUG_MODE,
-            Cst9217RunMode::Factory => REG_FACTORY_MODE,
-            _ => unimplemented!(),
-        };
-        self.i2c.write(self.addr, &write.to_be_bytes()).await
     }
     pub async fn read_touch_data(&mut self) -> Result<TouchData, I::Error> {
         let mut buf = [0u8; READ_BUF_SIZE];
@@ -361,7 +322,7 @@ impl<I: I2c, RST: OutputPin, INT, DELAY: embedded_hal_async::delay::DelayNs>
         Ok(())
     }
 
-    pub async fn reset(&mut self) -> Result<(), RST::Error> {
+    async fn reset(&mut self) -> Result<(), RST::Error> {
         self.reset.set_low()?;
         self.delay.delay_ms(10).await;
         self.reset.set_high()?;

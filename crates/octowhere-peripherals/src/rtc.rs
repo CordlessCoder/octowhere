@@ -32,6 +32,7 @@ pub struct DateTime {
 }
 
 impl DateTime {
+    #[cfg(test)]
     #[must_use]
     pub fn new(year: u8, month: u8, day: u8, hours: u8, minutes: u8, seconds: u8) -> Self {
         Self::with_weekday(year, month, day, 0, hours, minutes, seconds)
@@ -136,11 +137,6 @@ impl<I: I2c> Pcf85063aRtc<I> {
     #[must_use]
     pub fn oscillator_stopped(&self) -> bool {
         self.oscillator_stopped
-    }
-
-    #[must_use]
-    pub fn time_valid(&self) -> bool {
-        !self.oscillator_stopped
     }
 
     /// Set date/time.
