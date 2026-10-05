@@ -69,6 +69,8 @@ pair-inject = ["octowhere-node/phantom"]
 # Lets a debugger touch and cover the screen, press the power key and read the screen back; see
 # `tools/touch-inject.py`.
 touch-inject = []
+# Steps the CO5300 through the crate's other controls, on the display core; never returns.
+co5300-controls-bench = []
 
 [patch.crates-io]
 tca9554 = { git = "https://github.com/CordlessCoder/tca9554-rs", rev = "dd76e69" }

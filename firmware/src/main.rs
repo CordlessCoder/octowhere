@@ -8,6 +8,7 @@
 #![cfg_attr(
     any(
         feature = "fontdue-target-bench",
+        feature = "co5300-controls-bench",
         feature = "lora-link-tx",
         feature = "lora-link-rx"
     ),
@@ -511,6 +512,9 @@ fn log_raw_nmea(data: &[u8], line: &mut [u8; 256], line_len: &mut usize) {
     }
 }
 
+#[cfg(feature = "co5300-controls-bench")]
+mod controls_bench;
+
 macro_rules! start_display_core {
     ($peripherals:ident, $framebuffer_thread:ident) => {
         let swap: &'static mut Swap<SwapState<_>> = SWAP.init_with(|| {
@@ -632,6 +636,11 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
             .await
             .expect("display init failed");
     info!("[DISPLAY] OK");
+    #[cfg(feature = "co5300-controls-bench")]
+    {
+        let state = swap.get();
+        controls_bench::run(&mut display, &mut state.fb).await;
+    }
 
     let mut prev_swap_spi = Duration::MIN;
     let mut first_flush = true;
