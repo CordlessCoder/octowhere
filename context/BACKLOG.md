@@ -285,22 +285,16 @@ until the feature set is complete, because profiling an incomplete firmware pric
   rekey tests (`2e21c2c`, step 3; the `messages.rs` half was done in `96b6d81`), and the
   comments the review asked for (`5307b20`, step 4), and time and rounds converted one way in
   `schedule` (`f4e58b7`, step 5), and sets of ids as `octowhere_mesh::Ids` (`e2921f7` to
-  `23c7762`, step 6). Left:
+  `23c7762`, step 6), and one digest mismatch count, with `answer` for both (`ab58fc1`, step
+  7), and records framed and sealed packets built one way (`fa5a9aa`, step 8), and the names
+  and types of step 9 (`8cc2b28` to `b162190`). Left:
   - Duplication in the crate and `settings.rs`:
     - One slot encoding: `Builder::slot`, the pairing's `welcome` and `read_welcome`, and
       `settings`' `write_member` and `read_slot` each have their own, and the decoders tell a
       member from a gone record by different length rules.
     - The group header's flash layout (key, own id, generation), written and read in
       `settings.rs` at offsets one apart, in the crate with a round-trip test.
-    - One `record(kind, len, ...)` in `Builder`, which frames records five ways; `Header::new`
-      and a sealing builder for the four headers `mesh.rs` builds from literals.
-    - One mismatch counter for `Requests::heard` and `Summaries::heard`, whose names also hide
-      that they change the group and the store.
-  - Names and types: `messages::Name` renamed so it does not collide with `members::Name`;
-    `Pending.switch` (this device's round) and `Pending.new.switch` (the group's) named apart;
-    `now: u32` with 0 for unknown made an `Option` throughout; the pairing's `Phase::Transfer`
-    and `Compare` duplicating its own fields; `MeshView`'s refused pairing as its own state
-    rather than a placeholder `Searching` phase. Not rechecked since `337717f`: `rekey::Last`
+  - Not rechecked since `337717f`: `rekey::Last`
     and `rekey::Undo` public with public fields though nothing outside uses them, `bits`
     public likewise, and `Group::new` used only by tests, with a stale doc.
   - Work and stack: `start_transfer` in `pair.rs` clones the 2.6 KB group on the receive path
