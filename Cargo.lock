@@ -1021,14 +1021,11 @@ version = "0.1.0"
 dependencies = [
  "critical-section",
  "embassy-sync",
- "embedded-graphics",
- "embedded-graphics-core",
  "embedded-hal 1.0.0",
  "embedded-hal-async",
  "futures",
  "heapless",
  "lc76g",
- "libm",
  "octowhere-ui",
 ]
 

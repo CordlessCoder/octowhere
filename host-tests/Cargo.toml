@@ -6,11 +6,8 @@ edition = "2024"
 [dependencies]
 critical-section = { version = "1.2.0", features = ["std"] }
 embassy-sync = "0.8.0"
-embedded-graphics = "0.8.2"
-embedded-graphics-core = "0.4.1"
 heapless = "0.9.3"
 octowhere-ui = { path = "../crates/octowhere-ui" }
-libm = "0.2.16"
 
 [dev-dependencies]
 embedded-hal = "1.0"
