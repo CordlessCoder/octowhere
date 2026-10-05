@@ -28,15 +28,16 @@ initialization or peripheral mappings.
 - `crates/octowhere-motion/` owns compass calibration, sensor fusion, IMU unit conversion, and
   the magnetic declination from the World Magnetic Model 2025 (`declination`), which holds
   until 2030. It has no board or renderer dependency and builds for the host.
-- `crates/octowhere-mesh/` owns the location mesh in `context/LORA-PROTOCOL.md`: the slot
-  schedule, the packet's header and records, sealing them with AES-SIV, the table of positions,
+- `crates/octowhere-mesh/` owns the location mesh in `context/LORA-PROTOCOL.md`: its rounds
+  (`schedule`), the packet's header and records, sealing them with AES-SIV, the table of positions,
   the timebase, the group and its members (`members`), pairing (`pair`), the exchange
   without a radio, messages and the store every node holds them in (`messages`), removing
   a member by moving the group to a new key (`rekey`), and a device's Ed25519 identity, with
   its X25519 key derived from it, which signs its records (`identity`). It has no radio or
   board dependency and builds for the host. `octowhere-node` runs it over time.
-- `crates/octowhere-node/` owns the node that runs the mesh over time (`node`): it sends in
-  its slot, listens, keeps the timebase, pairs, passes messages on and carries removals out, on
+- `crates/octowhere-node/` owns the node that runs the mesh over time (`node`): it listens
+  throughout, sends when the channel is clear (`access`), keeps the timebase, pairs, passes
+  messages on and carries removals out, on
   whatever radio, clock, random source, device and group store it is given (`Radio`, `Time`,
   `Random`, `Device`, `GroupStore`, `Commands`). Beside it are what it shows the screens and
   takes from them (`view`), the messages it shows them with how far each has gone (`inbox`),
@@ -47,7 +48,7 @@ initialization or peripheral mappings.
   board's seams.
 - `crates/octowhere-sim/` runs several nodes on the host, each `octowhere-node`'s node
   unchanged, on virtual time: a simulated air between their radios by a link matrix, with
-  collisions and half-duplex radios; clocks with their own drift; stores that can fail a write
+  collisions, half-duplex radios and a channel check that sees a packet a few symbols in; clocks with their own drift; stores that can fail a write
   and restart a node from what they hold; and seeded random sources, so that a run repeats.
   Scenarios are its tests (`tests/scenarios.rs`), which read each node's log lines;
   `OCTOWHERE_SIM_LOG=1` prints them as they come. `tests/security.rs` stages the open items of
@@ -269,8 +270,9 @@ and a feature names one. The check rebuilds a temporary manifest with a stable c
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 1,846,208 bytes, 11.79% of the 15,663,104-byte app partition that
-`partitions.csv` gives it (the plain build at `e1b7176`; it was 1,840,576 at `def9052`,
+The image is currently 1,841,408 bytes, 11.76% of the 15,663,104-byte app partition that
+`partitions.csv` gives it (the plain build at `a75dcfe`, which dropped the slots; it was
+1,846,208 at `e1b7176`, 1,840,576 at `def9052`,
 1,840,544 at `da358ab`,
 1,839,344 at `dca8b71`, before
 the scan line's read buffer, 1,845,216 at `4abb8d6`,
@@ -595,8 +597,11 @@ loudly; it transmits or listens through the wrong path. That also couples the ra
 I2C bus, so any timing the protocol depends on includes an I2C transaction and waiting for the bus.
 
 `radio_task` runs the mesh, `octowhere-node`'s node on `crates/octowhere-mesh` with the
-board's seams in `firmware/src/mesh.rs`: slots, in an order the
-group's key shuffles each round, carrying neighbours, a digest of the member table, the member
+board's seams in `firmware/src/mesh.rs`. It contends for the channel (owner, 2026-10-05; the
+protocol's "Medium access"): the radio receives throughout, and a packet goes after a random
+backoff once the modem's status shows no packet under way, at once for a record or message, a
+round after the last for news of positions, and at the floor otherwise. The slots it replaced
+are on the `tdma` branch. Its packets carry neighbours, a digest of the member table, the member
 and gone records asked for or changed, a digest of the messages held, a summary of them when
 a neighbour's differs, messages, and positions, with a timebase taken from other nodes without
 a fix, under the group key pairing gave the node. Member, gone and key records carry their
@@ -606,13 +611,13 @@ radio asleep. Without a fix a node has no position of its own. Commands reach th
 `COMMANDS` in `firmware/src/mesh/device.rs`: start a pairing to add or join, choose a device found, answer the code, cancel,
 leave the group, rename, refresh, send text, remove a member while its id still holds the
 device named, and decline a removal, named by its new key.
-A refresh listens throughout for three rounds and keeps sending; a pairing stops it. A device
-that leaves sends its gone record in its next two slots before it forgets the key. Every node
+A refresh counts the members heard for three rounds; a pairing stops it. A device that leaves
+sends its gone record in two packets, 10 s apart, before it forgets the key. Every node
 holds every message for 24 hours in a store in PSRAM, lost at a restart, and the summaries
 bring back what a neighbour lacks. A removal sends the new key to each remaining member, and
 the group switches to it at the round the key names; a node keeps the old key for any member
-not yet heard on the new one, and in a sweep round sends that member its key message under the
-old key. Messages and removals have their screens (`context/SCREEN-DESIGN-BRIEF.md`,
+not yet heard on the new one, and sends that member its key message under the old key when it
+hears it there. Messages and removals have their screens (`context/SCREEN-DESIGN-BRIEF.md`,
 "Messages as built" and "Removal as built"; two boards in `docs/logs/lora/messages-2026-10-04/`
 and `docs/logs/lora/removal-2026-10-04/`). A pairing takes the radio to band O's upper channel at +2 dBm until it
 ends; the protocol's "The exchange as built" has the frames and their order, and
@@ -640,8 +645,9 @@ settles medium access, packet layout, freshness, crypto and pairing. Its "Firmwa
 section says what the firmware changed for it.
 
 The driver has more than the link test uses: channel activity detection, RSSI and SNR per packet,
-frequency error, and a hardware random source. The protocol needs channel activity detection to
-keep receive power down at 32 nodes, once slot timing is good to milliseconds.
+frequency error, and a hardware random source. Low-power listening, with channel activity
+detection and long preambles, is the route if continuous receive draws too much
+([`context/POWER-INVESTIGATION.md`](context/POWER-INVESTIGATION.md)).
 
 Radio hardware findings, including the RF switch requirement, the pin correction and the SX1272
 errata workaround, are in [`docs/hardware-notes.md`](docs/hardware-notes.md).
@@ -673,7 +679,7 @@ errata workaround, are in [`docs/hardware-notes.md`](docs/hardware-notes.md).
   3,200, and core 0's stack is 107,068 bytes; after that day's security fixes (`03cc818`) the
   radio task's poll takes 15,824, and after the mesh clean-up (`3a9d42e`) 16,384, with
   `async_main`'s 15,840; keeping key messages in flash (`e1b7176`) took them to 14,864 and
-  16,096. The clean-up took a pairing's copy of the group off its receive path,
+  16,096, and contention (`a75dcfe`) the radio task's to 14,912. The clean-up took a pairing's copy of the group off its receive path,
   so `Pairing::start_transfer` went from 5,344 to 320. This lists the largest frames, from the
   root:
 

@@ -6,6 +6,10 @@ here is measured. It waits for the owner's PPK2, and feeds two decisions:
 - whether the mesh keeps its slots or moves to contention (CSMA/CA);
 - whether the firmware light-sleeps while the screen is dark.
 
+The owner settled the first on 2026-10-05, before measuring: contention on continuous receive
+([`LORA-PROTOCOL.md`](LORA-PROTOCOL.md), "Medium access"). The measurements now say whether
+continuous receive fits the budget, or the mesh moves to low-power listening.
+
 ## Why it came up
 
 The owner revisited contention on 2026-10-04 for two reasons: message latency, and how much of the

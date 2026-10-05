@@ -3,12 +3,13 @@
 The product is a closed group of up to 32 equivalent nodes that share positions and carry messages
 between members, including private ones. GPS supplies both position and the time reference; LoRa
 carries the traffic. This document is the agreed design. Steps 1 to 4 of the build order below
-are implemented, and the mesh's side of step 6; "Build order" says what comes next; [`AGENTS.md`](../AGENTS.md), "Radio",
-says how.
+are implemented, and the mesh's side of step 6, on contention since 2026-10-05; "Build order"
+says what comes next; [`AGENTS.md`](../AGENTS.md), "Radio", says how.
 
 The first version of this design (commit `e57fe0a`) was eight nodes and positions only. The owner
 extended it on 2026-09-29 to 32 nodes, messages and private messages, moved it to band O, and kept
-fixed slots over contention.
+fixed slots over contention. On 2026-10-05 the owner moved it to contention; the `tdma` branch
+holds the slots as they were built (see "Medium access").
 
 ## Radio
 
@@ -59,11 +60,12 @@ do not confuse the two.
 - **Why duty cycle.** Polite spectrum access (listen before talk with adaptive frequency agility)
   caps cumulative transmit time at 100 s an hour per 200 kHz (EN 300 220-2 Table 18), which is 2.8%.
   Band O is 250 kHz wide, so agility cannot add a second 200 kHz. The duty-cycle option allows 10%.
-  Listen before talk also defers a transmission when the channel is busy, which breaks a fixed slot.
-- **Headroom.** One packet per node per round caps each node at 0.89% duty (below). The 10% is
-  unused headroom; what band O buys today is power.
-- **Fallback.** Band M, 868.0–868.6 MHz, allows 1% at 25 mW e.r.p. The schedule fits it unchanged,
-  at 14 dBm e.r.p. Moving a running group to it is deferred.
+  A node checks the channel before it sends; under the duty-cycle option that check is neither
+  required nor forbidden.
+- **Headroom.** A node rests nine airtimes after each packet, which holds it under the 10% at
+  any moment. A packet a round, at the largest, is 0.89%; messages and records use the rest.
+- **Fallback.** Band M, 868.0–868.6 MHz, allows 1% at 25 mW e.r.p., at 14 dBm e.r.p. The rest after
+  each packet would have to be 99 airtimes there. Moving a running group to it is deferred.
 - **Today.** The driver default, 868.0 MHz at 125 kHz, straddles the boundary between bands L and M.
   The protocol moves off it.
 
@@ -78,144 +80,106 @@ With 32 nodes the whole table no longer fits a packet (23 entries do), and sendi
 round would grow channel load with the square of the group. So a packet carries a partial digest:
 the sender's own entry and the entries that most need spreading, chosen as described under "Packet".
 
-A relay passes an entry on in its own next slot. Slots are shuffled every round (see "Medium
-access"), so that takes a little over half a round a hop on average, and at most about two.
+A relay passes an entry on in its next packet: at most a round after its last, or at once beside
+a record (see "Medium access").
 
 Messages cannot ride the digest's merge, since each one must arrive, and arrive once. They are
-flooded through the same slots with their own ids, and every node holds them for a day and
-passes on any a neighbour lacks; see "Messages".
+flooded in the same packets with their own ids, and every node holds them for a day and passes
+on any a neighbour lacks; see "Messages".
 
 ## Medium access
 
-GPS-anchored TDMA. Each round's 32 slots are the paired ids, 0–31, in an order of the group's
-own, new every round (see "Shuffled slots"). Slots are anchored to absolute UTC,
-so two partitions that cannot hear each other compute the same schedule and are already in phase
-when they rejoin. A node without a fix takes its time from the arrivals of another node's packets;
-see "Keeping time without a fix".
+Contention, CSMA/CA, on continuous receive (owner, 2026-10-05). It replaced GPS-anchored slots,
+for message latency and to drop the slot timing. The slots, their shuffle, the listening windows
+and the notices are on the `tdma` branch, at `146fd7a`, with this document as it described them.
+A node in a group keeps its receiver on throughout and sends when it has something to say and
+the channel is clear (`octowhere-node`'s `access`).
 
-- **Round.** 45 s, 32 slots, 1.40625 s apart. A UTC day holds exactly 1920 rounds. Slot `k` starts
-  at the round's start plus `k × 1.40625 s`.
-- **Slot.** The packet, at most 400 ms (255 bytes), two ~80 µs TCA9554 writes, and a ±250 ms guard:
-  at most 900 ms, leaving about 0.5 s before the next slot. Plain NMEA time is enough for that
-  guard, so no PPS is needed; "Time sync" below says where the ±250 ms comes from.
-- **Budget.** One packet per node per round: 0.89% duty at the largest packet, 0.40% at an
-  eight-entry digest. If all 32 nodes sent an eight-entry digest every round, the channel would be
-  busy 13% of the time.
+- **When a packet is due.** At once when the node holds records: a message, a member, gone or
+  key record, a request or a summary not yet sent (owner, 2026-10-05). A round after its last
+  packet when it holds only news: its own position moved more than ~25 m, which is above GPS
+  noise, it learned an entry materially newer than what it last relayed, a node appeared, or
+  its word that it is on a new key is to go in its first packets after a switch. And at the
+  floor, 130 s after its last packet, with nothing new. The round and the floor each come up to
+  10 s early, drawn at each packet, so that nodes that started together drift apart rather than
+  contend at every floor.
+- **The backoff.** Once due, a packet waits a random 0 to 31 steps of 10 ms, listening. A packet
+  heard meanwhile ends the wait, and the node looks again at what is due, since the cancel rule
+  below may have taken its news. At the end of the wait it checks the channel, and sends at once
+  if it detects no packet under way. Otherwise it waits a random 0 to 63 steps, past the longest
+  packet, and tries again.
+- **A step** is long enough for the modem to detect another node's preamble, about five symbols,
+  and for this node's own transmission to start. Two nodes due at once collide only when they
+  draw the same step.
+- **Duty.** After each transmission a node is silent for nine times its airtime, which keeps it
+  under band O's 10% at any moment.
+- **The floor** is a little under three rounds, so that a node listening for three rounds, in a
+  first sweep or a refresh, hears every node in reach.
+- **Sweep rounds** are every round of a timebase whose index is a multiple of 13, about every
+  10 minutes. Every node listens throughout anyway; what is left of them is a cadence for a
+  removal (see "Removing a member"). In one, a node sends its word that it is on the group's key
+  for a day after a switch, and a header under the old key while it waits for a member, each at
+  a time it draws in the round's first half.
 
-A node transmits in its slot when it has something to say, and stays silent otherwise:
-
-- its own position moved more than ~25 m since the last one it sent, which is above GPS noise
-- it learned an entry materially newer than what it last relayed for that node
-- a node appeared for the first time
-- it holds a message, member or gone record, request or summary not yet sent
-- the round is one of its floor rounds (below)
-- the round is a sweep round (see "Keeping time without a fix")
-- it hears no other node, so that another node's one-round sweep finds it wherever their slots
-  fall (owner, 2026-10-02). An 85-byte packet every round is about 7 mAh a day, paid only while
-  the node is alone
-
-Triggers promote a transmission to the node's next slot rather than sending immediately, so trigger
-latency is at most about two rounds, since slots are shuffled. Off-slot transmission has
-no audience, because the power saving depends on every node sleeping outside slots.
-
-The floor is every third round, at fixed rounds: node `k` transmits in every round `r` (UTC seconds
-divided by 45) with `r mod 3 == k mod 3`, whether or not it has anything new. So every node in range
-is heard at least every 135 s, and every node knows in which rounds each id is sure to transmit.
-
-A pending transmission is cancelled when an arriving packet already carries everything it would have
-said and that packet's sender reports every neighbour this node has (the neighbours record, below).
-Without the cancel, all nodes react to the same event at once. Without the neighbour condition, a
-cancel starves a node that only this one reaches. A floor transmission is never cancelled.
+A pending transmission is cancelled when an arriving packet already carries everything it would
+have said and that packet's sender reports every neighbour this node has (the neighbours record,
+below). Without the cancel, every node that heard a message would pass it on. Without the
+neighbour condition, a cancel starves a node that only this one reaches. A floor is never
+cancelled.
 
 As built, the rule works entry by entry. Each entry such a packet carried at the stamp this node
-holds counts as sent, and so does its member record, so the node still sends whatever news is
-left. A node heard for the first time stays news, since the packet cannot say this node heard it.
+holds counts as sent, and so do its member records and messages, so the node still sends whatever
+news is left. A node heard for the first time stays news, since the packet cannot say this node
+heard it. The rule is only as good as the neighbour table: a node that has not yet heard one of
+its neighbours cancels a relay that neighbour needed, and the message summaries bring it back
+later.
 
-### Shuffled slots
+Measured in the simulator, at four seeds (`crates/octowhere-sim/tests/contention.rs` asserts
+looser bounds):
 
-Owner, 2026-10-03 (`schedule::Schedule`).
+- A group message reaches 31 other nodes in reach in 0.2 to 0.7 s, in the origin's one packet:
+  it covers everyone, so nobody relays it.
+- Along a line of twelve, each node in reach of the next only, it takes 3.0 to 3.6 s from end to
+  end, about 0.3 s a hop.
+- 32 idle nodes in reach keep the channel 2% busy, and lose up to 2.3% of receptions to two nodes
+  sending at once.
 
-- **Order.** Each round, the 32 ids are sorted by AES-256 of the round's number on the node's
-  timebase and the id, under a key HKDF-SHA256 derives from the group key. An id's slot is its
-  place in that order. Members on one timebase share the round number, and only members hold
-  the key. The round number cannot be the key: every group with a fix shares it, so the order
-  would be every group's, and anyone's with GPS time.
-- **Exactly.** The key is HKDF-SHA256's 32 bytes from the group key, with no salt and the info
-  `octowhere slots`. Each id's block is the round number as eight big-endian bytes, then the
-  id, then seven zeros. The ids sort by the first eight bytes of their encrypted blocks, read
-  big-endian, then by id. Every device has to compute this alike.
-- **Why.** Every group's ids start at 0 and take the lowest free, so with slot = id, member k
-  of every group with a fix sends at the same instant, in the same floor rounds, as member k of
-  every other. Two groups in one place collide in every slot they share, and a receiver that
-  locks onto the other group's packet misses its own. Under their own keys, groups of n₁ and n₂
-  share about n₁·n₂/32 slots a round, rarely the same pair two rounds running. A transmitter
-  outside the group whose period divides the round hits a different member each round rather
-  than the same one for ever. And a listener with GPS time cannot read the sender's id from its
-  slot, which it could while a node's slot was its id (see "Packet").
-- **What stays.** Floor and sweep rounds go by the round number and the id. The header names
-  the slot as before: its base timestamp gives the round, and the order the slot. A notice's
-  sender works out the round of the node it notifies from that node's arrival, and its own slot
-  in that round from the order.
-- **Cost.** A node with news waits up to about two rounds for its slot, a little over half a
-  round on average, against at most one round and half on average with slot = id. A relay
-  chain in id order no longer crosses in one round. 32 AES blocks a round, cached for the two
-  rounds asked about last.
-- **Rekeying.** The order's key changes with the group key at the switch (owner, 2026-10-03).
-  Keeping the old order would let a removed member tell who sends from when they send. A
-  member that missed the switch sends in the old order from then on, and is found in a sweep
-  round (see "Removing a member").
+Every header names its sender's timebase and when the packet started on it (see "Keeping time
+without a fix"). Nothing else ties a packet to a time.
 
 ### Time sync
 
-The ±250 ms guard is an assumption carried from the first version of this design, not a
-measurement. What limits it is how late the firmware learns that a UTC second began:
+Contention needs UTC only to seconds: for record and message stamps, the message horizon and a
+removal's switch round. What limits how well GNSS gives it is how late the firmware learns that a
+UTC second began:
 
 - **No PPS.** The LC76G is on I2C and the board marks the GPS UART routes `NC`, so the pulse that
   marks each second's start never reaches the ESP32. Only NMEA says which second it is.
 - **NMEA latency.** The module writes RMC after computing the fix. How long after the second that
   is on the LC76G is unmeasured, and the adaptive low-power mode may vary it.
-- **Polling.** `sensor_task` used to read GNSS once every 250 ms, so a sentence could wait up to
-  about that long. `gnss_task` now reads around each expected burst (below). A read takes about
-  11 ms, since the module's protocol puts a 10 ms wait inside it, and a 2 ms pause between reads
-  keeps the module from refusing the next one, which costs another 10 ms. So one sighting is late
-  by up to about 13 ms.
+- **Polling.** `gnss_task` reads around each expected burst, from 100 ms before it is due until it
+  shows. A read takes about 11 ms, since the module's protocol puts a 10 ms wait inside it, and a
+  2 ms pause between reads keeps the module from refusing the next one, which costs another
+  10 ms. So one sighting is late by up to about 13 ms.
 - **RTC resolution.** The PCF85063A counts whole seconds. Phase within a second between fixes has
   to come from a CPU timer anchored to a sentence's arrival.
 
-Every term makes time late, never early, and every node runs the same hardware and firmware, so two
-nodes should disagree by less than either one's worst case.
-
-Ways to tighten it, none of which needs a PPS:
-
-- Read the module often around the expected second instead of every 250 ms. Built: reads start
-  100 ms before the burst is due and repeat until it shows.
-- Timestamp each RMC's arrival and keep the earliest over many fixes. Arrival jitter only adds
-  delay, so the minimum sits closest to the true edge. Built: the earliest of the last 16 fixes,
-  with each burst's reads starting 1.6 ms later than the last over 8 bursts, so the read grid
-  does not see every burst equally late. A burst counts only after a read found the buffer empty.
-- Once a neighbour is heard, align to the group from the `DIO0` arrival times of its packets. That
-  is what slots need, and what CAD depends on. Not built; it needs the protocol.
-
-Every I2C task runs on an interrupt executor, so the frame loop's draws do not delay a sighting.
-With the GNSS task still sharing the thread-mode executor, its reads took up to 139 ms; now the
-slowest read before a burst is about 14 ms. Indoors without a fix, the spacing of bursts as the
-task sees them fell from a 20 ms standard deviation to 12 ms, most of which is the module: its
-RMCs arrive up to about 30 ms either side of a second after the last. With a fix it is
-unmeasured, and the UTC estimate has only been exercised on the host.
-
-The local timer drifts from UTC by its crystal's error between fixes, which the estimate does not
-correct.
-
-Two measurements settle how tight it gets, and with it the floor (see "CAD is required at this
-size"): RMC's arrival after the second on one board, with its spread, from a fast GNSS read; and
-the agreement between two boards synced this way, logged together. Both belong on a
-`bench/gnss-time` branch.
+Every term makes time late, never early. The estimate keeps the earliest of the last 16 fixes'
+arrivals, with each burst's reads starting 1.6 ms later than the last over 8 bursts, so the read
+grid does not see every burst equally late; arrival jitter only adds delay, so the minimum sits
+closest to the true edge. A burst counts only after a read found the buffer empty. Indoors without
+a fix, the spacing of bursts as the task sees them has a 12 ms standard deviation, most of which
+is the module: its RMCs arrive up to about 30 ms either side of a second after the last. With a
+fix it is unmeasured, and the UTC estimate has only been exercised on the host. The local timer
+drifts from UTC by its crystal's error between fixes, which the estimate does not correct.
 
 ### Keeping time without a fix
 
-A node needs a timebase to place slots: GPS time from its own fix, or another node's, taken from
-when that node's packets arrive. The owner chose this over running slots on the RTC, whose whole
-seconds two nodes can disagree on (2026-10-01). Every header names the sender's timebase:
+A node needs a timebase for UTC: GPS time from its own fix, or another node's, taken from when
+that node's packets start. The owner chose this over the RTC alone, whose whole seconds two nodes
+can disagree on (2026-10-01), and kept it when slots went (2026-10-05), so that a node without a
+fix still stamps its records and times a removal's switch. Every header names the sender's
+timebase:
 
 - **Source.** GPS, a node's clock started from its RTC's UTC, or a node's clock started from
   its boot, by a node whose RTC held no time.
@@ -229,7 +193,7 @@ counts its seconds from 1970, so ranked by its root alone it took a whole group 
 node, those whose RTCs held the time too, refused records stamped in 2026 as an hour ahead.
 
 - **Taking a timebase.** A node that hears a packet from a timebase ranked above its own adopts
-  it: it sets its clock from the packet's arrival, and takes the sender's root and its hops plus
+  it: it sets its clock from the packet's start, and takes the sender's root and its hops plus
   one. Within its timebase it refines its clock only from packets with fewer hops than its own, so
   two nodes never set their clocks from each other and a hop's error cannot circulate. A node
   timing from its own fix never sets its clock from another's. A node that hears a clock rooted
@@ -241,55 +205,35 @@ node, those whose RTCs held the time too, refused records stamped in 2026 as an 
   - A node whose RTC holds the time refuses a timebase more than 5 minutes from it, and one
     started from a boot. An RTC drifts a couple of seconds a day, so the bound holds for months
     without a fix.
-  - A packet that would move a clock the node already has by more than a slot's guard waits,
-    held, for a second that agrees within the guard: from another sender, or from the same in a
-    later round, within four rounds, past a lone neighbour's floor round. The node listens
-    throughout those four rounds, since on a clock apart from the sender's its windows need not
-    meet the next packet. A replay of two recorded packets still gets through, within the
-    bound where the node has one.
+  - A packet that would move a clock the node already has by more than 250 ms waits, held, for
+    a second that agrees within that: from another sender, or from the same in a later round,
+    within a floor and a round. Outside a sweep, a packet from closer to the root that far off
+    is not even held. A replay of two recorded packets still gets through, within the bound
+    where the node has one.
   - A node's first timebase is no move of a clock it has, so only the bound guards it.
   Replayed an hour on, a packet had set a node's clock an hour back, which the node then kept as
   its own root; in a sweep round it lost the sender for about 340 s.
-- **Arrival timing.** A sender starts its packet at its slot's start, and its id and the header's
-  base timestamp name the slot. The receiver takes the time `DIO0` signals RxDone, subtracts the
-  packet's airtime, and has that slot's start on its own timer. The latencies on both sides, the
-  transmitter's start and the receiver seeing RxDone, would make each hop's clock late by about
-  1.05 ms, so the receiver takes that out (measured on two boards, 2026-10-01). A root then hears
-  the nodes timing from it within about 0.15 ms, which is their crystals' drift since they last
-  heard it.
-- **Sweeps.** A node with no timebase listens continuously for three rounds, 135 s, which spans
-  every node's floor round. So does a node that has heard no packet with fewer hops in its
+- **Arrival timing.** A sender names in its header when its packet starts on its timebase: the
+  whole second, and where in it in 256ths, about 4 ms each. The receiver takes the time `DIO0`
+  signals RxDone, subtracts the packet's airtime and 1.05 ms of latency on both sides, measured
+  on two boards when packets went in slots (2026-10-01), and has that start on its own timer. A
+  sender names the time before it checks the channel and loads the packet, which adds about a
+  millisecond, more when the I2C bus is held.
+- **Sweeps.** A node with no timebase listens for three rounds, 135 s, which spans every node's
+  floor, before it starts its own. So does a node that has heard no packet with fewer hops in its
   timebase for 7 rounds, and if that sweep hears none either, the node becomes its own root,
-  keeping its clock. Every round of a timebase whose index is a multiple of 13, about every
-  10 minutes, is a sweep round (owner, 2026-10-02): every node on it listens throughout, from a
-  guard before the round to a guard before its end, and sends in its own slot. A node not timing
-  from its own fix looks for a timebase ranked above its own, and every node looks for members
-  it does not know of (see "Listening"). Nodes on timebases close to one another sweep in rounds
-  that overlap, and hear each other there: nodes timing from GPS anywhere, and nodes whose clocks
-  started from RTCs a fix once set, which drift apart by a second or two a day. The RTC keeps
-  time while the device is off. 13 rounds is not a whole number of floors, so a sweep round
-  falls on each of the floor's three rounds in turn. A fix ends a node's first sweep at once. A
-  node keeps transmitting in its own slots during a sweep.
+  keeping its clock. A fix ends a node's first sweep at once. A node keeps sending during a
+  sweep once it has a timebase.
 - **Starting one.** A node that hears nobody in its first sweep starts its own timebase from its
   RTC's time, as its root, or from its boot if its RTC holds no time. A node whose clock was
   started from its boot takes UTC from a timebase started from UTC, for its own records' and
   messages' stamps; the RTC is GNSS's alone to set (owner, 2026-10-04). Without one it stamps
-  its records 0, which lose every merge. Groups started this way merge as their sweeps find each other, to the
-  lowest root. A node that gets a fix moves to GPS time, and the nodes timing from it find it again
-  at their next sweep.
-- **Refreshing.** REFRESH DEVICES on the screens starts the same three-round sweep at once
-  (owner, 2026-10-03), and keeps it to its end though a timebase taken up or a fix would end a
-  sweep. It counts the members it heard directly apart from those the group gained while it
-  ran, and a pairing stops it. It brought two boards on clocks 271 s apart together from either
-  side (`docs/logs/lora/refresh-and-recovery-2026-10-03/`).
-- **Notices.** A node that hears a member on a timebase ranked below its own sends it a notice
-  (owner, 2026-10-03): a header alone, flagged, 24 bytes, at the time that member listens for
-  the sender's slot on its own timebase, which the packet's arrival told it. The notice is sent
-  off the sender's slot, so its arrival says nothing of the sender's timebase and nobody times
-  from it. A node that hears a notice from a timebase ranked above its own sweeps for three
-  rounds, and takes the timebase from the sender's ordinary packets. So two parts of a group find
-  each other as soon as either one's sweep hears the other, whichever ranks higher
-  (`docs/logs/lora/sweeps-and-notices-2026-10-03/`).
+  its records 0, which lose every merge. Groups started this way merge to the lowest root as
+  soon as they hear each other. A node that gets a fix moves to GPS time, and the nodes timing
+  from it follow within two of its packets.
+- **Refreshing.** REFRESH DEVICES on the screens counts the members heard directly for three
+  rounds (owner, 2026-10-03), apart from those the group gained while it ran, and a pairing stops
+  it. Every member in reach sends within a floor, so the count is whole.
 - **Ageing.** A node's own GPS time counts as GPS while a fix has refined it within 30 minutes.
   After that the node ranks as its own root, so a node with a live fix takes the group over.
 
@@ -304,77 +248,34 @@ window below its base timestamp.
 
 ### Listening
 
-A node listens, every round, to the slot of every member its group holds and of every neighbour
-(owner, 2026-10-02). A neighbour is a node heard within the last 7 rounds (315 s): long enough to
-span two floor transmissions, so one lost packet does not drop it. A member out of range costs
-its window every round, and is heard again at its first transmission back in range.
+A node in a group receives throughout, so a member in reach is heard at its first packet, within
+a floor. Continuous receive at 9.7 mA is about 233 mAh a day, 47% of the two-day budget read as
+the whole device; [`POWER-INVESTIGATION.md`](POWER-INVESTIGATION.md) sets that against the rest
+of the device and has low-power listening, with CAD and long preambles, as the route if it is
+too much. A node in no group keeps the radio asleep.
 
-A member added elsewhere, which the node does not know of yet, is found in a sweep round (see
-"Keeping time without a fix"), where timebases are found too. Every node on a timebase near the
-node's own sends in a sweep round, so a new member in range is heard at the next one, within
-about 10 minutes. Once heard it is a neighbour, and the node that heard it asks for its member
-record (see "Member records on request").
-The sweep rounds keep the receiver on 7.7% of the time, about 18 mAh a day, and the packet each
-node sends in them costs about 0.5 mAh a day.
+### Why contention
 
-Listening costs the guard and the packet per slot, at 9.7 mA (125 kHz, LNA boost off, its reset
-state):
+The owner moved the mesh to contention on 2026-10-05, after the power investigation of
+2026-10-04 found the radio's share likely small beside the rest of the device. Slots made a
+message wait about half a 45 s round a hop, and placing them took the timebase's millisecond
+timing, the shuffle, windows and guards, sweeps as a way of listening, and notices.
 
-| Slots listened | Receive time | Per day |
-| --- | --- | --- |
-| 8 | 12% | about 28 mAh |
-| 16 | 24% | about 57 mAh |
-| 32 | 49% | about 114 mAh |
+What contention costs:
 
-The table counts a typical packet. As built, a window stays open for the longest packet and
-past the one it was for, about 0.9 s, so 8 slots keep the receiver on about 16% of the time.
-Ending a window at its guard when no packet started, with the radio's single receive and a
-symbol timeout, and at the end of the packet it was for, would bring it below the table.
+- **Power.** Continuous receive, above.
+- **Hidden nodes.** Two nodes that cannot hear each other both find the channel clear and collide
+  at a node between them, and broadcasts have no RTS/CTS. Capture needs the wanted packet 6 dB
+  stronger. The message summaries repair what is lost.
+- **Late sensing.** The modem detects a preamble only a few symbols in, so a check misses a packet
+  that started just before it. Between the check and the transmission the node loads its packet
+  and switches the RF path, an I2C write that a GNSS read can hold up for about 12 ms; a packet
+  that starts meanwhile is not seen. Taking the bus lock before the check closes that gap, and is
+  not built.
 
-### CAD is required at this size
-
-Channel activity detection finds a preamble in a couple of symbols, at 5.6 mA for its processing
-phase. An empty slot would cost that instead of the whole guard window. It pays only when slot phase
-is good to milliseconds, since a ±250 ms guard needs a CAD every few symbols across it. So:
-
-- refine each neighbour's slot phase from the `DIO0` arrival times of its packets
-- run CAD at the predicted preamble time, and open the full window only on a detection
-- use the header's slot-phase field, reserved for this
-
-With eight nodes this was an optimisation. With 32, listening to every slot without it is half the
-day in receive.
-
-CAD shortens discovery only indirectly. How soon a node coming into range is heard is set by how
-often it transmits, not by how often others listen. What CAD does is make listening to every slot,
-every round, cheap. Then the floor alone sets discovery, and a shorter floor buys it: a floor of
-every round costs each node about one 92 ms packet a round, about 4 mAh a day at 90 mA, plus its
-neighbours' receive. Two things are unmeasured: what CAD costs across a slot whose phase is known
-only to the ±250 ms guard, which a node never heard has, and how closely phase refined against GPS
-agrees between nodes that have never heard each other. Decide the floor once both are measured.
-
-Two levers found on 2026-10-03, for when this step comes:
-
-- **A guard per neighbour.** A root hears the nodes timing from it within about 0.15 ms of
-  where it expects them (see "Keeping time without a fix"), and `late_us` measures every
-  arrival against the node's clock, two nodes timing from their own fixes included. Sized from that, a heard neighbour's window
-  shrinks to milliseconds without CAD, which is left for the windows that stay wide: members not
-  heard yet, and sweeps. The receive time is read when the radio task runs after `DIO0`, not at
-  its edge, which a window of milliseconds has to account for.
-- **Sweeps.** They then cost the most: 18 mAh a day, against about 14 for listening to three
-  members as built. A member added elsewhere most likely has the lowest id free in this node's
-  table, so listening to that id's slot finds it at its next floor round, and nodes timing from
-  a fix could sweep less often.
-
-### Why not contention
-
-Contention needs continuous receive, about 9.7 mA or 233 mAh a day, or low-power listening, where
-senders stretch the preamble and receivers wake briefly with CAD, paying for it in airtime. It also
-brings hidden nodes: A and C both find the channel clear and collide at B. Unique slots rule that
-out inside the group.
-
-Pairing is the exception and stays contention-based, because a node being paired has no id and
-therefore no slot. The two devices are side by side with a user watching, so the stronger signal
-wins a collision and a lost exchange costs a retry. The duty-cycle option needs no channel check.
+Pairing sends without checking the channel: the two devices are side by side with a user
+watching, so the stronger signal wins a collision and a lost exchange costs a retry. The
+duty-cycle option needs no channel check.
 
 ## Packet
 
@@ -385,10 +286,10 @@ synthetic IV (16) | ciphertext: header (8) + records
 AES-SIV (RFC 5297, AES-CMAC-SIV with a 256-bit key) under the group key, with no associated data.
 The synthetic IV is computed from the key and the whole plaintext, and is both the IV and the
 authentication tag, so the packet carries no nonce and nothing in the clear. A sender id in the
-clear would tell a direction-finding listener which node transmitted. Shuffled slots (see
-"Medium access") keep the slot from telling it, to a listener with GPS time. SIV's
-determinism reveals only that two packets are identical, and a packet's timestamp keeps that
-from happening. Sending needs no random numbers, so a faulty random source leaks nothing. The
+clear would tell a direction-finding listener which node transmitted, and on contention a
+packet's time says nothing of its sender either. SIV's determinism reveals only that two packets
+are identical, and a packet's timestamp keeps that from happening. Sealing needs no random
+numbers, so a faulty random source leaks nothing. The
 owner chose it over ChaCha20-Poly1305 with a random 12-byte nonce, which cost 12 bytes a packet
 more, about 18 ms of airtime (2026-10-01).
 
@@ -396,14 +297,14 @@ Header, 8 bytes, encrypted:
 
 | Field | Bits |
 | --- | --- |
-| version | 4 |
+| version, 2 since contention | 4 |
 | sender id | 5 |
 | timebase source: 0 GPS, 1 a node's clock | 1 |
 | timebase root, for a node's clock | 5 |
 | hops from the timebase's root | 5 |
-| flags: bit 0 a notice, bit 1 a node's clock started from its boot, the rest reserved | 4 |
-| base timestamp, timebase seconds | 32 |
-| slot phase, reserved for CAD | 8 |
+| flags: bit 1 a node's clock started from its boot, the rest reserved (bit 0 was a notice) | 4 |
+| base timestamp: the second the packet starts in, timebase seconds | 32 |
+| phase: where in that second it starts, in 256ths | 8 |
 
 After the header comes a list of records, each a type byte, a length byte and a body. A node skips
 any record type it does not know, so a record type can be added without a wire break. Changing the
@@ -474,16 +375,17 @@ Owner, 2026-10-03. It replaced a rotation of one member record in every packet
   no positions drops from 85 bytes to 36, and from 149 ms of airtime to 77. A full one has room
   for about seven more entries.
 - **Request.** A request record holds the set of ids whose records the sender wants, and rides
-  in the sender's own next packet. Unlike a notice's target, its neighbours already listen to
-  its slot, and a new record type needs no header change. A node asks for one id when it hears
-  a sender it holds no record for. It asks for the whole table when a neighbour's digest has
-  differed from its own in two of that neighbour's packets running. Waiting for the second
-  gives an ordinary change, which goes out in the next slot, time to arrive.
+  in the sender's own next packet, which it makes due at once. A new record type needs no
+  header change. A node asks for one id when it hears a sender it holds no record for. It asks
+  for the whole table when a neighbour's digest has differed from its own in two of that
+  neighbour's packets running. Waiting for the second gives an ordinary change, which goes out
+  at once, time to arrive.
 - **Answer.** A node that hears a request marks each record asked for that it holds as not yet
   sent, unless its digest matches the requester's. The cancel rule marks a record sent once a
   covering packet carried it, so usually one neighbour answers. Records go up to three a packet,
-  ahead of the positions but leaving room for the sender's own entry. A whole table of 32 is
-  about 11 packets, one a round, about 8 minutes.
+  ahead of the positions but leaving room for the sender's own entry; signed, about one fits.
+  A whole table of 32 is about 32 packets, each once the rest after the last allows, about a
+  minute and a half.
 - **What it covers.** Everything the rotation did: a member added elsewhere, a member whose
   last acknowledgement the adding device lost, a rename missed out of range, and the duplicate
   id two partitions can hand out (see "Identity and storage").
@@ -511,8 +413,9 @@ key, and a removal.
 
 - **Body.** Text is printable ASCII, the fonts' characters, up to 160 of them. A private message
   that long fills one packet with the sender's own entry and the records every packet carries.
-- **Flooding.** A node relays each message new to it once, in its next slot, oldest first. It
-  counts as sent once a covering packet carried it, as an entry does (the cancel rule).
+- **Flooding.** A node relays each message new to it once, as soon as the channel lets it,
+  oldest first. It counts as sent once a covering packet carried it, as an entry does (the
+  cancel rule).
 - **Store and forward.** Every node holds every message for the message horizon, 24 hours
   from its timestamp, private ones included, and passes on any a neighbour lacks. The origin
   does not repeat it. A message reaches a member who comes back into range of anyone holding it
@@ -529,8 +432,8 @@ key, and a removal.
   gap in the numbers alone says nothing. A neighbour that hears a summary marks to be sent every
   message it holds outside those ranges or among those lacked, unless its digest matches the
   summary's sender's. A summary takes at most 120 bytes; one too short for every origin says
-  which it covers, and the next starts where it stopped. It is made before the slot it goes
-  in, since with a full store that takes milliseconds.
+  which it covers, and the next starts where it stopped. It is made before the backoff, since
+  with a full store that takes milliseconds.
 - **Acknowledgement.** The destination of a private message answers with an acknowledgement,
   itself a private message, which travels and is held the same way. Acknowledgements and
   messages to the whole group are not acknowledged.
@@ -539,10 +442,11 @@ key, and a removal.
   store holds the newest 256; a node holding that many takes no message older than all of them,
   so every node keeps the same ones. The sequence number is kept in flash (see "Private
   messages").
-- **Latency.** Each hop waits for the relaying node's slot, 1.4 s to one round.
-- **Capacity.** Every node carries every message once, so the group's message throughput is what fits
-  in one node's packet beside its positions, whatever the group's size. Beside an eight-entry digest
-  and the neighbours record, that is about 140 bytes of message body a round, or about 11 kB an hour.
+- **Latency.** A hop takes the backoff and the airtime, about 0.3 s in the simulator (see
+  "Medium access").
+- **Capacity.** Every node carries every message once, so each message costs the channel a
+  packet's room for every node that relays it. A node's rest holds it under 10% of the air; the
+  channel, shared by every relay in reach, is the bound. It is unmeasured.
 - **Pruning, later.** Gossiping every node's neighbour set gives every node the group's graph. A node
   can then skip relaying a direct message when it is not on a shortest path to the destination, and
   a group message when the sender already reaches all its neighbours. That is where routing starts
@@ -596,9 +500,10 @@ Owner, 2026-10-03, except where it says otherwise.
   a private message, a key message, with its generation, one past the current key's, the round
   the group switches at, counted on its timebase, the id and SHA-256 fingerprint of the
   member removed, and the fingerprint of the key it replaces (owner, 2026-10-04). The remover
-  signs each (see "Signatures") and sends one a packet, so the
-  switch is as many rounds away as its key messages and the removal message take, and four more:
-  the round it is in, and three for hops. That is about 8 minutes for 8 members, 27 for 32.
+  signs each (see "Signatures") and sends one a packet. The switch is a round away for each of
+  its key messages and the removal message, as slots sent them, and four more: the round it is
+  in, and three for hops. That is about 8 minutes for 8 members, 27 for 32. On contention they
+  go out in seconds (see "Open").
   Until then the removed device still reads everything. The remover reserves every sequence
   number its key messages need before it starts, and a remover that restarts before they have
   gone sends them again. Adding a device is refused while a removal is under way, since it would
@@ -609,26 +514,24 @@ Owner, 2026-10-03, except where it says otherwise.
   unread, and tries it again once it has switched: a member that missed several switches takes
   them in order, and one still on a key a rival won over waits for the winner (owner,
   2026-10-04).
-- **The switch.** Before it nodes send under the old key, and from it under the new one, in the
-  order the new key gives (see "Shuffled slots"). Every node tries both keys on receive, but
+- **The switch.** Before it nodes send under the old key, and from it under the new one. Every
+  node tries both keys on receive, but
   after the switch merges nothing that arrives under the old key but the key messages of its
   own generation, rivals of its key. Anything else in such a packet only shows that its sender
-  missed the change. Before its own switch a node takes nothing from a packet under
-  the new key either: it still sends under the old key, which the removed device reads, and
-  its slot order is still the old key's, so the packet's timing says nothing about its clock.
-  A node holding the key message of the generation after the one a member is on sends it
-  again, in a packet under that member's key, in its own slot of that key's order in the next
-  sweep round. Every member listens throughout a sweep round, whichever key it is on, and one
-  that switched to a rival key listens in that order in no other (owner, 2026-10-04). A member
+  missed the change. Before its own switch a node takes nothing from a packet under the new
+  key either but its sender's clock, where that outranks its own (see "Keeping time without a
+  fix"): it still sends under the old key, which the removed device reads. A node holding the
+  key message of the generation after the one a member is on sends it again, in a packet under
+  that member's key, as soon as it hears that member under it. A member
   on a key a rival won over is sent the winner's key message instead, of the same generation. The removed device can
   see that packet but cannot open the key inside. Key messages are kept for this past the
   message horizon while the old key is, but are left out of the digest after it. A member that
-  missed the switch sends in the old order; nodes on the new key hear it in a sweep round,
-  where they listen throughout, within about 10 minutes. A node sends a member its key
+  missed the switch goes on sending under the old key, and nodes on the new key hear it within
+  its floor. A node sends a member its key
   message this way again only after a gap of sweep rounds that doubles with each send, up to
   64 sweep rounds, about ten hours, and never stops while it keeps the old key (owner,
   2026-10-04): one that declined never takes it, and is not acknowledged, so that it would
-  otherwise draw one every sweep round. A node sent it three times at most before, so that
+  otherwise draw one each time it is heard. A node sent it three times at most before, so that
   anyone replaying one packet the member sent under the old key, which needs no key, spent
   every send before the member was back. A packet under an old key whose base timestamp is
   more than 5 minutes from the node's clock sends nothing at all, its key message or the
@@ -645,14 +548,13 @@ Owner, 2026-10-03, except where it says otherwise.
   member's id, and every node stopped waiting for it and dropped the key its catch-up needed. A
   node keeps the four newest such keys. A member can be away for any length of time and come
   back without pairing again. While some are not heard, a node sends a header under the old key
-  in its slot of each sweep round, so parts of the group that switched to different keys still
-  hear each other.
+  in each sweep round, so parts of the group that switched to different keys still hear each
+  other.
 - **The removed device** is sent a private message saying it was removed and by whom. Its
   screen shows that, and it does not leave the group by itself, so a stolen device that removes
   everyone else cannot take them out of their group. The remover sends it only after the
-  switch, under the old key, at its own slot in that key's order in a sweep round, where the
-  removed device still listens, and again when it hears the device under the old key, three
-  times in all.
+  switch, at once and under the old key, which the removed device still holds, and again when
+  it hears the device under the old key, three times in all.
   Told before the switch, the device could answer by removing its remover, and the two keys
   would be rivals, and it would win with a lower id than its remover's.
 - **Its record.** At the switch every node replaces the removed member's record with a gone
@@ -837,7 +739,7 @@ transcript. A key whose shared secret is not contributory ends the pairing.
   under that key shows the joining device stored the group, and the founding device then stores
   it, and takes it up only once the write lands. A failed write is tried again every 10 s while
   the wait lasts. The joining device is heard within about 3½ minutes: it waits 30 s for
-  done, sweeps for three rounds, then sends in its next slot, since it hears nobody. Starting
+  done, sweeps for three rounds, then starts its own timebase and sends at once. Starting
   another pairing or leaving ends the wait.
 - **Capacity.** A full group refuses to add before it searches, a returning device included (design
   hand-off). Below 32, a returning device keeps its id.
@@ -857,8 +759,8 @@ other takes the lowest id free in its table and announces it with a member recor
 nothing.
 
 An id is freed when its member leaves or is removed (see "Removing a member"). A device that
-leaves sends a gone record for itself in its next two slots, within about three rounds, from
-memory, and then forgets the key; the others replace its record with the gone record and free
+leaves sends a gone record for itself in two packets 10 s apart, from memory, and then forgets
+the key; the others replace its record with the gone record and free
 its id, with no new key (owner, 2026-10-03). A pairing started meanwhile ends that, and a
 device with no timebase has nobody to tell; the others can still remove it. A device that may
 still hold the key is removed instead. A gone record wins a merge against the same device's
@@ -914,10 +816,10 @@ other sequence number.
 The I2C bus is a mutex that excludes across cores. It was a `NoopRawMutex`, which would have
 failed silently if someone spawned a user on core 1. A task owning the bus was considered and
 rejected: it only serialises access, as the mutex does, with a priority layer on top. Priority is
-not expected to matter, and a priority-aware mutex adds it if it does. Bus contention is not a
-timing risk for slots: the TCA9554 write is about 80 µs and entirely predictable, and the lock can
-be taken before the decision to transmit. The longest transaction another user holds it for is a
-GNSS read of about 12 ms. Holding it across the packet is unnecessary, since the switch write before
+not expected to matter, and a priority-aware mutex adds it if it does. The TCA9554 write is about
+80 µs, but the longest transaction another user holds the bus for is a GNSS read of about 12 ms,
+and the write to transmit sits between the channel check and the transmission (see "Why
+contention"). Holding the bus across the packet is unnecessary, since the switch write before
 and the restore after are each short with the bus free between them.
 
 ## Build order
@@ -932,7 +834,7 @@ and the restore after are each short with the bus free between them.
 4. The cancel rule and neighbour-only listening. Built as listening to members and neighbours
    with periodic sweeps (see "Listening"), the cancel rule entry by entry (below), and a changed
    member record sent in the node's next slot.
-5. CAD with slot phase refined from arrival times.
+5. CAD with slot phase refined from arrival times. Dropped with the slots (2026-10-05).
 6. Messages, then private messages.
 7. Pruning relays from the gossiped graph.
 
@@ -948,7 +850,8 @@ What is left goes in this order (owner, 2026-10-03):
   mesh's side goes first, driven over the USB JTAG as pairing's was. Its design was settled
   with the owner on 2026-10-03 ("Messages", "Removing a member", "Identity and storage"). The
   mesh's side is built and ran on the two boards (`docs/logs/lora/step6-2026-10-03/`).
-- Step 5, then step 7.
+- Step 5, then step 7. Contention replaced the slots after step 6 (owner, 2026-10-05), which
+  leaves step 7.
 
 ## RTC calibration
 
@@ -966,14 +869,9 @@ protocol does not need this.
 
 ## Open
 
-- Two parts of a group whose clocks share no origin, such as RTCs that hold no time, sweep in
-  rounds that need not overlap. They find each other when a sweep round in either meets a
-  packet of the other, since a notice brings the lower one over: up to about 30 minutes for
-  idle nodes (`docs/logs/lora/founding-and-listening-2026-10-02/`). A node that hears nobody
-  sends every round, which leaves it one sweep.
 - A replay of two recorded packets still moves a clock, within 5 minutes where the node's RTC
-  holds the time and anywhere where it does not ("Replays" above). A replayed notice forces a
-  three-round sweep, and a replayed packet a four-round one while it is held; neither moves the
+  holds the time and anywhere where it does not ("Replays" above). A replayed packet held for a
+  second makes the node treat its clock as sweeping for a floor and a round; it does not move the
   clock. Jamming does more harm more easily.
 - A member being removed can still see that a removal is under way before the switch: key
   messages are marked as such, and none comes to it. Firmware changed to act on that can
@@ -987,21 +885,24 @@ protocol does not need this.
   back past a switch it made, which would undo the removals after it, as declining after a
   switch does. The simulator's `parts_apart_through_two_removals_settle_once_they_meet`,
   ignored for now, stages it.
-- For step 5: the power budget is two days on a cell of about 1,000 mAh (owner, 2026-10-03),
-  which sets the floor, the sweeps and how far CAD has to go. CAD's two measurements need both
-  boards with a GPS fix at once, which will not be possible for a while, so step 5 waits
-  behind the simulator and the next design round (owner, 2026-10-03).
-- A shorter floor once CAD is measured (see "CAD is required at this size").
-- Measuring GNSS time sync (see "Time sync").
-- Contention in place of slots (owner, 2026-10-04), for message latency and to drop the slot
-  timing. It waits on measuring what the rest of the device draws
+- A removal's switch still allows a round for each key message, as slots sent them. On
+  contention they go in seconds, so the switch could come within minutes, which shortens the
+  time the removed device still reads everything.
+- Taking the I2C bus lock before the channel check, so that a GNSS read cannot hold the
+  transmission back past it (see "Why contention").
+- Contention has run only in the simulator. On the boards: whether the modem's status sees a
+  packet under way as the simulator assumes, how late the transmission starts after the check,
+  and whether the header's 256ths keep two boards' clocks as close as slots did.
+- Continuous receive's power against the budget, two days on a cell of about 1,000 mAh (owner,
+  2026-10-03), which waits on measuring what the rest of the device draws
   ([`POWER-INVESTIGATION.md`](POWER-INVESTIGATION.md)).
+- Measuring GNSS time sync (see "Time sync").
 
 ## Deferred
 
-- Tuning for range, the spreading factor and with it the slot length, once the protocol
-  carries everything (owner, 2026-10-03). Range has not been measured. SF8 fits today's slot:
-  a 255-byte packet takes about 707 ms, which with the 500 ms guard is inside 1,406 ms.
+- Tuning for range, the spreading factor, once the protocol carries everything (owner,
+  2026-10-03). Range has not been measured. At SF8 a 255-byte packet takes about 707 ms, which
+  doubles the channel each packet holds and the rest after it.
 - Moving a running group to the fallback band.
 - Messages longer than one packet.
 - Flash encryption, as above.

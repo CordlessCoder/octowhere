@@ -243,12 +243,14 @@ until the feature set is complete, because profiling an incomplete firmware pric
   removal took, fixed in `d6b9389` (`docs/logs/lora/catch-up-2026-10-03/`). What is left of
   step 6 is its screens, which need a design round: sending and reading messages, a removal's
   confirmation, and removing a member.
-  Then step 5, CAD, which needs the slot timing it depends on measured first ("Time sync"
-  there) and both boards with a GPS fix at once, which will not be possible for a while; its
-  power budget is two days on about 1,000 mAh (owner, 2026-10-03; its "Open"). Then step 7.
-- Measure what the device draws once the owner's PPK2 is to hand (owner, 2026-10-04). It settles
-  whether the mesh keeps its slots or moves to contention for message latency, and whether the
-  firmware light-sleeps with the screen dark. The findings, the esp-hal wake-lock gap the owner
+  Contention replaced the slots on 2026-10-05 (owner; the protocol's "Medium access"), which
+  drops step 5, CAD; the slots are on the `tdma` branch. It has run only in the simulator:
+  run it on the two boards, with what the protocol's "Open" lists to check there. Then step 7.
+  The message review screen still says "Send waits for your radio slot.", the 2026-10-04
+  hand-off's copy, which is no longer true; it needs new copy from the owner or a design round.
+- Measure what the device draws once the owner's PPK2 is to hand (owner, 2026-10-04). It says
+  whether continuous receive fits the budget, now that the mesh contends for the channel, and
+  whether the firmware light-sleeps with the screen dark. The findings, the esp-hal wake-lock gap the owner
   will PR, and the plan are in [`POWER-INVESTIGATION.md`](POWER-INVESTIGATION.md).
 - Close what the 2026-10-03 security review of the mesh left open. It found seven defects,
   confirmed by host tests, and the fixes since are in the history from `0999a8a` to `6750e8d`.
