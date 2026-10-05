@@ -105,7 +105,8 @@ initialization or peripheral mappings.
   brightness, the screen timeout, and whether the screen rests on the always-on face. The
   mesh's state sits beside them: this device's Ed25519 seed, which its keys come from, and name, the end of its block of
   message sequence numbers, and its group's key and its generation, id, members and gone
-  members, and removals. Clearing the settings leaves the mesh's state (owner).
+  members, and removals, and the key messages kept for members that missed a switch. Clearing
+  the settings leaves the mesh's state (owner).
   `firmware/partitions.csv` is the flash layout, and the cargo runner flashes it.
 - `tools/compass-texture.py` records the design's compass fields into
   `crates/octowhere-ui/src/ui/compass_texture.rs`, from the design's own generator, and checks
@@ -268,8 +269,9 @@ and a feature names one. The check rebuilds a temporary manifest with a stable c
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 1,840,576 bytes, 11.75% of the 15,663,104-byte app partition that
-`partitions.csv` gives it (the plain build at `def9052`; it was 1,840,544 at `da358ab`,
+The image is currently 1,846,208 bytes, 11.79% of the 15,663,104-byte app partition that
+`partitions.csv` gives it (the plain build at `e1b7176`; it was 1,840,576 at `def9052`,
+1,840,544 at `da358ab`,
 1,839,344 at `dca8b71`, before
 the scan line's read buffer, 1,845,216 at `4abb8d6`,
 1,847,216 after the mesh clean-up, `3a9d42e`, 1,846,768
@@ -670,7 +672,8 @@ errata workaround, are in [`docs/hardware-notes.md`](docs/hardware-notes.md).
   and removals (2026-10-04) the radio task's poll takes 14,576 bytes and `Stage::advance`
   3,200, and core 0's stack is 107,068 bytes; after that day's security fixes (`03cc818`) the
   radio task's poll takes 15,824, and after the mesh clean-up (`3a9d42e`) 16,384, with
-  `async_main`'s 15,840. The clean-up took a pairing's copy of the group off its receive path,
+  `async_main`'s 15,840; keeping key messages in flash (`e1b7176`) took them to 14,864 and
+  16,096. The clean-up took a pairing's copy of the group off its receive path,
   so `Pairing::start_transfer` went from 5,344 to 320. This lists the largest frames, from the
   root:
 

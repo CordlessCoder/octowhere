@@ -36,3 +36,29 @@ What the run showed:
   30 s.
 - Core 0's stack: 42,892 of 105,068 bytes used after the start-up, and 52,472 at most through
   the pairing with the group screens drawn, the messages and the removal, on both boards.
+
+## The fixes, the same afternoon
+
+Both boards then ran `e1b7176`, with the same inject features, which keeps the key messages of
+members still waited for in flash (`14fd37f` before it stops the adder waiting for a member it
+pairs back in). 1C:1C was again the GPS root, with its RTC set; in the second run 1A:38's RTC
+was set too.
+
+| Log | What it holds |
+| --- | --- |
+| `kept-first-1a38.log`, `kept-first-1c1c.log` | A first run in which neither board heard the other in 20 minutes |
+| `kept-1a38-before-restart.log` | 1A:38 removing a phantom while 1C:1C was deaf, storing 1C:1C's key message |
+| `kept-1a38-after-restart.log` | 1A:38 after its restart: the key message back from flash, the catch-up, then the pairing |
+| `kept-1c1c.log` | 1C:1C through both: deaf, caught up, then leaving and paired back in |
+
+- `tools/pair-inject.py deaf 255`, renewed every 200 s, kept 1C:1C from hearing the removal.
+  1A:38 switched to generation 15, and 117 s later stored the key message 1C:1C needed, 154
+  bytes in 24 ms. Restarted, it read it back from flash, heard 1C:1C on the old key in a
+  sweep, and sent it. 1C:1C switched to 15, and 1A:38 dropped the old key and deleted the
+  stored message.
+- 1C:1C missed the switch to 16 the same way, then left, with 1A:38 deaf too so that the
+  gone record would not end its wait. Paired back in, 1C:1C was a member again, and 1A:38
+  dropped the old key 5 s after the pairing ended. Before `14fd37f` it kept it for a day.
+- In the first run neither board heard the other in 20 minutes, though 1A:38 swept twice. With
+  this morning's build on both, 1C:1C heard 1A:38 within 7 minutes; with `e1b7176` again and
+  RTC time on both, they heard each other within 8. Nothing in the logs explains the first run.

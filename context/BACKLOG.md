@@ -273,28 +273,17 @@ until the feature set is complete, because profiling an incomplete firmware pric
   [`ui-firmware-review/README.md`](ui-firmware-review/README.md): 112 findings, with the ones to
   take first. Its eight bugs are fixed (2026-10-04), and the rest state machine, the giant-glyph
   bound and most of the dead code (2026-10-05); the README lists what is left of those.
-- Decide how a member a restart has stranded gets its key (2026-10-05, found on the boards).
-  Key messages live in the message store, in PSRAM, and the protocol counts on neighbours to
-  give them back to a remover that restarted ("What is kept across a restart"). In a group of
-  two the only neighbour is the member waiting for the key, so it never switches: 1A:38 heard
-  1C:1C on the old key in a sweep and had no key message for it
-  (`docs/logs/lora/board-checks-2026-10-05/`). The same holds wherever every node that held
-  the message has restarted. The remover still has the new key and the member's public key, so
-  it could make the message again; or the messages for members still waited for could be kept
-  in flash.
-- Have a member back by pairing say it is on the group's key (2026-10-05, found on the boards).
-  A member sends its signed word that it is on the key only after a switch or a restart, so the
-  adder of a member that left and came back waits for it on the old key, and keeps sending
-  under that key in sweep rounds, until the member restarts or a day passes. Either the joining
-  device starts sending the word once it has joined, or the adder stops waiting for a member
-  it has just handed the key.
 - The mesh and node clean-up from the 2026-10-03 code-quality review is done (2026-10-05,
   `0a25c3d` to `3a9d42e`); `context/MESH-CLEANUP-PLAN.md` laid it out, and git has it at
   `55167be`. With the 2026-10-04 security fixes it has run on both boards: they restored their
   groups from flash, heard each other, switched together on two phantoms' removals and dropped
   the old key, and one rejoined after a restart; core 0's stack peaked at 52,472 of 105,068
-  bytes (`docs/logs/lora/board-checks-2026-10-05/`). Left for whenever the code is touched
-  anyway: `Group` mixes replicated data with send bookkeeping;
+  bytes (`docs/logs/lora/board-checks-2026-10-05/`). The two gaps that run found are closed, on
+  the owner's choices and run on both boards the same day: a node keeps the key messages of
+  members still waited for in flash, so a remover that restarts can still catch them up
+  (`e1b7176`), and an adder stops waiting for a member it pairs back in (`14fd37f`). Once, the
+  boards did not hear each other for 20 minutes, which nothing in the logs explains; watch for
+  it. Left for whenever the code is touched anyway: `Group` mixes replicated data with send bookkeeping;
   positional bools (`Message::private` takes eight arguments) and `Clock`'s `(i64, i64)` tuples;
   mixed byte orders (do not churn; pick one for new formats); `seal`/`open` and
   `seal_bound`/`open_bound` could be one pair.
