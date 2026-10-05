@@ -43,7 +43,7 @@ use embedded_graphics::prelude::*;
 use embedded_hal_async::i2c::I2c as _;
 use embedded_hal_bus::spi::ExclusiveDevice;
 use esp_hal::{
-    dma_tx_buffer,
+    dma_rx_buffer, dma_tx_buffer,
     gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull},
     i2c::master::I2c,
     peripherals, spi,
@@ -60,7 +60,7 @@ use octowhere::fontdue;
 use octowhere::{
     board,
     chrome::{self, Dirty, FB},
-    drivers::{co5300::Co5300Display, framebuffer::Flush as _, qspi_bus::QspiBus},
+    drivers::{Display, framebuffer::Flush as _, qspi_bus::QspiBus},
     gnss_time::SecondEstimator,
     motion::{
         compass::{AxisMap, Calibration, CalibrationEvent, CompassView, Holds, Vec3},
@@ -605,6 +605,7 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
         .with_mode(spi::Mode::_0);
 
     let mut dma_tx_command = dma_tx_buffer!(64).unwrap();
+    let dma_rx_reply = dma_rx_buffer!(4).unwrap();
     let mut dma_tx = dma_tx_buffer!(4095 * 2).unwrap();
     let mut dma_tx_swap = dma_tx_buffer!(4095 * 2).unwrap();
     let dma_burst = esp_hal::dma::BurstConfig {
@@ -628,10 +629,11 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
         .with_sio3(gpio7)
         .with_dma(dma_ch0)
         .into_async();
-    let spi = QspiBus::new(spi, dma_tx_command, cs);
-    let mut display = Co5300Display::new(spi, reset, te, dma_tx, dma_tx_swap)
-        .await
-        .expect("display init failed");
+    let bus = QspiBus::new(spi, dma_tx_command, dma_rx_reply, dma_tx, dma_tx_swap, cs);
+    let mut display: Display<'_, chrome::Color> =
+        Display::new(bus, reset, te, embassy_time::Delay, board::DISPLAY)
+            .await
+            .expect("display init failed");
     info!("[DISPLAY] OK");
     #[cfg(feature = "flush-shift-bench")]
     {
@@ -672,20 +674,20 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
                 first_flush = false;
             } else {
                 match select(
-                    display.wait_for_vsync(),
+                    display.wait_for_te(),
                     // A wait that starts just after a pulse lasts a whole frame.
                     Timer::after(Duration::from_millis(40)),
                 )
                 .await
                 {
-                    Either::First(()) => {}
+                    Either::First(_) => {}
                     Either::Second(()) => warn!("[DISPLAY] te_timeout"),
                 }
             }
             timings.vsync_wait = start.elapsed();
         }
         if let Some(level) = brightness.take()
-            && display.set_brightness(level).is_err()
+            && display.set_brightness(level).await.is_err()
         {
             warn!("[DISPLAY] brightness command failed");
         }

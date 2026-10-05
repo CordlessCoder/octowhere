@@ -48,6 +48,7 @@ ekv = { git = "https://github.com/embassy-rs/ekv", rev = "a0e2c7e", features = [
 octowhere-mesh = { path = "../crates/octowhere-mesh", features = ["defmt"] }
 octowhere-node = { path = "../crates/octowhere-node", features = ["defmt", "run"] }
 octowhere-peripherals = { path = "../crates/octowhere-peripherals", features = ["defmt"] }
+co5300 = { version = "0.1.0", path = "../crates/co5300" }
 
 [features]
 default = []

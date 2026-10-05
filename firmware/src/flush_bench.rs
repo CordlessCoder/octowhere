@@ -9,10 +9,7 @@ use embedded_graphics::primitives::Rectangle;
 use octowhere::{
     board,
     chrome::{Color, FB},
-    drivers::{
-        co5300::{Co5300Display, DisplayError},
-        framebuffer::Flush as _,
-    },
+    drivers::{Display, framebuffer::Flush as _},
     ui::shift::POSITIONS,
 };
 
@@ -47,7 +44,7 @@ fn report(case: &str, region: &str, shift: Point, samples: &mut [u32; RUNS]) {
     );
 }
 
-pub async fn run(display: &mut Co5300Display<'_, Color>, fb: &mut FB) -> ! {
+pub async fn run(display: &mut Display<'_, Color>, fb: &mut FB) -> ! {
     // Content does not change what a copy costs, but fill it so the rows are not all zero.
     for (i, byte) in fb.buffer_mut().iter_mut().enumerate() {
         *byte = (i * 7 + i / 932) as u8;
@@ -88,9 +85,9 @@ pub async fn run(display: &mut Co5300Display<'_, Color>, fb: &mut FB) -> ! {
 /// The region flush as it was before pixel shift, from `f5bceb3`.
 async fn flush_region_before(
     fb: &mut FB,
-    display: &mut Co5300Display<'_, Color>,
+    display: &mut Display<'_, Color>,
     area: Rectangle,
-) -> Result<(), DisplayError> {
+) -> Result<(), esp_hal::spi::Error> {
     const WIDTH: usize = board::LCD_WIDTH as usize;
     const HEIGHT: usize = board::LCD_HEIGHT as usize;
     const BPP: usize = 2;
@@ -120,8 +117,10 @@ async fn flush_region_before(
     }
     let flush_w = (x1 - x0).max(2).min(WIDTH - x0);
     let flush_h = (y1 - y0).max(2).min(HEIGHT - y0);
-    display.set_addr_window(x0 as u16, y0 as u16, flush_w as u16, flush_h as u16)?;
-    let mut stream = display.begin_stream_async().await?;
+    display
+        .set_window(x0 as u16, y0 as u16, flush_w as u16, flush_h as u16)
+        .await?;
+    let mut stream = display.pixels().await?;
     let mut rows = fb
         .buffer_mut()
         .chunks_exact_mut(WIDTH * BPP)
@@ -132,7 +131,7 @@ async fn flush_region_before(
     let mut keep_going = true;
     while keep_going {
         stream
-            .flush_if_needed_and_get_buf_async(|mut buf| {
+            .fill(|mut buf| {
                 let mut new = 0;
                 loop {
                     let chunk = (buf.len() / BPP * BPP).min(row.len());
@@ -155,6 +154,5 @@ async fn flush_region_before(
             })
             .await?;
     }
-    stream.flush_buf_async(|_| 0).await?;
-    stream.end()
+    stream.finish().await
 }

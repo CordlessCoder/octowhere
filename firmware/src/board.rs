@@ -7,12 +7,22 @@
 // An I2C address lives with whoever passes it. Drivers in `src/peripherals/` own theirs privately;
 // the ones below are here because an external crate takes the address as an argument.
 
-use embedded_hal::delay::DelayNs;
-
 // Display, CO5300
 pub use octowhere_ui::board::{LCD_HEIGHT, LCD_WIDTH};
-pub const LCD_COL_OFFSET: u16 = 6;
-pub const LCD_ROW_OFFSET: u16 = 0;
+/// The panel as its controller drives it.
+///
+/// TE pulses at scan line 150. A full flush takes about as long as the panel's scan, so one
+/// started at the blanking races the scan and tears wherever it falls behind. Starting this far
+/// behind the scan keeps the whole write on the far side of it: the lead must exceed the scan
+/// time less the shortest full flush, and the flush must end before the next scan reaches the
+/// rows it is writing.
+pub const DISPLAY: co5300::Config = co5300::Config {
+    width: LCD_WIDTH,
+    height: LCD_HEIGHT,
+    column_offset: 6,
+    row_offset: 0,
+    te_line: 150,
+};
 
 // I2C
 pub const I2C_FREQ_HZ: u32 = 400_000;
@@ -31,23 +41,3 @@ pub const EXIO_GPS_RESET: u8 = 7;
 
 // IMU, QMI8658 through `ph-qmi8658`
 pub const IMU_I2C_ADDR: u8 = 0x6B;
-
-#[inline]
-pub fn delay_ms(ms: u32) {
-    esp_hal::delay::Delay::new().delay_ms(ms);
-}
-
-#[inline]
-pub fn delay_us(us: u32) {
-    esp_hal::delay::Delay::new().delay_us(us);
-}
-
-#[inline]
-pub fn delay_ms_async(ms: u32) -> impl Future<Output = ()> {
-    embassy_time::Timer::after_millis(ms as u64)
-}
-
-#[inline]
-pub fn delay_us_async(us: u32) -> impl Future<Output = ()> {
-    embassy_time::Timer::after_micros(us as u64)
-}

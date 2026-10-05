@@ -3,70 +3,69 @@
 use embedded_graphics_core::geometry::Point;
 use embedded_graphics_core::primitives::Rectangle;
 
-use crate::drivers::co5300::{Co5300ColorMode, Co5300Display, DisplayError};
-use crate::framebuffer::Framebuffer;
+use co5300::ColorMode;
+
+use crate::drivers::Display;
+use crate::framebuffer::{Framebuffer, PixelFormat};
+
+type Error = esp_hal::spi::Error;
 
 /// Sends a framebuffer, or a region of it, to the panel.
 #[expect(
     async_fn_in_trait,
     reason = "only the display core calls it, from one executor"
 )]
-pub trait Flush<C: Co5300ColorMode>
+pub trait Flush<C: ColorMode + PixelFormat>
 where
     C::Bytes: AsRef<[u8]>,
 {
     /// Flush the entire framebuffer to the display via DMA QSPI.
     async fn flush(
         &mut self,
-        display: &mut Co5300Display<'_, C>,
+        display: &mut Display<'_, C>,
         debug_damage: bool,
-    ) -> Result<(), DisplayError>;
-
-    /// Flush the entire framebuffer through the blocking pixel-stream path.
-    fn flush_blocking(
-        &mut self,
-        display: &mut Co5300Display<'_, C>,
-        debug_damage: bool,
-    ) -> Result<(), DisplayError>;
+    ) -> Result<(), Error>;
 
     /// Flush the panel pixels that show framebuffer region `area` with the picture moved by
     /// `shift`. Where the region reaches the framebuffer's edge, the panel pixels past it, which
     /// repeat that edge, go too.
     async fn flush_region(
         &mut self,
-        display: &mut Co5300Display<'_, C>,
+        display: &mut Display<'_, C>,
         area: Rectangle,
         shift: Point,
         debug_overlay: Option<Rectangle>,
-    ) -> Result<(), DisplayError>;
+    ) -> Result<(), Error>;
 
     /// Flush the whole panel with the picture moved by `shift`.
     async fn flush_moved(
         &mut self,
-        display: &mut Co5300Display<'_, C>,
+        display: &mut Display<'_, C>,
         shift: Point,
         debug_damage: bool,
-    ) -> Result<(), DisplayError>;
+    ) -> Result<(), Error>;
 }
 
-impl<const N: usize, const WIDTH: usize, const HEIGHT: usize, C: Co5300ColorMode> Flush<C>
+impl<const N: usize, const WIDTH: usize, const HEIGHT: usize, C: ColorMode + PixelFormat> Flush<C>
     for Framebuffer<N, WIDTH, HEIGHT, C>
 where
     C::Bytes: AsRef<[u8]>,
 {
     async fn flush(
         &mut self,
-        display: &mut Co5300Display<'_, C>,
+        display: &mut Display<'_, C>,
         debug_damage: bool,
-    ) -> Result<(), DisplayError> {
-        display.set_addr_window(0, 0, WIDTH as u16, HEIGHT as u16)?;
-        let mut stream = display.begin_stream_async().await?;
+    ) -> Result<(), Error> {
+        display
+            .set_window(0, 0, WIDTH as u16, HEIGHT as u16)
+            .await?;
+        let mut stream = display.pixels().await?;
         let mut remaining = &mut self.buffer_mut()[..];
         let mut offset = 0;
 
         while !remaining.is_empty() {
             stream
-                .flush_if_needed_and_get_buf_async(|mut buf| {
+                .fill(|mut buf| {
                     let chunk = buf.len().min(remaining.len());
                     let captured = remaining.split_off_mut(..chunk).unwrap();
                     buf[..chunk].copy_from_slice(captured);
@@ -79,46 +78,16 @@ where
                 })
                 .await?;
         }
-        stream.flush_buf_async(|_| 0).await?;
-        stream.end()
-    }
-
-    fn flush_blocking(
-        &mut self,
-        display: &mut Co5300Display<'_, C>,
-        debug_damage: bool,
-    ) -> Result<(), DisplayError> {
-        display.set_addr_window(0, 0, WIDTH as u16, HEIGHT as u16)?;
-        let mut stream = display.begin_stream()?;
-        let mut remaining = &mut self.buffer_mut()[..];
-        let mut offset = 0;
-
-        while !remaining.is_empty() {
-            let chunk = {
-                let buf = stream.flush_if_needed_and_get_buf()?;
-                let chunk = buf.len().min(remaining.len());
-                let captured = remaining.split_off_mut(..chunk).unwrap();
-                buf[..chunk].copy_from_slice(captured);
-                #[cfg(feature = "damage-debug")]
-                if debug_damage {
-                    debug_full_chunk::<C, WIDTH, HEIGHT>(&mut buf[..chunk], offset);
-                }
-                offset += chunk;
-                chunk
-            };
-            stream.write(chunk);
-        }
-        stream.flush_buf()?;
-        stream.end()
+        stream.finish().await
     }
 
     async fn flush_region(
         &mut self,
-        display: &mut Co5300Display<'_, C>,
+        display: &mut Display<'_, C>,
         area: Rectangle,
         shift: Point,
         debug_overlay: Option<Rectangle>,
-    ) -> Result<(), DisplayError> {
+    ) -> Result<(), Error> {
         let Some(corner) = area.bottom_right() else {
             return Ok(());
         };
@@ -140,10 +109,10 @@ where
 
     async fn flush_moved(
         &mut self,
-        display: &mut Co5300Display<'_, C>,
+        display: &mut Display<'_, C>,
         shift: Point,
         debug_damage: bool,
-    ) -> Result<(), DisplayError> {
+    ) -> Result<(), Error> {
         if shift == Point::zero() {
             return self.flush(display, debug_damage).await;
         }
@@ -173,13 +142,13 @@ where
 /// Streams panel columns `x0..x1` of rows `y0..y1`, widened to the controller's 2 × 2 grain,
 /// each panel pixel taken from the framebuffer pixel `shift` before it, with the
 /// framebuffer's edge repeated past it.
-async fn stream_shifted<C: Co5300ColorMode, const WIDTH: usize, const HEIGHT: usize>(
+async fn stream_shifted<C: ColorMode + PixelFormat, const WIDTH: usize, const HEIGHT: usize>(
     pixels: &[u8],
-    display: &mut Co5300Display<'_, C>,
+    display: &mut Display<'_, C>,
     (x0, y0, x1, y1): (i32, i32, i32, i32),
     shift: Point,
     debug_overlay: Option<Rectangle>,
-) -> Result<(), DisplayError>
+) -> Result<(), Error>
 where
     C::Bytes: AsRef<[u8]>,
 {
@@ -197,12 +166,14 @@ where
     let middle = (span - left - right) * bpp;
     let row_bytes = span * bpp;
 
-    display.set_addr_window(x0 as u16, y0 as u16, span as u16, (y1 - y0) as u16)?;
-    let mut stream = display.begin_stream_async().await?;
+    display
+        .set_window(x0 as u16, y0 as u16, span as u16, (y1 - y0) as u16)
+        .await?;
+    let mut stream = display.pixels().await?;
     let (mut y, mut done) = (y0, 0);
     while y < y1 {
         stream
-            .flush_if_needed_and_get_buf_async(|buf| {
+            .fill(|buf| {
                 let room = buf.len() / bpp * bpp;
                 let mut written = 0;
                 while written < room && y < y1 {
@@ -243,8 +214,7 @@ where
     }
     #[cfg(not(feature = "damage-debug"))]
     let _ = debug_overlay;
-    stream.flush_buf_async(|_| 0).await?;
-    stream.end()
+    stream.finish().await
 }
 
 /// Writes `out.len()` bytes of a panel row, starting `at` bytes into it. The row is `left`
@@ -274,7 +244,7 @@ fn write_row(out: &mut [u8], at: usize, left: usize, middle: &[u8], first: &[u8]
 }
 
 #[cfg(feature = "damage-debug")]
-fn debug_full_chunk<C: Co5300ColorMode, const WIDTH: usize, const HEIGHT: usize>(
+fn debug_full_chunk<C: PixelFormat, const WIDTH: usize, const HEIGHT: usize>(
     pixels: &mut [u8],
     offset: usize,
 ) where
@@ -293,7 +263,7 @@ fn debug_full_chunk<C: Co5300ColorMode, const WIDTH: usize, const HEIGHT: usize>
 }
 
 #[cfg(feature = "damage-debug")]
-fn debug_region_chunk<C: Co5300ColorMode>(
+fn debug_region_chunk<C: PixelFormat>(
     pixels: &mut [u8],
     start_x: usize,
     y: usize,

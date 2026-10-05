@@ -1,0 +1,13 @@
+[package]
+name = "co5300"
+version = "0.1.0"
+edition = "2024"
+description = "Async driver for the CO5300 AMOLED controller over QSPI, generic over the bus"
+
+[dependencies]
+embedded-graphics-core = "0.4.1"
+embedded-hal = "1.0.0"
+embedded-hal-async = "1.0.0"
+
+[dev-dependencies]
+futures = { version = "0.3.34", default-features = false, features = ["executor"] }
