@@ -22,7 +22,7 @@ use octowhere_mesh::{
         Entry, HEADER_LEN, Hdop, Header, MAX_PACKET, Plain, Quality, Record, Sealing, Source,
         Timebase,
     },
-    pair::{End, Identity, MAX_FRAME, Pairing, Phase, Role},
+    pair::{Done, End, Identity, MAX_FRAME, Pairing, Phase, Role},
     rekey::{Learned, NewKey, Rekey, key_fingerprint},
     schedule::{
         GUARD_US, ROUND_US, SWEEP_EVERY, Schedule, airtime_us, is_sweep_round, round_at,
@@ -1710,11 +1710,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             self.arrived(&message, own);
         }
         if absorbed.rekey_changed {
-            if !self.removals.rekey.is_waiting() {
-                info!("[REKEY] every member is on the new key; the old one is dropped");
-                self.removals.all_on_new_key();
-            }
-            self.save_rekey();
+            self.rekey_changed();
         }
         self.shown.positions(&self.table);
         self.publish();
@@ -2023,7 +2019,8 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                 }
             }
         }
-        match (pairing.phase(), pairing.take_group()) {
+        let phase = pairing.phase();
+        match (phase, pairing.take_group()) {
             (Phase::Done(_), Some(group)) => {
                 let own = group.own();
                 self.group = Some(group);
@@ -2054,6 +2051,13 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                 }));
             }
             _ => {}
+        }
+        // The member has the group's key from this device, so needs no older one.
+        if let Phase::Done(Done::Added { id, .. }) = phase
+            && let Some(generation) = self.group.as_ref().map(Group::generation)
+            && self.removals.rekey.on_key(id, generation)
+        {
+            self.rekey_changed();
         }
         if !self.radio.tune(FREQUENCY_HZ, SYNC_WORD, POWER_DBM).await {
             warn!("[MESH] tuning back to the mesh's channel failed");
@@ -2095,6 +2099,16 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         self.removals.forget();
         self.shown.removals = RemovalsView::default();
         self.summary = None;
+    }
+
+    /// Stores the removals after a member stopped being waited for, dropping the old key and
+    /// what was kept for it once nobody is.
+    fn rekey_changed(&mut self) {
+        if !self.removals.rekey.is_waiting() {
+            info!("[REKEY] every member is on the new key; the old one is dropped");
+            self.removals.all_on_new_key();
+        }
+        self.save_rekey();
     }
 
     /// Queues the group's removals to be stored, now or, when the queue is full or they wait to

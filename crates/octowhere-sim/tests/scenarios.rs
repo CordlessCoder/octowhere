@@ -115,6 +115,49 @@ fn a_member_that_missed_two_switches_is_caught_up() {
     println!("caught up in {:.0} s", sim.now_s() - start);
 }
 
+/// Node 1 misses a switch, leaves, and node 0 pairs it back in: node 0 handed it the key, so it
+/// stops waiting for it on the old one at once rather than for a day.
+#[test]
+fn a_member_back_by_pairing_is_not_waited_for_on_the_old_key() {
+    let mut sim = pair(11);
+    sim.run_while_not(30 * 60, |sim| {
+        sim.count(0, "heard id=1") >= 1 && sim.count(1, "heard id=0") >= 1
+    });
+    sim.command(0, Command::Phantom);
+    let learned = sim.run_while_not(30 * 60, |sim| sim.count(1, "is Phantom now") == 1);
+    assert!(learned, "the phantom reached node 1");
+    sim.link(0, 1, None);
+    sim.link(1, 0, None);
+    sim.command(0, Command::Remove(2));
+    let switched = sim.run_while_not(60 * 60, |sim| sim.count(0, "switched to generation 1") == 1);
+    assert!(switched, "node 0 removed the phantom");
+    sim.command(1, Command::Leave);
+    let left = sim.run_while_not(10 * 60, |sim| sim.count(1, "left the group") == 1);
+    assert!(left, "node 1 left");
+    sim.link_all(Link::default());
+    sim.command(0, Command::Add);
+    sim.command(1, Command::Join);
+    let found = sim.run_while_not(5 * 60, |sim| sim.count(0, "[PAIR] found 0") >= 1);
+    assert!(found, "node 0 found node 1");
+    sim.command(0, Command::Choose(0));
+    let compared = sim.run_while_not(5 * 60, |sim| {
+        sim.count(0, "[PAIR] code") == 1 && sim.count(1, "[PAIR] code") == 1
+    });
+    assert!(compared, "both show a code");
+    sim.command(0, Command::Accept);
+    sim.command(1, Command::Accept);
+    let done = sim.run_while_not(5 * 60, |sim| {
+        sim.count(0, "returning: true") == 1 && sim.count(1, "Done(Joined") == 1
+    });
+    assert!(done, "node 1 came back");
+    // The adder stays on the pairing's channel a few seconds after it is done.
+    let dropped = sim.run_while_not(60, |sim| sim.count(0, "old one is dropped") == 1);
+    assert!(
+        dropped,
+        "node 0 stopped waiting for node 1 once it handed it the key"
+    );
+}
+
 /// A member that declines a removal after its switch goes back to the old key, stays there
 /// however often the remover's key comes, and keeps that across a restart. It forgets the
 /// records that changed since, the removed member's gone record among them, until a device
