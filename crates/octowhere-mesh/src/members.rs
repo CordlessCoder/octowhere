@@ -7,6 +7,7 @@ use core::cell::Cell;
 use sha2::{Digest, Sha256};
 
 use crate::identity::{Identity, SIGNATURE_LEN, verify};
+use crate::schedule::ROUND_US;
 use crate::seal::Key;
 use crate::{AHEAD_S, IDS, Ids};
 
@@ -1001,29 +1002,34 @@ enum Held {
     Former(usize),
 }
 
-/// A neighbour whose members or messages digest differs from this node's in this many of its
-/// packets running is asked for every record it holds, or sent a summary of the messages.
-pub const MISMATCHES: u8 = 2;
+/// A neighbour whose members or messages digest has differed from this node's for this long, since
+/// the last of its packets that agreed or brought this node something new, is asked for every
+/// record it holds, or sent a summary of the messages. A neighbour still bringing news is not
+/// asked, nor one whose packets differ only while a change is on its way.
+pub const MISMATCH_US: i64 = ROUND_US;
 
-/// For each id, how many of its packets running carried a digest unlike this node's.
+/// For each id, the second the last of its packets that agreed with this node's digest, or
+/// brought it something new, started in on that sender's timebase, plus one: 0 for none. Seconds
+/// keep it small, since the node replaces it whole, on the stack.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct Mismatches([u8; SLOTS]);
+pub(crate) struct Mismatches([u32; SLOTS]);
 
 impl Mismatches {
-    /// Counts a packet from `sender` whose digest `matched` this node's or not. Returns whether
-    /// that made [`MISMATCHES`] running, which starts the count again.
-    pub(crate) fn count(&mut self, sender: u8, matched: bool) -> bool {
-        let Some(count) = self.0.get_mut(usize::from(sender)) else {
+    /// Counts a packet from `sender`, started at `at` on its timebase, whose digest `matched`
+    /// this node's or which brought it something new. Returns whether its digests have differed
+    /// for [`MISMATCH_US`], which starts the count again.
+    pub(crate) fn count(&mut self, sender: u8, matched: bool, at: i64) -> bool {
+        let Some(since) = self.0.get_mut(usize::from(sender)) else {
             return false;
         };
-        if matched {
-            *count = 0;
-            return false;
-        }
-        *count += 1;
-        let due = *count >= MISMATCHES;
-        if due {
-            *count = 0;
+        let now = at.div_euclid(1_000_000).clamp(0, i64::from(u32::MAX - 1)) as u32 + 1;
+        // A sender whose clock went back counts from there.
+        let due = !matched
+            && *since != 0
+            && *since <= now
+            && i64::from(now - *since) * 1_000_000 >= MISMATCH_US;
+        if matched || due || *since == 0 || *since > now {
+            *since = now;
         }
         due
     }
@@ -1039,14 +1045,16 @@ pub struct Requests {
 }
 
 impl Requests {
-    /// Takes the members digest a packet from `sender` carried, and answers the ids it asked
-    /// for by marking `group`'s records of them to send, where the two tables differ.
+    /// Takes the members digest a packet from `sender`, started at `at` on its timebase, carried,
+    /// and answers the ids it asked for by marking `group`'s records of them to send, where the
+    /// two tables differ. `fed` says whether the packet brought this node a record new to it.
     pub fn answer(
         &mut self,
         group: &mut Group,
         sender: u8,
         digest: Option<u32>,
         asked: Option<Ids>,
+        (at, fed): (i64, bool),
     ) {
         let ours = group.digest();
         // A sender held as gone is telling the others it left.
@@ -1054,7 +1062,7 @@ impl Requests {
             self.pending.insert(sender);
         }
         if let Some(theirs) = digest
-            && self.mismatched.count(sender, theirs == ours)
+            && self.mismatched.count(sender, theirs == ours || fed, at)
         {
             self.pending = Ids::ALL;
         }
@@ -1297,29 +1305,35 @@ pub(crate) mod tests {
         let mut g = group(0, &[(0, 1), (3, 2)]);
         let mut requests = Requests::default();
         let ours = g.digest();
-        requests.answer(&mut g, 3, Some(ours), None);
+        requests.answer(&mut g, 3, Some(ours), None, (0, false));
         assert_eq!(requests.pending(), Ids::EMPTY);
-        requests.answer(&mut g, 7, Some(ours), None);
+        requests.answer(&mut g, 7, Some(ours), None, (0, false));
         assert_eq!(
             requests.pending(),
             Ids::of(7),
             "a sender it holds no record for"
         );
         requests.sent(Ids::of(7));
-        requests.answer(&mut g, 3, Some(ours ^ 1), None);
+        requests.answer(&mut g, 3, Some(ours ^ 1), None, (MISMATCH_US - 1, false));
         assert_eq!(
             requests.pending(),
             Ids::EMPTY,
-            "one packet may only be out of date"
+            "within a round of the last packet that agreed, a change may be on its way"
         );
-        requests.answer(&mut g, 3, Some(ours), None);
-        requests.answer(&mut g, 3, Some(ours ^ 1), None);
+        requests.answer(&mut g, 3, Some(ours ^ 1), None, (MISMATCH_US, true));
+        requests.answer(
+            &mut g,
+            3,
+            Some(ours ^ 1),
+            None,
+            (2 * MISMATCH_US - 1, false),
+        );
         assert_eq!(
             requests.pending(),
             Ids::EMPTY,
-            "a match in between starts the count again"
+            "a packet that brought a record starts the count again"
         );
-        requests.answer(&mut g, 3, Some(ours ^ 1), None);
+        requests.answer(&mut g, 3, Some(ours ^ 1), None, (2 * MISMATCH_US, false));
         assert_eq!(requests.pending(), Ids::ALL);
     }
 
@@ -1328,9 +1342,15 @@ pub(crate) mod tests {
         let mut g = group(0, &[(0, 1), (3, 2)]);
         let mut requests = Requests::default();
         let ours = g.digest();
-        requests.answer(&mut g, 3, Some(ours), Some(Ids::ALL));
+        requests.answer(&mut g, 3, Some(ours), Some(Ids::ALL), (0, false));
         assert!(!g.has_unsent());
-        requests.answer(&mut g, 3, Some(ours ^ 1), Some(Ids::of(3).with(9)));
+        requests.answer(
+            &mut g,
+            3,
+            Some(ours ^ 1),
+            Some(Ids::of(3).with(9)),
+            (0, false),
+        );
         assert_eq!(g.unsent(), Ids::of(3), "only the records held");
     }
 
@@ -1446,7 +1466,7 @@ pub(crate) mod tests {
         g.merge_gone(1, left(1, 2, 200), None);
         let mut requests = Requests::default();
         let ours = g.digest();
-        requests.answer(&mut g, 1, Some(ours), None);
+        requests.answer(&mut g, 1, Some(ours), None, (0, false));
         assert_eq!(requests.pending(), Ids::EMPTY);
     }
 

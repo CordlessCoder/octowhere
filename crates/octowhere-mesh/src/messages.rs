@@ -656,6 +656,24 @@ impl Store {
         (len, next)
     }
 
+    /// Whether a neighbour's summary shows it holds the newest message from an origin that this
+    /// store lacks.
+    #[must_use]
+    pub fn behind(&self, summary: &[u8]) -> bool {
+        let mut rest = summary.get(4..).unwrap_or_default();
+        while let Some(&origin) = rest.first() {
+            let Some(&holes) = rest.get(9) else {
+                return false;
+            };
+            let newest = u32::from_be_bytes(rest[5..9].try_into().expect("four bytes"));
+            if self.get((origin, newest)).is_none() {
+                return true;
+            }
+            rest = rest.get(10 + 8 * usize::from(holes)..).unwrap_or_default();
+        }
+        false
+    }
+
     /// Marks to be sent every message a neighbour's summary shows it lacks.
     pub fn answer(&mut self, summary: &[u8]) {
         let Some(covered) = summary.get(..4) else {
@@ -711,19 +729,37 @@ pub struct Summaries {
 }
 
 impl Summaries {
-    /// Takes the messages digest a packet from `sender` carried, 0 for none, as an empty store
-    /// has, and answers the summary it carried by marking what `store` holds and the sender
-    /// lacks to send, where the two stores differ.
-    pub fn answer(&mut self, store: &mut Store, sender: u8, theirs: u32, summary: Option<&[u8]>) {
+    /// Takes the messages digest a packet from `sender`, started at `at` on its timebase,
+    /// carried, 0 for none, as an empty store has, and answers the summary it carried by marking
+    /// what `store` holds and the sender lacks to send, where the two stores differ. `fed` says
+    /// whether the packet brought this node a message new to it.
+    pub fn answer(
+        &mut self,
+        store: &mut Store,
+        sender: u8,
+        theirs: u32,
+        summary: Option<&[u8]>,
+        (at, fed): (i64, bool),
+    ) {
         let ours = store.digest();
-        if self.mismatched.count(sender, theirs == ours) {
+        if self.mismatched.count(sender, theirs == ours || fed, at) {
             self.pending = true;
         }
         if let Some(summary) = summary
             && theirs != ours
         {
             store.answer(summary);
+            // No gap shows a lost message that was the last of its origin's so far.
+            if store.behind(summary) {
+                self.pending = true;
+            }
         }
+    }
+
+    /// Makes a summary due: this node took a message whose origin's one before it, which it
+    /// names, it does not hold.
+    pub fn lacking(&mut self) {
+        self.pending = true;
     }
 
     #[must_use]
@@ -816,6 +852,7 @@ mod tests {
     use std::boxed::Box;
 
     use super::*;
+    use crate::members::MISMATCH_US;
     use crate::members::tests::key;
     use crate::members::tests::key as key_of;
 
@@ -1022,6 +1059,23 @@ mod tests {
     }
 
     #[test]
+    fn a_summary_shows_a_store_behind_on_an_origin_s_newest() {
+        let (mut ahead, mut behind) = (store(), store());
+        for seq in 1..=3 {
+            ahead.insert(text(4, seq, seq - 1, NOW + seq), NOW);
+            if seq < 3 {
+                behind.insert(text(4, seq, seq - 1, NOW + seq), NOW);
+            }
+        }
+        let mut summary = [0; 253];
+        let (len, _) = ahead.summary(&mut summary, 0);
+        assert!(behind.behind(&summary[..len]));
+        assert!(!ahead.behind(&summary[..len]));
+        let (len, _) = behind.summary(&mut summary, 0);
+        assert!(!ahead.behind(&summary[..len]), "ahead is not behind");
+    }
+
+    #[test]
     fn a_summary_brings_what_its_sender_lacks() {
         // Numbers skip at a restart: 3 follows nothing known, 70 follows 3.
         let chain = [
@@ -1086,21 +1140,25 @@ mod tests {
     }
 
     #[test]
-    fn a_neighbour_differing_twice_running_gets_a_summary() {
+    fn a_neighbour_differing_for_a_round_gets_a_summary() {
         let mut s = store();
         s.insert(text(1, 1, 0, NOW), NOW);
         let ours = s.digest();
         let mut summaries = Summaries::default();
-        summaries.answer(&mut s, 3, ours ^ 1, None);
-        assert!(!summaries.pending());
-        summaries.answer(&mut s, 3, ours, None);
-        summaries.answer(&mut s, 3, ours ^ 1, None);
+        summaries.answer(&mut s, 3, ours, None, (0, false));
+        summaries.answer(&mut s, 3, ours ^ 1, None, (MISMATCH_US - 1, false));
+        assert!(!summaries.pending(), "within a round of agreeing");
+        summaries.answer(&mut s, 3, ours ^ 1, None, (MISMATCH_US, true));
+        summaries.answer(&mut s, 3, ours ^ 1, None, (2 * MISMATCH_US - 1, false));
         assert!(
             !summaries.pending(),
-            "a match between starts the count again"
+            "a packet that brought a message starts the count again"
         );
-        summaries.answer(&mut s, 3, ours ^ 1, None);
-        assert!(summaries.pending());
+        summaries.answer(&mut s, 3, ours ^ 1, None, (2 * MISMATCH_US, false));
+        assert!(
+            summaries.pending(),
+            "a round past the last that brought one"
+        );
         summaries.sent(0);
         assert!(!summaries.pending());
     }
@@ -1113,9 +1171,9 @@ mod tests {
         let ours = s.digest();
         let mut summaries = Summaries::default();
         let empty = [0xff, 0xff, 0xff, 0xff];
-        summaries.answer(&mut s, 3, ours, Some(&empty));
+        summaries.answer(&mut s, 3, ours, Some(&empty), (0, false));
         assert!(!s.has_unsent());
-        summaries.answer(&mut s, 3, 0, Some(&empty));
+        summaries.answer(&mut s, 3, 0, Some(&empty), (0, false));
         assert!(s.has_unsent());
     }
 

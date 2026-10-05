@@ -30,7 +30,9 @@ pub struct State<'a> {
 /// When a packet arrived, as the node judges it.
 #[derive(Clone, Copy)]
 pub struct When {
-    /// The round its sender's slot was in.
+    /// When its sender's packet started, on the sender's timebase.
+    pub at: i64,
+    /// The round it started in.
     pub round: i64,
     /// UTC seconds on the node's own timebase, if it has one.
     pub now: Option<u32>,
@@ -206,6 +208,12 @@ pub fn absorb<'p>(
                             *slot = message.name();
                             absorbed.arrived += 1;
                         }
+                        // Lost on the way, as a hidden node's collision loses one.
+                        if message.prev() != 0
+                            && messages.get((message.origin(), message.prev())).is_none()
+                        {
+                            summaries.lacking();
+                        }
                     }
                     // Catching up a member away for longer than the horizon.
                     Insert::Old if message.is_key() && message.to() == To::Member(own) => {
@@ -227,10 +235,11 @@ pub fn absorb<'p>(
             messages.sent(name);
         }
     }
-    requests.answer(group, sender, theirs, asked);
+    let fed = (!absorbed.changed.is_empty(), absorbed.arrived > 0);
+    requests.answer(group, sender, theirs, asked, (when.at, fed.0));
     // A packet with no members digest is no full account of its sender.
     if theirs.is_some() {
-        summaries.answer(messages, sender, their_messages, summary);
+        summaries.answer(messages, sender, their_messages, summary, (when.at, fed.1));
     }
     absorbed.summary = summary.is_some();
     absorbed
@@ -252,18 +261,20 @@ mod tests {
     use crate::{
         Zeroable,
         members::{
-            MISMATCHES,
+            MISMATCH_US,
             tests::{key, member, signed},
         },
         messages::kind,
         packet::{Builder, Header, MAX_PLAIN, Plain, Source, Timebase},
         rekey::OnKey,
+        schedule::ROUND_US,
         seal::Key,
     };
 
     const NOW: u32 = 1_790_000_000;
     const ROUND: i64 = 39_800_000;
     const WHEN: When = When {
+        at: ROUND * ROUND_US,
         round: ROUND,
         now: Some(NOW),
         utc: Some(NOW),
@@ -299,6 +310,11 @@ mod tests {
 
         /// Takes a packet from id 1 holding what `fill` writes.
         fn absorb(&mut self, fill: impl FnOnce(&mut Builder)) -> Absorbed {
+            self.absorb_at(WHEN, fill)
+        }
+
+        /// Takes a packet from id 1 holding what `fill` writes, sent `when`.
+        fn absorb_at(&mut self, when: When, fill: impl FnOnce(&mut Builder)) -> Absorbed {
             let mut buf = [0; MAX_PLAIN];
             let header = Header {
                 sender: 1,
@@ -316,7 +332,7 @@ mod tests {
             absorb(
                 plain.records(),
                 1,
-                WHEN,
+                when,
                 State {
                     group: &mut self.group,
                     table: &mut self.table,
@@ -361,15 +377,30 @@ mod tests {
     }
 
     #[test]
+    fn a_message_whose_predecessor_is_missing_makes_a_summary_due() {
+        for held in [true, false] {
+            let mut node = Node::new();
+            let first = Message::to_group(1, 1, 0, NOW - 6, &[kind::TEXT, b'h', b'i']).unwrap();
+            let second = Message::to_group(1, 2, 1, NOW - 5, &[kind::TEXT, b'h', b'o']).unwrap();
+            if held {
+                node.messages.insert(first, NOW);
+            }
+            node.absorb(|builder| builder.message(&second).unwrap());
+            assert_eq!(node.summaries.pending(), !held, "first held: {held}");
+        }
+    }
+
+    #[test]
     fn only_a_full_account_of_its_sender_makes_a_summary_due() {
         for members_digest in [true, false] {
             let mut node = Node::new();
             let held = Message::to_group(1, 1, 0, NOW - 5, &[kind::TEXT, b'h', b'i']).unwrap();
             node.messages.insert(held, NOW);
+            node.messages.sent(held.name());
             let digest = node.group.digest();
             // Their messages digest, absent, differs from this node's.
-            for _ in 0..MISMATCHES {
-                node.absorb(|builder| {
+            for at in [WHEN.at, WHEN.at + MISMATCH_US] {
+                node.absorb_at(When { at, ..WHEN }, |builder| {
                     if members_digest {
                         builder.members_digest(digest).unwrap();
                     }

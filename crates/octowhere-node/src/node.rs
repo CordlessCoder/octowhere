@@ -31,7 +31,7 @@ use octowhere_mesh::{
 
 use crate::{
     GroupWrite, KeptRow,
-    access::{Access, BUSY_STEPS, Holding, SPREAD_US, STEP_US, STEPS},
+    access::{Access, BUSY_STEPS, Holding, REPAIR_SPREAD_US, SPREAD_US, STEP_US, STEPS},
     fmt::{Ascii, Mac},
     inbox::Inbox,
     removals::Removals,
@@ -1209,7 +1209,8 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         let round_ends = now + (round + 1) * ROUND_US - time;
         let old = self.old_due(round, now, time, own);
         let holding = self.holding(round, now, time, own);
-        let own_at = self.access.own_due(holding, now);
+        let spread = self.draw(REPAIR_SPREAD_US, own);
+        let own_at = self.access.own_due(holding, now, || spread);
         let (at, old) = match old {
             Some(at) if at <= own_at => (at, true),
             _ => (own_at, false),
@@ -1232,10 +1233,9 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
 
     /// What this node holds to send in `round`, at local time `now` and timebase time `time`.
     fn holding(&mut self, round: i64, now: i64, time: i64, own: u8) -> Holding {
-        let records = !self.requests.pending().is_empty()
-            || self.group.as_ref().is_some_and(Group::has_unsent)
-            || self.messages.has_unsent()
-            || self.summary.is_some();
+        let records =
+            self.group.as_ref().is_some_and(Group::has_unsent) || self.messages.has_unsent();
+        let repair = !self.requests.pending().is_empty() || self.summary.is_some();
         let news = self.table.has_news() || self.removals.on_key_first();
         let start = now - (time - round * ROUND_US);
         let sweep = (is_sweep_round(round)
@@ -1244,6 +1244,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         .then(|| self.sweep_at(round, start, own));
         Holding {
             records,
+            repair,
             news,
             sweep,
         }
@@ -1540,6 +1541,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             plain.records(),
             header.sender,
             When {
+                at: header.start(),
                 round,
                 now,
                 utc,

@@ -11,6 +11,9 @@ pub const FLOOR_US: i64 = 3 * ROUND_US - 5_000_000;
 /// How far a packet's start may sit from where the node's clock puts it and still refine that
 /// clock at once, for the sender's and the node's own clock error.
 pub const GUARD_US: i64 = 250_000;
+/// After each transmission a node is silent for this many times its airtime, which keeps it
+/// under band O's 10% at any moment.
+pub const REST_TIMES: i64 = 9;
 /// Every round whose index is a multiple of this is a sweep round: members on old keys are sent
 /// their key messages in it, and a node's word that it is on the group's key goes out in it for
 /// a day.
@@ -49,11 +52,12 @@ pub fn is_sweep_round(round: i64) -> bool {
 /// A packet's time on air, for spreading factor 7 at 125 kHz, coding rate 4/5, an explicit header,
 /// CRC on and an 8-symbol preamble (Semtech AN1200.13).
 #[must_use]
-pub fn airtime_us(len: usize) -> i64 {
+pub const fn airtime_us(len: usize) -> i64 {
     const SYMBOL_US: i64 = 1_024;
     const SF: i64 = 7;
     let bits = 8 * len as i64 - 4 * SF + 28 + 16;
-    let payload_symbols = 8 + (bits + 4 * SF - 1).div_euclid(4 * SF).max(0) * 5;
+    let blocks = (bits + 4 * SF - 1).div_euclid(4 * SF);
+    let payload_symbols = 8 + if blocks > 0 { blocks } else { 0 } * 5;
     // The preamble's 8 symbols and the 4.25 the modem adds.
     49 * SYMBOL_US / 4 + payload_symbols * SYMBOL_US
 }

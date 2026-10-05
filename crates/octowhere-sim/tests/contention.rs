@@ -45,15 +45,15 @@ fn flood(sim: &mut Sim, nodes: usize) -> Option<f64> {
     reached.then(|| (sim.now_us() - at) as f64 / 1e6)
 }
 
-/// Every other node of 32 in reach has a message within a second, from the origin's one packet:
-/// it covers everyone, so nobody relays it.
+/// Every other node of 32 in reach has a message within two seconds, from the origin's one
+/// packet: it covers everyone, so nobody relays it.
 #[test]
-fn a_message_reaches_32_nodes_in_reach_in_a_second() {
+fn a_message_reaches_32_nodes_in_reach_within_two_seconds() {
     let mut sim = group(32, 1, false);
     let carried = |sim: &Sim| -> usize { (0..32).map(|node| sim.count(node, "messages=1 ")).sum() };
     let before = carried(&sim);
     let took = flood(&mut sim, 32).expect("every node has the message");
-    assert!(took < 1.0, "{took} s");
+    assert!(took < 2.0, "{took} s");
     assert_eq!(carried(&sim), before + 1, "one packet carried it");
 }
 

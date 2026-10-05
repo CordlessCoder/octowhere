@@ -2,7 +2,7 @@
 //! when its own packet is due. Once due, a packet waits a random backoff of whole [`STEP_US`]
 //! and goes if the channel is clear then, or backs off again.
 
-use octowhere_mesh::schedule::{FLOOR_US, ROUND_US, airtime_us};
+use octowhere_mesh::schedule::{FLOOR_US, REST_TIMES, ROUND_US, airtime_us};
 
 /// One step of a backoff: long enough for a node to detect another's preamble and for its own
 /// transmission to start, so that two nodes a step apart do not both send.
@@ -12,18 +12,21 @@ pub const STEP_US: i64 = 10_000;
 pub const STEPS: u32 = 32;
 /// A node that found the channel busy waits up to this many steps, past the longest packet.
 pub const BUSY_STEPS: u32 = 64;
-/// After each transmission a node is silent for this many times its airtime, which keeps it
-/// under band O's 10% at any moment.
-pub const REST_TIMES: i64 = 9;
 /// A node's floor and its news come up to this much early, drawn at each of its packets, so that
 /// nodes that started together drift apart rather than contend at every floor.
 pub const SPREAD_US: i64 = 10_000_000;
+/// A summary or a request, which asks for what a node lacks, waits up to this long once due,
+/// drawn once. Nodes that cannot hear each other often answer one packet together, and the
+/// backoff keeps a node apart only from those it hears.
+pub const REPAIR_SPREAD_US: i64 = 5_000_000;
 
 /// What a node holds to send, which says when its own packet is due.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Holding {
-    /// Records, messages, a request or a summary, which go at once.
+    /// Records or messages, which go at once.
     pub records: bool,
+    /// A summary or a request, which go at the time drawn for them.
+    pub repair: bool,
     /// Positions or a word worth sending before the floor, which wait a round after the last
     /// packet.
     pub news: bool,
@@ -38,13 +41,21 @@ pub struct Access {
     own: Option<(i64, i64)>,
     /// Until when it stays silent: after its last transmission, or a channel found busy.
     quiet_until: i64,
+    /// When the repair it holds is due, once drawn.
+    repair_at: Option<i64>,
 }
 
 impl Access {
     /// When the node's own packet is due at local time `now`, holding `holding`: its first at
-    /// once.
-    #[must_use]
-    pub fn own_due(&self, holding: Holding, now: i64) -> i64 {
+    /// once. `spread` is a draw below [`REPAIR_SPREAD_US`], taken if a repair is new.
+    pub fn own_due(&mut self, holding: Holding, now: i64, spread: impl FnOnce() -> i64) -> i64 {
+        let repair = match holding.repair {
+            true => Some(*self.repair_at.get_or_insert_with(|| now + spread())),
+            false => {
+                self.repair_at = None;
+                None
+            }
+        };
         let due = match self.own {
             None => now,
             Some(_) if holding.records => now,
@@ -54,12 +65,13 @@ impl Access {
                 if holding.news {
                     due = due.min(last + ROUND_US);
                 }
-                if let Some(at) = holding.sweep {
-                    due = due.min(at);
-                }
                 due
             }
         };
+        let due = [holding.sweep, repair]
+            .into_iter()
+            .flatten()
+            .fold(due, i64::min);
         self.after_quiet(due)
     }
 
@@ -74,6 +86,7 @@ impl Access {
     pub fn sent(&mut self, at: i64, len: usize, own: Option<i64>) {
         if let Some(spread) = own {
             self.own = Some((at, spread));
+            self.repair_at = None;
         }
         self.quiet_until = at + (1 + REST_TIMES) * airtime_us(len);
     }
@@ -99,14 +112,14 @@ mod tests {
     #[test]
     fn the_first_packet_and_records_go_at_once() {
         let mut access = Access::default();
-        assert_eq!(access.own_due(Holding::default(), NOW), NOW);
+        assert_eq!(access.own_due(Holding::default(), NOW, || 0), NOW);
         access.sent(NOW, 40, Some(0));
         let later = NOW + 10 * 1_000_000;
         let records = Holding {
             records: true,
             ..Holding::default()
         };
-        assert_eq!(access.own_due(records, later), later);
+        assert_eq!(access.own_due(records, later, || 0), later);
     }
 
     #[test]
@@ -117,20 +130,47 @@ mod tests {
             news: true,
             ..Holding::default()
         };
-        assert_eq!(access.own_due(news, NOW + 1), NOW + ROUND_US);
-        assert_eq!(access.own_due(Holding::default(), NOW + 1), NOW + FLOOR_US);
+        assert_eq!(access.own_due(news, NOW + 1, || 0), NOW + ROUND_US);
+        assert_eq!(
+            access.own_due(Holding::default(), NOW + 1, || 0),
+            NOW + FLOOR_US
+        );
         let sweep = Holding {
             sweep: Some(NOW + 5_000_000),
             ..news
         };
-        assert_eq!(access.own_due(sweep, NOW + 1), NOW + 5_000_000);
+        assert_eq!(access.own_due(sweep, NOW + 1, || 0), NOW + 5_000_000);
+    }
+
+    #[test]
+    fn a_repair_waits_the_time_drawn_for_it_once() {
+        let mut access = Access::default();
+        access.sent(NOW, 40, Some(0));
+        let repair = Holding {
+            repair: true,
+            ..Holding::default()
+        };
+        assert_eq!(
+            access.own_due(repair, NOW + 1, || 3_000_000),
+            NOW + 3_000_001
+        );
+        assert_eq!(
+            access.own_due(repair, NOW + 2, || 0),
+            NOW + 3_000_001,
+            "drawn once"
+        );
+        access.sent(NOW + 3_000_001, 40, Some(0));
+        assert_eq!(
+            access.own_due(repair, NOW + 4_000_000, || 0),
+            NOW + 4_000_000
+        );
     }
 
     #[test]
     fn a_spread_brings_the_floor_early() {
         let mut access = Access::default();
         access.sent(NOW, 40, Some(3_000_000));
-        let floor = access.own_due(Holding::default(), NOW + 1);
+        let floor = access.own_due(Holding::default(), NOW + 1, || 0);
         assert_eq!(floor, NOW + FLOOR_US - 3_000_000);
         assert!(access.sent_since(NOW));
     }
@@ -144,8 +184,8 @@ mod tests {
             ..Holding::default()
         };
         let quiet = NOW + 10 * airtime_us(255);
-        assert_eq!(access.own_due(records, NOW + 1), quiet);
-        assert_eq!(access.own_due(Holding::default(), NOW + 1), quiet);
+        assert_eq!(access.own_due(records, NOW + 1, || 0), quiet);
+        assert_eq!(access.own_due(Holding::default(), NOW + 1, || 0), quiet);
         assert!(
             !access.sent_since(NOW),
             "an old key's packet is not its own"

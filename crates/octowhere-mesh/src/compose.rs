@@ -131,9 +131,12 @@ pub fn compose(builder: &mut Builder, round: i64, base: u32, from: Sources) -> C
     } else {
         0
     };
-    carried.summary = summary.is_some_and(|summary| {
-        builder.room() >= 2 + summary.len() + own_room && builder.summary(summary).is_ok()
-    });
+    // A summary asks for what this node lacks, and waits while it has messages to send: one
+    // would crowd out a key message.
+    carried.summary = !messages.has_unsent()
+        && summary.is_some_and(|summary| {
+            builder.room() >= 2 + summary.len() + own_room && builder.summary(summary).is_ok()
+        });
     for id in group.unsent_in_turn() {
         if carried.records.count() as usize >= MAX_RECORDS {
             break;
@@ -313,7 +316,6 @@ mod tests {
                 "neighbours",
                 "members digest",
                 "messages digest",
-                "summary",
                 "member",
                 "message",
                 "message",
@@ -326,7 +328,28 @@ mod tests {
             "the lowest id waiting, this node's own"
         );
         assert_eq!(carried.positions().len(), 3);
+        assert!(!carried.summary, "it waits while messages are to go");
+    }
+
+    #[test]
+    fn a_summary_goes_once_no_message_is_to_go() {
+        let (table, group, mut store) = (table(&[2, 3]), group(1), store(2));
+        for n in 0..2 {
+            store.sent((3, n + 1));
+        }
+        let (carried, kinds) = compose_kinds(Sources {
+            table: &table,
+            group: &group,
+            messages: &store,
+            requests: &Requests::default(),
+            summary: Some(&[1, 2, 3]),
+            on_key: None,
+        });
         assert!(carried.summary);
+        assert_eq!(
+            kinds[..4],
+            ["neighbours", "members digest", "messages digest", "summary"]
+        );
     }
 
     #[test]
