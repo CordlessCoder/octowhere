@@ -8,7 +8,8 @@ use sha2::{Digest, Sha256};
 use crate::identity::{Identity, SIGNATURE_LEN, verify};
 use crate::members::{Group, Member, PUBLIC_LEN, RECORD_MAX_LEN, fingerprint};
 use crate::messages::{BODY_MAX, FIXED_LEN, Message, To, kind};
-use crate::schedule::ROUND_S;
+use crate::packet::MAX_PACKET;
+use crate::schedule::{REST_TIMES, ROUND_S, ROUND_US, airtime_us};
 use crate::seal::Key;
 use crate::{IDS, Ids};
 
@@ -18,7 +19,12 @@ pub const KEY_LEN: usize = 1 + 32 + 2 + 4 + 1 + 8 + 8;
 /// The key messages a remover sends in each packet, which sets how far off the switch is. A
 /// signed key message takes most of a packet.
 pub const KEYS_PER_PACKET: u32 = 1;
-/// Rounds past the remover's own key messages for them to cross the hops.
+/// How long a remover takes over each packet of key messages: the packet, at its largest, and
+/// the rest after it.
+pub const KEY_PACKET_US: i64 = (1 + REST_TIMES) * airtime_us(MAX_PACKET);
+/// Rounds past the remover's own key messages for them to cross the hops, and for those lost on
+/// the way to be asked for again (owner, 2026-10-05). A member that still misses the switch is
+/// caught up the next time it is heard under the old key.
 pub const HOP_ROUNDS: u32 = 3;
 /// The older keys kept for members not yet heard on a newer one.
 pub const OLD_KEYS: usize = 4;
@@ -163,10 +169,11 @@ fn is_newer(a: u16, b: u16) -> bool {
 }
 
 /// How many rounds from now a removal's switch is, for a remover sending `messages` key and
-/// removal messages.
+/// removal messages: the rounds it takes to send them, [`HOP_ROUNDS`], and the round it is in.
 #[must_use]
 pub const fn switch_rounds(messages: u32) -> u32 {
-    messages.div_ceil(KEYS_PER_PACKET) + HOP_ROUNDS + 1
+    let sending = messages.div_ceil(KEYS_PER_PACKET) as u64 * KEY_PACKET_US as u64;
+    sending.div_ceil(ROUND_US as u64) as u32 + HOP_ROUNDS + 1
 }
 
 /// The furthest a key message's switch can be past the round it arrives in: as far as a removal
@@ -1162,8 +1169,10 @@ mod tests {
 
     #[test]
     fn the_switch_is_as_far_off_as_the_removers_messages_take() {
-        // Six key messages and the removal notice, one a packet, then hops.
-        assert_eq!(switch_rounds(7), 7 + HOP_ROUNDS + 1);
+        // Six key messages and the removal notice, one a packet at about 4 s each, fit a round.
+        assert_eq!(switch_rounds(7), 1 + HOP_ROUNDS + 1);
+        // 31 take about 124 s, three rounds: 5.25 minutes in all.
+        assert_eq!(switch_rounds(31), 3 + HOP_ROUNDS + 1);
         let g = group(0, &[(0, 1), (1, 2), (2, 3), (3, 4)]);
         let mut rekey = Rekey::default();
         let started = rekey.start(&g, 2, Key::new([9; 32]), 1_000).unwrap();
@@ -1192,7 +1201,7 @@ mod tests {
         let mut g = group(0, &[(0, 1), (1, 2), (2, 3), (3, 4)]);
         let mut rekey = Rekey::default();
         assert_eq!(
-            rekey.learned(&g, 1, new(9, 4, 1_010, 2, 3), 1_000),
+            rekey.learned(&g, 1, new(9, 4, 1_010, 2, 3), 1_005),
             Learned::Pending
         );
         assert!(!rekey.is_due(1_009));
@@ -1299,17 +1308,17 @@ mod tests {
         let mut rekey = Rekey::default();
         let next = new(9, 5, 1_020, 3, 4).after(8);
         assert_eq!(
-            rekey.learned(&g, 2, next.clone(), 1_000),
+            rekey.learned(&g, 2, next.clone(), 1_015),
             Learned::Later,
             "the switch to the key it follows comes first"
         );
         assert_eq!(
-            rekey.learned(&g, 2, new(9, 4, 1_010, 3, 4).after(7), 1_000),
+            rekey.learned(&g, 2, new(9, 4, 1_010, 3, 4).after(7), 1_005),
             Learned::Later,
             "it follows a key that won elsewhere"
         );
         assert!(rekey.pending().is_none());
-        rekey.learned(&g, 2, new(8, 4, 1_010, 1, 2), 1_000);
+        rekey.learned(&g, 2, new(8, 4, 1_010, 1, 2), 1_005);
         rekey.switch(&mut g).unwrap();
         assert_eq!(rekey.learned(&g, 2, next, 1_015), Learned::Pending);
         assert_eq!(
@@ -1324,20 +1333,20 @@ mod tests {
         let g = group(0, &[(0, 1), (1, 2), (2, 3)]);
         let mut rekey = Rekey::default();
         assert_eq!(
-            rekey.learned(&g, 7, new(9, 4, 1_010, 2, 3), 1_000),
+            rekey.learned(&g, 7, new(9, 4, 1_010, 2, 3), 1_005),
             Learned::Ignored
         );
         assert_eq!(
-            rekey.learned(&g, 1, new(9, 2, 1_010, 2, 3), 1_000),
+            rekey.learned(&g, 1, new(9, 2, 1_010, 2, 3), 1_005),
             Learned::Ignored
         );
         assert_eq!(
-            rekey.learned(&g, 1, new(5, 3, 1_010, 2, 3), 1_000),
+            rekey.learned(&g, 1, new(5, 3, 1_010, 2, 3), 1_005),
             Learned::Ignored,
             "the current key is no rival of itself"
         );
         assert_eq!(
-            rekey.learned(&g, 1, new(9, 4, 1_010, 0, 1), 1_000),
+            rekey.learned(&g, 1, new(9, 4, 1_010, 0, 1), 1_005),
             Learned::Ignored,
             "a key message never removes the device it goes to"
         );
@@ -1349,7 +1358,7 @@ mod tests {
         let mut g = group(0, &[(0, 1), (1, 2), (2, 3)]);
         let mut rekey = Rekey::default();
         assert_eq!(
-            rekey.learned(&g, 1, new(9, 4, 1_010, 2, 99), 1_000),
+            rekey.learned(&g, 1, new(9, 4, 1_010, 2, 99), 1_005),
             Learned::Ignored,
             "names nobody"
         );
@@ -1369,7 +1378,7 @@ mod tests {
         left(&mut g, 6, 99);
         let mut rekey = Rekey::default();
         assert_eq!(
-            rekey.learned(&g, 1, new(9, 4, 1_010, 6, 99), 1_000),
+            rekey.learned(&g, 1, new(9, 4, 1_010, 6, 99), 1_005),
             Learned::Pending,
             "a member gone by the time the key arrives"
         );
@@ -1379,7 +1388,7 @@ mod tests {
     fn a_declined_removal_is_not_asked_again() {
         let mut g = group(0, &[(0, 1), (1, 2), (2, 3)]);
         let mut rekey = Rekey::default();
-        rekey.learned(&g, 1, new(9, 4, 1_010, 2, 3), 1_000);
+        rekey.learned(&g, 1, new(9, 4, 1_010, 2, 3), 1_005);
         assert!(rekey.decline(&g));
         assert!(rekey.pending().is_none());
         assert!(!rekey.is_due(2_000));
@@ -1409,14 +1418,14 @@ mod tests {
         // round.
         let g = group(0, &[(0, 1), (1, 2), (2, 3), (3, 4)]);
         let mut rekey = Rekey::default();
-        rekey.learned(&g, 3, losing.clone(), 1_000);
+        rekey.learned(&g, 3, losing.clone(), 1_005);
         assert_eq!(
-            rekey.learned(&g, 1, winning.clone(), 1_000),
+            rekey.learned(&g, 1, winning.clone(), 1_007),
             Learned::Pending
         );
         assert_eq!(rekey.pending().unwrap().remover, 1);
         assert_eq!(
-            rekey.learned(&g, 3, losing.clone(), 1_000),
+            rekey.learned(&g, 3, losing.clone(), 1_005),
             Learned::Ignored
         );
 
@@ -1425,7 +1434,7 @@ mod tests {
         let mut g = group(0, &[(0, 1), (1, 2), (2, 3), (3, 4)]);
         let record = *g.member(2).unwrap();
         let mut rekey = Rekey::default();
-        rekey.learned(&g, 3, losing, 1_000);
+        rekey.learned(&g, 3, losing, 1_005);
         rekey.switch(&mut g).unwrap();
         assert!(g.gone(2).is_some());
         assert_eq!(
@@ -1470,7 +1479,7 @@ mod tests {
         let mut g = group(2, &members);
         let mut rekey = Rekey::default();
         rekey.start(&g, 3, Key::new([30; 32]), 1_000).unwrap();
-        assert_eq!(rekey.learned(&g, 1, rival.clone(), 1_001), Learned::Pending);
+        assert_eq!(rekey.learned(&g, 1, rival.clone(), 1_007), Learned::Pending);
         let switched = rekey.switch(&mut g).unwrap();
         assert_eq!(switched.removed, Some(0));
         assert_eq!(switched.undone, Ids::of(3), "3 is a member again");
@@ -1499,7 +1508,7 @@ mod tests {
         let mut rekey = Rekey::default();
         rekey.start(&g, 3, Key::new([30; 32]), 1_000).unwrap();
         rekey.switch(&mut g).unwrap();
-        rekey.learned(&g, 1, new(40, 5, 1_030, 0, 1).after(30), 1_020);
+        rekey.learned(&g, 1, new(40, 5, 1_030, 0, 1).after(30), 1_025);
         assert_eq!(rekey.switch(&mut g).unwrap().undone, Ids::EMPTY);
 
         // A rival from a higher id loses.
@@ -1507,7 +1516,7 @@ mod tests {
         let mut rekey = Rekey::default();
         rekey.start(&g, 1, Key::new([30; 32]), 1_000).unwrap();
         assert_eq!(
-            rekey.learned(&g, 3, new(31, 4, 1_012, 0, 1), 1_001),
+            rekey.learned(&g, 3, new(31, 4, 1_012, 0, 1), 1_007),
             Learned::Ignored
         );
     }
@@ -1516,7 +1525,7 @@ mod tests {
     fn a_removal_can_be_declined_for_a_day_after_its_switch() {
         let mut g = group(0, &[(0, 1), (1, 2), (2, 3), (3, 4)]);
         let mut rekey = Rekey::default();
-        rekey.learned(&g, 1, new(9, 4, 1_010, 2, 3), 1_000);
+        rekey.learned(&g, 1, new(9, 4, 1_010, 2, 3), 1_005);
         rekey.switch(&mut g).unwrap();
         let until = 1_010 + UNDO_ROUNDS;
         assert_eq!(rekey.undo_until(), Some(until));
@@ -1575,9 +1584,9 @@ mod tests {
         // Nor while the next is under way, and only the last.
         let mut g = group(0, &[(0, 1), (1, 2), (2, 3), (3, 4)]);
         let mut rekey = Rekey::default();
-        rekey.learned(&g, 1, new(9, 4, 1_010, 2, 3), 1_000);
+        rekey.learned(&g, 1, new(9, 4, 1_010, 2, 3), 1_005);
         rekey.switch(&mut g).unwrap();
-        rekey.learned(&g, 1, new(10, 5, 1_030, 3, 4).after(9), 1_020);
+        rekey.learned(&g, 1, new(10, 5, 1_030, 3, 4).after(9), 1_025);
         assert_eq!(rekey.undo(&mut g, 1_020, 2), None);
         rekey.switch(&mut g).unwrap();
         assert_eq!(rekey.undo(&mut g, 1_040, 2), None);
@@ -1596,7 +1605,7 @@ mod tests {
         let (losing, winning) = (new(21, 4, 1_010, 2, 3), new(20, 4, 1_012, 3, 4));
         let mut g = group(0, &[(0, 1), (1, 2), (2, 3), (3, 4)]);
         let mut rekey = Rekey::default();
-        rekey.learned(&g, 3, losing.clone(), 1_000);
+        rekey.learned(&g, 3, losing.clone(), 1_005);
         rekey.switch(&mut g).unwrap();
         rekey.learned(&g, 1, winning.clone(), 1_020);
         rekey.switch(&mut g).unwrap();
@@ -1619,7 +1628,7 @@ mod tests {
     fn a_rival_removing_the_same_member_leaves_it_gone() {
         let mut g = group(0, &[(0, 1), (1, 2), (2, 3), (3, 4)]);
         let mut rekey = Rekey::default();
-        rekey.learned(&g, 3, new(21, 4, 1_010, 2, 3), 1_000);
+        rekey.learned(&g, 3, new(21, 4, 1_010, 2, 3), 1_005);
         rekey.switch(&mut g).unwrap();
         rekey.learned(&g, 1, new(20, 4, 1_012, 2, 3), 1_020);
         let switched = rekey.switch(&mut g).unwrap();
@@ -1652,7 +1661,7 @@ mod tests {
         let mut g = group(0, &[(0, 1), (1, 2), (2, 3), (3, 4)]);
         left(&mut g, 6, 99);
         let mut rekey = Rekey::default();
-        rekey.learned(&g, 1, new(9, 4, 1_010, 2, 3), 1_000);
+        rekey.learned(&g, 1, new(9, 4, 1_010, 2, 3), 1_005);
         rekey.switch(&mut g).unwrap();
         rekey.learned(&g, 1, new(10, 5, 1_020, 2, 99).after(9), 1_015);
         assert_eq!(rekey.switch(&mut g).unwrap().removed, None);
@@ -1671,7 +1680,7 @@ mod tests {
         let mut g = group(0, &[(0, 1), (1, 2), (2, 3), (3, 4)]);
         left(&mut g, 6, 99);
         let mut rekey = Rekey::default();
-        rekey.learned(&g, 3, new(21, 4, 1_010, 2, 3), 1_000);
+        rekey.learned(&g, 3, new(21, 4, 1_010, 2, 3), 1_005);
         rekey.switch(&mut g).unwrap();
         rekey.learned(&g, 1, new(20, 4, 1_012, 6, 99), 1_020);
         assert_eq!(rekey.switch(&mut g).unwrap().restored, Some(2));
@@ -1685,7 +1694,7 @@ mod tests {
         let mut g = group(0, &[(0, 1), (1, 2), (2, 3), (3, 4), (4, 5)]);
         left(&mut g, 6, 99);
         let mut rekey = Rekey::default();
-        rekey.learned(&g, 1, new(9, 4, 1_010, 2, 3), 1_000);
+        rekey.learned(&g, 1, new(9, 4, 1_010, 2, 3), 1_005);
         rekey.switch(&mut g).unwrap();
         rekey.learned(&g, 3, new(21, 5, 1_020, 6, 99).after(9), 1_015);
         assert_eq!(rekey.switch(&mut g).unwrap().removed, None);
@@ -1719,7 +1728,7 @@ mod tests {
         let mut g = group(2, &[(0, 1), (1, 2), (2, 3), (3, 4)]);
         let mut rekey = Rekey::default();
         rekey.start(&g, 3, Key::new([30; 32]), 1_000).unwrap();
-        rekey.learned(&g, 1, rival, 1_001);
+        rekey.learned(&g, 1, rival, 1_007);
         assert_eq!(rekey.switch(&mut g).unwrap().undone, Ids::EMPTY);
     }
 
@@ -1727,7 +1736,7 @@ mod tests {
     fn declining_keeps_an_older_rival_of_the_key_gone_back_to() {
         let mut g = group(0, &[(0, 1), (1, 2), (2, 3), (3, 4)]);
         let mut rekey = Rekey::default();
-        rekey.learned(&g, 1, new(9, 4, 1_010, 2, 3), 1_000);
+        rekey.learned(&g, 1, new(9, 4, 1_010, 2, 3), 1_005);
         rekey.old[0] = Some(Old {
             key: Key::new([20; 32]),
             generation: 3,
@@ -1813,7 +1822,7 @@ mod tests {
 
         rekey.start(&g, 2, Key::new([9; 32]), 1_000).unwrap();
         rekey.switch(&mut g).unwrap();
-        rekey.learned(&g, 3, new(10, 5, 1_030, 1, 2).after(9), 1_020);
+        rekey.learned(&g, 3, new(10, 5, 1_030, 1, 2).after(9), 1_025);
         rekey.decline(&g);
         rekey.learned(&g, 3, new(11, 5, 1_031, 1, 2).after(9), 1_040);
         let mut out = [0; STORED_MAX];
@@ -1834,7 +1843,7 @@ mod tests {
         // stored before there was one.
         let mut g = group(0, &[(0, 1), (1, 2), (2, 3)]);
         let mut rekey = Rekey::default();
-        rekey.learned(&g, 1, new(9, 4, 1_010, 2, 3), 1_000);
+        rekey.learned(&g, 1, new(9, 4, 1_010, 2, 3), 1_005);
         rekey.switch(&mut g).unwrap();
         g.merge(1, signed(1, 2, 2_000), None);
         rekey.changed(g.take_changed());
@@ -2017,7 +2026,7 @@ mod tests {
     fn a_switch_records_who_removed_for_each_generation() {
         let mut g = group(0, &[(0, 1), (1, 2), (2, 3), (3, 4)]);
         let mut rekey = Rekey::default();
-        rekey.learned(&g, 1, new(9, 4, 1_010, 2, 3), 1_000);
+        rekey.learned(&g, 1, new(9, 4, 1_010, 2, 3), 1_005);
         rekey.switch(&mut g).unwrap();
         assert_eq!(rekey.remover_of(4), Some(1));
         rekey.start(&g, 3, Key::new([8; 32]), 1_020).unwrap();
