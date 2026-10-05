@@ -3,9 +3,9 @@
 
 use crate::bits::{BitReader, BitWriter, Full};
 use crate::members::{GONE_LEN, Gone, Member, RECORD_MAX_LEN, Slot};
-use crate::messages::{BODY_MAX, FIXED_LEN, Message};
+use crate::messages::Message;
 use crate::rekey::{ON_KEY_LEN, OnKey};
-use crate::seal::SIV_LEN;
+use crate::seal::{self, Key, SIV_LEN};
 
 pub const VERSION: u8 = 1;
 /// The radio's largest payload.
@@ -115,6 +115,18 @@ pub struct Header {
 }
 
 impl Header {
+    /// The header of a packet from `sender` on `timebase`, whose slot starts in second `base`.
+    #[must_use]
+    pub fn new(sender: u8, timebase: Timebase, base: u32) -> Self {
+        Self {
+            sender,
+            timebase,
+            base,
+            phase: 0,
+            notice: false,
+        }
+    }
+
     fn encode(&self, out: &mut [u8; HEADER_LEN]) {
         let (source, root) = match self.timebase.source {
             Source::Gps => (0, 0),
@@ -323,6 +335,9 @@ pub const NEIGHBOURS_LEN: usize = WORD_LEN;
 /// Writes a packet's plaintext: the header, then records in the order they are added.
 pub struct Builder<'a> {
     buf: &'a mut [u8],
+    /// Where in `buf` the plaintext starts.
+    start: usize,
+    /// The plaintext's length so far.
     len: usize,
     base: u32,
 }
@@ -330,11 +345,16 @@ pub struct Builder<'a> {
 impl<'a> Builder<'a> {
     /// Starts a plaintext in `buf`, which holds at most [`MAX_PLAIN`] of it.
     pub fn new(buf: &'a mut [u8], header: &Header) -> Self {
+        Self::at(buf, 0, header)
+    }
+
+    fn at(buf: &'a mut [u8], start: usize, header: &Header) -> Self {
         let mut bytes = [0; HEADER_LEN];
         header.encode(&mut bytes);
-        buf[..HEADER_LEN].copy_from_slice(&bytes);
+        buf[start..start + HEADER_LEN].copy_from_slice(&bytes);
         Self {
             buf,
+            start,
             len: HEADER_LEN,
             base: header.base,
         }
@@ -343,7 +363,7 @@ impl<'a> Builder<'a> {
     /// The bytes left for records.
     #[must_use]
     pub fn room(&self) -> usize {
-        self.buf.len().min(MAX_PLAIN) - self.len
+        (self.buf.len() - self.start).min(MAX_PLAIN) - self.len
     }
 
     /// The most entries a positions record can hold in what is left.
@@ -356,16 +376,30 @@ impl<'a> Builder<'a> {
         ((room - 2) * 8 / ENTRY_BITS).min(255 * 8 / ENTRY_BITS)
     }
 
-    fn word(&mut self, kind: u8, value: u32) -> Result<(), Full> {
-        if self.room() < WORD_LEN {
+    /// Writes a record of `kind` with a body of `len` bytes, which `write` fills. Nothing counts
+    /// as written unless `write` succeeds.
+    fn record(
+        &mut self,
+        kind: u8,
+        len: usize,
+        write: impl FnOnce(&mut [u8]) -> Result<(), Full>,
+    ) -> Result<(), Full> {
+        if len > 255 || 2 + len > self.room() {
             return Err(Full);
         }
-        let at = self.len;
+        let at = self.start + self.len;
         self.buf[at] = kind;
-        self.buf[at + 1] = 4;
-        self.buf[at + 2..at + 6].copy_from_slice(&value.to_le_bytes());
-        self.len += WORD_LEN;
+        self.buf[at + 1] = len as u8;
+        write(&mut self.buf[at + 2..at + 2 + len])?;
+        self.len += 2 + len;
         Ok(())
+    }
+
+    fn word(&mut self, kind: u8, value: u32) -> Result<(), Full> {
+        self.record(kind, WORD_LEN - 2, |body| {
+            body.copy_from_slice(&value.to_le_bytes());
+            Ok(())
+        })
     }
 
     pub fn neighbours(&mut self, heard: u32) -> Result<(), Full> {
@@ -387,94 +421,62 @@ impl<'a> Builder<'a> {
 
     /// Writes a summary [`Store::summary`] wrote.
     pub fn summary(&mut self, summary: &[u8]) -> Result<(), Full> {
-        if summary.len() > 255 || 2 + summary.len() > self.room() {
-            return Err(Full);
-        }
-        let at = self.len;
-        self.buf[at] = record::SUMMARY;
-        self.buf[at + 1] = summary.len() as u8;
-        self.buf[at + 2..at + 2 + summary.len()].copy_from_slice(summary);
-        self.len += 2 + summary.len();
-        Ok(())
+        self.record(record::SUMMARY, summary.len(), |body| {
+            body.copy_from_slice(summary);
+            Ok(())
+        })
     }
 
     pub fn message(&mut self, message: &Message) -> Result<(), Full> {
-        if message.record_len() > self.room() {
-            return Err(Full);
-        }
-        let mut body = [0; FIXED_LEN + BODY_MAX];
-        let len = message.encode(&mut body);
-        let at = self.len;
-        self.buf[at] = record::MESSAGE;
-        self.buf[at + 1] = len as u8;
-        self.buf[at + 2..at + 2 + len].copy_from_slice(&body[..len]);
-        self.len += 2 + len;
-        Ok(())
+        self.record(record::MESSAGE, message.record_len() - 2, |body| {
+            message.encode(body);
+            Ok(())
+        })
     }
 
     /// Writes a positions record of `entries`, each of which must fit below the base timestamp.
     pub fn positions(&mut self, entries: &[Entry]) -> Result<(), Full> {
-        let len = positions_len(entries.len());
-        if entries.is_empty() || len > self.room() || len - 2 > 255 {
+        if entries.is_empty() {
             return Err(Full);
         }
-        let at = self.len;
-        self.buf[at] = record::POSITIONS;
-        self.buf[at + 1] = (len - 2) as u8;
-        let mut writer = BitWriter::new(&mut self.buf[at + 2..at + len]);
-        for entry in entries {
-            assert!(
-                entry.fits_below(self.base),
-                "an entry must fit below the base"
-            );
-            entry.encode(self.base, &mut writer)?;
-        }
-        self.len += len;
-        Ok(())
+        let base = self.base;
+        self.record(
+            record::POSITIONS,
+            positions_len(entries.len()) - 2,
+            |body| {
+                let mut writer = BitWriter::new(body);
+                for entry in entries {
+                    assert!(entry.fits_below(base), "an entry must fit below the base");
+                    entry.encode(base, &mut writer)?;
+                }
+                Ok(())
+            },
+        )
     }
 
     /// Writes a member record for `id`.
     pub fn member(&mut self, id: u8, member: &Member) -> Result<(), Full> {
-        let mut body = [0; RECORD_MAX_LEN];
-        let len = member.encode(id, &mut body);
-        if 2 + len > self.room() {
-            return Err(Full);
-        }
-        let at = self.len;
-        self.buf[at] = record::MEMBER;
-        self.buf[at + 1] = len as u8;
-        self.buf[at + 2..at + 2 + len].copy_from_slice(&body[..len]);
-        self.len += 2 + len;
-        Ok(())
+        let mut bytes = [0; RECORD_MAX_LEN];
+        let len = member.encode(id, &mut bytes);
+        self.record(record::MEMBER, len, |body| {
+            body.copy_from_slice(&bytes[..len]);
+            Ok(())
+        })
     }
 
     /// Writes a gone record for `id`.
     pub fn gone(&mut self, id: u8, gone: &Gone) -> Result<(), Full> {
-        if 2 + GONE_LEN > self.room() {
-            return Err(Full);
-        }
-        let mut body = [0; GONE_LEN];
-        gone.encode(id, &mut body);
-        let at = self.len;
-        self.buf[at] = record::GONE;
-        self.buf[at + 1] = GONE_LEN as u8;
-        self.buf[at + 2..at + 2 + GONE_LEN].copy_from_slice(&body);
-        self.len += 2 + GONE_LEN;
-        Ok(())
+        self.record(record::GONE, GONE_LEN, |body| {
+            gone.encode(id, body.try_into().expect("a gone record's length"));
+            Ok(())
+        })
     }
 
     pub fn on_key(&mut self, on_key: &OnKey) -> Result<(), Full> {
-        if 2 + ON_KEY_LEN > self.room() {
-            return Err(Full);
-        }
-        let mut body = [0; ON_KEY_LEN];
-        on_key.encode(&mut body);
-        let at = self.len;
-        self.buf[at] = record::ON_KEY;
-        self.buf[at + 1] = ON_KEY_LEN as u8;
-        self.buf[at + 2..at + 2 + ON_KEY_LEN].copy_from_slice(&body);
-        self.len += 2 + ON_KEY_LEN;
-        Ok(())
+        self.record(record::ON_KEY, ON_KEY_LEN, |body| {
+            on_key.encode(body.try_into().expect("an on-key record's length"));
+            Ok(())
+        })
     }
 
     /// Writes what the slot at `id` holds: a member record or a gone record.
@@ -489,6 +491,37 @@ impl<'a> Builder<'a> {
     #[must_use]
     pub fn finish(self) -> usize {
         self.len
+    }
+}
+
+/// A packet whose plaintext a [`Builder`] writes behind the room for its synthetic IV, and which
+/// is sealed under a key as it finishes.
+pub struct Sealing<'a>(Builder<'a>);
+
+impl<'a> Sealing<'a> {
+    /// Starts a packet in `packet`, which holds at most [`MAX_PACKET`] of it.
+    pub fn new(packet: &'a mut [u8], header: &Header) -> Self {
+        Self(Builder::at(packet, SIV_LEN, header))
+    }
+
+    /// Seals the packet under `key`, and returns its length.
+    #[must_use]
+    pub fn seal(self, key: &Key) -> usize {
+        seal::seal(key, self.0.buf, self.0.len)
+    }
+}
+
+impl<'a> core::ops::Deref for Sealing<'a> {
+    type Target = Builder<'a>;
+
+    fn deref(&self) -> &Builder<'a> {
+        &self.0
+    }
+}
+
+impl core::ops::DerefMut for Sealing<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 
@@ -650,6 +683,23 @@ mod tests {
         assert!(matches!(records.next(), Some(Record::Members(0xdead_beef))));
         assert!(matches!(records.next(), Some(Record::Request(0x8000_0010))));
         assert!(records.next().is_none());
+    }
+
+    #[test]
+    fn a_sealed_packet_is_the_plaintext_sealed() {
+        let key = Key::new([7; 32]);
+        let mut by_hand = [0; MAX_PACKET];
+        let mut builder = Builder::new(&mut by_hand[SIV_LEN..], &header());
+        builder.neighbours(0x8000_0011).unwrap();
+        let plain_len = builder.finish();
+        let len = seal::seal(&key, &mut by_hand, plain_len);
+
+        let mut sealed = [0; MAX_PACKET];
+        let mut sealing = Sealing::new(&mut sealed, &header());
+        sealing.neighbours(0x8000_0011).unwrap();
+        assert_eq!(sealing.room(), MAX_PLAIN - HEADER_LEN - WORD_LEN);
+        assert_eq!(sealing.seal(&key), len);
+        assert_eq!(sealed[..len], by_hand[..len]);
     }
 
     #[test]

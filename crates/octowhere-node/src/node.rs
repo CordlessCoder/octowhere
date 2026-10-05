@@ -19,7 +19,7 @@ use octowhere_mesh::{
         self, BODY_MAX, Insert, Message, Pairwise, Sequence, Store, Summaries, TEXT_MAX, To, kind,
     },
     packet::{
-        Builder, Entry, HEADER_LEN, Hdop, Header, MAX_PACKET, Plain, Quality, Record, Source,
+        Entry, HEADER_LEN, Hdop, Header, MAX_PACKET, Plain, Quality, Record, Sealing, Source,
         Timebase,
     },
     pair::{End, Identity, MAX_FRAME, Pairing, Phase, Role},
@@ -1300,19 +1300,11 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         self.radio.standby().await;
         self.time.until(send_at - PREPARE_US).await;
         self.after = start + 1;
-        let header = Header {
-            sender: own,
-            timebase,
-            base: second_at(start),
-            phase: 0,
-            notice: false,
-        };
         let mut packet = [0u8; MAX_PACKET];
-        let mut builder = Builder::new(&mut packet[SIV_LEN..], &header);
+        let mut builder = Sealing::new(&mut packet, &Header::new(own, timebase, second_at(start)));
         let _ = builder.neighbours(self.table.neighbours(round).bits());
         let _ = builder.gone(own, &leaving.gone);
-        let plain_len = builder.finish();
-        let len = seal::seal(leaving.group.key(), &mut packet, plain_len);
+        let len = builder.seal(leaving.group.key());
         let sent = self.radio.transmit(&packet[..len], Some(send_at)).await;
         info!(
             "[MESH] told the group it left round={} done={}",
@@ -1358,15 +1350,8 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             return;
         };
         let key = key.clone();
-        let header = Header {
-            sender: own,
-            timebase,
-            base: second_at(time),
-            phase: 0,
-            notice: false,
-        };
         let mut packet = [0u8; MAX_PACKET];
-        let mut builder = Builder::new(&mut packet[SIV_LEN..], &header);
+        let mut builder = Sealing::new(&mut packet, &Header::new(own, timebase, second_at(time)));
         let (mut caught, mut lost) = (Ids::EMPTY, Ids::EMPTY);
         for &(id, catches_up_with) in &ids {
             match self.removals.message_for(id, catches_up_with) {
@@ -1376,8 +1361,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                 None => lost.insert(id),
             }
         }
-        let plain_len = builder.finish();
-        let len = seal::seal(&key, &mut packet, plain_len);
+        let len = builder.seal(&key);
         let sent = self.radio.transmit(&packet[..len], Some(at)).await;
         self.removals.sent_old(caught, lost, round);
         info!(
@@ -1409,14 +1393,10 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             return;
         };
         let header = Header {
-            sender: own,
-            timebase,
-            base: second_at(time),
-            phase: 0,
             notice: true,
+            ..Header::new(own, timebase, second_at(time))
         };
-        let plain_len = Builder::new(&mut packet[SIV_LEN..], &header).finish();
-        let len = seal::seal(group.key(), &mut packet, plain_len);
+        let len = Sealing::new(&mut packet, &header).seal(group.key());
         let sent = self.radio.transmit(&packet[..len], Some(at)).await;
         info!("[MESH] notice sent done={}", sent.is_some_and(|done| done));
     }
@@ -1815,15 +1795,8 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             return;
         };
         let base = second_at(start);
-        let header = Header {
-            sender: group.own(),
-            timebase,
-            base,
-            phase: 0,
-            notice: false,
-        };
         let mut packet = [0u8; MAX_PACKET];
-        let mut builder = Builder::new(&mut packet[SIV_LEN..], &header);
+        let mut builder = Sealing::new(&mut packet, &Header::new(group.own(), timebase, base));
         let carried = compose(
             &mut builder,
             round,
@@ -1840,8 +1813,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                 on_key: self.removals.on_key_for(round, send_at),
             },
         );
-        let plain_len = builder.finish();
-        let len = seal::seal(group.key(), &mut packet, plain_len);
+        let len = builder.seal(group.key());
         if carried.on_key {
             self.removals.carried_on_key();
         }
