@@ -155,9 +155,6 @@ initialization or peripheral mappings.
   without a display, and what is settled. Read it before using the board.
 - [`context/HARDWARE-VERIFICATION.md`](context/HARDWARE-VERIFICATION.md) lists open hardware
   questions from static review. They are questions, not confirmed defects.
-- [`context/MESH-CLEANUP-PLAN.md`](context/MESH-CLEANUP-PLAN.md) is the plan, step by step,
-  for what the 2026-10-03 code-quality review of the mesh and node left open, with the base
-  commit, the gates and the baseline each step is checked against. Follow it in order.
 - [`context/ui-firmware-review/`](context/ui-firmware-review/README.md) is the 2026-10-04
   code-quality review of the UI crate and the firmware at `b8ab7ca`: its brief, each
   reviewer's findings, and in the README the bugs verified and the findings to take first.
@@ -268,9 +265,10 @@ and a feature names one. The check rebuilds a temporary manifest with a stable c
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 1,846,768 bytes, 11.79% of the 15,663,104-byte app partition that
-`partitions.csv` gives it (the plain build once the firmware moved into `firmware/`; it was
-1,848,064 at `03cc818`, and at `58ea45c` 1,835,136, and 1,837,792 with the inject features).
+The image is currently 1,847,216 bytes, 11.79% of the 15,663,104-byte app partition that
+`partitions.csv` gives it (the plain build after the mesh clean-up, `3a9d42e`; it was 1,846,768
+once the firmware moved into `firmware/`, 1,848,064 at `03cc818`, and at `58ea45c` 1,835,136, and
+1,837,792 with the inject features).
 Since the move, panic locations name the local crates by absolute path, as they always named
 registry crates, so the size moves a little with the checkout's path: a worktree with a longer
 one built 96 bytes more. `b06d686` alone added
@@ -657,8 +655,18 @@ errata workaround, are in [`docs/hardware-notes.md`](docs/hardware-notes.md).
   figures predate signing; remeasure before relying on them. With the member face, messages
   and removals (2026-10-04) the radio task's poll takes 14,576 bytes and `Stage::advance`
   3,200, and core 0's stack is 107,068 bytes; after that day's security fixes (`03cc818`) the
-  radio task's poll takes 15,824. `context/MESH-CLEANUP-PLAN.md` has the command that lists
-  the largest frames.
+  radio task's poll takes 15,824, and after the mesh clean-up (`3a9d42e`) 16,384, with
+  `async_main`'s 15,840. The clean-up took a pairing's copy of the group off its receive path,
+  so `Pairing::start_transfer` went from 5,344 to 320. This lists the largest frames, from the
+  root:
+
+  ```text
+  OBJDUMP=$(ls ~/.rustup/toolchains/esp/xtensa-esp-elf/*/xtensa-esp-elf/bin/xtensa-esp-elf-objdump | head -1)
+  $OBJDUMP -d --no-show-raw-insn -C firmware/target/xtensa-esp32s3-none-elf/release/octowhere \
+    | awk '/^[0-9a-f]+ <.*>:$/ {name=$0; getline; if ($0 ~ /entry/) {split($0, a, ","); sz=a[2]; gsub(/ /, "", sz); print sz "\t" name}}' \
+    | awk -F'\t' '{v=$1; if (v ~ /^0x/) v=strtonum(v); print v "\t" $2}' | sort -rn | head -12
+  ```
+
   Each function's frame is the `entry a1, N` that opens it in `xtensa-esp-elf-objdump -d`, in
   hex once it is large. The dump names code with no symbol of its own after the symbol before
   it, so a large frame can carry an unlikely name.

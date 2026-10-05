@@ -110,8 +110,7 @@ until the feature set is complete, because profiling an incomplete firmware pric
       `node.rs`).
     - The plain image grew 54,432 bytes over messages and removals, to 1,835,136. Check whether
       it crossed into padding before blaming the code ("Binary size" in `AGENTS.md`).
-    - Rerun `bench/stack-watermark`: the radio task's poll is 14,576 bytes and core 0's stack
-      107,068.
+    - Rerun `bench/stack-watermark` (the clean-up's entry below).
   - The consistency rules and the cost on a board, done (2026-10-04): the drawer's buttons take
     taps over 40 px (`a54b8eb`); the member face draws a full frame in under 100 ms, from 315
     without a fix and 123 with one (`80ac3cd`,
@@ -270,41 +269,16 @@ until the feature set is complete, because profiling an incomplete firmware pric
 - Act on the 2026-10-04 code-quality review of the UI crate and the firmware,
   [`ui-firmware-review/README.md`](ui-firmware-review/README.md): 112 findings, with the ones to
   take first. Its eight bugs are fixed (2026-10-04); the rest are open.
-- Simplify the node (`octowhere-node`'s `node.rs`, moved from `src/mesh.rs`) and the mesh crate's surface, from the 2026-10-03 code-quality review
-  of `337717f`. What is left is planned step by step in `MESH-CLEANUP-PLAN.md` (2026-10-04):
-  follow that, and strike lines here as its steps land. The order the owner agreed on 2026-10-04: the radio and the save flags first,
-  as they shrink the simulator's seams, then the seams (the entry above), then `send()` and
-  `take()` into the crate before the simulator's scenarios. Leave the slot encoding and the
-  flash header until tests cover them, since they touch the stored format. Done: the review's
-  quick wins (`96b6d81`), the radio's fields and methods as `mesh::Radio` (`471e8f7`), and the `unsaved`,
-  `unsaved_group` and `rekey_unsaved` flags as `Unsaved`, and the node's own `heard` and
-  `refresh` in place of the view's, which only copies them now, and `send()`'s packet filling
-  and `take()`'s records loop as the mesh crate's tested `compose` and `absorb`, and the ten
-  removal fields as `Removals` (`0a25c3d`, plan step 1), and `step()`'s choice of what goes
-  out as the tested `Next::choose` (`7381762`, step 2), and one group fixture for the member and
-  rekey tests (`2e21c2c`, step 3; the `messages.rs` half was done in `96b6d81`), and the
-  comments the review asked for (`5307b20`, step 4), and time and rounds converted one way in
-  `schedule` (`f4e58b7`, step 5), and sets of ids as `octowhere_mesh::Ids` (`e2921f7` to
-  `23c7762`, step 6), and one digest mismatch count, with `answer` for both (`ab58fc1`, step
-  7), and records framed and sealed packets built one way (`fa5a9aa`, step 8), and the names
-  and types of step 9 (`8cc2b28` to `b162190`). Left:
-  - Duplication in the crate and `settings.rs`:
-    - One slot encoding: `Builder::slot`, the pairing's `welcome` and `read_welcome`, and
-      `settings`' `write_member` and `read_slot` each have their own, and the decoders tell a
-      member from a gone record by different length rules.
-    - The group header's flash layout (key, own id, generation), written and read in
-      `settings.rs` at offsets one apart, in the crate with a round-trip test.
-  - Not rechecked since `337717f`: `rekey::Last`
-    and `rekey::Undo` public with public fields though nothing outside uses them, `bits`
-    public likewise, and `Group::new` used only by tests, with a stale doc.
-  - Work and stack: `start_transfer` in `pair.rs` clones the 2.6 KB group on the receive path
-    though its only failure comes before any change; `old_slot_at` rebuilds a 1 KB `Schedule`,
-    an HKDF and 32 AES blocks, every step while catching a member up; check the remaining
-    `Box::new(group.clone())` temporaries.
-  - Matters of taste, for when their code is touched anyway: `Group` mixes replicated data
-    with send bookkeeping; positional bools (`Message::private` takes eight arguments) and
-    `Clock`'s `(i64, i64)` tuples; mixed byte orders (do not churn; pick one for new formats);
-    `seal`/`open` and `seal_bound`/`open_bound` could be one pair.
+- The mesh and node clean-up from the 2026-10-03 code-quality review is done (2026-10-05,
+  `0a25c3d` to `3a9d42e`); `context/MESH-CLEANUP-PLAN.md` laid it out, and git has it at
+  `55167be`. Two things wait for the boards: flash both with master and check that they pair,
+  hear each other, switch on a phantom's removal, drop the old key on the members' on-key
+  records and rejoin after a restart, which the 2026-10-04 security fixes and the clean-up have
+  only run in the simulator; and rerun `bench/stack-watermark`, since the frames moved. Left
+  for whenever the code is touched anyway: `Group` mixes replicated data with send bookkeeping;
+  positional bools (`Message::private` takes eight arguments) and `Clock`'s `(i64, i64)` tuples;
+  mixed byte orders (do not churn; pick one for new formats); `seal`/`open` and
+  `seal_bound`/`open_bound` could be one pair.
 - Finish what step 3's screens leave open (`SCREEN-DESIGN-BRIEF.md`, "Group and pairing as
   built"):
   - Every group screen's legibility on the panel, which nobody has judged yet. Typing on the

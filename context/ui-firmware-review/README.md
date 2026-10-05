@@ -3,7 +3,7 @@
 Three reviewers read the UI crate and the firmware at `b8ab7ca`, from `BRIEF.md` (what they were
 told: partition, rules, categories, format). Their findings are `ui-runtime.md`, `ui-faces.md`
 and `firmware.md`, with line numbers at `b8ab7ca`. The mesh and node had the same review on
-2026-10-03 (`MESH-CLEANUP-PLAN.md`).
+2026-10-03; its clean-up is done, and its plan, `MESH-CLEANUP-PLAN.md`, is in git at `55167be`.
 
 112 findings: ui-runtime 36, ui-faces 39, firmware 37. The eight bugs are fixed, each with a
 regression test that fails without its fix; the other findings are open.
