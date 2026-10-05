@@ -21,23 +21,23 @@ impl AxisMap {
 
 /// Spread each axis must cover before the hard-iron offset is trusted. Earth's field is about
 /// 50 µT, so turning the board through every orientation spreads each axis by about 100 µT.
-pub const CALIBRATION_SPREAD_UT: f32 = 40.0;
+const CALIBRATION_SPREAD_UT: f32 = 40.0;
 
 /// How far the corrected field's strength may stray from the calibration's before the reading
 /// counts as disturbed.
-pub const DISTURBANCE_FRACTION: f32 = 0.35;
+const DISTURBANCE_FRACTION: f32 = 0.35;
 /// Once calibrated, how far it may stray and still join the fit. Tighter than
 /// [`DISTURBANCE_FRACTION`], so a field weakened by something nearby is neither flagged nor
 /// learned.
-pub const FIT_ADMIT_FRACTION: f32 = 0.15;
+const FIT_ADMIT_FRACTION: f32 = 0.15;
 /// Once the screen shows interference, the field must come back within this fraction for
 /// [`INTERFERENCE_LEAVE_US`] before it stops. Looser than [`DISTURBANCE_FRACTION`], so a field
 /// hovering at the threshold keeps showing interference rather than flickering.
-pub const INTERFERENCE_CLEAR_FRACTION: f32 = 0.30;
+const INTERFERENCE_CLEAR_FRACTION: f32 = 0.30;
 /// How long, in µs, the field must stay disturbed without a break before the screen shows it.
-pub const INTERFERENCE_ENTER_US: u64 = 200_000;
+const INTERFERENCE_ENTER_US: u64 = 200_000;
 /// How long, in µs, it must stay clear without a break before the screen stops showing it.
-pub const INTERFERENCE_LEAVE_US: u64 = 1_000_000;
+const INTERFERENCE_LEAVE_US: u64 = 1_000_000;
 /// The heading goes when the screen stands within 11.5° of vertical, whichever edge is up, since
 /// the dial lies in the screen's plane and no longer matches the ground's: this is the vertical
 /// part of the screen's normal there.
@@ -47,28 +47,28 @@ const UPRIGHT_CLEAR: f32 = 0.258_819;
 
 /// A sample joins the sphere fit only this far, in µT, from the last one that did, so a board held
 /// still does not outweigh every other direction.
-pub const FIT_SPACING_UT: f32 = 3.0;
+const FIT_SPACING_UT: f32 = 3.0;
 /// Samples the sphere fit needs before it replaces the midpoint of each axis's range.
-pub const FIT_MIN_SAMPLES: u32 = 12;
+const FIT_MIN_SAMPLES: u32 = 12;
 /// Once calibrated, each spaced sample weighs the ones before it down by `1 - 1 / FIT_MEMORY`, so
 /// the fit follows an offset that drifts.
-pub const FIT_MEMORY: f64 = 300.0;
+const FIT_MEMORY: f64 = 300.0;
 /// The forgetting never takes the fit below this many samples' worth of what the completed
 /// calibration knew, held at the current estimate. Without it, a board kept level forgets the
 /// offset along the axis it no longer turns through.
-pub const FIT_FLOOR: f64 = 20.0;
+const FIT_FLOOR: f64 = 20.0;
 
 /// A candidate fit, started by a sample the fit does not admit, replaces the calibration once it
 /// covers as much as a calibration does and its samples lie within this RMS distance, in µT, of
 /// its sphere.
 /// A magnet passing by does not form a sphere; a changed offset of the board's own turns with the
 /// board and does.
-pub const CANDIDATE_RESIDUAL_UT: f32 = 2.0;
+const CANDIDATE_RESIDUAL_UT: f32 = 2.0;
 /// And its radius is within this fraction of the calibration's, as Earth's field has not changed.
-pub const CANDIDATE_RADIUS_FRACTION: f32 = 0.15;
+const CANDIDATE_RADIUS_FRACTION: f32 = 0.15;
 /// A candidate is dropped after this many spaced samples in a row that the fit admitted, or once it
 /// covers enough but is not a sphere.
-pub const CANDIDATE_QUIET_SAMPLES: u32 = 40;
+const CANDIDATE_QUIET_SAMPLES: u32 = 40;
 
 /// A hard-iron offset: the field of the board itself, which turns with the board. Earth's field
 /// then lies on a sphere around it, and the offset is that sphere's centre, fitted by least
@@ -184,14 +184,14 @@ impl HardIron {
 
     /// Starts forgetting old samples, keeping [`FIT_FLOOR`] samples' worth of what the fit knows
     /// now. Does nothing before there is a fit.
-    pub fn track(&mut self) {
+    fn track(&mut self) {
         if self.floor.is_none() && self.solution.is_some() && self.weight > 0.0 {
             self.floor = Some(self.normal.map(|value| value / self.weight));
         }
     }
 
     #[must_use]
-    pub fn is_tracking(&self) -> bool {
+    fn is_tracking(&self) -> bool {
         self.floor.is_some()
     }
 
@@ -262,8 +262,8 @@ impl HardIron {
             / 3.0
     }
 
-    /// The RMS distance, in µT, of the fitted samples from the sphere. Meaningful only before
-    /// [`track`](Self::track), as the floor does not count as samples.
+    /// The RMS distance, in µT, of the fitted samples from the sphere. Meaningful only until
+    /// the fit starts tracking, as the floor does not count as samples.
     #[must_use]
     pub fn residual(&self) -> Option<f32> {
         let solution = self.solution?;
@@ -297,7 +297,7 @@ impl HardIron {
         (length(field) - radius).abs() > fraction * radius
     }
 
-    /// The least-covered axis's range as a fraction of [`CALIBRATION_SPREAD_UT`], up to 1.
+    /// The least-covered axis's range as a fraction of the spread a calibration needs, up to 1.
     #[must_use]
     pub fn progress(&self) -> f32 {
         (0..3)
@@ -324,7 +324,7 @@ fn radius_squared(solution: [f64; 4]) -> f64 {
 }
 
 /// The hard-iron calibration the compass uses, which follows a changing environment. Samples
-/// within [`FIT_ADMIT_FRACTION`] go to a fit that slowly forgets. The rest start a candidate fit,
+/// near the fitted sphere go to a fit that slowly forgets. The rest start a candidate fit,
 /// which takes over if it forms a sphere of Earth's field, and is dropped otherwise once the
 /// disturbance passes.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -439,7 +439,7 @@ impl Calibration {
 
     /// Whether `field`'s strength is more than `fraction` off the calibration's.
     #[must_use]
-    pub fn strays(&self, field: Vec3, fraction: f32) -> bool {
+    fn strays(&self, field: Vec3, fraction: f32) -> bool {
         self.main.strays(field, fraction)
     }
 
@@ -466,8 +466,8 @@ pub struct Attitude {
 
 /// Tilt-compensated heading and tilt. `None` when either vector is too short to have a
 /// direction, or the field lies along gravity.
-#[must_use]
-pub fn attitude(accel: Vec3, field: Vec3) -> Option<Attitude> {
+#[cfg(test)]
+fn attitude(accel: Vec3, field: Vec3) -> Option<Attitude> {
     let down = normalize([-accel[0], -accel[1], -accel[2]])?;
     let east = normalize(cross(down, field))?;
     let north = cross(east, down);
@@ -488,6 +488,7 @@ pub fn attitude(accel: Vec3, field: Vec3) -> Option<Attitude> {
     })
 }
 
+#[cfg(test)]
 fn cross(a: Vec3, b: Vec3) -> Vec3 {
     [
         a[1] * b[2] - a[2] * b[1],
@@ -496,6 +497,7 @@ fn cross(a: Vec3, b: Vec3) -> Vec3 {
     ]
 }
 
+#[cfg(test)]
 fn normalize(v: Vec3) -> Option<Vec3> {
     let length = length(v);
     (length > 1e-3).then(|| [v[0] / length, v[1] / length, v[2] / length])
