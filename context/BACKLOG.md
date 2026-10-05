@@ -244,8 +244,8 @@ until the feature set is complete, because profiling an incomplete firmware pric
   step 6 is its screens, which need a design round: sending and reading messages, a removal's
   confirmation, and removing a member.
   Contention replaced the slots on 2026-10-05 (owner; the protocol's "Medium access"), which
-  drops step 5, CAD; the slots are on the `tdma` branch. It has run only in the simulator:
-  run it on the two boards, with what the protocol's "Open" lists to check there. Then step 7.
+  drops step 5, CAD; the slots are on the `tdma` branch. It ran on the two boards
+  (`docs/logs/lora/contention-2026-10-05/`). Then step 7.
   REFRESH DEVICES is to be retired (owner, 2026-10-05; `design/DECISIONS.md` 33): that needs
   a design round for the group screens, the refresh screens and the drawer's refresh rows,
   and then the mesh's refresh command and view can go too.

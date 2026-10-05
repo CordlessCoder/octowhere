@@ -920,9 +920,12 @@ protocol does not need this.
   120 s over ten seeds, against 40 s to about 9 minutes before relays were heard as
   acknowledgements; a lone message crossed it in 4 to 90 s with every link losing a packet in
   five.
-- Contention has run only in the simulator. On the boards: whether the modem's status sees a
-  packet under way as the simulator assumes, how late the transmission starts after the check,
-  and whether the header's 256ths keep two boards' clocks as close as slots did.
+- Contention ran on the two boards (`docs/logs/lora/contention-2026-10-05/`). Its first build
+  never sent: the modem's RX on-going bit holds throughout continuous receive, and the check
+  took it for a packet under way. A sender starts a few milliseconds after the time its
+  header names, so a node two hops from its clock's root hears it 5 to 9 ms late. What two
+  boards side by side cannot show, nodes hidden from each other and two starting inside the
+  modem's detection time, rests on the simulator.
 - Continuous receive's power against the budget, two days on a cell of about 1,000 mAh (owner,
   2026-10-03), which waits on measuring what the rest of the device draws
   ([`POWER-INVESTIGATION.md`](POWER-INVESTIGATION.md)).
