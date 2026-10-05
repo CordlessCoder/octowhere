@@ -216,14 +216,18 @@ until the feature set is complete, because profiling an incomplete firmware pric
   screens' two 8,848-byte lists. Both are read on every frame that draws them, so measure
   each frame from PSRAM on the board before moving it; the title's identity frames already
   come close to their 33 ms.
-- Implement more of the CO5300 controller reusably (owner, 2026-09-24). The driver is its own
-  crate, `crates/co5300`, generic over the bus (2026-10-05, owner's choice), and covers the
-  start-up, address windows, brightness, sleep and TE. The datasheet
-  (`docs/datasheets/CO5300_Datasheet_V0.00.pdf`) also has TE modes and the scan line as proper
-  settings, reading the current scan line (45h), partial and scroll areas, idle mode, deep
-  standby, and high-brightness and contrast controls. Each needs a byte test in the crate and a
-  run on the board; a read also needs reads on the bus trait. The move itself has only run in
-  the host tests: flash it, and rerun `bench/flush-shift` to see that the flush kept its time.
+- Run the CO5300 crate on the board (2026-10-05). The driver is its own crate,
+  `crates/co5300`, generic over the bus (owner's choice), and has run only in its host tests,
+  which check every byte against the datasheet or the old driver. Flash master, and rerun
+  `bench/flush-shift` to see that the flush kept its time. The crate also has the datasheet's
+  other controls (`docs/datasheets/CO5300_Datasheet_V0.00.pdf`), which nothing calls yet: TE
+  off and its two modes, the TE line, reading the scan line (45h), the partial area and partial
+  mode, idle mode, deep standby, high-brightness mode and its level, sunlight enhancement and
+  the current limit. The datasheet has no scroll area. Try each on the board before a screen
+  relies on it. The scan line's reply is read on SIO0, where the datasheet's read diagram has
+  it; if it comes back as nothing but 00h or FFh, the module may wire the controller's output to
+  SIO1, which `DataMode::SingleTwoDataLines` reads. Whether the partial area takes the column
+  offset as windows do is not settled either.
 - Build the protocol in [`LORA-PROTOCOL.md`](LORA-PROTOCOL.md), in its "Build order". Steps 1
   to 3 are done: pairing, the member table, its storage and the screens, paired between the two
   boards by the mesh's commands and through the screens (`docs/logs/lora/pairing-2026-10-02/`,

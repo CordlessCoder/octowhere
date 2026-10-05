@@ -11,6 +11,7 @@ enum Event {
     Begin(u8, u32, Lanes),
     Stream(Vec<u8>),
     End,
+    Read(u8, u32, usize),
     Reset(bool),
     DelayUs(u32),
     DelayMs(u32),
@@ -60,7 +61,23 @@ impl Bus for Recorder {
         self.0.borrow_mut().push(Event::End);
         Ok(())
     }
+
+    /// Answers every read with [`REPLY`].
+    async fn read(
+        &mut self,
+        instruction: u8,
+        address: u32,
+        buffer: &mut [u8],
+    ) -> Result<(), Infallible> {
+        self.0
+            .borrow_mut()
+            .push(Event::Read(instruction, address, buffer.len()));
+        buffer.copy_from_slice(&REPLY[..buffer.len()]);
+        Ok(())
+    }
 }
+
+const REPLY: [u8; 2] = [0x01, 0xC2];
 
 struct Pin(Log);
 
@@ -161,36 +178,38 @@ fn command(command: u8, parameters: &[u8]) -> Event {
     )
 }
 
+/// The reset and start-up the driver before this crate sent.
+fn start_up() -> Vec<Event> {
+    vec![
+        Event::Reset(false),
+        Event::DelayMs(10),
+        Event::Reset(true),
+        Event::Reset(false),
+        Event::DelayUs(10),
+        Event::Reset(true),
+        Event::DelayMs(120),
+        command(0x11, &[]),
+        Event::DelayMs(120),
+        command(0xFE, &[0x00]),
+        command(0xC4, &[0x80]),
+        command(0x53, &[0x20]),
+        command(0x63, &[0xFF]),
+        command(0x51, &[0x00]),
+        command(0x3A, &[0x55]),
+        command(0x29, &[]),
+        command(0x58, &[0x00]),
+        command(0x36, &[0x00]),
+        Event::DelayMs(10),
+        command(0x20, &[]),
+        command(0x35, &[0x00]),
+        command(0x44, &[0x00, 150]),
+    ]
+}
+
 #[test]
 fn the_start_up_resets_then_sends_the_sequence_it_always_sent() {
     let (_, log) = started();
-    assert_eq!(
-        taken(&log),
-        vec![
-            Event::Reset(false),
-            Event::DelayMs(10),
-            Event::Reset(true),
-            Event::Reset(false),
-            Event::DelayUs(10),
-            Event::Reset(true),
-            Event::DelayMs(120),
-            command(0x11, &[]),
-            Event::DelayMs(120),
-            command(0xFE, &[0x00]),
-            command(0xC4, &[0x80]),
-            command(0x53, &[0x20]),
-            command(0x63, &[0xFF]),
-            command(0x51, &[0x00]),
-            command(0x3A, &[0x55]),
-            command(0x29, &[]),
-            command(0x58, &[0x00]),
-            command(0x36, &[0x00]),
-            Event::DelayMs(10),
-            command(0x20, &[]),
-            command(0x35, &[0x00]),
-            command(0x44, &[0x00, 150]),
-        ]
-    );
+    assert_eq!(taken(&log), start_up());
 }
 
 #[test]
@@ -309,5 +328,122 @@ fn pixels_open_with_a_quad_ramwr_and_pass_each_fill_through() {
             Event::Stream(vec![0xF8, 0x00]),
             Event::End,
         ]
+    );
+}
+
+/// The commands `act` sends to a started controller.
+fn sent(act: impl AsyncFnOnce(&mut Display) -> Result<(), Infallible>) -> Vec<Event> {
+    let (mut display, log) = started();
+    taken(&log);
+    block_on(act(&mut display)).unwrap();
+    taken(&log)
+}
+
+#[test]
+fn the_te_line_turns_off_and_on_in_either_mode_at_any_line() {
+    assert_eq!(
+        sent(async |display| {
+            display.te_off().await?;
+            display.te_on(TeMode::VAndHBlank).await?;
+            display.te_on(TeMode::VBlank).await?;
+            display.set_te_line(300).await
+        }),
+        vec![
+            command(0x34, &[]),
+            command(0x35, &[0x01]),
+            command(0x35, &[0x00]),
+            command(0x44, &[0x01, 0x2C]),
+        ]
+    );
+}
+
+#[test]
+fn the_scan_line_is_read_big_endian() {
+    let (mut display, log) = started();
+    taken(&log);
+    assert_eq!(block_on(display.scan_line()), Ok(0x01C2));
+    assert_eq!(taken(&log), vec![Event::Read(0x03, 0x4500, 2)]);
+}
+
+#[test]
+fn the_partial_area_goes_out_offset_and_switches_modes() {
+    assert_eq!(
+        sent(async |display| {
+            display.set_partial_area((10, 99), (20, 29)).await?;
+            display.partial_mode().await?;
+            display.normal_mode().await
+        }),
+        vec![
+            command(0x31, &[0, 16, 0, 105]),
+            command(0x30, &[0, 20, 0, 29]),
+            command(0x12, &[]),
+            command(0x13, &[]),
+        ]
+    );
+}
+
+#[test]
+fn idle_mode_turns_on_and_off() {
+    assert_eq!(
+        sent(async |display| {
+            display.set_idle(true).await?;
+            display.set_idle(false).await
+        }),
+        vec![command(0x39, &[]), command(0x38, &[])]
+    );
+}
+
+#[test]
+fn deep_standby_is_left_by_a_reset_and_a_whole_start_up() {
+    let (mut display, log) = started();
+    taken(&log);
+    block_on(display.deep_standby()).unwrap();
+    assert_eq!(taken(&log), vec![command(0x4F, &[0x01])]);
+    block_on(display.leave_deep_standby()).unwrap();
+    assert_eq!(taken(&log), start_up());
+}
+
+#[test]
+fn high_brightness_mode_turns_on_and_off_and_takes_its_own_level() {
+    assert_eq!(
+        sent(async |display| {
+            display.set_hbm(true).await?;
+            display.set_hbm_brightness(0x80).await?;
+            display.set_hbm(false).await
+        }),
+        vec![
+            command(0x66, &[0x02]),
+            command(0x63, &[0x80]),
+            command(0x66, &[0x00]),
+        ]
+    );
+}
+
+#[test]
+fn sunlight_enhancement_sets_its_level_or_stops() {
+    assert_eq!(
+        sent(async |display| {
+            display.set_sunlight(Some(Sunlight::Low)).await?;
+            display.set_sunlight(Some(Sunlight::Medium)).await?;
+            display.set_sunlight(Some(Sunlight::High)).await?;
+            display.set_sunlight(None).await
+        }),
+        vec![
+            command(0x58, &[0x04]),
+            command(0x58, &[0x05]),
+            command(0x58, &[0x06]),
+            command(0x58, &[0x00]),
+        ]
+    );
+}
+
+#[test]
+fn the_current_limit_turns_on_and_off() {
+    assert_eq!(
+        sent(async |display| {
+            display.set_current_limit(true).await?;
+            display.set_current_limit(false).await
+        }),
+        vec![command(0x55, &[0x03]), command(0x55, &[0x00])]
     );
 }

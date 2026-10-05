@@ -2,7 +2,7 @@
 
 use co5300::{Bus, Lanes};
 use esp_hal::Async;
-use esp_hal::dma::{DmaTxBuf, EmptyBuf};
+use esp_hal::dma::{DmaRxBuf, DmaTxBuf, EmptyBuf};
 use esp_hal::gpio::Output;
 use esp_hal::spi::master::{Address, Command, DataMode, SpiDma};
 
@@ -13,8 +13,9 @@ use embassy_time::Instant;
 /// microseconds a chunk, and the display core has nothing else to run meanwhile.
 pub struct QspiBus<'d> {
     spi: Option<SpiDma<'d, Async>>,
-    /// A command's parameters.
+    /// A command's parameters, and a read's reply.
     command: Option<DmaTxBuf>,
+    reply: Option<DmaRxBuf>,
     cs: Output<'d>,
     /// The stream's buffer filling, and the one the last chunk went from.
     active: Option<DmaTxBuf>,
@@ -27,6 +28,7 @@ impl<'d> QspiBus<'d> {
     pub fn new(
         spi: SpiDma<'d, Async>,
         command: DmaTxBuf,
+        reply: DmaRxBuf,
         stream: DmaTxBuf,
         swap: DmaTxBuf,
         cs: Output<'d>,
@@ -34,6 +36,7 @@ impl<'d> QspiBus<'d> {
         Self {
             spi: Some(spi),
             command: Some(command),
+            reply: Some(reply),
             cs,
             active: Some(stream),
             swap: Some(swap),
@@ -196,5 +199,39 @@ impl Bus for QspiBus<'_> {
         let sent = self.send(|_| 0);
         self.cs.set_high();
         sent
+    }
+
+    /// The reply comes on SIO0, where the controller's read diagram has it. Nothing has read
+    /// the panel yet to show the module wires it there rather than to SIO1.
+    async fn read(
+        &mut self,
+        instruction: u8,
+        address: u32,
+        buffer: &mut [u8],
+    ) -> Result<(), Self::Error> {
+        self.cs.set_low();
+        let spi = self.spi.take().unwrap();
+        let reply = self.reply.take().unwrap();
+        let transfer = spi
+            .half_duplex_read_buffer(
+                DataMode::Single,
+                Command::_8Bit(u16::from(instruction), DataMode::Single),
+                Address::_24Bit(address, DataMode::Single),
+                0,
+                buffer.len(),
+                reply,
+            )
+            .map_err(|(error, spi, reply)| {
+                self.spi = Some(spi);
+                self.reply = Some(reply);
+                self.cs.set_high();
+                error
+            })?;
+        let (spi, reply) = transfer.wait();
+        reply.read_received_data(buffer);
+        self.spi = Some(spi);
+        self.reply = Some(reply);
+        self.cs.set_high();
+        Ok(())
     }
 }

@@ -16,8 +16,9 @@ initialization or peripheral mappings.
   configuration ("Build and test"). Its sources are under `firmware/src/`, below. The root is a
   second workspace, of everything else that builds with cargo, for the host.
 - `crates/co5300/` is the CO5300 controller's driver: its start-up, windows, brightness,
-  sleep and TE, generic over a QSPI write trait, the reset and TE pins and a delay, so it
-  builds and tests on the host. `firmware/src/drivers/` holds the display path on the board:
+  sleep and TE, and the datasheet's other controls, which nothing calls yet and the board has
+  not run (`context/BACKLOG.md`). It is generic over a QSPI bus trait, the reset and TE pins
+  and a delay, so it builds and tests on the host. `firmware/src/drivers/` holds the display path on the board:
   that trait on esp-hal's SPI DMA, and flushing the framebuffer to the panel.
 - `crates/octowhere-peripherals/` owns the I2C devices' drivers: touch, power, RTC,
   magnetometer, and their shared register helper. They are generic over `embedded-hal-async`'s

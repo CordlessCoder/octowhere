@@ -43,7 +43,7 @@ use embedded_graphics::prelude::*;
 use embedded_hal_async::i2c::I2c as _;
 use embedded_hal_bus::spi::ExclusiveDevice;
 use esp_hal::{
-    dma_tx_buffer,
+    dma_rx_buffer, dma_tx_buffer,
     gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull},
     i2c::master::I2c,
     peripherals, spi,
@@ -602,6 +602,7 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
         .with_mode(spi::Mode::_0);
 
     let mut dma_tx_command = dma_tx_buffer!(64).unwrap();
+    let dma_rx_reply = dma_rx_buffer!(4).unwrap();
     let mut dma_tx = dma_tx_buffer!(4095 * 2).unwrap();
     let mut dma_tx_swap = dma_tx_buffer!(4095 * 2).unwrap();
     let dma_burst = esp_hal::dma::BurstConfig {
@@ -625,7 +626,7 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
         .with_sio3(gpio7)
         .with_dma(dma_ch0)
         .into_async();
-    let bus = QspiBus::new(spi, dma_tx_command, dma_tx, dma_tx_swap, cs);
+    let bus = QspiBus::new(spi, dma_tx_command, dma_rx_reply, dma_tx, dma_tx_swap, cs);
     let mut display: Display<'_, chrome::Color> =
         Display::new(bus, reset, te, embassy_time::Delay, board::DISPLAY)
             .await
