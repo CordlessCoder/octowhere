@@ -59,24 +59,22 @@ frame figures in them are the reviewers' (list sizes on wasm32, frames from thei
   removed calls wrote stay. `main.rs` no longer carries `#![expect(unused)]`. The
   builds that replace the frame loop or the mesh (`fontdue-target-bench`, `lora-link-*`) allow
   unused code instead, and the link tests are functions of their own.
-- Left for the owner: the display driver's blocking path (firmware, Public surface), which the
-  CO5300 crate in `BACKLOG.md` may want, and the scripted mesh behind a feature (ui-runtime,
-  Public surface).
+- The display driver, moved into `crates/co5300` and generic over its bus (owner's choice):
+  its blocking path is gone (firmware, Public surface), the transfer is written once for a
+  command and once for the pixels (firmware, Duplication), and the commented-out code and the
+  stale headers went with the old files (firmware, Comments). Two of the old driver's resets
+  disagreed; the crate keeps the one the board ran.
+- Left for the owner: the scripted mesh behind a feature (ui-runtime, Public surface).
 
 ## Worth acting on first, besides the bugs
 
 - `async_main`'s poll frame, 15,920 bytes, sits under the frame loop for the device's life and
   inlines boot-only work (`Store::new`, `load_mesh`, `mesh_start`); unmeasured how much
   (firmware, Work and stack).
-- The giant-glyph test bounds the raster at 10,000 cells while boot reserves `RASTER_CELLS` =
-  8,859, so a glyph between them passes and grows the raster on the board, the 2026-10-03
-  boot panic (ui-faces, Tests).
 - The toast overlay holds two lists, about 22.6 KB of internal heap, for the whole run; a list
   is 11,312 bytes on wasm32, not `AGENTS.md`'s 8,848 (ui-runtime, Work and stack).
 - The 2026-10-04 screens' damage tests never check what the flush sends (ui-runtime, Tests).
 - Two `Slide` types confirm the same gesture by different rules (both UI reports).
-- The display bus transfer is written eight times, and most of the blocking path has no caller
-  (firmware; fits the CO5300 crate entry in `BACKLOG.md`).
 - The board's group-write store is split between `main.rs` and `mesh/device.rs`, with the write
   numbering worked out in three places (firmware, Structure).
 

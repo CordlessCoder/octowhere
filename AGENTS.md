@@ -15,8 +15,10 @@ initialization or peripheral mappings.
 - `firmware/` is the firmware: its own Cargo workspace, with the board's toolchain and cargo
   configuration ("Build and test"). Its sources are under `firmware/src/`, below. The root is a
   second workspace, of everything else that builds with cargo, for the host.
-- `firmware/src/drivers/` owns the display path: QSPI, the CO5300 panel, and flushing the
-  framebuffer to it.
+- `crates/co5300/` is the CO5300 controller's driver: its start-up, windows, brightness,
+  sleep and TE, generic over a QSPI write trait, the reset and TE pins and a delay, so it
+  builds and tests on the host. `firmware/src/drivers/` holds the display path on the board:
+  that trait on esp-hal's SPI DMA, and flushing the framebuffer to the panel.
 - `crates/octowhere-peripherals/` owns the I2C devices' drivers: touch, power, RTC,
   magnetometer, and their shared register helper. They are generic over `embedded-hal-async`'s
   I2C and build and test on the host; the firmware reaches them as `octowhere::peripherals`,
@@ -468,13 +470,13 @@ Core 1 owns the display SPI/DMA path.
   to the frame loop through `BOOT_KEY_PRESSES`. The stage takes them as `Input::boot_key` and
   does nothing with them yet.
 - `second_core` on core 1 waits for display TE with a timeout, flushes the handed-off regions
-  through `Co5300Display`, sets the display level a frame carries before flushing it, and
+  through `drivers::Display`, sets the display level a frame carries before flushing it, and
   returns the other framebuffer. It moves the picture by the frame's pixel shift as it copies
   each row into its DMA buffers, repeating the framebuffer's edge past it, and flushes in full
   when a frame's shift differs from the last one sent; an unshifted full flush keeps the
   straight copy. A frame can also switch the panel out of sleep before it goes
   out, or into sleep after. The panel comes up dark. TE pulses when the panel's scan
-  reaches `TE_LINE` in `firmware/src/drivers/co5300.rs`, so a flush runs behind the scan. A full flush
+  reaches `board::DISPLAY`'s `te_line`, so a flush runs behind the scan. A full flush
   takes about as long as the scan, so moving the line, or waiting for TE's level instead of its
   edge, brings back tearing.
 
@@ -553,9 +555,11 @@ poisons the thread and a later `get()` panics.
 
 The display path is split across:
 
-- [`firmware/src/drivers/qspi_bus.rs`](firmware/src/drivers/qspi_bus.rs), which owns QSPI command transfers.
-- [`firmware/src/drivers/co5300.rs`](firmware/src/drivers/co5300.rs), which initializes the panel, handles TE,
-  address windows, brightness, and double-buffered DMA pixel streaming.
+- [`crates/co5300/`](crates/co5300/src/lib.rs), which starts the controller and sends its
+  commands: address windows, brightness, sleep and TE.
+- [`firmware/src/drivers/qspi_bus.rs`](firmware/src/drivers/qspi_bus.rs), its `Bus` on
+  esp-hal's SPI DMA, which streams pixels through two DMA buffers, filling one while the other
+  goes out.
 - [`crates/octowhere-ui/src/framebuffer.rs`](crates/octowhere-ui/src/framebuffer.rs), which
   stores draw-target pixels. The firmware allocates it in PSRAM.
 - [`firmware/src/drivers/framebuffer.rs`](firmware/src/drivers/framebuffer.rs), whose `Flush` trait streams the
@@ -800,7 +804,7 @@ atomic register masks with a mutex-guarded cache and a `RawMutex` type parameter
 in the firmware's manifest. Dropping either will not compile.
 
 `octowhere-ui`, `octowhere-tz`, `octowhere-motion`, `octowhere-mesh`, `octowhere-node`,
-`octowhere-peripherals`,
+`octowhere-peripherals`, `co5300`,
 `lc76g`, `sx127x-lora` and `sx127x-common` are local path crates. `octowhere-tz` lives in
 `crates/tz`, and the firmware reaches it as `octowhere::tz`.
 `crates/sx127x-lora` publishes the package name `sx127xlora`, so the manifest key and the directory

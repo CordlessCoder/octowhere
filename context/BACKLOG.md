@@ -216,12 +216,14 @@ until the feature set is complete, because profiling an incomplete firmware pric
   screens' two 8,848-byte lists. Both are read on every frame that draws them, so measure
   each frame from PSRAM on the board before moving it; the title's identity frames already
   come close to their 33 ms.
-- Move the CO5300 driver into its own crate under `crates/`, with the QSPI command layer it
-  needs, and implement more of the controller reusably (owner, 2026-09-24). Today
-  `firmware/src/drivers/co5300.rs` covers init, address windows, brightness, TE and pixel streaming.
-  The datasheet (`docs/datasheets/CO5300_Datasheet_V0.00.pdf`) also has TE modes and the scan
-  line as proper settings, reading the current scan line (45h), partial and scroll areas, idle
-  mode, deep standby, and high-brightness and contrast controls.
+- Implement more of the CO5300 controller reusably (owner, 2026-09-24). The driver is its own
+  crate, `crates/co5300`, generic over the bus (2026-10-05, owner's choice), and covers the
+  start-up, address windows, brightness, sleep and TE. The datasheet
+  (`docs/datasheets/CO5300_Datasheet_V0.00.pdf`) also has TE modes and the scan line as proper
+  settings, reading the current scan line (45h), partial and scroll areas, idle mode, deep
+  standby, and high-brightness and contrast controls. Each needs a byte test in the crate and a
+  run on the board; a read also needs reads on the bus trait. The move itself has only run in
+  the host tests: flash it, and rerun `bench/flush-shift` to see that the flush kept its time.
 - Build the protocol in [`LORA-PROTOCOL.md`](LORA-PROTOCOL.md), in its "Build order". Steps 1
   to 3 are done: pairing, the member table, its storage and the screens, paired between the two
   boards by the mesh's commands and through the screens (`docs/logs/lora/pairing-2026-10-02/`,
