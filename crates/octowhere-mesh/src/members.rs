@@ -343,6 +343,23 @@ pub fn stamp(now: Option<u32>) -> u32 {
 
 /// The most gone records kept once new members have taken their ids.
 pub const FORMER: usize = 8;
+
+/// The bytes the flash keeps a group's header in: its key, this node's id in it, and the key's
+/// generation, little-endian.
+pub const STORED_HEADER_LEN: usize = 32 + 1 + 2;
+
+/// Reads a group's header as [`Group::encode_stored_header`] wrote it: its key, this node's id
+/// and the key's generation. One stored before keys had generations stops after the id, and
+/// its key is the first.
+#[must_use]
+pub fn decode_stored_header(bytes: &[u8]) -> Option<(Key, u8, u16)> {
+    let key: [u8; 32] = bytes.get(..32)?.try_into().ok()?;
+    let own = *bytes.get(32)?;
+    let generation = bytes.get(33..35).map_or(0, |generation| {
+        u16::from_le_bytes([generation[0], generation[1]])
+    });
+    Some((Key::new(key), own, generation))
+}
 const _: () = assert!(FORMER <= 8, "`former_unsent` is a `u8` set");
 
 #[derive(Clone)]
@@ -399,6 +416,14 @@ impl Group {
     #[must_use]
     pub(crate) fn new(key: Key, own: u8, members: [Option<Member>; SLOTS]) -> Option<Self> {
         Self::restore(key, 0, own, members.map(|member| member.map(Slot::Member)))
+    }
+
+    /// Writes the header the flash keeps the group under, which
+    /// [`decode_stored_header`] reads.
+    pub fn encode_stored_header(&self, out: &mut [u8; STORED_HEADER_LEN]) {
+        out[..32].copy_from_slice(self.key.bytes());
+        out[32] = self.own;
+        out[33..].copy_from_slice(&self.generation.to_le_bytes());
     }
 
     /// A group as stored or as pairing delivered it. `None` unless it holds this node's record.
@@ -1617,5 +1642,32 @@ pub(crate) mod tests {
             Group::restore(Key::new([5; 32]), 7, 0, slots).is_none(),
             "a group needs this node's record"
         );
+    }
+
+    /// The header as `settings.rs` wrote it before the encoding moved here.
+    fn header_as_first_stored(key: &[u8; 32], own: u8, generation: u16) -> [u8; 35] {
+        let mut value = [0; 35];
+        value[..32].copy_from_slice(key);
+        value[32] = own;
+        value[33..35].copy_from_slice(&generation.to_le_bytes());
+        value
+    }
+
+    #[test]
+    fn a_stored_header_keeps_its_bytes_and_reads_back() {
+        let g = group_at(0x0203, 1, &[(0, 1), (1, 2)]);
+        let mut bytes = [0; STORED_HEADER_LEN];
+        g.encode_stored_header(&mut bytes);
+        assert_eq!(bytes, header_as_first_stored(g.key().bytes(), 1, 0x0203));
+        let (key, own, generation) = decode_stored_header(&bytes).unwrap();
+        assert_eq!((key.bytes(), own, generation), (g.key().bytes(), 1, 0x0203));
+    }
+
+    #[test]
+    fn a_header_stored_before_generations_is_the_first_key() {
+        let bytes = header_as_first_stored(&[9; 32], 4, 7);
+        let (key, own, generation) = decode_stored_header(&bytes[..33]).unwrap();
+        assert_eq!((key.bytes(), own, generation), (&[9; 32], 4, 0));
+        assert!(decode_stored_header(&bytes[..32]).is_none());
     }
 }

@@ -17,7 +17,10 @@ use esp_bootloader_esp_idf::partitions::{self, DataPartitionSubType, PartitionTy
 use esp_storage::{FlashStorage, FlashStorageError};
 use octowhere_mesh::{
     IDS,
-    members::{GONE_LEN, Gone, Group, Member, Name, RECORD_FIXED_LEN, RECORD_MAX_LEN, Slot},
+    members::{
+        GONE_LEN, Gone, Group, Member, Name, RECORD_FIXED_LEN, RECORD_MAX_LEN, STORED_HEADER_LEN,
+        Slot, decode_stored_header,
+    },
     rekey::{self, Rekey},
     seal::Key,
 };
@@ -52,7 +55,7 @@ const SETTINGS_KEYS: [&[u8]; 6] = [
     KEY_TIMEOUT,
     KEY_ZONE_MODE,
 ];
-/// The group key, this device's id in it, and the key's generation.
+/// The group's header, as `Group::encode_stored_header` writes it.
 const KEY_GROUP: &[u8] = b"group";
 /// A removal under way, the old keys kept and those declined, as `Rekey::encode` writes them.
 /// It sorts after every member's key.
@@ -393,12 +396,8 @@ impl Store {
                 }
             }
             let group = group.and_then(|group| {
-                let (key, own) = (group.get(..32)?, *group.get(32)?);
-                // Stored before the key had generations: its first.
-                let generation = group
-                    .get(33..35)
-                    .map_or(0, |bytes| u16::from_le_bytes([bytes[0], bytes[1]]));
-                Group::restore(Key::new(key.try_into().ok()?), generation, own, slots)
+                let (key, own, generation) = decode_stored_header(&group)?;
+                Group::restore(key, generation, own, slots)
             });
             let seed = value(KEY_IDENTITY)
                 .await
@@ -460,10 +459,12 @@ impl Store {
                     transaction.write(KEY_REKEY, &value[..1 + len]).await
                 }
                 GroupWrite::Group(group, rekey) => {
-                    value[1..33].copy_from_slice(group.key().bytes());
-                    value[33] = group.own();
-                    value[34..36].copy_from_slice(&group.generation().to_le_bytes());
-                    let mut written = transaction.write(KEY_GROUP, &value[..36]).await;
+                    let mut header = [0; STORED_HEADER_LEN];
+                    group.encode_stored_header(&mut header);
+                    value[1..1 + STORED_HEADER_LEN].copy_from_slice(&header);
+                    let mut written = transaction
+                        .write(KEY_GROUP, &value[..1 + STORED_HEADER_LEN])
+                        .await;
                     for id in 0..IDS {
                         if written.is_err() {
                             break;
