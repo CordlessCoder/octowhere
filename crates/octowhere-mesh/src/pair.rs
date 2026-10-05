@@ -211,6 +211,28 @@ impl Phase {
     }
 }
 
+/// Where a pairing is: its [`Phase`] without the code and the parts' progress, which the
+/// pairing holds once for every phase that shows them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Stage {
+    Searching,
+    Found,
+    Connecting,
+    Compare,
+    Waiting,
+    Transfer,
+    Storing,
+    Finishing,
+    Done(Done),
+    Ended(End),
+}
+
+impl Stage {
+    fn is_final(self) -> bool {
+        matches!(self, Self::Done(_) | Self::Ended(_))
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Candidate {
     public: [u8; PUBLIC_LEN],
@@ -225,7 +247,7 @@ pub struct Pairing {
     public: [u8; PUBLIC_LEN],
     nonce: [u8; NONCE_LEN],
     jitter: u32,
-    phase: Phase,
+    stage: Stage,
     /// When the phase times out.
     deadline: i64,
     /// When the next frame goes out, and how long after it the one after.
@@ -267,7 +289,7 @@ impl Pairing {
             public: me.public(),
             nonce,
             jitter,
-            phase: Phase::Searching,
+            stage: Stage::Searching,
             deadline: now + SEARCH_US,
             due: None,
             every: None,
@@ -317,7 +339,7 @@ impl Pairing {
         let mut pairing = Self::new(Role::Add, me, nonce, now);
         pairing.utc = utc;
         if group.is_full() {
-            pairing.phase = Phase::Ended(End::Full);
+            pairing.stage = Stage::Ended(End::Full);
             pairing.deadline = now;
         }
         pairing.group = Some(group);
@@ -331,13 +353,27 @@ impl Pairing {
 
     #[must_use]
     pub fn phase(&self) -> Phase {
-        self.phase
+        match self.stage {
+            Stage::Searching => Phase::Searching,
+            Stage::Found => Phase::Found,
+            Stage::Connecting => Phase::Connecting,
+            Stage::Compare => Phase::Compare { code: self.code },
+            Stage::Waiting => Phase::Waiting { code: self.code },
+            Stage::Transfer => Phase::Transfer {
+                done: self.parts_done,
+                total: self.parts,
+            },
+            Stage::Storing => Phase::Storing,
+            Stage::Finishing => Phase::Finishing,
+            Stage::Done(done) => Phase::Done(done),
+            Stage::Ended(end) => Phase::Ended(end),
+        }
     }
 
     /// When the phase times out, while it can.
     #[must_use]
     pub fn deadline(&self) -> Option<i64> {
-        (!self.phase.is_final() && self.phase != Phase::Storing).then_some(self.deadline)
+        (!self.stage.is_final() && self.stage != Stage::Storing).then_some(self.deadline)
     }
 
     /// Adding: the hardware addresses of the devices announcing, in the order first heard.
@@ -380,13 +416,13 @@ impl Pairing {
     /// Whether the pairing has nothing left to send or wait for.
     #[must_use]
     pub fn is_over(&self, now: i64) -> bool {
-        self.phase.is_final() && self.due.is_none() && now >= self.deadline
+        self.stage.is_final() && self.due.is_none() && now >= self.deadline
     }
 
     /// When [`Pairing::poll`] next has something to do.
     #[must_use]
     pub fn wake_at(&self) -> i64 {
-        let deadline = if self.phase == Phase::Storing {
+        let deadline = if self.stage == Stage::Storing {
             i64::MAX
         } else {
             self.deadline
@@ -407,7 +443,7 @@ impl Pairing {
     }
 
     fn end(&mut self, end: End, tell: Option<Reason>, now: i64) {
-        self.phase = Phase::Ended(end);
+        self.stage = Stage::Ended(end);
         self.tell = tell.filter(|_| self.key.is_some());
         self.ends_left = 0;
         self.due = None;
@@ -420,7 +456,7 @@ impl Pairing {
 
     /// Adding: picks the candidate at `index` in [`Pairing::candidates`].
     pub fn choose(&mut self, index: usize, now: i64) {
-        if self.role != Role::Add || self.phase != Phase::Found {
+        if self.role != Role::Add || self.stage != Stage::Found {
             return;
         }
         let Some(candidate) = self.candidates.iter().flatten().nth(index).copied() else {
@@ -429,18 +465,18 @@ impl Pairing {
         self.peer = Some(candidate);
         self.commitment = commitment(&self.nonce, &self.public, &candidate.public);
         self.session = session(&candidate.public, &self.public);
-        self.phase = Phase::Connecting;
+        self.stage = Stage::Connecting;
         self.deadline = now + STALL_US;
         self.send_now(now, Some(RETRY_US));
     }
 
     /// This user confirmed that the codes match.
     pub fn accept(&mut self, now: i64) {
-        let Phase::Compare { code } = self.phase else {
+        let Stage::Compare = self.stage else {
             return;
         };
         self.accepted_here = true;
-        self.phase = Phase::Waiting { code };
+        self.stage = Stage::Waiting;
         match self.role {
             Role::Join => self.send_now(now, Some(RETRY_US)),
             Role::Add if self.accepted_there => self.start_transfer(now),
@@ -450,7 +486,7 @@ impl Pairing {
 
     /// This user declined the code, or reported that the codes differ.
     pub fn reject(&mut self, mismatch: bool, now: i64) {
-        if matches!(self.phase, Phase::Compare { .. } | Phase::Waiting { .. }) {
+        if matches!(self.stage, Stage::Compare | Stage::Waiting) {
             let (end, reason) = if mismatch {
                 (End::Mismatch, Reason::Mismatch)
             } else {
@@ -462,31 +498,31 @@ impl Pairing {
 
     /// This user cancelled. Once the group is being stored, it is too late to.
     pub fn cancel(&mut self, now: i64) {
-        if !self.phase.is_final() && !matches!(self.phase, Phase::Storing | Phase::Finishing) {
+        if !self.stage.is_final() && !matches!(self.stage, Stage::Storing | Stage::Finishing) {
             self.end(End::Cancelled, Some(Reason::Cancelled), now);
         }
     }
 
     /// Takes the outcome of storing [`Pairing::group`].
     pub fn stored(&mut self, ok: bool, now: i64) {
-        if self.phase != Phase::Storing {
+        if self.stage != Stage::Storing {
             return;
         }
         match (self.role, ok) {
             (Role::Join, true) => {
-                self.phase = Phase::Finishing;
+                self.stage = Stage::Finishing;
                 self.deadline = now + STALL_US;
                 self.send_now(now, Some(RETRY_US));
             }
             (Role::Join, false) => self.end(End::StoreFailed, Some(Reason::StoreFailed), now),
             (Role::Add, ok) => {
-                self.phase = if ok {
-                    Phase::Done(Done::Added {
+                self.stage = if ok {
+                    Stage::Done(Done::Added {
                         id: self.new_id,
                         returning: self.returning,
                     })
                 } else {
-                    Phase::Ended(End::StoreFailed)
+                    Stage::Ended(End::StoreFailed)
                 };
                 // The joining device has the group either way; telling it so lets it stop.
                 self.deadline = now + LINGER_US;
@@ -507,7 +543,7 @@ impl Pairing {
             Some(every) if len.is_some() => Some(now + every + self.jitter()),
             _ => None,
         };
-        if matches!(self.phase, Phase::Ended(_)) && self.ends_left > 0 {
+        if matches!(self.stage, Stage::Ended(_)) && self.ends_left > 0 {
             self.ends_left -= 1;
             if self.ends_left == 0 {
                 self.due = None;
@@ -517,55 +553,53 @@ impl Pairing {
     }
 
     fn time_out(&mut self, now: i64) {
-        if self.role == Role::Add && matches!(self.phase, Phase::Searching | Phase::Found) {
+        if self.role == Role::Add && matches!(self.stage, Stage::Searching | Stage::Found) {
             for slot in &mut self.candidates {
                 if slot.is_some_and(|c| now - c.last > CANDIDATE_US) {
                     *slot = None;
                 }
             }
-            self.phase = if self.candidates.iter().any(Option::is_some) {
-                Phase::Found
+            self.stage = if self.candidates.iter().any(Option::is_some) {
+                Stage::Found
             } else {
-                Phase::Searching
+                Stage::Searching
             };
         }
-        if now < self.deadline || self.phase == Phase::Storing {
+        if now < self.deadline || self.stage == Stage::Storing {
             return;
         }
-        match self.phase {
-            Phase::Searching | Phase::Found => self.end(End::NotFound, None, now),
-            Phase::Connecting => self.end(End::Lost, None, now),
-            Phase::Compare { .. } | Phase::Waiting { .. } => {
+        match self.stage {
+            Stage::Searching | Stage::Found => self.end(End::NotFound, None, now),
+            Stage::Connecting => self.end(End::Lost, None, now),
+            Stage::Compare | Stage::Waiting => {
                 self.end(End::TimedOut, Some(Reason::TimedOut), now);
             }
-            Phase::Transfer { .. }
-                if self.role == Role::Add && self.parts_done + 1 == self.parts =>
-            {
+            Stage::Transfer if self.role == Role::Add && self.parts_done + 1 == self.parts => {
                 self.end(End::Unconfirmed, None, now);
             }
-            Phase::Transfer { .. } => self.end(End::Lost, None, now),
-            Phase::Finishing => {
-                self.phase = Phase::Done(Done::Joined {
+            Stage::Transfer => self.end(End::Lost, None, now),
+            Stage::Finishing => {
+                self.stage = Stage::Done(Done::Joined {
                     id: self.new_id,
                     confirmed: false,
                 });
                 self.due = None;
             }
-            Phase::Storing | Phase::Done(_) | Phase::Ended(_) => {}
+            Stage::Storing | Stage::Done(_) | Stage::Ended(_) => {}
         }
     }
 
     /// Writes the frame the phase sends.
     fn frame(&mut self, out: &mut [u8; MAX_FRAME]) -> Option<usize> {
         out[0] = VERSION;
-        match (self.role, self.phase) {
-            (Role::Join, Phase::Searching) => {
+        match (self.role, self.stage) {
+            (Role::Join, Stage::Searching) => {
                 out[1] = kind::ANNOUNCE;
                 out[2..34].copy_from_slice(&self.public);
                 out[34..40].copy_from_slice(&self.me.mac);
                 Some(ANNOUNCE_LEN)
             }
-            (Role::Add, Phase::Connecting) => {
+            (Role::Add, Stage::Connecting) => {
                 let peer = self.peer?;
                 out[1] = kind::OFFER;
                 out[2..34].copy_from_slice(&peer.public);
@@ -574,19 +608,19 @@ impl Pairing {
                 out[98..104].copy_from_slice(&self.me.mac);
                 Some(OFFER_LEN)
             }
-            (Role::Join, Phase::Connecting) => {
+            (Role::Join, Stage::Connecting) => {
                 out[1] = kind::NONCE;
                 out[2..10].copy_from_slice(&self.session);
                 out[10..26].copy_from_slice(&self.nonce);
                 Some(NONCE_FRAME_LEN)
             }
-            (Role::Add, Phase::Compare { .. } | Phase::Waiting { .. }) => {
+            (Role::Add, Stage::Compare | Stage::Waiting) => {
                 out[1] = kind::REVEAL;
                 out[2..10].copy_from_slice(&self.session);
                 out[10..26].copy_from_slice(&self.nonce);
                 Some(NONCE_FRAME_LEN)
             }
-            (Role::Join, Phase::Waiting { .. }) => {
+            (Role::Join, Stage::Waiting) => {
                 let name = self.me.name;
                 let name = name.as_bytes();
                 let mut body = [0; 1 + 16];
@@ -594,7 +628,7 @@ impl Pairing {
                 body[1..1 + name.len()].copy_from_slice(name);
                 self.seal(out, &body[..1 + name.len()])
             }
-            (Role::Add, Phase::Transfer { .. }) => {
+            (Role::Add, Stage::Transfer) => {
                 let index = self.parts_done;
                 let start = usize::from(index) * PART_DATA;
                 let end = (start + PART_DATA).min(self.blob_len);
@@ -605,7 +639,7 @@ impl Pairing {
                 body[3..3 + end - start].copy_from_slice(&self.blob[start..end]);
                 self.seal(out, &body[..3 + end - start])
             }
-            (Role::Join, Phase::Transfer { .. } | Phase::Finishing) => {
+            (Role::Join, Stage::Transfer | Stage::Finishing) => {
                 let mut ack = [0; 2 + SIGNATURE_LEN];
                 ack[..2].copy_from_slice(&[body::ACK, self.parts_done.wrapping_sub(1)]);
                 // The last part's carries this device's signature of its own record.
@@ -621,10 +655,10 @@ impl Pairing {
                     None => self.seal(out, &ack[..2]),
                 }
             }
-            (Role::Add, Phase::Done(_) | Phase::Ended(End::StoreFailed)) => {
+            (Role::Add, Stage::Done(_) | Stage::Ended(End::StoreFailed)) => {
                 self.seal(out, &[body::DONE])
             }
-            (_, Phase::Ended(_)) => {
+            (_, Stage::Ended(_)) => {
                 let reason = self.tell?;
                 self.seal(out, &[body::END, reason.to_byte()])
             }
@@ -663,7 +697,7 @@ impl Pairing {
     }
 
     fn announced(&mut self, frame: &[u8], now: i64) {
-        if !matches!(self.phase, Phase::Searching | Phase::Found) {
+        if !matches!(self.stage, Stage::Searching | Stage::Found) {
             return;
         }
         let public: [u8; PUBLIC_LEN] = frame[2..34].try_into().expect("32 bytes");
@@ -695,11 +729,11 @@ impl Pairing {
             self.candidates
                 .sort_unstable_by_key(|c| c.map_or(i64::MAX, |c| c.first));
         }
-        self.phase = Phase::Found;
+        self.stage = Stage::Found;
     }
 
     fn offered(&mut self, frame: &[u8], now: i64) {
-        if self.phase != Phase::Searching || frame[2..34] != self.public {
+        if self.stage != Stage::Searching || frame[2..34] != self.public {
             return;
         }
         let public: [u8; PUBLIC_LEN] = frame[34..66].try_into().expect("32 bytes");
@@ -711,7 +745,7 @@ impl Pairing {
         });
         self.commitment = frame[66..98].try_into().expect("32 bytes");
         self.session = session(&self.public, &public);
-        self.phase = Phase::Connecting;
+        self.stage = Stage::Connecting;
         self.deadline = now + STALL_US;
         self.send_now(now, Some(RETRY_US));
     }
@@ -720,26 +754,26 @@ impl Pairing {
         if frame[2..10] != self.session {
             return;
         }
-        match self.phase {
-            Phase::Connecting => {
+        match self.stage {
+            Stage::Connecting => {
                 let peer = self.peer.expect("chosen before connecting");
                 self.their_nonce = frame[10..26].try_into().expect("16 bytes");
                 if !self.derive(&peer.public, &peer.public, &self.public.clone()) {
                     self.end(End::Inauthentic, None, now);
                     return;
                 }
-                self.phase = Phase::Compare { code: self.code };
+                self.stage = Stage::Compare;
                 self.deadline = now + COMPARE_US;
                 self.send_now(now, None);
             }
             // The reveal was lost.
-            Phase::Compare { .. } | Phase::Waiting { .. } => self.send_now(now, None),
+            Stage::Compare | Stage::Waiting => self.send_now(now, None),
             _ => {}
         }
     }
 
     fn revealed(&mut self, frame: &[u8], now: i64) {
-        if self.phase != Phase::Connecting || frame[2..10] != self.session {
+        if self.stage != Stage::Connecting || frame[2..10] != self.session {
             return;
         }
         let peer = self.peer.expect("offered before connecting");
@@ -753,7 +787,7 @@ impl Pairing {
             self.end(End::Inauthentic, None, now);
             return;
         }
-        self.phase = Phase::Compare { code: self.code };
+        self.stage = Stage::Compare;
         self.deadline = now + COMPARE_US;
         self.due = None;
     }
@@ -810,8 +844,8 @@ impl Pairing {
         };
         match (self.role, what) {
             (_, body::END)
-                if !self.phase.is_final()
-                    && !matches!(self.phase, Phase::Storing | Phase::Finishing) =>
+                if !self.stage.is_final()
+                    && !matches!(self.stage, Stage::Storing | Stage::Finishing) =>
             {
                 if let Some(reason) = rest.first().copied().and_then(Reason::from_byte) {
                     self.end(End::Peer(reason), None, now);
@@ -823,15 +857,15 @@ impl Pairing {
                 }
                 self.accepted_there = true;
                 self.their_name = Name::new(rest);
-                if matches!(self.phase, Phase::Waiting { .. }) && self.accepted_here {
+                if matches!(self.stage, Stage::Waiting) && self.accepted_here {
                     self.start_transfer(now);
                 }
             }
             (Role::Add, body::ACK) => self.acknowledged(rest, now),
             (Role::Join, body::PART) => self.part(rest, now),
             (Role::Join, body::DONE) => {
-                if matches!(self.phase, Phase::Finishing | Phase::Done(_)) {
-                    self.phase = Phase::Done(Done::Joined {
+                if matches!(self.stage, Stage::Finishing | Stage::Done(_)) {
+                    self.stage = Stage::Done(Done::Joined {
                         id: self.new_id,
                         confirmed: true,
                     });
@@ -868,18 +902,15 @@ impl Pairing {
         self.parts = self.blob_len.div_ceil(PART_DATA) as u8;
         self.parts_done = 0;
         self.group = Some(group);
-        self.phase = Phase::Transfer {
-            done: 0,
-            total: self.parts,
-        };
+        self.stage = Stage::Transfer;
         self.deadline = now + STALL_US;
         self.send_now(now, Some(RETRY_US));
     }
 
     fn acknowledged(&mut self, rest: &[u8], now: i64) {
         let Some(&index) = rest.first() else { return };
-        match self.phase {
-            Phase::Transfer { .. } if index == self.parts_done => {
+        match self.stage {
+            Stage::Transfer if index == self.parts_done => {
                 if self.parts_done + 1 == self.parts {
                     let signed = rest
                         .get(1..)
@@ -892,19 +923,16 @@ impl Pairing {
                 }
                 self.parts_done += 1;
                 if self.parts_done == self.parts {
-                    self.phase = Phase::Storing;
+                    self.stage = Stage::Storing;
                     self.due = None;
                 } else {
-                    self.phase = Phase::Transfer {
-                        done: self.parts_done,
-                        total: self.parts,
-                    };
+                    self.stage = Stage::Transfer;
                     self.deadline = now + STALL_US;
                     self.send_now(now, Some(RETRY_US));
                 }
             }
             // The joining device missed the done.
-            Phase::Done(_) | Phase::Ended(End::StoreFailed) if index + 1 == self.parts => {
+            Stage::Done(_) | Stage::Ended(End::StoreFailed) if index + 1 == self.parts => {
                 self.send_now(now, None);
             }
             _ => {}
@@ -934,9 +962,8 @@ impl Pairing {
             return;
         };
         let (index, total) = (*index, *total);
-        let phase = self.phase;
-        match phase {
-            Phase::Waiting { .. } | Phase::Transfer { .. } if index == self.parts_done => {
+        match self.stage {
+            Stage::Waiting | Stage::Transfer if index == self.parts_done => {
                 if total == 0
                     || (index > 0 && total != self.parts)
                     || usize::from(total) * PART_DATA > WELCOME_MAX + PART_DATA
@@ -951,10 +978,7 @@ impl Pairing {
                 self.parts = total;
                 self.deadline = now + STALL_US;
                 if self.parts_done < total {
-                    self.phase = Phase::Transfer {
-                        done: self.parts_done,
-                        total,
-                    };
+                    self.stage = Stage::Transfer;
                     self.send_now(now, None);
                     return;
                 }
@@ -967,14 +991,14 @@ impl Pairing {
                         group.sign_own(&self.me);
                         self.new_id = group.own();
                         self.group = Some(group);
-                        self.phase = Phase::Storing;
+                        self.stage = Stage::Storing;
                         self.due = None;
                     }
                     _ => self.end(End::Malformed, Some(Reason::StoreFailed), now),
                 }
             }
             // The acknowledgement was lost.
-            Phase::Transfer { .. } if index < self.parts_done => {
+            Stage::Transfer if index < self.parts_done => {
                 self.send_now(now, None);
             }
             _ => {}
