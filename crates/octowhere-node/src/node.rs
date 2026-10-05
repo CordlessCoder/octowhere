@@ -862,15 +862,14 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         if self.shown.removals.current.is_some() {
             return;
         }
-        let (Some(group), Some((undo, Some(last)))) =
-            (&self.group, self.removals.rekey.declinable())
+        let (Some(group), Some(declinable)) = (&self.group, self.removals.rekey.declinable())
         else {
             return;
         };
         let (Some(remover), Some(at), Some(until)) = (
             self.removals.rekey.remover_of(group.generation()),
-            self.local_at_round(undo.switched),
-            self.local_at_round(undo.until + 1),
+            self.local_at_round(declinable.switched),
+            self.local_at_round(declinable.until + 1),
         ) else {
             return;
         };
@@ -884,9 +883,9 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             key: key_fingerprint(group.key()),
             remover,
             remover_name: name(remover, group.member(remover)),
-            removed: last.removed,
-            removed_name: name(last.removed, last.record.as_ref()),
-            device: last.fingerprint,
+            removed: declinable.removed,
+            removed_name: name(declinable.removed, declinable.record.as_ref()),
+            device: declinable.fingerprint,
             stage: RemovalStage::Switched {
                 at,
                 decline: Decline::Until(until),

@@ -210,7 +210,7 @@ impl Old {
 /// The last switch: which member it removed, so that a rival key that wins after it can give
 /// that member its place back.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Last {
+pub(crate) struct Last {
     pub generation: u16,
     pub removed: u8,
     pub fingerprint: [u8; 8],
@@ -222,7 +222,7 @@ pub struct Last {
 /// The key a removal's switch left, kept for [`UNDO_ROUNDS`] so that this device's user can
 /// still decline the removal and go back to it.
 #[derive(Clone)]
-pub struct Undo {
+pub(crate) struct Undo {
     pub key: Key,
     pub generation: u16,
     /// The generation the removal switched to. A rival of it has the same.
@@ -238,6 +238,20 @@ pub struct Undo {
     /// Whether another member made the removal. This device's own is kept only so that a rival
     /// winning over it can still be declined.
     pub theirs: bool,
+}
+
+/// The removal last switched to, as this device can still decline it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Declinable {
+    /// The group's switch round.
+    pub switched: u32,
+    /// The last round it can be declined in.
+    pub until: u32,
+    /// The member it removed, and that member's device.
+    pub removed: u8,
+    pub fingerprint: [u8; 8],
+    /// The member's record before the switch, unless what was stored predates keeping it.
+    pub record: Option<Member>,
 }
 
 /// What declining a removal after its switch did.
@@ -309,16 +323,22 @@ impl Rekey {
             .map(|undo| undo.removed)
     }
 
-    /// The removal last switched to, while this device can still decline it, and the member it
-    /// removed as it was.
+    /// The removal last switched to, while this device can still decline it and holds the
+    /// member it removed.
     #[must_use]
-    pub fn declinable(&self) -> Option<(&Undo, Option<&Last>)> {
+    pub fn declinable(&self) -> Option<Declinable> {
         let undo = self.undo.as_ref().filter(|undo| undo.theirs)?;
         let last = self
             .last
             .as_ref()
-            .filter(|last| last.generation == undo.new_generation);
-        Some((undo, last))
+            .filter(|last| last.generation == undo.new_generation)?;
+        Some(Declinable {
+            switched: undo.switched,
+            until: undo.until,
+            removed: last.removed,
+            fingerprint: last.fingerprint,
+            record: last.record,
+        })
     }
 
     /// The last round the removal last switched to can be declined in.

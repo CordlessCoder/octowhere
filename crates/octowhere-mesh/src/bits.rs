@@ -31,14 +31,9 @@ impl<'a> BitWriter<'a> {
     }
 
     /// The bytes written, the last one padded with zeros.
-    #[must_use]
-    pub fn len(&self) -> usize {
+    #[cfg(test)]
+    fn len(&self) -> usize {
         self.bit.div_ceil(8)
-    }
-
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.bit == 0
     }
 }
 

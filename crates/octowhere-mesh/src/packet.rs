@@ -1,7 +1,8 @@
 //! The plaintext a packet seals: the header, then records, each a type byte, a length byte and a
 //! body. `seal` puts the synthetic IV in front of it.
 
-use crate::bits::{BitReader, BitWriter, Full};
+pub use crate::bits::Full;
+use crate::bits::{BitReader, BitWriter};
 use crate::members::{GONE_LEN, Gone, Member, RECORD_MAX_LEN, Slot};
 use crate::messages::Message;
 use crate::rekey::{ON_KEY_LEN, OnKey};
