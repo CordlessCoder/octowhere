@@ -215,14 +215,13 @@ until the feature set is complete, because profiling an incomplete firmware pric
   screens' two 8,848-byte lists. Both are read on every frame that draws them, so measure
   each frame from PSRAM on the board before moving it; the title's identity frames already
   come close to their 33 ms.
-- Look at the CO5300 controls the panel alone shows (2026-10-05). The driver is its own crate,
-  `crates/co5300`, generic over the bus (owner's choice), and runs on both boards; its flush is
-  a few microseconds faster than the old driver's, the TE modes and the TE line count as the
-  datasheet says, and deep standby comes back (`docs/logs/display/co5300-crate-2026-10-05/`).
-  `bench/co5300-controls` steps through the rest, 6 s each with the step logged: the partial
-  area and partial mode, idle mode, high-brightness mode, sunlight enhancement and the current
-  limit, which only someone watching the panel can judge. Whether the partial area takes the
-  column offset as windows do is not settled. The datasheet has no scroll area. Reading the
+- The CO5300 driver is its own crate, `crates/co5300`, generic over the bus (owner's choice,
+  2026-10-05), and runs on both boards: its flush is a few microseconds faster than the old
+  driver's, the TE modes and the TE line count as the datasheet says, deep standby comes back,
+  and the partial area, idle mode, high-brightness mode, sunlight enhancement and the current
+  limit look right on the panel (owner, 2026-10-05, through `bench/co5300-controls`;
+  `docs/logs/display/co5300-crate-2026-10-05/`). Nothing calls those yet. The datasheet has no
+  scroll area. Reading the
   controller does not work on this board: every read comes back as zeros, on either reply line
   and at 5 MHz, which the datasheet's 100 ns read cycle needs, and the schematic leaves the
   connector's pin 19 unconnected. The crate keeps the scan line for a board that wires it.

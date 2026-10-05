@@ -34,4 +34,5 @@ The controls:
   ways. So the panel's reply line is most likely not connected on this board, and nothing here
   can read the controller.
 - Partial mode, idle mode, high-brightness mode, sunlight enhancement and the current limit
-  show only on the panel. The bench holds each for 6 s and logs the step.
+  show only on the panel. The bench holds each for 6 s and logs the step, and the owner, watching,
+  saw each look right.
