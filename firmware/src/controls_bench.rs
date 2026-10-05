@@ -69,6 +69,22 @@ pub async fn run(display: &mut Display<'_, Color>, fb: &mut FB) -> ! {
         display.set_brightness(LEVEL).await.unwrap();
         step("pattern at the plain level").await;
 
+        for sio1 in [false, true] {
+            octowhere::drivers::qspi_bus::READ_ON_SIO1
+                .store(sio1, core::sync::atomic::Ordering::Relaxed);
+            for (command, len) in [(0x04u8, 3usize), (0x0A, 1), (0x0C, 1), (0x45, 2)] {
+                let mut reply = [0u8; 3];
+                display.read_raw(command, &mut reply[..len]).await.unwrap();
+                info!(
+                    "[CTRLBENCH] sio1={} read {=u8:#04x}: {=[u8]:#04x}",
+                    sio1,
+                    command,
+                    reply[..len]
+                );
+            }
+        }
+        octowhere::drivers::qspi_bus::READ_ON_SIO1
+            .store(false, core::sync::atomic::Ordering::Relaxed);
         let mut lines = [0u16; 16];
         for line in &mut lines {
             *line = display.scan_line().await.unwrap();

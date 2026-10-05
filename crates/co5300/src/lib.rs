@@ -316,6 +316,11 @@ impl<B: Bus, RST: OutputPin, TE: Wait, D: DelayNs, C: ColorMode> Co5300<B, RST, 
         Ok(u16::from_be_bytes(line))
     }
 
+    /// Reads `command`'s reply into `buffer`, for the controls bench.
+    pub async fn read_raw(&mut self, command: u8, buffer: &mut [u8]) -> Result<(), B::Error> {
+        self.bus.read(READ, u32::from(command) << 8, buffer).await
+    }
+
     /// Sets the rows and columns [`partial_mode`](Self::partial_mode) shows, from `first` to
     /// `last` inclusive, in panel coordinates. A `last` before `first` wraps round the panel.
     pub async fn set_partial_area(

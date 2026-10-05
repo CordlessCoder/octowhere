@@ -85,6 +85,10 @@ impl<'d> QspiBus<'d> {
     }
 }
 
+/// Which line the controls bench reads replies on.
+pub static READ_ON_SIO1: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
 fn mode(lanes: Lanes) -> DataMode {
     match lanes {
         Lanes::Single => DataMode::Single,
@@ -210,11 +214,19 @@ impl Bus for QspiBus<'_> {
         buffer: &mut [u8],
     ) -> Result<(), Self::Error> {
         self.cs.set_low();
-        let spi = self.spi.take().unwrap();
+        let mut spi = self.spi.take().unwrap();
+        let read = esp_hal::spi::master::Config::default()
+            .with_frequency(esp_hal::time::Rate::from_mhz(5))
+            .with_mode(esp_hal::spi::Mode::_0);
+        spi.apply_config(&read).unwrap();
         let reply = self.reply.take().unwrap();
         let transfer = spi
             .half_duplex_read_buffer(
-                DataMode::Single,
+                if READ_ON_SIO1.load(core::sync::atomic::Ordering::Relaxed) {
+                    DataMode::SingleTwoDataLines
+                } else {
+                    DataMode::Single
+                },
                 Command::_8Bit(u16::from(instruction), DataMode::Single),
                 Address::_24Bit(address, DataMode::Single),
                 0,
@@ -227,8 +239,14 @@ impl Bus for QspiBus<'_> {
                 self.cs.set_high();
                 error
             })?;
-        let (spi, reply) = transfer.wait();
-        reply.read_received_data(buffer);
+        let (mut spi, reply) = transfer.wait();
+        let write = esp_hal::spi::master::Config::default()
+            .with_frequency(esp_hal::time::Rate::from_mhz(80))
+            .with_mode(esp_hal::spi::Mode::_0);
+        spi.apply_config(&write).unwrap();
+        let received = reply.number_of_received_bytes();
+        let copied = reply.read_received_data(buffer);
+        defmt::info!("[CTRLBENCH] read received={} copied={}", received, copied);
         self.spi = Some(spi);
         self.reply = Some(reply);
         self.cs.set_high();
