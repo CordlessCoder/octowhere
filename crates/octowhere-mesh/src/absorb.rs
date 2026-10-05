@@ -308,7 +308,6 @@ mod tests {
                 },
                 base: NOW,
                 phase: 0,
-                notice: false,
             };
             let mut builder = Builder::new(&mut buf, &header);
             fill(&mut builder);

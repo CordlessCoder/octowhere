@@ -202,7 +202,6 @@ mod tests {
             },
             base: NOW,
             phase: 0,
-            notice: false,
         }
     }
 

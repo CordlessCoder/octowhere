@@ -1,7 +1,8 @@
-//! Runs the location mesh on a radio: sends this node's packet in its slot, listens to the
-//! other slots, and keeps the timebase the slots are placed on. Pairing takes the radio over, on
-//! a channel of its own, until it ends. A refresh listens throughout for three rounds when the
-//! screens ask. `octowhere_mesh` holds the protocol and `context/LORA-PROTOCOL.md` the design.
+//! Runs the location mesh on a radio: listens throughout, sends this node's packets when the
+//! channel is clear (`access`), and keeps the timebase that names their times. Pairing takes the
+//! radio over, on a channel of its own, until it ends. A refresh counts the members heard for
+//! three rounds when the screens ask. `octowhere_mesh` holds the protocol and
+//! `context/LORA-PROTOCOL.md` the design.
 
 use alloc::boxed::Box;
 use core::alloc::Allocator;
@@ -12,21 +13,17 @@ use embassy_futures::select::{Either, Either3, select, select3};
 use octowhere_mesh::{
     IDS, Ids, Zeroable,
     absorb::{Event, State, When, absorb},
-    clock::{Clock, SWEEP_US, Taken, UTC_BOUND_US},
+    clock::{Clock, SWEEP_US, UTC_BOUND_US},
     compose::{Sources, compose},
     members::{Gone, Group, Member, Name, Requests, fingerprint},
     messages::{
         self, BODY_MAX, Insert, Message, Pairwise, Sequence, Store, Summaries, TEXT_MAX, To, kind,
     },
-    packet::{
-        Entry, HEADER_LEN, Hdop, Header, MAX_PACKET, Plain, Quality, Record, Sealing, Source,
-        Timebase,
-    },
+    packet::{Entry, Hdop, Header, MAX_PACKET, Plain, Quality, Record, Sealing, Source, Timebase},
     pair::{Done, End, Identity, MAX_FRAME, Pairing, Phase, Role},
     rekey::{Learned, NewKey, Rekey, key_fingerprint},
     schedule::{
-        GUARD_US, ROUND_US, SWEEP_EVERY, Schedule, airtime_us, is_sweep_round, round_at,
-        round_start_s, second_at, stored_round_at,
+        ROUND_US, airtime_us, is_sweep_round, round_at, round_start_s, second_at, stored_round_at,
     },
     seal::{self, Key, SIV_LEN},
     table::Table,
@@ -34,6 +31,7 @@ use octowhere_mesh::{
 
 use crate::{
     GroupWrite, KeptRow,
+    access::{Access, BUSY_STEPS, Holding, SPREAD_US, STEP_US, STEPS},
     fmt::{Ascii, Mac},
     inbox::Inbox,
     removals::Removals,
@@ -57,30 +55,34 @@ const PAIR_FREQUENCY_HZ: u32 = 869_587_500;
 const PAIR_SYNC_WORD: u8 = 0xA6;
 /// PA_BOOST's lowest. Two devices side by side overload each other's receiver at +17 dBm.
 const PAIR_POWER_DBM: u8 = 2;
-/// How long before its slot the node loads its packet and switches the antenna to transmit.
-const PREPARE_US: i64 = 30_000;
-/// How long after a packet ends `DIO0`'s RxDone is seen, plus how long after its slot's start a
-/// sender's transmission begins: half how late a root hears the nodes timing from it, on two
-/// boards whose `DIO0` follows the radio (2026-10-01). Polling the flags adds half a poll.
+/// How long after a packet ends `DIO0`'s RxDone is seen, plus how long after the time its header
+/// names a sender's transmission begins: half how late a root heard the nodes timing from it, on
+/// two boards whose `DIO0` follows the radio, when packets went in slots (2026-10-01). A sender
+/// now also checks the channel and loads its packet after naming the time. Polling the flags
+/// adds half a poll.
 const ARRIVAL_LATENCY_US: i64 = 1_050;
 /// How long a pairing waits for the group to be stored before it counts as a failure.
 const STORE_TIMEOUT_US: i64 = 10 * 1_000_000;
-/// A notice is a header alone.
-const NOTICE_LEN: usize = SIV_LEN + HEADER_LEN;
 /// The longest a pairing listens before it runs its timers again.
 const PAIR_LISTEN_US: i64 = 250_000;
 /// How long a device that founded a group, without hearing the last acknowledgement, listens
 /// for the joining device under the group's key. That device waits 30 s for done, sweeps for
-/// three rounds, then sends in its next slot, since it hears nobody: about 3½ minutes in all.
+/// three rounds for a timebase, then sends at once, since it starts its own: about 3½ minutes in
+/// all.
 const FOUNDING_WAIT_US: i64 = 10 * 60 * 1_000_000;
 /// How long after a failed write a founding's wait tries to store its group again.
 const STORE_RETRY_US: i64 = 10 * 1_000_000;
 /// The messages made here that can wait for a sequence number and a timebase.
 const OUTBOX: usize = 8;
-/// The slots a device that leaves sends its gone record in.
+/// The packets a device that leaves sends its gone record in.
 const LEAVE_REPEATS: u8 = 2;
-/// How long a device that left tries to tell the others: its next slots, a round apart.
+/// How far apart they go, so that whatever lost the first does not lose the second.
+const LEAVE_GAP_US: i64 = 10 * 1_000_000;
+/// How long a device that left tries to tell the others.
 const LEAVE_WAIT_US: i64 = 3 * ROUND_US;
+/// A sweep round's packets go at a time each node draws in its first half, so that they do not
+/// all meet at its start, and one that finds the channel busy still goes within the round.
+const SWEEP_SPREAD_US: i64 = ROUND_US / 2;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Fix {
@@ -206,37 +208,6 @@ enum Opened {
         old: (Key, u16, u16),
     },
     Not,
-}
-
-/// What a step sends next.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Next {
-    /// A notice, at local time `at`.
-    Notice { at: i64 },
-    /// A packet under an old key, at local time `at`, in `round` of that key's order.
-    Old { at: i64, round: i64 },
-    /// This node's own packet, in its slot.
-    Own,
-}
-
-impl Next {
-    /// What goes out next, with this node's own slot at local time `send_at`: a notice due at
-    /// local time `notice`, or else a packet under an old key due at the local time and round
-    /// `old`, if it ends before the own slot with time to prepare for that; or else the own
-    /// packet.
-    fn choose(send_at: i64, notice: Option<i64>, old: Option<(i64, i64)>) -> Self {
-        if let Some(at) = notice
-            && at + airtime_us(NOTICE_LEN) + PREPARE_US < send_at
-        {
-            return Self::Notice { at };
-        }
-        if let Some((at, round)) = old
-            && at + airtime_us(MAX_PACKET) + PREPARE_US < send_at
-        {
-            return Self::Old { at, round };
-        }
-        Self::Own
-    }
 }
 
 impl From<Request> for Command {
@@ -499,12 +470,14 @@ fn utc_now(device: &impl Device, now: i64) -> Option<i64> {
         .map(|utc| utc / 1_000_000)
 }
 
-/// A group this device left, kept until it has told the others in its own slots.
+/// A group this device left, kept until it has told the others.
 struct Leaving {
     group: Group,
     gone: Gone,
-    /// The slots it is still to be sent in.
+    /// The packets it is still to be sent in.
     left: u8,
+    /// When the next may go, on the local clock.
+    next: i64,
     /// When it is given up, on the local clock.
     until: i64,
 }
@@ -540,7 +513,8 @@ pub trait Radio {
     async fn idle_receive(&mut self);
     async fn standby(&mut self);
     async fn sleep(&mut self);
-    /// Starts receiving until the radio is put in standby. Returns whether it started.
+    /// Starts receiving until the radio is put in standby, or goes on without a break if it is
+    /// receiving already. Returns whether it is receiving.
     async fn start_receiving(&mut self) -> bool;
     /// Waits until local time `deadline` for a packet to arrive. Returns whether one did.
     async fn wait_received(&mut self, deadline: i64) -> bool;
@@ -548,10 +522,12 @@ pub trait Radio {
     async fn read_packet(&mut self) -> Option<(Received, i64)>;
     /// How late, on average, a packet's end is seen after it ends.
     fn seen_late_us(&self) -> i64;
-    /// Sends `packet`, at local time `at` or at once, and leaves the radio as
-    /// [`Radio::idle_receive`] does. Returns whether it was seen to finish, or `None` when it
-    /// could not be loaded.
-    async fn transmit(&mut self, packet: &[u8], at: Option<i64>) -> Option<bool>;
+    /// Whether, while receiving, the channel is clear: no packet under way that the radio can
+    /// detect, and none arrived that is not yet read.
+    async fn is_clear(&mut self) -> bool;
+    /// Sends `packet` at once, and leaves the radio as [`Radio::idle_receive`] does. Returns
+    /// whether it was seen to finish, or `None` when it could not be loaded.
+    async fn transmit(&mut self, packet: &[u8]) -> Option<bool>;
 }
 
 /// The local clock a node runs on, in microseconds.
@@ -632,11 +608,6 @@ pub struct Mesh<R, T, G, D, S, A: Allocator> {
     founding: Option<Box<Founding>>,
     /// A group this device left and has yet to tell.
     leaving: Option<Box<Leaving>>,
-    /// The order the group's ids send in, from its key.
-    schedule: Option<Box<Schedule>>,
-    /// The order of the old key a packet under one goes out under, with that key, while it
-    /// stays the same.
-    old_schedule: Option<Box<(Key, Schedule)>>,
     /// The member records the next packet asks for.
     requests: Requests,
     /// The members' addresses as a refresh under way started, which tell the members it learns
@@ -646,8 +617,9 @@ pub struct Mesh<R, T, G, D, S, A: Allocator> {
     unsaved: Unsaved,
     clock: Clock,
     table: Table,
-    /// The timebase time the next own slot is looked for from, past the last one decided.
-    after: i64,
+    access: Access,
+    /// The sweep round this node last drew a time to send in, and that time on the local timer.
+    sweep_at: Option<(i64, i64)>,
     timebase_shown: Option<Timebase>,
     /// When each id was last heard sending, on the local clock.
     heard: [Option<i64>; IDS as usize],
@@ -660,9 +632,6 @@ pub struct Mesh<R, T, G, D, S, A: Allocator> {
     shown: Shown,
     /// The view [`publish`] fills.
     view: Box<MeshView>,
-    /// Where a member heard on a timebase ranked below this node's places its slots, as its
-    /// offset from the local timer, until a notice has gone to it.
-    notice: Option<i64>,
     /// Every message the node holds.
     messages: Box<Store, A>,
     /// The messages the screens are shown.
@@ -723,21 +692,19 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             group,
             founding: None,
             leaving: None,
-            schedule: None,
-            old_schedule: None,
             requests: Requests::default(),
             refresh_known: None,
             unsaved: Unsaved::default(),
             clock: Clock::new(own, now),
             table: Table::new(own),
-            after: i64::MIN,
+            access: Access::default(),
+            sweep_at: None,
             timebase_shown: None,
             heard: [None; IDS as usize],
             refresh: None,
             refreshes: 0,
             shown: Shown::new(true),
             view: blank_view(),
-            notice: None,
             messages: zeroed_in(alloc.clone()),
             inbox: Inbox::new(zeroed_in(alloc.clone())),
             summaries: Summaries::default(),
@@ -759,30 +726,8 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         }
         let tuned = mesh.radio.tune(FREQUENCY_HZ, SYNC_WORD, POWER_DBM).await;
         info!("[MESH] tuned={}", tuned);
-        mesh.sync_schedule();
         mesh.publish();
         mesh
-    }
-
-    /// Keeps the slot schedule the group's key gives. Call it once the group changes, before
-    /// placing a slot.
-    fn sync_schedule(&mut self) {
-        let group = self
-            .group
-            .as_ref()
-            .or(self.leaving.as_ref().map(|leaving| &leaving.group));
-        match group {
-            Some(group)
-                if !self
-                    .schedule
-                    .as_ref()
-                    .is_some_and(|schedule| schedule.is_for(group.key())) =>
-            {
-                self.schedule = Some(Box::new(Schedule::new(group.key())));
-            }
-            Some(_) => {}
-            None => self.schedule = None,
-        }
     }
 
     #[inline(never)]
@@ -934,7 +879,6 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             );
         }
         loop {
-            self.sync_schedule();
             self.publish();
             let command = if self.group.is_some() {
                 match select(self.step(), commands.receive()).await {
@@ -1002,6 +946,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                         group,
                         gone,
                         left: LEAVE_REPEATS,
+                        next: now,
                         until: now + LEAVE_WAIT_US,
                     }));
                 }
@@ -1245,62 +1190,83 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         if !self.outbox.is_empty() {
             self.post_outbox(time).await;
         }
-        let Some((round, start)) = self
-            .schedule
-            .as_deref()
-            .map(|schedule| schedule.next_slot((time + PREPARE_US).max(self.after), own))
-        else {
-            return;
-        };
-        let send_at = start + (now - time);
-        match Next::choose(
-            send_at,
-            self.notice_at(now, own),
-            self.old_slot_at(now, own),
-        ) {
-            Next::Notice { at } => {
-                self.notice = None;
-                if !self.listen(at - PREPARE_US).await {
-                    self.send_notice(own, timebase, at).await;
-                }
-                return;
-            }
-            Next::Old { at, round } => {
-                if !self.listen(at - PREPARE_US).await {
-                    self.send_old(own, timebase, at, round).await;
-                }
-                return;
-            }
-            Next::Own => {}
-        }
         self.prepare_summary();
-        if self.listen(send_at - PREPARE_US).await {
+        let round = round_at(time);
+        let round_ends = now + (round + 1) * ROUND_US - time;
+        let old = self.old_due(round, now, time, own);
+        let holding = self.holding(round, now, time, own);
+        let own_at = self.access.own_due(holding, now);
+        let (at, old) = match old {
+            Some(at) if at <= own_at => (at, true),
+            _ => (own_at, false),
+        };
+        if at > now {
+            // A packet heard, or a new round, can change what is due.
+            self.listen(at.min(round_ends)).await;
             return;
         }
-        self.after = start + 1;
-        let sending = self.table.wants_to_send(round)
-            || !self.requests.pending().is_empty()
-            || self.group.as_ref().is_some_and(Group::has_unsent)
-            || self.messages.has_unsent()
-            || self.summary.is_some();
-        info!(
-            "[MESH] round={} sending={} sweeping={}",
-            round,
-            sending,
-            self.clock.is_sweeping(self.time.now())
-        );
-        if sending {
-            self.send(round, start, timebase, send_at).await;
+        let wait = self.draw(i64::from(STEPS), own) * STEP_US;
+        if self.listen(now + wait).await {
+            return;
+        }
+        if !self.radio.is_clear().await {
+            let wait = self.draw(i64::from(BUSY_STEPS), own) * STEP_US;
+            debug!("[MESH] the channel is busy; backing off {}ms", wait / 1_000);
+            self.access.busy(self.time.now(), wait);
+            return;
+        }
+        if old {
+            self.send_old(own, timebase).await;
+        } else {
+            self.send(timebase).await;
         }
     }
 
-    /// Sends the gone record of the group this device left in its next own slot, and forgets
-    /// the group once it has gone out in [`LEAVE_REPEATS`] of them or the wait is over.
+    /// What this node holds to send in `round`, at local time `now` and timebase time `time`.
+    fn holding(&mut self, round: i64, now: i64, time: i64, own: u8) -> Holding {
+        let records = !self.requests.pending().is_empty()
+            || self.group.as_ref().is_some_and(Group::has_unsent)
+            || self.messages.has_unsent()
+            || self.summary.is_some();
+        let news = self.table.has_news() || self.removals.on_key_first();
+        let start = now - (time - round * ROUND_US);
+        let sweep = (is_sweep_round(round)
+            && self.removals.on_key_in_sweeps(now)
+            && !self.access.sent_since(start))
+        .then(|| self.sweep_at(round, start, own));
+        Holding {
+            records,
+            news,
+            sweep,
+        }
+    }
+
+    /// When this node sends in sweep round `round`, which starts at local time `start`: a time
+    /// it draws once a round, in its first half.
+    fn sweep_at(&mut self, round: i64, start: i64, own: u8) -> i64 {
+        match self.sweep_at {
+            Some((drawn, at)) if drawn == round => at,
+            _ => {
+                let at = start + self.draw(SWEEP_SPREAD_US, own);
+                self.sweep_at = Some((round, at));
+                at
+            }
+        }
+    }
+
+    /// A random number below `bound`, or without a random source one that differs for each id.
+    fn draw(&mut self, bound: i64, own: u8) -> i64 {
+        match self.random.bytes::<4>() {
+            Some(bytes) => i64::from(u32::from_le_bytes(bytes)) % bound,
+            None => bound * i64::from(own) / i64::from(IDS),
+        }
+    }
+
+    /// Sends the gone record of the group this device left, [`LEAVE_REPEATS`] times, and
+    /// forgets the group once it has gone out in all of them or the wait is over.
     async fn tell_leaving(&mut self) {
         let now = self.time.now();
-        let (Some(leaving), Some((time, timebase)), Some(schedule)) =
-            (&self.leaving, self.clock.at(now), self.schedule.as_deref())
-        else {
+        let (Some(leaving), Some((_, timebase))) = (&self.leaving, self.clock.at(now)) else {
             info!("[MESH] left with no timebase to tell the others on");
             self.leaving = None;
             return;
@@ -1309,72 +1275,72 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             self.leaving = None;
             return;
         }
-        let own = leaving.group.own();
-        let (round, start) = schedule.next_slot((time + PREPARE_US).max(self.after), own);
-        let send_at = start + (now - time);
-        if send_at > leaving.until {
-            self.leaving = None;
+        let (own, next, until) = (leaving.group.own(), leaving.next, leaving.until);
+        let wait = self.draw(i64::from(STEPS), own) * STEP_US;
+        let at = (self.access.after_quiet(next) + wait).min(until);
+        // Nothing heard is taken now, but the channel is listened to for the check.
+        if !self.radio.start_receiving().await {
+            warn!("[MESH] receive start failed");
+        }
+        if self.radio.wait_received(at).await {
+            let _ = self.radio.read_packet().await;
             return;
         }
-        self.radio.standby().await;
-        self.time.until(send_at - PREPARE_US).await;
-        self.after = start + 1;
+        if !self.radio.is_clear().await {
+            let wait = self.draw(i64::from(BUSY_STEPS), own) * STEP_US;
+            self.access.busy(self.time.now(), wait);
+            return;
+        }
+        let now = self.time.now();
+        let (Some(leaving), Some((time, _))) = (&self.leaving, self.clock.at(now)) else {
+            return;
+        };
         let mut packet = [0u8; MAX_PACKET];
-        let mut builder = Sealing::new(&mut packet, &Header::new(own, timebase, second_at(start)));
-        let _ = builder.neighbours(self.table.neighbours(round).bits());
+        let mut builder = Sealing::new(&mut packet, &Header::new(own, timebase, time));
+        let _ = builder.neighbours(self.table.neighbours(round_at(time)).bits());
         let _ = builder.gone(own, &leaving.gone);
         let len = builder.seal(leaving.group.key());
-        let sent = self.radio.transmit(&packet[..len], Some(send_at)).await;
+        let sent = self.radio.transmit(&packet[..len]).await;
+        self.access.sent(now, len, None);
         info!(
-            "[MESH] told the group it left round={} done={}",
-            round,
+            "[MESH] told the group it left done={}",
             sent.is_some_and(|done| done)
         );
         if let Some(leaving) = &mut self.leaving {
             leaving.left -= 1;
+            leaving.next = now + LEAVE_GAP_US;
         }
     }
 
-    /// When this node's slot comes next in the order of the old key a packet under one would go
-    /// out under, on the local timer, and its round. That is always in a sweep round, where
-    /// every member listens throughout: one that switched to a rival key listens in no other
-    /// round of the old key's order.
-    fn old_slot_at(&mut self, now: i64, own: u8) -> Option<(i64, i64)> {
-        if !self.removals.sends_old() {
-            self.old_schedule = None;
+    /// When a packet under an old key is due, on the local timer: at once to catch a member up,
+    /// and otherwise at this node's time in a sweep round while a member is waited for, so that
+    /// parts of the group on rival keys still hear each other.
+    fn old_due(&mut self, round: i64, now: i64, time: i64, own: u8) -> Option<i64> {
+        if !self.removals.sends_old() || self.removals.old_packet(round).is_none() {
             return None;
         }
-        let (time, _) = self.clock.at(now)?;
-        let from = time + 2 * PREPARE_US;
-        let (key, _, _) = self.removals.old_packet(round_at(from))?;
-        if self.old_schedule.as_ref().is_none_or(|held| held.0 != *key) {
-            self.old_schedule = Some(Box::new((key.clone(), Schedule::new(key))));
-        }
-        let (_, schedule) = self.old_schedule.as_deref()?;
-        let (mut round, mut start) = schedule.next_slot(from, own);
-        if !is_sweep_round(round) {
-            // A sweep round's header goes in that round only.
-            if !self.removals.catching_up() {
-                return None;
-            }
-            round += SWEEP_EVERY - round.rem_euclid(SWEEP_EVERY);
-            start = schedule.slot_start(round, own);
-        }
-        Some((start + (now - time), round))
+        let at = if self.removals.catching_up() {
+            now
+        } else {
+            self.sweep_at(round, now - (time - round * ROUND_US), own)
+        };
+        Some(self.access.after_quiet(at))
     }
 
-    /// Sends a packet under an old key at local time `at`, in this node's slot in that key's
-    /// order: a header, and the key message of each member waiting for one on that key.
-    async fn send_old(&mut self, own: u8, timebase: Timebase, at: i64, round: i64) {
-        let Some((time, _)) = self.clock.at(at) else {
+    /// Sends a packet under an old key: a header, and the key message of each member waiting
+    /// for one on that key.
+    async fn send_old(&mut self, own: u8, timebase: Timebase) {
+        let now = self.time.now();
+        let Some((time, _)) = self.clock.at(now) else {
             return;
         };
+        let round = round_at(time);
         let Some((key, generation, ids)) = self.removals.old_packet(round) else {
             return;
         };
         let key = key.clone();
         let mut packet = [0u8; MAX_PACKET];
-        let mut builder = Sealing::new(&mut packet, &Header::new(own, timebase, second_at(time)));
+        let mut builder = Sealing::new(&mut packet, &Header::new(own, timebase, time));
         let (mut caught, mut lost) = (Ids::EMPTY, Ids::EMPTY);
         for &(id, catches_up_with) in &ids {
             match self.removals.message_for(id, catches_up_with) {
@@ -1385,7 +1351,8 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             }
         }
         let len = builder.seal(&key);
-        let sent = self.radio.transmit(&packet[..len], Some(at)).await;
+        let sent = self.radio.transmit(&packet[..len]).await;
+        self.access.sent(now, len, None);
         self.removals.sent_old(caught, lost, round);
         info!(
             "[REKEY] sent under generation {} round={} caught={:#010x} len={} done={}",
@@ -1395,33 +1362,6 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             len,
             sent.is_some_and(|done| done)
         );
-    }
-
-    /// When the member a notice is for next listens for this node's slot, on the local timer.
-    fn notice_at(&self, now: i64, own: u8) -> Option<i64> {
-        let offset = self.notice?;
-        // The member's round, on its own timebase, gives this node's slot there.
-        let (_, start) = self
-            .schedule
-            .as_deref()?
-            .next_slot(now - offset + 2 * PREPARE_US, own);
-        Some(start + offset)
-    }
-
-    /// Sends a notice at local time `at`, when a member on a lower timebase listens for this
-    /// node, which makes it sweep and so hear this node's own packets.
-    async fn send_notice(&mut self, own: u8, timebase: Timebase, at: i64) {
-        let mut packet = [0u8; NOTICE_LEN];
-        let (Some(group), Some((time, _))) = (&self.group, self.clock.at(at)) else {
-            return;
-        };
-        let header = Header {
-            notice: true,
-            ..Header::new(own, timebase, second_at(time))
-        };
-        let len = Sealing::new(&mut packet, &header).seal(group.key());
-        let sent = self.radio.transmit(&packet[..len], Some(at)).await;
-        info!("[MESH] notice sent done={}", sent.is_some_and(|done| done));
     }
 
     fn take_readings(&mut self, own: u8) {
@@ -1444,11 +1384,13 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         }
     }
 
-    /// Listens until local time `end`: throughout in a sweep or without a timebase, and otherwise
-    /// in a window round the slot of each other member and of each id heard lately.
-    /// Returns whether a switch, or a packet that moved the node to another timebase or another
-    /// id, moved every slot; the next own slot is then looked for afresh.
+    /// Receives until local time `end`, making a switch and ending a refresh as they come.
+    /// Returns whether it took a packet or made a switch, after which the step looks afresh at
+    /// what is due.
     async fn listen(&mut self, end: i64) -> bool {
+        if !self.radio.start_receiving().await {
+            warn!("[MESH] receive start failed");
+        }
         loop {
             let now = self.time.now();
             if self.update_refresh(now) {
@@ -1456,99 +1398,33 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             }
             if self.switch_at(now).is_some_and(|at| at <= now) {
                 self.switch_key();
-                self.after = i64::MIN;
                 return true;
             }
             if now >= end {
                 return false;
             }
-            let (open, close) = match self.clock.at(now) {
-                Some((time, _)) if !self.clock.is_sweeping(now) => {
-                    let offset = now - time;
-                    let from = time - GUARD_US - airtime_us(MAX_PACKET) + 1;
-                    let ids = self.listened(round_at(from));
-                    let window = self
-                        .schedule
-                        .as_deref()
-                        .and_then(|schedule| schedule.next_slot_in(from, ids))
-                        .map(|(_, start)| {
-                            (
-                                start - GUARD_US + offset,
-                                start + GUARD_US + airtime_us(MAX_PACKET) + offset,
-                            )
-                        });
-                    let sweep = self.clock.next_sweep(now).unwrap_or(i64::MAX);
-                    match window {
-                        Some((open, close)) if open < sweep => {
-                            (open.max(now), close.min(sweep).min(end))
-                        }
-                        // The sweep round opens first: wait for it, and sweep from there.
-                        _ => (sweep.max(now).min(end), sweep.max(now).min(end)),
-                    }
-                }
-                _ => (
-                    now,
-                    self.clock.sweep_ends(now).map_or(end, |ends| ends.min(end)),
-                ),
-            };
-            // A refresh's end is shown as it comes, and a switch is made as it comes, whatever
-            // the window.
-            let event = [self.refresh_until(), self.switch_at(now)]
+            let close = [self.refresh_until(), self.switch_at(now)]
                 .into_iter()
                 .flatten()
                 .filter(|&at| at > now)
-                .min();
-            let close = match event {
-                Some(at) => close.min(at),
-                None => close,
-            };
-            if let Some(ends) = event
-                && ends < open.min(end)
-            {
-                self.radio.standby().await;
-                self.time.until(ends).await;
-                continue;
+                .fold(end, i64::min);
+            if self.radio.wait_received(close).await {
+                self.receive().await;
+                return true;
             }
-            if open >= end {
-                self.radio.standby().await;
-                self.time.until(end).await;
-                return false;
-            }
-            if open > now {
-                self.radio.standby().await;
-                self.time.until(open).await;
-            }
-            if !self.radio.start_receiving().await {
-                warn!("[MESH] receive start failed");
-            }
-            while self.radio.wait_received(close).await {
-                if self.receive().await {
-                    self.radio.standby().await;
-                    self.after = i64::MIN;
-                    return true;
-                }
-            }
-            self.radio.standby().await;
         }
     }
 
-    /// The ids whose slots the node listens to outside a sweep in `round`: the group's other
-    /// members, and any other id heard in the rounds a neighbour counts for. A member the group
-    /// does not know of yet is found by a sweep.
-    fn listened(&self, round: i64) -> Ids {
-        let Some(group) = &self.group else {
-            return Ids::EMPTY;
-        };
-        (group.ids() | self.table.neighbours(round)).without(group.own())
+    /// Takes the packet `DIO0` reported.
+    async fn receive(&mut self) {
+        if let Some((packet, done)) = self.radio.read_packet().await {
+            self.take(&packet, done);
+        }
     }
 
-    /// Takes the packet `DIO0` reported. Returns whether it moved the node to its timebase, or
-    /// to another id.
-    async fn receive(&mut self) -> bool {
-        let Some((packet, done)) = self.radio.read_packet().await else {
-            return false;
-        };
-        self.take(&packet, done)
+    /// When a packet of `len` bytes whose RxDone was seen at local time `done` started.
+    fn started(&self, len: usize, done: i64) -> i64 {
+        done - airtime_us(len) - ARRIVAL_LATENCY_US - self.radio.seen_late_us()
     }
 
     /// Opens a sealed packet in place under the group's key. Says instead which other key
@@ -1582,72 +1458,43 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         Opened::Not
     }
 
-    /// Takes a packet whose RxDone was seen at local time `done`. Returns whether it moved the
-    /// node to its timebase, or to another id.
-    fn take(&mut self, packet: &Received, done: i64) -> bool {
+    /// Takes a packet whose RxDone was seen at local time `done`.
+    fn take(&mut self, packet: &Received, done: i64) {
         let len = packet.length;
         let mut bytes = packet.payload;
         match self.open(&mut bytes[..len]) {
             Opened::Current => {}
-            // Nothing else in it is taken: this node sends under the old key, which the member
-            // being removed reads, and its slot order and clock are still the old key's.
+            // Nothing else in it is taken before this node's own switch: it still sends under the
+            // old key, which the member being removed reads.
             Opened::Pending { header } => {
                 info!("[REKEY] heard {} on the key to switch to", header.sender);
                 if let Some(heard) = self.heard.get_mut(usize::from(header.sender)) {
                     *heard = Some(done);
                 }
-                return self.adopt_pending(&header, len, done);
+                self.adopt_pending(&header, len, done);
+                return;
             }
             Opened::Old { header, old } => {
                 self.heard_on_old(&header, old, done);
                 self.take_rivals(&bytes[SIV_LEN..len]);
-                return false;
+                return;
             }
             Opened::Not => {
                 info!("[MESH] not ours len={} rssi={}", len, packet.rssi);
-                return false;
+                return;
             }
         }
         let utc = self.utc_seconds(done);
+        let start = self.started(len, done);
         let Some(group) = &mut self.group else {
-            return false;
+            return;
         };
         let Ok(plain) = Plain::parse(&bytes[SIV_LEN..len]) else {
             warn!("[MESH] malformed len={}", len);
-            return false;
+            return;
         };
         let header = plain.header;
-        let polled = self.radio.seen_late_us();
-        let start = done - airtime_us(len) - ARRIVAL_LATENCY_US - polled;
-        let Some(slot) = self
-            .schedule
-            .as_deref()
-            .map(|schedule| schedule.named_slot(header.base, header.sender))
-        else {
-            return false;
-        };
-        let ours = self.clock.at(done).map(|(_, timebase)| timebase.source);
-        if header.notice {
-            if ours.is_none_or(|ours| header.timebase.source.outranks(ours)) {
-                info!(
-                    "[MESH] notice from id={} timebase={:?}; sweeping",
-                    header.sender, header.timebase.source
-                );
-                self.clock.sweep(done);
-            }
-            return false;
-        }
-        let arrival = self.clock.arrival(&header, slot, start, done);
-        if arrival.taken == Taken::Ignored
-            && self.notice.is_none()
-            && ours.is_some_and(|ours| ours.outranks(header.timebase.source))
-        {
-            info!(
-                "[MESH] id={} is on a lower timebase; a notice goes to it",
-                header.sender
-            );
-            self.notice = Some(start - slot);
-        }
+        let arrival = self.clock.arrival(&header, start, done);
         if let Some(heard) = self.heard.get_mut(usize::from(header.sender)) {
             *heard = Some(done);
         }
@@ -1658,7 +1505,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         {
             refresh.heard |= 1 << header.sender;
         }
-        let round = round_at(slot);
+        let round = round_at(header.start());
         self.table.heard(header.sender, round);
         // A clock started from a boot is no UTC to judge a record's time by.
         let now = self
@@ -1667,10 +1514,10 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             .filter(|(_, timebase)| timebase.source.is_utc())
             .map(|(time, _)| second_at(time));
         // Messages are judged by this node's clock: the header's own time is the sender's word.
-        let round_s = self
-            .clock
-            .at(done)
-            .map_or_else(|| round_start_s(slot), |(time, _)| round_start_s(time));
+        let round_s = self.clock.at(done).map_or_else(
+            || round_start_s(header.start()),
+            |(time, _)| round_start_s(time),
+        );
         let own = group.own();
         let absorbed = absorb(
             plain.records(),
@@ -1749,28 +1596,24 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             absorbed.carried,
             absorbed.summary,
         );
-        arrival.taken == Taken::Adopted || absorbed.renumbered.is_some()
     }
 
     /// Moves to the clock of a packet under the key to switch to, if it outranks this node's. A
     /// node that restarted with no UTC finds the group's clock in no other packet once the
-    /// others have switched. Returns whether it moved.
-    fn adopt_pending(&mut self, header: &Header, len: usize, done: i64) -> bool {
+    /// others have switched.
+    fn adopt_pending(&mut self, header: &Header, len: usize, done: i64) {
         let ours = self.clock.at(done).map(|(_, timebase)| timebase.source);
-        if ours.is_some_and(|ours| !header.timebase.source.outranks(ours)) {
-            return false;
+        if ours.is_some_and(|ours| !header.timebase.source.outranks(ours))
+            || self.removals.rekey.pending().is_none()
+        {
+            return;
         }
-        let Some(pending) = self.removals.rekey.pending() else {
-            return false;
-        };
-        let slot = Schedule::new(&pending.new.key).named_slot(header.base, header.sender);
-        let start = done - airtime_us(len) - ARRIVAL_LATENCY_US - self.radio.seen_late_us();
-        let arrival = self.clock.arrival(header, slot, start, done);
+        let start = self.started(len, done);
+        let arrival = self.clock.arrival(header, start, done);
         info!(
             "[REKEY] clock from the key to switch to: {:?} late_us={:?}",
             arrival.taken, arrival.late_us
         );
-        arrival.taken == Taken::Adopted
     }
 
     /// Takes from a packet under an old key, opened, the key messages of this node's
@@ -1807,19 +1650,19 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         }
     }
 
-    /// Sends this node's packet in its slot in `round`, which starts at timebase time `start` and
-    /// local time `send_at`.
-    async fn send(&mut self, round: i64, start: i64, timebase: Timebase, send_at: i64) {
-        let Some(group) = &mut self.group else {
+    /// Sends this node's packet, at once.
+    async fn send(&mut self, timebase: Timebase) {
+        let now = self.time.now();
+        let (Some(group), Some((time, _))) = (&mut self.group, self.clock.at(now)) else {
             return;
         };
-        let base = second_at(start);
+        let (round, own) = (round_at(time), group.own());
         let mut packet = [0u8; MAX_PACKET];
-        let mut builder = Sealing::new(&mut packet, &Header::new(group.own(), timebase, base));
+        let mut builder = Sealing::new(&mut packet, &Header::new(own, timebase, time));
         let carried = compose(
             &mut builder,
             round,
-            base,
+            second_at(time),
             Sources {
                 table: &self.table,
                 group,
@@ -1829,17 +1672,21 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                     .summary
                     .as_deref()
                     .map(|(summary, _)| summary.as_slice()),
-                on_key: self.removals.on_key_for(round, send_at),
+                on_key: self.removals.on_key_for(round, now),
             },
         );
         let len = builder.seal(group.key());
+        let Some(done) = self.radio.transmit(&packet[..len]).await else {
+            // Tried again after a backoff, rather than at once.
+            let wait = self.draw(i64::from(BUSY_STEPS), own) * STEP_US;
+            self.access.busy(now, wait);
+            return;
+        };
+        let spread = self.draw(SPREAD_US, own);
+        self.access.sent(now, len, Some(spread));
         if carried.on_key {
             self.removals.carried_on_key();
         }
-
-        let Some(done) = self.radio.transmit(&packet[..len], Some(send_at)).await else {
-            return;
-        };
         if let Some(group) = &mut self.group {
             carried.sent(
                 &mut self.table,
@@ -1918,7 +1765,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         loop {
             let now = self.time.now();
             if let Some(len) = pairing.poll(now, &mut frame) {
-                let sent = self.radio.transmit(&frame[..len], None).await;
+                let sent = self.radio.transmit(&frame[..len]).await;
                 debug!(
                     "[PAIR] sent kind={} len={} done={}",
                     frame[1],
@@ -2086,9 +1933,8 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
     fn restart(&mut self, own: u8) {
         self.clock = Clock::new(own, self.time.now());
         self.table = Table::new(own);
-        self.after = i64::MIN;
+        self.access = Access::default();
         self.timebase_shown = None;
-        self.notice = None;
         self.requests = Requests::default();
         self.heard = [None; IDS as usize];
         self.shown.positions = [None; IDS as usize];
@@ -2315,7 +2161,6 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             self.time.now(),
         );
         self.save_switch();
-        self.sync_schedule();
         let decline = match self.removals.rekey.undo_until() {
             Some(until) => self
                 .local_at_round(until + 1)
@@ -2454,7 +2299,6 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         self.summary = None;
         self.removals.reverted();
         self.save_switch();
-        self.sync_schedule();
         let at = self.time.now();
         self.show_stage(key, RemovalStage::Declined { at });
         self.shown.positions(&self.table);
@@ -2908,7 +2752,6 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         info!("[MESH] the founded group is this device's");
         let own = founding.group.own();
         self.group = Some(founding.group);
-        self.sync_schedule();
         self.unsaved.group_replaced();
         self.restart(own);
         if let Some((packet, done)) = heard {
@@ -3086,49 +2929,5 @@ pub async fn offline(
             }
             command => warn!("[MESH] no radio for {:?}", command),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const SEND_AT: i64 = 10_000_000;
-
-    /// The latest local time a packet of `len` bytes can go out and still leave the own slot
-    /// its preparation.
-    fn last_start(len: usize) -> i64 {
-        SEND_AT - PREPARE_US - airtime_us(len) - 1
-    }
-
-    #[test]
-    fn a_notice_that_fits_goes_ahead_of_an_old_key_packet() {
-        let at = last_start(NOTICE_LEN);
-        assert_eq!(
-            Next::choose(SEND_AT, Some(at), Some((0, 7))),
-            Next::Notice { at }
-        );
-    }
-
-    #[test]
-    fn an_old_key_packet_goes_when_the_notice_does_not_fit() {
-        let at = last_start(MAX_PACKET);
-        assert_eq!(
-            Next::choose(SEND_AT, Some(last_start(NOTICE_LEN) + 1), Some((at, 7))),
-            Next::Old { at, round: 7 }
-        );
-    }
-
-    #[test]
-    fn the_own_packet_goes_when_nothing_ends_in_time() {
-        assert_eq!(Next::choose(SEND_AT, None, None), Next::Own);
-        assert_eq!(
-            Next::choose(
-                SEND_AT,
-                Some(last_start(NOTICE_LEN) + 1),
-                Some((last_start(MAX_PACKET) + 1, 7))
-            ),
-            Next::Own
-        );
     }
 }

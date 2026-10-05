@@ -1798,7 +1798,6 @@ dependencies = [
 name = "octowhere-mesh"
 version = "0.1.0"
 dependencies = [
- "aes",
  "aes-siv",
  "bytemuck",
  "defmt 1.1.1",

@@ -2,13 +2,12 @@
 //! carries.
 
 use crate::packet::{Entry, MAX_DELTA};
-use crate::schedule::{is_floor, is_sweep_round};
 use crate::{AHEAD_S, IDS, Ids};
 
 /// An id heard within this many rounds is a neighbour.
 pub const NEIGHBOUR_ROUNDS: i64 = 7;
 /// An entry this much newer than the one last sent for its id is worth sending again, as is one
-/// that moved [`MOVED_M`]: a floor period, so a still node's entry stays current.
+/// that moved [`MOVED_M`]: about a floor, so a still node's entry stays current.
 pub const NEWER_S: u32 = 135;
 /// A position this far from the one last sent for its id is worth sending again; above GPS noise.
 pub const MOVED_M: f32 = 25.0;
@@ -198,16 +197,11 @@ impl Table {
         }
     }
 
-    /// Whether this node transmits in its slot in `round`. It sends in a sweep round, which
-    /// nodes on a timebase near its own sweep too. One that hears nobody sends every round, so
-    /// that another node's sweep finds it, wherever their slots fall.
+    /// Whether this node has positions worth sending before its floor: its own moved, an entry
+    /// newer than it last sent, or an id heard for the first time.
     #[must_use]
-    pub fn wants_to_send(&self, round: i64) -> bool {
-        is_floor(round, self.own)
-            || is_sweep_round(round)
-            || self.appeared
-            || self.neighbours(round).is_empty()
-            || self.entries().any(|entry| self.is_fresh(entry))
+    pub fn has_news(&self) -> bool {
+        self.appeared || self.entries().any(|entry| self.is_fresh(entry))
     }
 
     /// Picks up to `out.len()` entries for a packet with base timestamp `base`, in the protocol's
@@ -334,35 +328,33 @@ mod tests {
     }
 
     #[test]
-    fn a_node_sends_on_its_floor_and_when_it_has_news() {
+    fn a_node_has_news_of_moves_new_entries_and_new_nodes() {
         let mut table = Table::new(1);
-        let (floor, quiet) = (1, 2);
-        table.heard(5, quiet);
+        table.heard(5, 2);
         table.sent(&[]);
-        assert!(table.wants_to_send(floor));
-        assert!(!table.wants_to_send(quiet));
+        assert!(!table.has_news());
 
         table.set_own(entry(1, 1_000, DUBLIN));
-        assert!(table.wants_to_send(quiet), "its first position");
+        assert!(table.has_news(), "its first position");
         table.sent(&[entry(1, 1_000, DUBLIN)]);
         table.set_own(entry(1, 1_100, DUBLIN + 100));
-        assert!(!table.wants_to_send(quiet), "a metre is noise");
+        assert!(!table.has_news(), "a metre is noise");
         table.set_own(entry(1, 1_200, NORTH));
-        assert!(table.wants_to_send(quiet), "33 m is a move");
+        assert!(table.has_news(), "33 m is a move");
         table.sent(&[entry(1, 1_200, NORTH)]);
 
-        table.heard(7, quiet);
-        assert!(table.wants_to_send(quiet), "a node appeared");
+        table.heard(7, 2);
+        assert!(table.has_news(), "a node appeared");
         table.sent(&[]);
-        assert!(!table.wants_to_send(quiet));
+        assert!(!table.has_news());
 
         table.merge(entry(7, 1_200, DUBLIN), None);
-        assert!(table.wants_to_send(quiet), "an entry not yet relayed");
+        assert!(table.has_news(), "an entry not yet relayed");
         table.sent(&[entry(7, 1_200, DUBLIN)]);
         table.merge(entry(7, 1_300, DUBLIN), None);
-        assert!(!table.wants_to_send(quiet), "100 s newer and still");
+        assert!(!table.has_news(), "100 s newer and still");
         table.merge(entry(7, 1_200 + NEWER_S, DUBLIN), None);
-        assert!(table.wants_to_send(quiet));
+        assert!(table.has_news());
     }
 
     #[test]
@@ -396,60 +388,25 @@ mod tests {
     }
 
     #[test]
-    fn a_node_sends_in_a_sweep_round() {
-        let mut table = Table::new(1);
-        let sweep = 2 * crate::schedule::SWEEP_EVERY;
-        assert!(!is_floor(sweep, 1));
-        table.heard(5, sweep);
-        table.sent(&[]);
-        assert!(table.wants_to_send(sweep));
-        assert!(!table.wants_to_send(sweep + 1));
-    }
-
-    #[test]
-    fn a_node_that_hears_nobody_sends_every_round() {
-        let mut table = Table::new(1);
-        assert!((0..3).all(|round| table.wants_to_send(round)));
-        table.heard(5, 0);
-        table.sent(&[]);
-        assert!(
-            !table.wants_to_send(2),
-            "a neighbour hears it in its floor rounds"
-        );
-        assert!(
-            table.wants_to_send(NEIGHBOUR_ROUNDS + 2),
-            "until the neighbour has gone unheard"
-        );
-    }
-
-    #[test]
     fn a_packet_that_reaches_every_neighbour_cancels_relaying_what_it_carried() {
         let mut table = Table::new(1);
-        let quiet = 2;
         let mut carried = [None; SLOTS];
         table.heard(4, 100);
         table.heard(7, 100);
         table.sent(&[]);
         table.merge(entry(7, 1_000, DUBLIN), None);
         carried[7] = Some(1_000);
-        assert!(table.wants_to_send(quiet), "7's position is news");
+        assert!(table.has_news(), "7's position is news");
 
         table.covered_by(4, &carried, Ids::of(1), 100);
-        assert!(table.wants_to_send(quiet), "4 does not report hearing 7");
+        assert!(table.has_news(), "4 does not report hearing 7");
         table.covered_by(4, &carried, Ids::of(7), 100);
-        assert!(
-            !table.wants_to_send(quiet),
-            "4 reached everyone this node hears"
-        );
+        assert!(!table.has_news(), "4 reached everyone this node hears");
 
         table.merge(entry(7, 2_000, NORTH), None);
         carried[7] = Some(1_000);
         table.covered_by(4, &carried, Ids::of(7), 100);
-        assert!(table.wants_to_send(quiet), "4 carried an older entry");
-        assert!(
-            table.wants_to_send(table_floor(1)),
-            "a floor is never cancelled"
-        );
+        assert!(table.has_news(), "4 carried an older entry");
     }
 
     #[test]
@@ -461,7 +418,7 @@ mod tests {
         table.merge(entry(4, 1_000, DUBLIN), None);
         carried[4] = Some(1_000);
         table.covered_by(4, &carried, Ids::EMPTY, 100);
-        assert!(!table.wants_to_send(2));
+        assert!(!table.has_news());
     }
 
     #[test]
@@ -469,11 +426,7 @@ mod tests {
         let mut table = Table::new(1);
         table.heard(4, 100);
         table.covered_by(4, &[None; SLOTS], Ids::EMPTY, 100);
-        assert!(table.wants_to_send(2));
-    }
-
-    fn table_floor(id: u8) -> i64 {
-        (0..3).find(|&round| is_floor(round, id)).unwrap()
+        assert!(table.has_news());
     }
 
     #[test]

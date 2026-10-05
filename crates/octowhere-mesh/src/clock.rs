@@ -1,13 +1,13 @@
-//! The timebase a node places its slots on: GPS time from its own fix, or another node's clock,
-//! taken from when that node's packets arrive. Times are microseconds: `local` on the node's own
-//! timer, the timebase's since 1970.
+//! The timebase a node keeps UTC on: GPS time from its own fix, or another node's clock, taken
+//! from when that node's packets start, which their headers name. Times are microseconds:
+//! `local` on the node's own timer, the timebase's since 1970.
 
 use crate::packet::{Header, Source, Timebase};
-use crate::schedule::{FLOOR_EVERY, GUARD_US, ROUND_US, SWEEP_EVERY, is_sweep_round, round_at};
+use crate::schedule::{FLOOR_US, GUARD_US, ROUND_US, is_sweep_round, round_at};
 use crate::table::NEIGHBOUR_ROUNDS;
 
-/// A node's first sweep, and one after it lost its timebase's root, listen this long, which spans
-/// every node's floor round.
+/// A node's first sweep, and one after it lost its timebase's root, last this long, which spans
+/// every node's floor.
 pub const SWEEP_US: i64 = 3 * ROUND_US;
 /// Hearing nothing closer to its timebase's root for this long makes a node sweep, and a sweep
 /// that hears nothing closer makes it its own root.
@@ -18,9 +18,8 @@ pub const GPS_STALE_US: i64 = 30 * 60 * 1_000_000;
 /// 2026-10-04). An RTC drifts a couple of seconds a day, so it holds for months without a fix.
 pub const UTC_BOUND_US: i64 = 5 * 60 * 1_000_000;
 /// How long a packet that would move the clock further than a guard waits for a second that
-/// agrees, the node listening throughout: past a floor round, so that a lone neighbour's next
-/// packet comes within it.
-pub const AGREE_US: i64 = (FLOOR_EVERY + 1) * ROUND_US;
+/// agrees: past a floor, so that a lone neighbour's next packet comes within it.
+pub const AGREE_US: i64 = FLOOR_US + ROUND_US;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -173,12 +172,13 @@ impl Clock {
         }
     }
 
-    /// Takes a packet whose transmission started at local time `start`. A sender starts at its
-    /// slot's start, `slot` on its timebase, which its header names to the group's schedule.
-    /// Outside a sweep, a packet more than the guard away from its slot does not refine the
-    /// clock: it was heard in another slot's window, or replayed.
-    pub fn arrival(&mut self, header: &Header, slot: i64, start: i64, now: i64) -> Arrival {
+    /// Takes a packet whose transmission started at local time `start`, which its header names on
+    /// its sender's timebase. Outside a sweep, a packet more than the guard away from where this
+    /// node's clock puts it does not refine the clock: it was replayed, or its sender's clock is
+    /// adrift.
+    pub fn arrival(&mut self, header: &Header, start: i64, now: i64) -> Arrival {
         let sweeping = self.is_sweeping(now);
+        let slot = header.start();
         let offset = start - slot;
         let late_us = self
             .clock
@@ -219,8 +219,6 @@ impl Clock {
                 round: round_at(slot),
                 until: now + AGREE_US,
             });
-            // On a clock apart from the sender's, the node's windows need not meet its next
-            // packet.
             self.sweep_to(now + AGREE_US);
             taken = Taken::Held;
         }
@@ -269,11 +267,6 @@ impl Clock {
         self.clock.map(|(offset, _)| time + offset)
     }
 
-    /// Sweeps for three rounds from local time `now`, as a notice asks.
-    pub fn sweep(&mut self, now: i64) {
-        self.sweep_to(now + SWEEP_US);
-    }
-
     /// Sweeps until local time `until`, or later if a sweep under way runs longer. Taking up a
     /// timebase or a fix ends it, as it ends a first sweep, so a caller that must listen on
     /// asks again.
@@ -307,25 +300,17 @@ impl Clock {
             }
         }
     }
-
-    /// The local time the next sweep round after `now` opens, with a timebase.
-    #[must_use]
-    pub fn next_sweep(&self, now: i64) -> Option<i64> {
-        let (time, _) = self.at(now)?;
-        let round = round_at(time + GUARD_US) + 1;
-        let next = round + (SWEEP_EVERY - round.rem_euclid(SWEEP_EVERY)) % SWEEP_EVERY;
-        self.local(next * ROUND_US - GUARD_US)
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schedule::{SLOT_US, second_at};
+    use crate::schedule::SWEEP_EVERY;
 
-    /// A slot's start in an order that does not shuffle, which the clock does not need.
+    /// A packet's start in `round`, a second apart for each sender, where its header names it
+    /// exactly.
     fn slot_start(round: i64, id: u8) -> i64 {
-        round * ROUND_US + i64::from(id) * SLOT_US
+        round * ROUND_US + i64::from(id) * SECOND + 1_953
     }
 
     const SECOND: i64 = 1_000_000;
@@ -333,20 +318,16 @@ mod tests {
     const UTC: i64 = 1_790_000_000 * SECOND;
 
     fn header(sender: u8, source: Source, hops: u8, start: i64) -> Header {
-        Header {
-            sender,
-            timebase: Timebase { source, hops },
-            base: second_at(start),
-            phase: 0,
-            notice: false,
-        }
+        let header = Header::new(sender, Timebase { source, hops }, start);
+        assert_eq!(header.start(), start);
+        header
     }
 
     /// A node whose timer reads `skew` more than the timebase, and the local time of a slot.
     fn sent(clock: &mut Clock, from: u8, source: Source, hops: u8, skew: i64, now: i64) -> Arrival {
         let round = crate::schedule::round_at(now - skew) + 1;
         let start = slot_start(round, from);
-        clock.arrival(&header(from, source, hops, start), start, start + skew, now)
+        clock.arrival(&header(from, source, hops, start), start + skew, now)
     }
 
     #[test]
@@ -422,19 +403,6 @@ mod tests {
     }
 
     #[test]
-    fn a_notice_starts_a_three_round_sweep() {
-        let mut clock = Clock::new(1, 0);
-        clock.tick(SWEEP_US, Some(UTC + ROUND_US));
-        let now = SWEEP_US + SECOND;
-        assert!(!clock.is_sweeping(now));
-        clock.sweep(now);
-        assert!(clock.is_sweeping(now + SWEEP_US - 1));
-        assert_eq!(clock.sweep_ends(now), Some(now + SWEEP_US));
-        clock.tick(now + SWEEP_US, None);
-        assert!(!clock.is_sweeping(now + SWEEP_US));
-    }
-
-    #[test]
     fn a_node_sweeps_its_timebases_sweep_rounds() {
         // A timebase whose round at local time 0 follows a sweep round.
         let start = (round_at(UTC) / SWEEP_EVERY * SWEEP_EVERY + 1) * ROUND_US;
@@ -443,7 +411,6 @@ mod tests {
         clock.tick(0, None);
         assert!(!clock.is_sweeping(0), "a fix ends the first sweep");
         let opens = (SWEEP_EVERY - 1) * ROUND_US - GUARD_US;
-        assert_eq!(clock.next_sweep(0), Some(opens));
         assert!(!clock.is_sweeping(opens - 1));
         assert!(clock.is_sweeping(opens));
         assert_eq!(clock.sweep_ends(opens), Some(opens + ROUND_US));
@@ -451,10 +418,6 @@ mod tests {
         assert!(
             !clock.is_sweeping(opens + ROUND_US),
             "for one round, whenever the node ticks"
-        );
-        assert_eq!(
-            clock.next_sweep(opens),
-            Some(opens + SWEEP_EVERY * ROUND_US)
         );
     }
 

@@ -67,11 +67,13 @@ fn a_run_repeats_from_its_seed() {
 fn members_enrolled_while_records_are_asked_for_reach_the_other_node() {
     let mut sim = pair(5);
     sim.run_while_not(30 * 60, |sim| sim.count(0, "heard id=1") >= 1);
+    sim.fail_writes(0, true);
     sim.command(1, Command::Rename(Name::new(b"Roger Saved").unwrap()));
     sim.run_while_not(15 * 60, |sim| {
         sim.count(0, "member 1 is Roger Saved now") == 1
     });
     sim.restart(0);
+    sim.fail_writes(0, false);
     let asked = sim.count(0, "asked=0xffffffff");
     let asking = sim.run_while_not(30 * 60, |sim| sim.count(0, "asked=0xffffffff") > asked);
     assert!(asking, "the restart left the digests apart");

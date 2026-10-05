@@ -6,9 +6,12 @@ use crate::bits::{BitReader, BitWriter};
 use crate::members::{Gone, Member, RECORD_MAX_LEN, Slot};
 use crate::messages::Message;
 use crate::rekey::{ON_KEY_LEN, OnKey};
+use crate::schedule::second_at;
 use crate::seal::{self, Key, SIV_LEN};
 
-pub const VERSION: u8 = 1;
+/// 2 since contention replaced slots: a node on slots would take a packet's start for its
+/// slot's.
+pub const VERSION: u8 = 2;
 /// The radio's largest payload.
 pub const MAX_PACKET: usize = 255;
 pub const HEADER_LEN: usize = 8;
@@ -105,27 +108,28 @@ impl Timebase {
 pub struct Header {
     pub sender: u8,
     pub timebase: Timebase,
-    /// The whole second, on the sender's timebase, that its slot starts in.
+    /// The whole second, on the sender's timebase, that its packet starts in.
     pub base: u32,
-    /// Reserved for CAD.
+    /// Where in that second it starts, in 256ths.
     pub phase: u8,
-    /// The packet asks a node on a timebase ranked below the sender's to sweep. It is sent when
-    /// that node listens for the sender, off the sender's own slot, so its arrival says nothing
-    /// of the sender's timebase.
-    pub notice: bool,
 }
 
 impl Header {
-    /// The header of a packet from `sender` on `timebase`, whose slot starts in second `base`.
+    /// The header of a packet from `sender` on `timebase` that starts at timebase time `start`.
     #[must_use]
-    pub fn new(sender: u8, timebase: Timebase, base: u32) -> Self {
+    pub fn new(sender: u8, timebase: Timebase, start: i64) -> Self {
         Self {
             sender,
             timebase,
-            base,
-            phase: 0,
-            notice: false,
+            base: second_at(start),
+            phase: (start.rem_euclid(1_000_000) * 256 / 1_000_000) as u8,
         }
+    }
+
+    /// When the packet started on the sender's timebase, to the middle of its 256th of a second.
+    #[must_use]
+    pub fn start(&self) -> i64 {
+        i64::from(self.base) * 1_000_000 + (2 * i64::from(self.phase) + 1) * 1_000_000 / 512
     }
 
     fn encode(&self, out: &mut [u8; HEADER_LEN]) {
@@ -141,7 +145,7 @@ impl Header {
             (source, 1),
             (u64::from(root), 5),
             (u64::from(self.timebase.hops), 5),
-            (u64::from(self.notice) | u64::from(boot) << 1, 4),
+            (u64::from(boot) << 1, 4),
             (u64::from(self.base), 32),
             (u64::from(self.phase), 8),
         ] {
@@ -180,7 +184,6 @@ impl Header {
             },
             base: take(32) as u32,
             phase: take(8) as u8,
-            notice: flags & 1 != 0,
         })
     }
 }
@@ -670,7 +673,6 @@ mod tests {
             },
             base: 1_790_000_000,
             phase: 0,
-            notice: false,
         }
     }
 
@@ -732,17 +734,20 @@ mod tests {
     }
 
     #[test]
-    fn a_notice_survives_the_header() {
-        let header = Header {
-            notice: true,
-            ..header()
-        };
-        let mut bytes = [0; HEADER_LEN];
-        header.encode(&mut bytes);
-        assert_eq!(Header::decode(&bytes), Ok(header));
-        let mut bytes = [0; HEADER_LEN];
-        self::header().encode(&mut bytes);
-        assert!(!Header::decode(&bytes).unwrap().notice);
+    fn a_packet_s_start_survives_the_header_to_two_milliseconds() {
+        for start in [
+            1_790_000_000_000_000,
+            1_790_000_000_003_905,
+            1_790_000_000_500_000,
+            1_790_000_000_999_999,
+        ] {
+            let header = Header::new(24, header().timebase, start);
+            let mut bytes = [0; HEADER_LEN];
+            header.encode(&mut bytes);
+            let read = Header::decode(&bytes).unwrap();
+            assert_eq!(read, header);
+            assert!((read.start() - start).abs() <= 1_000_000 / 512, "{start}");
+        }
     }
 
     fn entry(id: u8, stamp: u32) -> Entry {
@@ -853,13 +858,12 @@ mod tests {
     }
 
     #[test]
-    fn a_boot_clock_survives_the_header_beside_a_notice() {
+    fn a_boot_clock_survives_the_header() {
         let header = Header {
             timebase: Timebase {
                 source: Source::Boot(3),
                 hops: 2,
             },
-            notice: true,
             ..header()
         };
         let mut bytes = [0; HEADER_LEN];

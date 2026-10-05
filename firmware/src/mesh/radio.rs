@@ -8,7 +8,9 @@ use sx127xlora::{
     driver::Sx127xError,
     registers::{
         FIFO_ADDR_PTR, FIFO_TX_BASE_ADDR, FIFO_TX_BASE_ADDR_VALUE, IRQ_FLAGS,
-        SYNC_WORD as SYNC_WORD_REGISTER,
+        IRQ_FLAGS_VALID_HEADER_MASK, MODEM_STAT, MODEM_STAT_MODEM_STATUS_HEADER_INFO_VALID_MASK,
+        MODEM_STAT_MODEM_STATUS_RX_ONGOING_MASK, MODEM_STAT_MODEM_STATUS_SIGNAL_DETECTED,
+        MODEM_STAT_MODEM_STATUS_SIGNAL_SYNCHRONIZED, SYNC_WORD as SYNC_WORD_REGISTER,
     },
     types::{DeviceMode, OCP, PowerRamp, RxDone, TxConfig, TxDone},
 };
@@ -24,12 +26,21 @@ const SEND_TIMEOUT_US: i64 = 500_000;
 const POLL_US: u64 = 1_000;
 const IRQ_TX_DONE: u8 = 0x08;
 const IRQ_RX_DONE: u8 = 0x40;
+/// The modem's status while a packet is under way: its preamble detected, then the modem
+/// synchronised to it, receiving and its header read.
+const MODEM_BUSY: u8 = MODEM_STAT_MODEM_STATUS_SIGNAL_DETECTED
+    | MODEM_STAT_MODEM_STATUS_SIGNAL_SYNCHRONIZED
+    | MODEM_STAT_MODEM_STATUS_RX_ONGOING_MASK
+    | MODEM_STAT_MODEM_STATUS_HEADER_INFO_VALID_MASK;
 
 pub struct BoardRadio {
     lora: SensorLora,
     dio0: Input<'static>,
     /// `DIO0` rose for the last flag it was mapped to. Where it did not, the flags are polled.
     dio0_follows: bool,
+    /// In continuous receive since the last mode change. Starting it again would restart the
+    /// receiver, and lose a packet under way.
+    receiving: bool,
     path: LoraPath,
 }
 
@@ -39,6 +50,7 @@ impl BoardRadio {
             lora,
             dio0,
             dio0_follows: true,
+            receiving: false,
             path,
         }
     }
@@ -70,6 +82,7 @@ impl BoardRadio {
 
     /// Puts the packet in the radio's FIFO, ready to send on one mode change.
     async fn load(&mut self, packet: &[u8]) -> Result<(), ()> {
+        self.receiving = false;
         let lora = &mut self.lora;
         lora.set_device_mode(DeviceMode::STDBY)
             .await
@@ -106,6 +119,7 @@ impl Radio for BoardRadio {
     /// Puts the radio in standby with its antenna on the receive path and `DIO0` on RxDone,
     /// whatever was interrupted.
     async fn idle_receive(&mut self) {
+        self.receiving = false;
         let _ = self.lora.set_device_mode(DeviceMode::STDBY).await;
         let _ = self.lora.clear_all_interrupts().await;
         let _ = self.lora.map_dio0::<RxDone>().await;
@@ -113,16 +127,36 @@ impl Radio for BoardRadio {
     }
 
     async fn standby(&mut self) {
+        self.receiving = false;
         let _ = self.lora.set_device_mode(DeviceMode::STDBY).await;
     }
 
     async fn sleep(&mut self) {
+        self.receiving = false;
         let _ = self.lora.set_device_mode(DeviceMode::SLEEP).await;
     }
 
-    /// Starts receiving until the radio is put in standby. Returns whether it started.
     async fn start_receiving(&mut self) -> bool {
-        self.lora.rx(None).await.is_ok()
+        if !self.receiving {
+            self.receiving = self.lora.rx(None).await.is_ok();
+        }
+        self.receiving
+    }
+
+    /// Reads the modem's status over SPI. The modem sees a preamble a few symbols in, so a
+    /// packet that started just before goes unseen.
+    async fn is_clear(&mut self) -> bool {
+        if self.dio0_follows && self.dio0.is_high() {
+            return false;
+        }
+        match self.lora.read(IRQ_FLAGS).await {
+            Ok(flags) if flags & (IRQ_RX_DONE | IRQ_FLAGS_VALID_HEADER_MASK) == 0 => {}
+            _ => return false,
+        }
+        self.lora
+            .read(MODEM_STAT)
+            .await
+            .is_ok_and(|status| status & MODEM_BUSY == 0)
     }
 
     /// Waits until local time `deadline` for a packet to arrive. Returns whether one did.
@@ -179,22 +213,14 @@ impl Radio for BoardRadio {
         }
     }
 
-    async fn transmit(&mut self, packet: &[u8], at: Option<i64>) -> Option<bool> {
+    async fn transmit(&mut self, packet: &[u8]) -> Option<bool> {
         if self.load(packet).await.is_err() {
             warn!("[MESH] loading a {}-byte packet failed", packet.len());
             self.idle_receive().await;
             return None;
         }
         let _ = self.path.transmit().await;
-        if let Some(at) = at {
-            until(at).await;
-        }
         let started = local();
-        if let Some(at) = at
-            && started - at > 1_000
-        {
-            warn!("[MESH] sent {}us late", started - at);
-        }
         let _ = self.lora.set_device_mode(DeviceMode::TX).await;
         let done = self.wait_for(IRQ_TX_DONE, started + SEND_TIMEOUT_US).await;
         let flags = self.lora.read(IRQ_FLAGS).await.ok();

@@ -22,6 +22,8 @@ pub type Micros = u64;
 /// How much stronger a packet must arrive than one overlapping it on its channel to be heard
 /// through it.
 pub const CAPTURE_DB: i16 = 6;
+/// How long a receiver takes to detect a packet's preamble: about five of its symbols.
+pub const DETECT_US: Micros = 5_000;
 
 /// How a packet from one node reaches another.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -193,6 +195,26 @@ impl World {
 
     pub fn link_of(&self, from: usize, to: usize) -> Option<Link> {
         self.links.borrow().get(&(from, to)).copied()
+    }
+
+    /// Whether `node`'s radio, receiving, finds the channel clear: no packet on its channel by
+    /// a link to it that started long enough ago to detect, and none arrived that it has not
+    /// read.
+    pub fn is_clear(&self, node: usize) -> bool {
+        let now = self.now();
+        let nodes = self.nodes.borrow();
+        let radio = &nodes[node].radio;
+        if radio.received.is_some() {
+            return false;
+        }
+        let links = self.links.borrow();
+        !self.air.borrow().iter().any(|sent| {
+            sent.sender != node
+                && sent.channel == radio.channel
+                && sent.start + DETECT_US <= now
+                && now < sent.end
+                && links.contains_key(&(sent.sender, node))
+        })
     }
 
     /// Ends `node`'s transmission in flight, unheard, as a node powered off mid-packet would.

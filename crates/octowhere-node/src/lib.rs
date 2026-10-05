@@ -18,6 +18,8 @@ extern crate alloc;
 #[macro_use]
 mod fmt;
 #[cfg(feature = "run")]
+mod access;
+#[cfg(feature = "run")]
 mod inbox;
 #[cfg(feature = "run")]
 mod node;

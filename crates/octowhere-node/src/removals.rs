@@ -298,6 +298,19 @@ impl<A: Allocator> Removals<A> {
             .map(|on| &on.record)
     }
 
+    /// Whether this node's word that it is on the group's key is still to go in its next
+    /// packets, whatever the round.
+    #[must_use]
+    pub fn on_key_first(&self) -> bool {
+        self.on_key.as_ref().is_some_and(|on| on.first > 0)
+    }
+
+    /// Whether a sweep round's packet sent at local time `now` carries that word.
+    #[must_use]
+    pub fn on_key_in_sweeps(&self, now: i64) -> bool {
+        self.on_key.as_ref().is_some_and(|on| now < on.until)
+    }
+
     /// A packet carried the word that this node is on the group's key.
     pub fn carried_on_key(&mut self) {
         if let Some(on) = &mut self.on_key {

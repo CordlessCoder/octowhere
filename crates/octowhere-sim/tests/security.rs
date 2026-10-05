@@ -5,14 +5,11 @@
 use octowhere_mesh::{
     members::Name,
     packet::{Builder, Header, MAX_PACKET, Source, Timebase},
-    schedule::{GUARD_US, ROUND_US, SWEEP_EVERY, Schedule, round_at, second_at},
+    schedule::{GUARD_US, ROUND_US, SWEEP_EVERY, round_at},
     seal::{self, Key, SIV_LEN},
 };
 use octowhere_node::Command;
 use octowhere_sim::{Config, Link, Sim, Transmission, UTC0_S, grouped};
-
-/// No group member stands at this id, so nothing else is sent in its slot.
-const FREE_ID: u8 = 31;
 
 /// `count` nodes of one group, all in reach of each other, recording the air, once each has
 /// heard every other. Node `n` starts with `configs(n)`.
@@ -55,7 +52,7 @@ fn last_sent(sim: &Sim, node: usize) -> Transmission {
         .expect("the node sent")
 }
 
-/// The round each of the first `count` nodes last logged it was in, and UTC's round then.
+/// The round each of the first `count` nodes last sent in, and UTC's round then.
 fn clocks(sim: &Sim, count: usize) -> String {
     (0..count)
         .map(|node| match last_round(sim, node) {
@@ -63,27 +60,27 @@ fn clocks(sim: &Sim, count: usize) -> String {
                 let utc = round_at(UTC0_S * 1_000_000 + at as i64);
                 format!("\n  node {node}: round {round}, UTC's {utc}")
             }
-            None => format!("\n  node {node}: no round logged"),
+            None => format!("\n  node {node}: sent nothing"),
         })
         .collect()
 }
 
-/// When `node` last logged the round it is in, and that round.
+/// When `node` last sent, and the round it was in.
 fn last_round(sim: &Sim, node: usize) -> Option<(u64, i64)> {
     sim.lines(node).into_iter().rev().find_map(|line| {
-        let round = line.text.strip_prefix("[MESH] round=")?;
+        let round = line.text.strip_prefix("[MESH] sent round=")?;
         let round = round.split(' ').next()?.parse().ok()?;
         Some((line.at, round))
     })
 }
 
-/// Whether `node`'s clock was on UTC's round when it last logged one.
+/// Whether `node`'s clock was on UTC's round when it last sent.
 fn on_utc(sim: &Sim, node: usize) -> bool {
     last_round(sim, node)
         .is_some_and(|(at, round)| round == round_at(UTC0_S * 1_000_000 + at as i64))
 }
 
-/// The packets that moved `node`'s clock by more than a slot's guard since virtual time `since`.
+/// The packets that moved `node`'s clock by more than a guard since virtual time `since`.
 fn moves(sim: &Sim, node: usize, since: u64) -> String {
     sim.lines(node)
         .into_iter()
@@ -99,10 +96,9 @@ fn moves(sim: &Sim, node: usize, since: u64) -> String {
         .collect()
 }
 
-/// Runs to `round`'s slot for an id nobody holds under `key`, on a timebase that keeps UTC, a
-/// moment after it opens: a time a node in a sweep round hears a packet, and nobody else sends.
-fn run_to_free_slot(sim: &mut Sim, key: &Key, round: i64) {
-    let start = Schedule::new(key).slot_start(round, FREE_ID) + 100_000;
+/// Runs to a moment after `round` starts, on a timebase that keeps UTC.
+fn run_into(sim: &mut Sim, round: i64) {
+    let start = round * ROUND_US + 100_000;
     sim.run_to((start - UTC0_S * 1_000_000) as u64);
 }
 
@@ -115,16 +111,11 @@ fn next_sweep(sim: &Sim) -> i64 {
 /// A packet under `key` that claims to come from `sender`, with nothing in it, sent at timebase
 /// time `start`.
 fn forged(key: &Key, sender: u8, start: i64) -> Vec<u8> {
-    let header = Header {
-        sender,
-        timebase: Timebase {
-            source: Source::Node(0),
-            hops: Timebase::MAX_HOPS,
-        },
-        base: second_at(start),
-        phase: 0,
-        notice: false,
+    let timebase = Timebase {
+        source: Source::Node(0),
+        hops: Timebase::MAX_HOPS,
     };
+    let header = Header::new(sender, timebase, start);
     let mut packet = [0u8; MAX_PACKET];
     let plain_len = Builder::new(&mut packet[SIV_LEN..], &header).finish();
     let len = seal::seal(key, &mut packet, plain_len);
@@ -231,7 +222,7 @@ fn catch_up_after(absence: Absence) {
     if absence != Absence::Quiet {
         for _ in 0..6 {
             let round = next_sweep(&sim);
-            run_to_free_slot(&mut sim, &key, round);
+            run_into(&mut sim, round);
             let bytes = match absence {
                 Absence::Replayed => recorded.bytes.clone(),
                 Absence::Relayed => last_sent(&sim, 2).bytes,
@@ -320,7 +311,6 @@ fn clock_after_replay(replay: Replay, rtc: bool) {
     let mut recorded = last_sent(&sim, 0);
     let radio = sim.add_radio();
     sim.link(radio, 1, Some(Link::default()));
-    let (key, _) = sim.key(1).expect("node 1 is in the group");
     match replay {
         Replay::None => sim.run_for(60 * 60),
         Replay::ToARoot => {
@@ -330,15 +320,13 @@ fn clock_after_replay(replay: Replay, rtc: bool) {
                 sim.count(1, "timebase root=1 hops=0") >= 1,
                 "node 1 lost node 0 and became its own root"
             );
-            // In node 0's slot, which node 1 listens to.
             let round = round_at(sim.utc_us()) + 1;
-            let start = Schedule::new(&key).slot_start(round, 0) + 100_000;
-            sim.run_to((start - UTC0_S * 1_000_000) as u64);
+            run_into(&mut sim, round);
         }
         Replay::InASweep | Replay::RecentInASweep => {
             sim.run_for(60 * 60);
             let round = next_sweep(&sim);
-            run_to_free_slot(&mut sim, &key, round);
+            run_into(&mut sim, round);
             if matches!(replay, Replay::RecentInASweep) {
                 recorded = last_sent(&sim, 0);
             }

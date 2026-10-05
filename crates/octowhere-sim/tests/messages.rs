@@ -66,7 +66,8 @@ fn line(seed: u64) -> Sim {
 fn a_group_message_is_queued_then_sent_then_heard_relayed() {
     let mut sim = line(11);
     send(&sim, 0, None, "Meet at the bridge.");
-    sim.run_for(1);
+    // Shorter than any packet's airtime.
+    sim.run_to(sim.now_us() + 1_000);
     assert_eq!(
         carriage(&sim, 0, "Meet at the bridge."),
         Some(Carriage::Queued)

@@ -152,11 +152,11 @@ impl Radio for SimRadio {
         0
     }
 
-    async fn transmit(&mut self, packet: &[u8], at: Option<i64>) -> Option<bool> {
-        if let Some(at) = at {
-            let at = self.world.nodes.borrow()[self.node].global(at);
-            Sleep::new(&self.world, at).await;
-        }
+    async fn is_clear(&mut self) -> bool {
+        self.world.is_clear(self.node)
+    }
+
+    async fn transmit(&mut self, packet: &[u8]) -> Option<bool> {
         let end = self.world.send(self.node, packet);
         Sleep::new(&self.world, end).await;
         self.world.sent(self.node);
