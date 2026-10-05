@@ -8,21 +8,6 @@ use embassy_sync::waitqueue::AtomicWaker;
 
 pub use octowhere_ui::framebuffer::fill_buf_repeat;
 
-pub fn widening_copy<const FACTOR: usize>(buf: &mut [u8], data: &[u8], width: usize) {
-    const {
-        assert!(FACTOR != 0);
-    }
-    if const { FACTOR == 1 } {
-        buf.copy_from_slice(data);
-    } else {
-        buf.chunks_exact_mut(width * FACTOR)
-            .zip(data.chunks_exact(width))
-            .for_each(|(chunk, source)| {
-                fill_buf_repeat(chunk, source, FACTOR);
-            });
-    }
-}
-
 /// Allows for efficiently implementing double-buffering accross tasks and even cores.
 pub struct Swap<T> {
     val1: UnsafeCell<T>,
@@ -66,10 +51,6 @@ impl<T> Swap<T> {
                 poisoned: false,
             },
         )
-    }
-    #[must_use]
-    pub fn release(self) -> (T, T) {
-        (self.val1.into_inner(), self.val2.into_inner())
     }
 }
 

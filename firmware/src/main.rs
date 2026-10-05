@@ -1,11 +1,18 @@
 #![feature(impl_trait_in_assoc_type)]
-#![feature(type_alias_impl_trait)]
 #![feature(allocator_api)]
 #![no_std]
 #![no_main]
 // Now defaults to deny in Rust-2024, however abusing statics is necessary in the embedded world.
 #![expect(static_mut_refs)]
-#![expect(unused)]
+// These replace the frame loop or the mesh, and leave what they replace unused.
+#![cfg_attr(
+    any(
+        feature = "fontdue-target-bench",
+        feature = "lora-link-tx",
+        feature = "lora-link-rx"
+    ),
+    allow(unused)
+)]
 #![deny(clippy::mem_forget)]
 #![warn(unused_must_use)]
 #[cfg(all(feature = "lora-link-tx", feature = "lora-link-rx"))]
@@ -23,7 +30,7 @@ use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_executor::Spawner;
 use embassy_futures::{
     join::join,
-    select::{Either, Either3, Either4, select, select3, select4},
+    select::{Either, Either4, select, select4},
 };
 use embassy_sync::{
     blocking_mutex::{Mutex as BlockingMutex, raw::CriticalSectionRawMutex},
@@ -45,15 +52,15 @@ use esp_hal::{
 };
 use esp_println as _;
 use lc76g::{
-    GnssDateTime, GnssError, GnssOperation, GnssState, Lc76g, LowPowerMode, NmeaOutputRate,
-    NmeaParser, NmeaSentence, NmeaUpdate, PairCommandBuilder,
+    GnssDateTime, GnssError, GnssState, Lc76g, LowPowerMode, NmeaOutputRate, NmeaParser,
+    NmeaSentence, NmeaUpdate, PairCommandBuilder,
 };
+#[cfg(feature = "fontdue-target-bench")]
+use octowhere::fontdue;
 use octowhere::{
     board,
-    chrome::{self, Color, Dirty, FB},
+    chrome::{self, Dirty, FB},
     drivers::{co5300::Co5300Display, framebuffer::Flush as _, qspi_bus::QspiBus},
-    fontdue,
-    framebuffer::Framebuffer,
     gnss_time::SecondEstimator,
     motion::{
         compass::{AxisMap, Calibration, CalibrationEvent, CompassView, Holds, Vec3},
@@ -81,12 +88,7 @@ use octowhere::{
     util::{Place, Swap, SwapThread, TouchKind, place_touch},
 };
 use static_cell::StaticCell;
-use sx127xlora::{
-    Sx1272,
-    driver::Sx1272Lora,
-    registers::{FRF_MSB, IRQ_FLAGS, OP_MODE, VERSION},
-    types::{RxDone, Sx127xLoraConfig, TxDone},
-};
+use sx127xlora::{Sx1272, driver::Sx1272Lora, types::Sx127xLoraConfig};
 use tca9554::Tca9554;
 
 use esp_alloc as _;
@@ -205,6 +207,7 @@ mod fix_inject {
     static OCTOWHERE_FIX_INJECT_ON: AtomicU32 = AtomicU32::new(0);
 
     /// The screens take the position as this device's fix.
+    #[expect(dead_code, reason = "any value but MESH is taken this way")]
     pub const SCREENS: u32 = 1;
     /// The mesh takes it too, with GPS time from the RTC. Two RTCs disagree by more than the
     /// slots' guard, so only one device in a group may claim it.
@@ -271,7 +274,7 @@ static GNSS_HEALTH: BlockingMutex<CriticalSectionRawMutex, Cell<GnssHealth>> =
         last_response: None,
         last_fix: None,
     }));
-/// The local timer minus UTC, from `gnss_task`: see [`gps_utc`].
+/// The local timer minus UTC, from `gnss_task`, for the mesh.
 static GPS_TIME: BlockingMutex<CriticalSectionRawMutex, Cell<Option<GpsTime>>> =
     BlockingMutex::new(Cell::new(None));
 
@@ -283,15 +286,6 @@ struct GpsTime {
     updated: Instant,
 }
 
-/// UTC in microseconds now, and when the fixes it comes from last refined it. It is late by the
-/// receiver's own latency, which is the same on every board.
-fn gps_utc() -> Option<(i64, Instant)> {
-    let time = GPS_TIME.lock(Cell::get)?;
-    Some((
-        Instant::now().as_micros() as i64 - time.offset,
-        time.updated,
-    ))
-}
 /// How long powering off waits for the settings queued before it to be saved.
 const SETTINGS_SETTLE: Duration = Duration::from_secs(3);
 /// A zone choice from the settings panel, for `zone_task`, which owns the zone.
@@ -545,7 +539,7 @@ macro_rules! start_display_core {
                 },
             )
         });
-        let (mut $framebuffer_thread, second_core_swap) = swap.split();
+        let ($framebuffer_thread, second_core_swap) = swap.split();
 
         esp_rtos::start_second_core(
             $peripherals.CPU_CTRL.reborrow(),
@@ -1641,110 +1635,112 @@ struct RadioTask {
     mesh: mesh::Start,
 }
 
-/// Owns the radio. Without a link test it leaves the radio as start-up configured it.
+/// Owns the radio: the mesh, or a link test in its place.
 #[embassy_executor::task]
 async fn radio_task(task: RadioTask) {
+    #[cfg(feature = "lora-link-tx")]
+    link_tx(task).await;
+    #[cfg(feature = "lora-link-rx")]
+    link_rx(task).await;
+    #[cfg(not(any(feature = "lora-link-tx", feature = "lora-link-rx")))]
+    {
+        let RadioTask {
+            lora,
+            dio0,
+            path,
+            mesh,
+        } = task;
+        mesh::Mesh::new(
+            mesh::BoardRadio::new(lora, dio0, path),
+            mesh::BoardTime,
+            mesh::BoardRandom,
+            mesh::BoardDevice,
+            mesh::BoardGroupStore,
+            &PSRAM_HEAP,
+            mesh,
+        )
+        .await
+        .run(&mesh::BoardCommands)
+        .await;
+    }
+}
+
+#[cfg(feature = "lora-link-tx")]
+async fn link_tx(task: RadioTask) -> ! {
+    use sx127xlora::types::TxDone;
     let RadioTask {
         mut lora,
         mut dio0,
         mut path,
-        mesh,
+        ..
     } = task;
-
-    #[cfg(feature = "lora-link-tx")]
-    {
-        lora.map_dio0::<TxDone>().await.unwrap();
-        let mut sequence = 0u32;
-        loop {
-            Timer::after(Duration::from_millis(250)).await;
-            let mut payload = *b"OWLK\0\0\0\0";
-            payload[4..].copy_from_slice(&sequence.to_be_bytes());
-            if path.transmit().await.is_err() {
-                warn!("[LORA] LINK_TX_SWITCH_FAILED");
-                continue;
-            }
-            if lora.tx(&payload).await.is_err() {
-                warn!("[LORA] LINK_TX_FAILED");
-            } else {
-                match select(
-                    dio0.wait_for_rising_edge(),
-                    Timer::after(Duration::from_secs(2)),
-                )
-                .await
-                {
-                    Either::First(()) => {
-                        info!("[LORA] LINK_TX_DONE sequence={}", sequence);
-                        let _ = lora.clear_interrupt::<TxDone>().await;
-                    }
-                    Either::Second(()) => warn!("[LORA] LINK_TX_TIMEOUT"),
+    lora.map_dio0::<TxDone>().await.unwrap();
+    let mut sequence = 0u32;
+    loop {
+        Timer::after(Duration::from_millis(250)).await;
+        let mut payload = *b"OWLK\0\0\0\0";
+        payload[4..].copy_from_slice(&sequence.to_be_bytes());
+        if path.transmit().await.is_err() {
+            warn!("[LORA] LINK_TX_SWITCH_FAILED");
+            continue;
+        }
+        if lora.tx(&payload).await.is_err() {
+            warn!("[LORA] LINK_TX_FAILED");
+        } else {
+            match select(
+                dio0.wait_for_rising_edge(),
+                Timer::after(Duration::from_secs(2)),
+            )
+            .await
+            {
+                Either::First(()) => {
+                    info!("[LORA] LINK_TX_DONE sequence={}", sequence);
+                    let _ = lora.clear_interrupt::<TxDone>().await;
                 }
+                Either::Second(()) => warn!("[LORA] LINK_TX_TIMEOUT"),
             }
-            sequence = sequence.wrapping_add(1);
-            let _ = path.receive().await;
         }
+        sequence = sequence.wrapping_add(1);
+        let _ = path.receive().await;
     }
-
-    #[cfg(feature = "lora-link-rx")]
-    {
-        lora.map_dio0::<RxDone>().await.unwrap();
-        if path.receive().await.is_err() {
-            warn!("[LORA] LINK_RX_SWITCH_FAILED");
-        }
-        // Continuous receive stays listening between packets, so none is missed while one is
-        // read out.
-        if lora.rx(None).await.is_err() {
-            warn!("[LORA] LINK_RX_START_FAILED");
-        }
-        info!("[LORA] LINK_RX_START");
-        loop {
-            // DIO0 stays high until RxDone is cleared, so a level wait cannot miss a packet.
-            match select(dio0.wait_for_high(), Timer::after(Duration::from_secs(2))).await {
-                Either::First(()) => match lora.rx_packet().await {
-                    Ok(packet) => info!(
-                        "[LORA] LINK_RX_OK len={} rssi={} snr_raw={} payload={}",
-                        packet.length,
-                        packet.rssi,
-                        packet.snr_raw,
-                        packet.payload(),
-                    ),
-                    Err(_) => warn!("[LORA] LINK_RX_PACKET_FAILED"),
-                },
-                Either::Second(()) => warn!("[LORA] LINK_RX_TIMEOUT"),
-            }
-            let _ = lora.clear_all_interrupts().await;
-        }
-    }
-
-    #[cfg(not(any(feature = "lora-link-tx", feature = "lora-link-rx")))]
-    mesh::Mesh::new(
-        mesh::BoardRadio::new(lora, dio0, path),
-        mesh::BoardTime,
-        mesh::BoardRandom,
-        mesh::BoardDevice,
-        mesh::BoardGroupStore,
-        &PSRAM_HEAP,
-        mesh,
-    )
-    .await
-    .run(&mesh::BoardCommands)
-    .await;
 }
 
-fn bench_repeat<R>(mut the_thing: impl FnMut() -> R, name: &str) -> (R, Duration) {
-    const ITERS: u32 = 10;
-    let start = Instant::now();
-    let mut ret;
-    let mut iter = 0;
-    loop {
-        ret = core::hint::black_box(the_thing());
-        iter += 1;
-        if iter >= ITERS {
-            break;
-        }
+#[cfg(feature = "lora-link-rx")]
+async fn link_rx(task: RadioTask) -> ! {
+    use sx127xlora::types::RxDone;
+    let RadioTask {
+        mut lora,
+        mut dio0,
+        mut path,
+        ..
+    } = task;
+    lora.map_dio0::<RxDone>().await.unwrap();
+    if path.receive().await.is_err() {
+        warn!("[LORA] LINK_RX_SWITCH_FAILED");
     }
-    let took = start.elapsed() / ITERS;
-    info!("{=str}: {}ms", name, took.as_micros() as f32 / 1_000.);
-    (ret, took)
+    // Continuous receive stays listening between packets, so none is missed while one is
+    // read out.
+    if lora.rx(None).await.is_err() {
+        warn!("[LORA] LINK_RX_START_FAILED");
+    }
+    info!("[LORA] LINK_RX_START");
+    loop {
+        // DIO0 stays high until RxDone is cleared, so a level wait cannot miss a packet.
+        match select(dio0.wait_for_high(), Timer::after(Duration::from_secs(2))).await {
+            Either::First(()) => match lora.rx_packet().await {
+                Ok(packet) => info!(
+                    "[LORA] LINK_RX_OK len={} rssi={} snr_raw={} payload={}",
+                    packet.length,
+                    packet.rssi,
+                    packet.snr_raw,
+                    packet.payload(),
+                ),
+                Err(_) => warn!("[LORA] LINK_RX_PACKET_FAILED"),
+            },
+            Either::Second(()) => warn!("[LORA] LINK_RX_TIMEOUT"),
+        }
+        let _ = lora.clear_all_interrupts().await;
+    }
 }
 
 #[cfg(feature = "fontdue-target-bench")]
@@ -2133,7 +2129,7 @@ async fn bring_up(spawner: Spawner, parts: Parts, zones: ZoneTracker, mesh: mesh
             sources.on, sources.off
         );
     }
-    let mut power = answered.then_some(power);
+    let power = answered.then_some(power);
     let mut initial_sensor_state = SensorSnapshot::default();
     if reset_lora(i2c.clone()).await.is_err() {
         error!("[TCA9554] unavailable; the GNSS and LoRa resets and the RF switch are not driven");

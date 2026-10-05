@@ -38,7 +38,6 @@ octowhere-ui = { path = "../crates/octowhere-ui", features = ["allocator-api", "
 # `half_duplex` gives a packet the radio's whole 256-byte FIFO; without it the driver refuses
 # anything over 128 bytes, in either direction.
 sx127xlora = { path = "../crates/sx127x-lora", features = ["defmt", "half_duplex"] }
-futures = { version = "0.3.32", default-features = false, features = ["async-await"] }
 embassy-embedded-hal = { version = "0.6.0", features = ["defmt"] }
 ph-qmi8658 = { version = "0.1.1", features = ["defmt", "fixed"] }
 tca9554 = "0.2.0"
