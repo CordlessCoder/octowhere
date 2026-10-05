@@ -269,9 +269,9 @@ What contention costs:
   stronger. The message summaries repair what is lost.
 - **Late sensing.** The modem detects a preamble only a few symbols in, so a check misses a packet
   that started just before it. Between the check and the transmission the node loads its packet
-  and switches the RF path, an I2C write that a GNSS read can hold up for about 12 ms; a packet
-  that starts meanwhile is not seen. Taking the bus lock before the check closes that gap, and is
-  not built.
+  and switches the RF path, an I2C write that a GNSS read could hold up for about 12 ms, and a
+  packet that started meanwhile went unseen. The node now takes the I2C bus before the check and
+  releases it once the transmission has started, so the gap is the SPI load and one I2C write.
 
 Pairing sends without checking the channel: the two devices are side by side with a user
 watching, so the stronger signal wins a collision and a lost exchange costs a retry. The
@@ -817,10 +817,10 @@ The I2C bus is a mutex that excludes across cores. It was a `NoopRawMutex`, whic
 failed silently if someone spawned a user on core 1. A task owning the bus was considered and
 rejected: it only serialises access, as the mutex does, with a priority layer on top. Priority is
 not expected to matter, and a priority-aware mutex adds it if it does. The TCA9554 write is about
-80 µs, but the longest transaction another user holds the bus for is a GNSS read of about 12 ms,
-and the write to transmit sits between the channel check and the transmission (see "Why
-contention"). Holding the bus across the packet is unnecessary, since the switch write before
-and the restore after are each short with the bus free between them.
+80 µs, but the longest transaction another user holds the bus for is a GNSS read of about 12 ms.
+So the radio holds the bus from the channel check until its transmission has started (see "Why
+contention"). Holding it across the packet is unnecessary, since the switch write before and the
+restore after are each short with the bus free between them.
 
 ## Build order
 
@@ -888,8 +888,6 @@ protocol does not need this.
 - A removal's switch still allows a round for each key message, as slots sent them. On
   contention they go in seconds, so the switch could come within minutes, which shortens the
   time the removed device still reads everything.
-- Taking the I2C bus lock before the channel check, so that a GNSS read cannot hold the
-  transmission back past it (see "Why contention").
 - Contention has run only in the simulator. On the boards: whether the modem's status sees a
   packet under way as the simulator assumes, how late the transmission starts after the check,
   and whether the header's 256ths keep two boards' clocks as close as slots did.

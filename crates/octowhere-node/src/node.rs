@@ -496,6 +496,18 @@ struct Founding {
 /// The longest packet a radio takes.
 pub const RECEIVED_MAX: usize = 255;
 
+/// What became of a packet offered on a channel that had to be clear.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum Sent {
+    /// A packet was under way, or one arrived that is not yet read: nothing went.
+    Busy,
+    /// It could not be loaded: nothing went.
+    Failed,
+    /// It went, and was seen to finish if `true`.
+    Done(bool),
+}
+
 /// A packet a radio received.
 pub struct Received {
     pub payload: [u8; RECEIVED_MAX],
@@ -522,12 +534,14 @@ pub trait Radio {
     async fn read_packet(&mut self) -> Option<(Received, i64)>;
     /// How late, on average, a packet's end is seen after it ends.
     fn seen_late_us(&self) -> i64;
-    /// Whether, while receiving, the channel is clear: no packet under way that the radio can
-    /// detect, and none arrived that is not yet read.
-    async fn is_clear(&mut self) -> bool;
     /// Sends `packet` at once, and leaves the radio as [`Radio::idle_receive`] does. Returns
     /// whether it was seen to finish, or `None` when it could not be loaded.
     async fn transmit(&mut self, packet: &[u8]) -> Option<bool>;
+    /// Sends `packet` as [`Radio::transmit`] does if, while receiving, the channel is clear: no
+    /// packet under way that the radio can detect, and none arrived that is not yet read.
+    /// Nothing the radio waits on may come between the check and the transmission's start.
+    /// Leaves the radio receiving when it sends nothing.
+    async fn transmit_if_clear(&mut self, packet: &[u8]) -> Sent;
 }
 
 /// The local clock a node runs on, in microseconds.
@@ -1209,12 +1223,6 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         if self.listen(now + wait).await {
             return;
         }
-        if !self.radio.is_clear().await {
-            let wait = self.draw(i64::from(BUSY_STEPS), own) * STEP_US;
-            debug!("[MESH] the channel is busy; backing off {}ms", wait / 1_000);
-            self.access.busy(self.time.now(), wait);
-            return;
-        }
         if old {
             self.send_old(own, timebase).await;
         } else {
@@ -1254,6 +1262,15 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         }
     }
 
+    /// Notes a transmission that did not go, `sent` saying why, and backs off before the next.
+    fn back_off(&mut self, sent: Sent, own: u8) {
+        let wait = self.draw(i64::from(BUSY_STEPS), own) * STEP_US;
+        if sent == Sent::Busy {
+            debug!("[MESH] the channel is busy; backing off {}ms", wait / 1_000);
+        }
+        self.access.busy(self.time.now(), wait);
+    }
+
     /// A random number below `bound`, or without a random source one that differs for each id.
     fn draw(&mut self, bound: i64, own: u8) -> i64 {
         match self.random.bytes::<4>() {
@@ -1286,11 +1303,6 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             let _ = self.radio.read_packet().await;
             return;
         }
-        if !self.radio.is_clear().await {
-            let wait = self.draw(i64::from(BUSY_STEPS), own) * STEP_US;
-            self.access.busy(self.time.now(), wait);
-            return;
-        }
         let now = self.time.now();
         let (Some(leaving), Some((time, _))) = (&self.leaving, self.clock.at(now)) else {
             return;
@@ -1300,12 +1312,13 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         let _ = builder.neighbours(self.table.neighbours(round_at(time)).bits());
         let _ = builder.gone(own, &leaving.gone);
         let len = builder.seal(leaving.group.key());
-        let sent = self.radio.transmit(&packet[..len]).await;
+        let sent = self.radio.transmit_if_clear(&packet[..len]).await;
+        let Sent::Done(done) = sent else {
+            self.back_off(sent, own);
+            return;
+        };
         self.access.sent(now, len, None);
-        info!(
-            "[MESH] told the group it left done={}",
-            sent.is_some_and(|done| done)
-        );
+        info!("[MESH] told the group it left done={}", done);
         if let Some(leaving) = &mut self.leaving {
             leaving.left -= 1;
             leaving.next = now + LEAVE_GAP_US;
@@ -1351,7 +1364,11 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             }
         }
         let len = builder.seal(&key);
-        let sent = self.radio.transmit(&packet[..len]).await;
+        let sent = self.radio.transmit_if_clear(&packet[..len]).await;
+        let Sent::Done(done) = sent else {
+            self.back_off(sent, own);
+            return;
+        };
         self.access.sent(now, len, None);
         self.removals.sent_old(caught, lost, round);
         info!(
@@ -1360,7 +1377,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             round,
             caught.bits(),
             len,
-            sent.is_some_and(|done| done)
+            done
         );
     }
 
@@ -1676,10 +1693,9 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             },
         );
         let len = builder.seal(group.key());
-        let Some(done) = self.radio.transmit(&packet[..len]).await else {
-            // Tried again after a backoff, rather than at once.
-            let wait = self.draw(i64::from(BUSY_STEPS), own) * STEP_US;
-            self.access.busy(now, wait);
+        let sent = self.radio.transmit_if_clear(&packet[..len]).await;
+        let Sent::Done(done) = sent else {
+            self.back_off(sent, own);
             return;
         };
         let spread = self.draw(SPREAD_US, own);

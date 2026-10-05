@@ -15,7 +15,7 @@ use sx127xlora::{
     types::{DeviceMode, OCP, PowerRamp, RxDone, TxConfig, TxDone},
 };
 
-use octowhere_node::{Radio, Received};
+use octowhere_node::{Radio, Received, Sent};
 
 use super::time::{local, until};
 use crate::{LoraPath, SensorLora};
@@ -78,6 +78,38 @@ impl BoardRadio {
             }
             Timer::after(Duration::from_micros(POLL_US)).await;
         }
+    }
+
+    /// Whether the channel is clear, from the modem's status over SPI. The modem sees a preamble
+    /// a few symbols in, so a packet that started just before goes unseen.
+    async fn is_clear(&mut self) -> bool {
+        if self.dio0_follows && self.dio0.is_high() {
+            return false;
+        }
+        match self.lora.read(IRQ_FLAGS).await {
+            Ok(flags) if flags & (IRQ_RX_DONE | IRQ_FLAGS_VALID_HEADER_MASK) == 0 => {}
+            _ => return false,
+        }
+        self.lora
+            .read(MODEM_STAT)
+            .await
+            .is_ok_and(|status| status & MODEM_BUSY == 0)
+    }
+
+    /// Waits for the transmission started at local time `started` to end, and puts the radio
+    /// back to receive. Returns whether TxDone was seen.
+    async fn finish(&mut self, started: i64) -> bool {
+        let done = self.wait_for(IRQ_TX_DONE, started + SEND_TIMEOUT_US).await;
+        let flags = self.lora.read(IRQ_FLAGS).await.ok();
+        if !done {
+            warn!("[MESH] TxDone not seen flags={}", flags);
+        }
+        if self.dio0_follows && !done && flags.is_some_and(|flags| flags & IRQ_TX_DONE != 0) {
+            warn!("[MESH] DIO0 did not rise for TxDone; polling the radio's flags from here");
+            self.dio0_follows = false;
+        }
+        self.idle_receive().await;
+        done
     }
 
     /// Puts the packet in the radio's FIFO, ready to send on one mode change.
@@ -143,22 +175,6 @@ impl Radio for BoardRadio {
         self.receiving
     }
 
-    /// Reads the modem's status over SPI. The modem sees a preamble a few symbols in, so a
-    /// packet that started just before goes unseen.
-    async fn is_clear(&mut self) -> bool {
-        if self.dio0_follows && self.dio0.is_high() {
-            return false;
-        }
-        match self.lora.read(IRQ_FLAGS).await {
-            Ok(flags) if flags & (IRQ_RX_DONE | IRQ_FLAGS_VALID_HEADER_MASK) == 0 => {}
-            _ => return false,
-        }
-        self.lora
-            .read(MODEM_STAT)
-            .await
-            .is_ok_and(|status| status & MODEM_BUSY == 0)
-    }
-
     /// Waits until local time `deadline` for a packet to arrive. Returns whether one did.
     async fn wait_received(&mut self, deadline: i64) -> bool {
         self.wait_for(IRQ_RX_DONE, deadline).await
@@ -222,16 +238,28 @@ impl Radio for BoardRadio {
         let _ = self.path.transmit().await;
         let started = local();
         let _ = self.lora.set_device_mode(DeviceMode::TX).await;
-        let done = self.wait_for(IRQ_TX_DONE, started + SEND_TIMEOUT_US).await;
-        let flags = self.lora.read(IRQ_FLAGS).await.ok();
-        if !done {
-            warn!("[MESH] TxDone not seen flags={}", flags);
+        Some(self.finish(started).await)
+    }
+
+    /// Holds the I2C bus from the check until the transmission has started. The switch to
+    /// transmit is an I2C write, and a GNSS read can hold the bus for about 12 ms, long enough
+    /// for another node's packet to start unseen.
+    async fn transmit_if_clear(&mut self, packet: &[u8]) -> Sent {
+        let mut bus = self.path.lock().await;
+        if !self.is_clear().await {
+            return Sent::Busy;
         }
-        if self.dio0_follows && !done && flags.is_some_and(|flags| flags & IRQ_TX_DONE != 0) {
-            warn!("[MESH] DIO0 did not rise for TxDone; polling the radio's flags from here");
-            self.dio0_follows = false;
+        if self.load(packet).await.is_err() {
+            // Putting the radio back to receive takes the bus.
+            drop(bus);
+            warn!("[MESH] loading a {}-byte packet failed", packet.len());
+            self.idle_receive().await;
+            return Sent::Failed;
         }
-        self.idle_receive().await;
-        Some(done)
+        let _ = self.path.transmit_on(&mut bus).await;
+        let started = local();
+        let _ = self.lora.set_device_mode(DeviceMode::TX).await;
+        drop(bus);
+        Sent::Done(self.finish(started).await)
     }
 }

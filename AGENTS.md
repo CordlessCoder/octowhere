@@ -600,7 +600,9 @@ I2C bus, so any timing the protocol depends on includes an I2C transaction and w
 board's seams in `firmware/src/mesh.rs`. It contends for the channel (owner, 2026-10-05; the
 protocol's "Medium access"): the radio receives throughout, and a packet goes after a random
 backoff once the modem's status shows no packet under way, at once for a record or message, a
-round after the last for news of positions, and at the floor otherwise. The slots it replaced
+round after the last for news of positions, and at the floor otherwise. The radio holds the I2C
+bus from that check until its transmission has started, since the switch to transmit is a
+write on it (`LoraPath::transmit_on`). The slots it replaced
 are on the `tdma` branch. Its packets carry neighbours, a digest of the member table, the member
 and gone records asked for or changed, a digest of the messages held, a summary of them when
 a neighbour's differs, messages, and positions, with a timebase taken from other nodes without

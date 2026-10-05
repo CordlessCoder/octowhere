@@ -10,7 +10,8 @@ use std::{
 };
 
 use octowhere_node::{
-    Command, Commands, Device, Fix, GpsTime, GroupStore, GroupWrite, Radio, Random, Received, Time,
+    Command, Commands, Device, Fix, GpsTime, GroupStore, GroupWrite, Radio, Random, Received, Sent,
+    Time,
     view::{MeshView, MessagesView},
 };
 
@@ -152,8 +153,11 @@ impl Radio for SimRadio {
         0
     }
 
-    async fn is_clear(&mut self) -> bool {
-        self.world.is_clear(self.node)
+    async fn transmit_if_clear(&mut self, packet: &[u8]) -> Sent {
+        if !self.world.is_clear(self.node) {
+            return Sent::Busy;
+        }
+        Sent::Done(self.transmit(packet).await.unwrap_or(false))
     }
 
     async fn transmit(&mut self, packet: &[u8]) -> Option<bool> {
