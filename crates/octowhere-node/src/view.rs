@@ -82,6 +82,14 @@ pub enum Refused {
     Removing,
 }
 
+/// A pairing the mesh would not start, by the session it was asked for in.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Refusal {
+    pub session: u32,
+    pub role: Role,
+    pub refused: Refused,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PairingView {
     /// Counts up from 1 with each pairing asked for since boot.
@@ -97,7 +105,6 @@ pub struct PairingView {
     pub peer_name: Option<Name>,
     /// The group the pairing holds, as this device's id and the member count.
     pub group: Option<(u8, u8)>,
-    pub refused: Option<Refused>,
 }
 
 /// Where a refresh is. It listens throughout for three rounds, sending in its slot as usual.
@@ -213,8 +220,10 @@ pub struct MeshView {
     pub group: Option<GroupView>,
     /// Pairings asked for since boot.
     pub sessions: u32,
-    /// The latest of them.
+    /// The latest of them that started.
     pub pairing: Option<PairingView>,
+    /// The latest refused, while no pairing has started since.
+    pub refusal: Option<Refusal>,
     /// Leaves and renames answered since boot, and the last answer.
     pub answered: u32,
     pub answer: Option<Answer>,
@@ -285,6 +294,7 @@ impl Default for MeshView {
             group: None,
             sessions: 0,
             pairing: None,
+            refusal: None,
             answered: 0,
             answer: None,
             refresh: None,
@@ -307,6 +317,7 @@ impl MeshView {
             group,
             sessions,
             pairing,
+            refusal,
             answered,
             answer,
             refresh,
@@ -319,6 +330,7 @@ impl MeshView {
         self.group = *group;
         self.sessions = *sessions;
         self.pairing.clone_from(pairing);
+        self.refusal = *refusal;
         self.answered = *answered;
         self.answer = *answer;
         self.refresh = *refresh;
@@ -334,12 +346,20 @@ impl MeshView {
             .filter(|pairing| pairing.session > sessions)
     }
 
+    /// Why the pairing asked for after `sessions` was refused, if it was.
+    #[must_use]
+    pub fn refusal_after(&self, sessions: u32) -> Option<Refused> {
+        self.refusal
+            .filter(|refusal| refusal.session > sessions)
+            .map(|refusal| refusal.refused)
+    }
+
     /// Whether a pairing is under way, which holds the screen awake.
     #[must_use]
     pub fn pairing_active(&self) -> bool {
         self.pairing
             .as_ref()
-            .is_some_and(|pairing| !pairing.phase.is_final() && pairing.refused.is_none())
+            .is_some_and(|pairing| !pairing.phase.is_final())
     }
 }
 

@@ -290,10 +290,16 @@ impl Session {
         mesh.session_after(self.after)
     }
 
+    fn refused(&self, mesh: &MeshView) -> Option<Refused> {
+        mesh.refusal_after(self.after)
+    }
+
     /// Whether the pairing has not yet ended, including one the mesh has not taken up yet.
     fn active(&self, mesh: &MeshView) -> bool {
-        self.view(mesh)
-            .is_none_or(|pairing| !pairing.phase.is_final() && pairing.refused.is_none())
+        self.refused(mesh).is_none()
+            && self
+                .view(mesh)
+                .is_none_or(|pairing| !pairing.phase.is_final())
     }
 
     fn caption(&self) -> &'static str {
@@ -1196,9 +1202,7 @@ fn handle_pairing(
     let tapped = |area: Rectangle| tap.is_some_and(|point| area.contains(point));
     let pairing = session.view(mesh);
     let phase = pairing.map(|pairing| pairing.phase);
-    if pairing.is_some_and(|pairing| pairing.refused.is_some())
-        || phase.is_some_and(Phase::is_final)
-    {
+    if session.refused(mesh).is_some() || phase.is_some_and(Phase::is_final) {
         if tapped(ACTION)
             && let Some(recovery) = pairing.and_then(|pairing| recovery_of(mesh, pairing))
             && recovery.phase.is_final()
@@ -1947,11 +1951,7 @@ fn peer(pairing: &PairingView) -> layout::Line {
 
 fn pairing(list: &mut List, session: &Session, mesh: &MeshView, now: Micros) {
     let caption = session.caption();
-    let Some(pairing) = session.view(mesh) else {
-        // Asked for, and not yet taken up: the role's first screen, with no time to count.
-        return discovery(list, session, mesh, None, now);
-    };
-    if let Some(refused) = pairing.refused {
+    if let Some(refused) = session.refused(mesh) {
         let ending = match refused {
             Refused::InGroup => Ending {
                 big: "IN A GROUP",
@@ -1977,6 +1977,10 @@ fn pairing(list: &mut List, session: &Session, mesh: &MeshView, now: Micros) {
         };
         return outcome(list, caption, &ending, None);
     }
+    let Some(pairing) = session.view(mesh) else {
+        // Asked for, and not yet taken up: the role's first screen, with no time to count.
+        return discovery(list, session, mesh, None, now);
+    };
     let cancel = (!session.cancelled).then_some("CANCEL");
     match pairing.phase {
         Phase::Found if session.role == Role::Add => {

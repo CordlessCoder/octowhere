@@ -536,7 +536,6 @@ pub fn frames() -> Vec<(String, Stage)> {
         peer: None,
         peer_name: None,
         group: None,
-        refused: None,
     });
     busy.wait(50_000);
     tap(&mut busy, 233, 178);

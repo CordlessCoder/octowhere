@@ -529,7 +529,6 @@ impl Sim {
                     peer: None,
                     peer_name: None,
                     group,
-                    refused: None,
                 });
                 if role == Role::Add && self.view.group.as_ref().is_some_and(GroupView::is_full) {
                     self.end(End::Full);

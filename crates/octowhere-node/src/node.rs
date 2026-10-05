@@ -40,8 +40,8 @@ use crate::{
     unsaved::{Due, Unsaved},
     view::{
         Answer, Decline, GroupView, MemberView, MeshView, MessagesView, PairingView, Position,
-        RecoveryPhase, RecoveryView, RefreshPhase, RefreshView, Refused, RemovalStage, RemovalView,
-        RemovalsView, Request, Text, Unremovable,
+        RecoveryPhase, RecoveryView, RefreshPhase, RefreshView, Refusal, Refused, RemovalStage,
+        RemovalView, RemovalsView, Request, Text, Unremovable,
     },
 };
 
@@ -307,6 +307,7 @@ struct Shown {
     radio: bool,
     sessions: u32,
     pairing: Option<PairingView>,
+    refusal: Option<Refusal>,
     answered: u32,
     answer: Option<Answer>,
     /// The node's `heard` and `refresh`, copied in as it renders. Protocol decisions read the
@@ -327,6 +328,7 @@ impl Shown {
             radio,
             sessions: 0,
             pairing: None,
+            refusal: None,
             answered: 0,
             answer: None,
             heard: [None; IDS as usize],
@@ -340,6 +342,16 @@ impl Shown {
     fn answer(&mut self, answer: Answer) {
         self.answered += 1;
         self.answer = Some(answer);
+    }
+
+    /// Shows the pairing asked for in `session` as refused.
+    fn refuse(&mut self, session: u32, role: Role, refused: Refused) {
+        self.pairing = None;
+        self.refusal = Some(Refusal {
+            session,
+            role,
+            refused,
+        });
     }
 
     /// Notes the newest of the positions `table` holds.
@@ -371,6 +383,7 @@ impl Shown {
             group: shown_group,
             sessions,
             pairing,
+            refusal,
             answered,
             answer,
             refresh,
@@ -382,6 +395,7 @@ impl Shown {
         *name = me.name;
         *sessions = self.sessions;
         pairing.clone_from(&self.pairing);
+        *refusal = self.refusal;
         *answered = self.answered;
         *answer = self.answer;
         *refresh = self.refresh;
@@ -435,22 +449,6 @@ fn pairing_view(session: u32, pairing: &Pairing) -> PairingView {
         group: pairing
             .group()
             .map(|group| (group.own(), group.count() as u8)),
-        refused: None,
-    }
-}
-
-/// A session the mesh would not start.
-fn refused(session: u32, role: Role, refused: Refused) -> PairingView {
-    PairingView {
-        session,
-        role,
-        phase: Phase::Searching,
-        deadline: None,
-        candidates: heapless::Vec::new(),
-        peer: None,
-        peer_name: None,
-        group: None,
-        refused: Some(refused),
     }
 }
 
@@ -972,15 +970,15 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             Command::Add if self.removals.rekey.pending().is_some() => {
                 warn!("[MESH] a removal is under way; adding waits for its switch");
                 self.shown.sessions += 1;
-                self.shown.pairing =
-                    Some(refused(self.shown.sessions, Role::Add, Refused::Removing));
+                self.shown
+                    .refuse(self.shown.sessions, Role::Add, Refused::Removing);
             }
             Command::Add => self.pair(Role::Add, commands).await,
             Command::Join if self.group.is_some() => {
                 warn!("[MESH] in a group; it must leave before it can join another");
                 self.shown.sessions += 1;
-                self.shown.pairing =
-                    Some(refused(self.shown.sessions, Role::Join, Refused::InGroup));
+                self.shown
+                    .refuse(self.shown.sessions, Role::Join, Refused::InGroup);
             }
             Command::Join => self.pair(Role::Join, commands).await,
             Command::Leave => {
@@ -1864,11 +1862,12 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         self.shown.recovery = None;
         self.stop_refresh(self.time.now());
         self.shown.sessions += 1;
+        self.shown.refusal = None;
         let session = self.shown.sessions;
         let (Some(nonce), Some(founding)) = (self.random.bytes::<16>(), self.random.bytes::<32>())
         else {
             warn!("[PAIR] no true random source; not pairing");
-            self.shown.pairing = Some(refused(session, role, Refused::NoRandom));
+            self.shown.refuse(session, role, Refused::NoRandom);
             return;
         };
         if !self
