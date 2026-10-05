@@ -268,7 +268,8 @@ until the feature set is complete, because profiling an incomplete firmware pric
     removal screens let each user decline the rival they do not want (the protocol's "Open").
 - Act on the 2026-10-04 code-quality review of the UI crate and the firmware,
   [`ui-firmware-review/README.md`](ui-firmware-review/README.md): 112 findings, with the ones to
-  take first. Its eight bugs are fixed (2026-10-04); the rest are open.
+  take first. Its eight bugs are fixed (2026-10-04), and the rest state machine, the giant-glyph
+  bound and most of the dead code (2026-10-05); the README lists what is left of those.
 - The mesh and node clean-up from the 2026-10-03 code-quality review is done (2026-10-05,
   `0a25c3d` to `3a9d42e`); `context/MESH-CLEANUP-PLAN.md` laid it out, and git has it at
   `55167be`. Two things wait for the boards: flash both with master and check that they pair,

@@ -6,7 +6,8 @@ and `firmware.md`, with line numbers at `b8ab7ca`. The mesh and node had the sam
 2026-10-03; its clean-up is done, and its plan, `MESH-CLEANUP-PLAN.md`, is in git at `55167be`.
 
 112 findings: ui-runtime 36, ui-faces 39, firmware 37. The eight bugs are fixed, each with a
-regression test that fails without its fix; the other findings are open.
+regression test that fails without its fix, and so are the findings under "Taken since" below;
+the others are open.
 
 ## Verified, and fixed
 
@@ -43,11 +44,27 @@ frame figures in them are the reviewers' (list sizes on wasm32, frames from thei
 8. **Corrupt RTC year reads as 2255** (`octowhere-peripherals` `rtc.rs`): `is_valid` never
    checks the year, so `bcd_to_dec_checked`'s 0xFF sentinel passes. Low. Fixed in `4caeca0`.
 
+## Taken since
+
+- The rest and power-key transitions, written in seven places in `stage.rs` (ui-runtime,
+  Structure): one `Stage::enter` in `3fca20c`. A toast's wake differed from the others in two
+  ways, now tested: from off it climbed on a panel still asleep, and over a dim it dropped a
+  brightness being edited.
+- The giant-glyph test's bound (ui-faces, Tests): the reserved raster's, in `6e4812b`.
+- Every Public surface finding but two, in `302d45c` (UI), `1a31fae` (firmware), `cfd4e5c`
+  (host-tests), `bac2d24` (peripherals) and `4abb8d6` (motion). Three of them were wrong in
+  part. `messages::Conversation` is used by the drawer and stays public. host-tests needs
+  `heapless`, for `util.rs`'s tests, which it compiles from `firmware/src`. And
+  `octowhere-peripherals`' `allow(dead_code)` is for its register maps, so the registers the
+  removed calls wrote stay. `main.rs` no longer carries `#![expect(unused)]`. The
+  builds that replace the frame loop or the mesh (`fontdue-target-bench`, `lora-link-*`) allow
+  unused code instead, and the link tests are functions of their own.
+- Left for the owner: the display driver's blocking path (firmware, Public surface), which the
+  CO5300 crate in `BACKLOG.md` may want, and the scripted mesh behind a feature (ui-runtime,
+  Public surface).
+
 ## Worth acting on first, besides the bugs
 
-- The rest and power-key transitions are written in seven places in `stage.rs`, each resetting
-  different fields; bugs 1 and 2 come from it (ui-runtime, Structure). The same shape as the
-  node's removal fields before plan step 1.
 - `async_main`'s poll frame, 15,920 bytes, sits under the frame loop for the device's life and
   inlines boot-only work (`Store::new`, `load_mesh`, `mesh_start`); unmeasured how much
   (firmware, Work and stack).
