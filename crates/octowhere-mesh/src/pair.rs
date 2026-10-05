@@ -21,9 +21,7 @@
 use crate::IDS;
 pub use crate::identity::Identity;
 use crate::identity::{SIGNATURE_LEN, dh_public};
-use crate::members::{
-    GONE_LEN, Gone, Group, MAC_LEN, Member, Name, PUBLIC_LEN, RECORD_MAX_LEN, Slot, stamp,
-};
+use crate::members::{Group, MAC_LEN, Member, Name, PUBLIC_LEN, RECORD_MAX_LEN, Slot, stamp};
 use crate::seal::{self, Key, SIV_LEN};
 use alloc::boxed::Box;
 
@@ -1034,21 +1032,12 @@ fn welcome(group: &Group, id: u8, out: &mut [u8; WELCOME_MAX]) -> usize {
     let mut count = 0;
     let mut len = 36;
     for slot_id in 0..IDS {
-        let n = match group.slot(slot_id) {
-            Some(Slot::Member(member)) => {
-                let mut record = [0; RECORD_MAX_LEN];
-                let n = member.encode(slot_id, &mut record);
-                out[len + 1..len + 1 + n].copy_from_slice(&record[..n]);
-                n
-            }
-            Some(Slot::Gone(gone)) => {
-                let mut record = [0; GONE_LEN];
-                gone.encode(slot_id, &mut record);
-                out[len + 1..len + 1 + GONE_LEN].copy_from_slice(&record);
-                GONE_LEN
-            }
-            None => continue,
+        let Some(slot) = group.slot(slot_id) else {
+            continue;
         };
+        let mut record = [0; RECORD_MAX_LEN];
+        let n = slot.encode(slot_id, &mut record);
+        out[len + 1..len + 1 + n].copy_from_slice(&record[..n]);
         out[len] = n as u8;
         len += 1 + n;
         count += 1;
@@ -1057,8 +1046,7 @@ fn welcome(group: &Group, id: u8, out: &mut [u8; WELCOME_MAX]) -> usize {
     len
 }
 
-/// Reads what [`welcome`] wrote. A gone record is shorter than any member record, which tells
-/// them apart.
+/// Reads what [`welcome`] wrote.
 fn read_welcome(blob: &[u8]) -> Option<Group> {
     let key = Key::new(blob.get(..32)?.try_into().ok()?);
     let generation = u16::from_le_bytes(blob.get(32..34)?.try_into().ok()?);
@@ -1069,13 +1057,7 @@ fn read_welcome(blob: &[u8]) -> Option<Group> {
     for _ in 0..count {
         let (&n, after) = rest.split_first()?;
         let (record, after) = after.split_at_checked(usize::from(n))?;
-        let (id, slot) = if record.len() == GONE_LEN {
-            let (id, gone) = Gone::decode(record)?;
-            (id, Slot::Gone(gone))
-        } else {
-            let (id, member) = Member::decode(record)?;
-            (id, Slot::Member(member))
-        };
+        let (id, slot) = Slot::decode(record)?;
         slots[usize::from(id)] = Some(slot);
         rest = after;
     }
@@ -1088,7 +1070,48 @@ fn read_welcome(blob: &[u8]) -> Option<Group> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::members::tests::member;
+    use crate::members::{GONE_LEN, Gone, tests::member};
+
+    /// The welcome as [`welcome`] wrote it before slots had one encoding.
+    fn welcome_as_first_written(group: &Group, id: u8) -> alloc::vec::Vec<u8> {
+        let mut out = alloc::vec![0; 36];
+        out[..32].copy_from_slice(group.key().bytes());
+        out[32..34].copy_from_slice(&group.generation().to_le_bytes());
+        out[34] = id;
+        let mut count = 0;
+        for slot_id in 0..IDS {
+            let record = match group.slot(slot_id) {
+                Some(Slot::Member(member)) => {
+                    let mut record = [0; RECORD_MAX_LEN];
+                    let n = member.encode(slot_id, &mut record);
+                    record[..n].to_vec()
+                }
+                Some(Slot::Gone(gone)) => {
+                    let mut record = [0; GONE_LEN];
+                    gone.encode(slot_id, &mut record);
+                    record.to_vec()
+                }
+                None => continue,
+            };
+            out.push(record.len() as u8);
+            out.extend_from_slice(&record);
+            count += 1;
+        }
+        out[35] = count;
+        out
+    }
+
+    #[test]
+    fn a_welcome_keeps_its_bytes() {
+        let mut slots = [None; IDS as usize];
+        slots[0] = Some(Slot::Member(member(1, 100)));
+        slots[2] = Some(Slot::Gone(Gone::unsigned(member(2, 0).public, 200)));
+        slots[31] = Some(Slot::Member(member(3, 300)));
+        let group = Group::restore(Key::new([6; 32]), 9, 0, slots).unwrap();
+        let mut blob = [0; WELCOME_MAX];
+        let len = welcome(&group, 31, &mut blob);
+        assert_eq!(blob[..len], welcome_as_first_written(&group, 31));
+    }
 
     #[test]
     fn a_transfer_keeps_the_generation_and_gone_records() {

@@ -17,12 +17,8 @@ use esp_bootloader_esp_idf::partitions::{self, DataPartitionSubType, PartitionTy
 use esp_storage::{FlashStorage, FlashStorageError};
 use octowhere_mesh::{
     IDS,
-    members::{
-        GONE_LEN, Gone, Group, Member, Name, RECORD_FIXED_LEN, RECORD_MAX_LEN, STORED_HEADER_LEN,
-        Slot, decode_stored_header,
-    },
+    members::{Group, Name, RECORD_MAX_LEN, STORED_HEADER_LEN, Slot, decode_stored_header},
     rekey::{self, Rekey},
-    seal::Key,
 };
 use octowhere_ui::{
     tz::DATABASE,
@@ -120,8 +116,8 @@ pub struct MeshSaved {
 
 pub use octowhere_node::GroupWrite;
 
-/// Writes `slot` at `id`, or deletes the key if it is stored and `slot` is `None`, and keeps
-/// `stored` in step. A gone record's value is shorter than any member's, which tells them apart.
+/// Writes `slot` at `id`, as `Slot::encode` writes its record, or deletes the key if it is
+/// stored and `slot` is `None`, and keeps `stored` in step.
 async fn write_member(
     transaction: &mut ekv::WriteTransaction<'_, Partition, NoopRawMutex>,
     stored: &mut u32,
@@ -131,17 +127,11 @@ async fn write_member(
     let mut value = [0; 1 + RECORD_MAX_LEN];
     value[0] = MESH_VERSION;
     let len = match slot {
-        Some(Slot::Member(member)) => {
+        Some(slot) => {
             let mut record = [0; RECORD_MAX_LEN];
-            let len = member.encode(id, &mut record);
+            let len = slot.encode(id, &mut record);
             value[1..1 + len].copy_from_slice(&record[..len]);
             len
-        }
-        Some(Slot::Gone(gone)) => {
-            let mut record = [0; GONE_LEN];
-            gone.encode(id, &mut record);
-            value[1..1 + GONE_LEN].copy_from_slice(&record);
-            GONE_LEN
         }
         None if *stored & 1 << id != 0 => {
             transaction.delete(&member_key(id)).await?;
@@ -159,13 +149,8 @@ async fn write_member(
 
 /// Reads a slot's stored value, after its version byte.
 fn read_slot(id: u8, value: &[u8]) -> Option<Slot> {
-    if value.len() > RECORD_FIXED_LEN {
-        let (at, member) = Member::decode(value)?;
-        (at == id).then_some(Slot::Member(member))
-    } else {
-        let (at, gone) = Gone::decode(value)?;
-        (at == id).then_some(Slot::Gone(gone))
-    }
+    let (at, slot) = Slot::decode(value)?;
+    (at == id).then_some(slot)
 }
 
 /// A member's key: `group.member.` and its id in two digits, which sorts after `group`.

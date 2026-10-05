@@ -298,6 +298,11 @@ pub enum Slot {
     Gone(Gone),
 }
 
+const _: () = assert!(
+    GONE_LEN < RECORD_FIXED_LEN,
+    "a gone record's length tells it from a member's"
+);
+
 impl Slot {
     /// The bytes its record takes in a packet, its type and length included.
     #[must_use]
@@ -305,6 +310,33 @@ impl Slot {
         match self {
             Self::Member(member) => member.record_len(),
             Self::Gone(_) => 2 + GONE_LEN,
+        }
+    }
+
+    /// Writes its record for `id`, a member's or a gone one, and returns the record's length.
+    pub fn encode(&self, id: u8, out: &mut [u8; RECORD_MAX_LEN]) -> usize {
+        match self {
+            Self::Member(member) => member.encode(id, out),
+            Self::Gone(gone) => {
+                let (record, _) = out
+                    .split_first_chunk_mut::<GONE_LEN>()
+                    .expect("room for one");
+                gone.encode(id, record);
+                GONE_LEN
+            }
+        }
+    }
+
+    /// Reads a record [`Slot::encode`] wrote, and its id. A gone record is [`GONE_LEN`] bytes and
+    /// every member record is longer, which tells them apart where nothing else says which.
+    #[must_use]
+    pub fn decode(record: &[u8]) -> Option<(u8, Self)> {
+        if record.len() == GONE_LEN {
+            let (id, gone) = Gone::decode(record)?;
+            Some((id, Self::Gone(gone)))
+        } else {
+            let (id, member) = Member::decode(record)?;
+            Some((id, Self::Member(member)))
         }
     }
 }
@@ -1669,5 +1701,41 @@ pub(crate) mod tests {
         let (key, own, generation) = decode_stored_header(&bytes[..33]).unwrap();
         assert_eq!((key.bytes(), own, generation), (&[9; 32], 4, 0));
         assert!(decode_stored_header(&bytes[..32]).is_none());
+    }
+
+    /// A slot's record as `settings.rs` stored it before the encoding moved here.
+    fn slot_as_first_stored(id: u8, slot: &Slot) -> alloc::vec::Vec<u8> {
+        match slot {
+            Slot::Member(member) => {
+                let mut record = [0; RECORD_MAX_LEN];
+                let len = member.encode(id, &mut record);
+                record[..len].to_vec()
+            }
+            Slot::Gone(gone) => {
+                let mut record = [0; GONE_LEN];
+                gone.encode(id, &mut record);
+                record.to_vec()
+            }
+        }
+    }
+
+    #[test]
+    fn a_slot_keeps_its_bytes_and_reads_back_by_the_flash_rule_too() {
+        for (id, slot) in [
+            (3, Slot::Member(signed(3, 4, 120))),
+            (5, Slot::Gone(left(5, 6, 130))),
+        ] {
+            let mut record = [0; RECORD_MAX_LEN];
+            let len = slot.encode(id, &mut record);
+            assert_eq!(record[..len], slot_as_first_stored(id, &slot));
+            assert_eq!(Slot::decode(&record[..len]), Some((id, slot)));
+            // The flash told them apart by a member's fixed length, the welcome by a gone
+            // record's; both agree on every record written.
+            assert_eq!(
+                len > RECORD_FIXED_LEN,
+                matches!(slot, Slot::Member(_)),
+                "{slot:?}"
+            );
+        }
     }
 }

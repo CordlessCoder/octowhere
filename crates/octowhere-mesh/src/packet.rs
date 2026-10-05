@@ -3,7 +3,7 @@
 
 pub use crate::bits::Full;
 use crate::bits::{BitReader, BitWriter};
-use crate::members::{GONE_LEN, Gone, Member, RECORD_MAX_LEN, Slot};
+use crate::members::{Gone, Member, RECORD_MAX_LEN, Slot};
 use crate::messages::Message;
 use crate::rekey::{ON_KEY_LEN, OnKey};
 use crate::seal::{self, Key, SIV_LEN};
@@ -457,20 +457,12 @@ impl<'a> Builder<'a> {
 
     /// Writes a member record for `id`.
     pub fn member(&mut self, id: u8, member: &Member) -> Result<(), Full> {
-        let mut bytes = [0; RECORD_MAX_LEN];
-        let len = member.encode(id, &mut bytes);
-        self.record(record::MEMBER, len, |body| {
-            body.copy_from_slice(&bytes[..len]);
-            Ok(())
-        })
+        self.slot(id, &Slot::Member(*member))
     }
 
     /// Writes a gone record for `id`.
     pub fn gone(&mut self, id: u8, gone: &Gone) -> Result<(), Full> {
-        self.record(record::GONE, GONE_LEN, |body| {
-            gone.encode(id, body.try_into().expect("a gone record's length"));
-            Ok(())
-        })
+        self.slot(id, &Slot::Gone(*gone))
     }
 
     pub fn on_key(&mut self, on_key: &OnKey) -> Result<(), Full> {
@@ -482,10 +474,16 @@ impl<'a> Builder<'a> {
 
     /// Writes what the slot at `id` holds: a member record or a gone record.
     pub fn slot(&mut self, id: u8, slot: &Slot) -> Result<(), Full> {
-        match slot {
-            Slot::Member(member) => self.member(id, member),
-            Slot::Gone(gone) => self.gone(id, gone),
-        }
+        let kind = match slot {
+            Slot::Member(_) => record::MEMBER,
+            Slot::Gone(_) => record::GONE,
+        };
+        let mut bytes = [0; RECORD_MAX_LEN];
+        let len = slot.encode(id, &mut bytes);
+        self.record(kind, len, |body| {
+            body.copy_from_slice(&bytes[..len]);
+            Ok(())
+        })
     }
 
     /// The plaintext's length.
@@ -658,6 +656,10 @@ impl Iterator for Positions<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::members::{
+        GONE_LEN,
+        tests::{left, signed},
+    };
 
     fn header() -> Header {
         Header {
@@ -684,6 +686,32 @@ mod tests {
         assert!(matches!(records.next(), Some(Record::Members(0xdead_beef))));
         assert!(matches!(records.next(), Some(Record::Request(0x8000_0010))));
         assert!(records.next().is_none());
+    }
+
+    #[test]
+    fn a_slot_record_keeps_its_bytes() {
+        let member = signed(3, 4, 120);
+        let gone = left(5, 6, 130);
+        let mut member_body = [0; RECORD_MAX_LEN];
+        let member_len = member.encode(3, &mut member_body);
+        let mut gone_body = [0; GONE_LEN];
+        gone.encode(5, &mut gone_body);
+        for (id, slot, kind, body) in [
+            (
+                3,
+                Slot::Member(member),
+                record::MEMBER,
+                &member_body[..member_len],
+            ),
+            (5, Slot::Gone(gone), record::GONE, &gone_body[..]),
+        ] {
+            let mut buf = [0; MAX_PLAIN];
+            let mut builder = Builder::new(&mut buf, &header());
+            builder.slot(id, &slot).unwrap();
+            let len = builder.finish();
+            assert_eq!(buf[HEADER_LEN..HEADER_LEN + 2], [kind, body.len() as u8]);
+            assert_eq!(buf[HEADER_LEN + 2..len], *body);
+        }
     }
 
     #[test]
