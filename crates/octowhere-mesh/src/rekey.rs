@@ -178,9 +178,9 @@ pub const SWITCH_AHEAD: u32 = switch_rounds(IDS as u32) + 1;
 pub struct Pending {
     pub new: NewKey,
     pub remover: u8,
-    /// The round this device switches at: the key's, or later, so that a removal learned late
-    /// still leaves its user [`DECLINE_ROUNDS`] to decline it.
-    pub switch: u32,
+    /// The round this device switches at: the key's own [`NewKey::switch`], or later, so that a
+    /// removal learned late still leaves its user [`DECLINE_ROUNDS`] to decline it.
+    pub own_switch: u32,
 }
 
 /// A key the group switched away from, kept for the members not yet heard on a newer one.
@@ -385,7 +385,7 @@ impl Rekey {
         self.pending = Some(Pending {
             new: new.clone(),
             remover: group.own(),
-            switch: new.switch,
+            own_switch: new.switch,
         });
         self.removing = Some((new.generation, id));
         self.again.remove(id);
@@ -433,11 +433,11 @@ impl Rekey {
         {
             return Learned::Ignored;
         }
-        let switch = new.switch.max(round.saturating_add(DECLINE_ROUNDS));
+        let own_switch = new.switch.max(round.saturating_add(DECLINE_ROUNDS));
         self.pending = Some(Pending {
             new,
             remover,
-            switch,
+            own_switch,
         });
         Learned::Pending
     }
@@ -466,7 +466,7 @@ impl Rekey {
     pub fn is_due(&self, round: u32) -> bool {
         self.pending
             .as_ref()
-            .is_some_and(|pending| round >= pending.switch)
+            .is_some_and(|pending| round >= pending.own_switch)
     }
 
     /// Declines the removal of the member `removed` that this device last switched for, in
@@ -579,7 +579,7 @@ impl Rekey {
                 generation: group.generation(),
                 new_generation: new.generation,
                 switched: new.switch,
-                until: pending.switch.saturating_add(UNDO_ROUNDS),
+                until: pending.own_switch.saturating_add(UNDO_ROUNDS),
                 changed,
                 removed,
                 theirs: !ours,
@@ -759,7 +759,7 @@ impl Rekey {
         match &self.pending {
             Some(pending) => {
                 put(&[1, pending.remover]);
-                put(&pending.switch.to_be_bytes());
+                put(&pending.own_switch.to_be_bytes());
                 put(&pending.new.encode());
             }
             None => put(&[0]),
@@ -847,11 +847,11 @@ impl Rekey {
         let mut rekey = Self::default();
         if take(1)?[0] == 1 {
             let remover = take(1)?[0];
-            let switch = u32::from_be_bytes(take(4)?.try_into().ok()?);
+            let own_switch = u32::from_be_bytes(take(4)?.try_into().ok()?);
             rekey.pending = Some(Pending {
                 new: NewKey::decode(take(KEY_LEN)?)?,
                 remover,
-                switch,
+                own_switch,
             });
         }
         let count = usize::from(take(1)?[0]);
@@ -1664,7 +1664,7 @@ mod tests {
             pending: Some(Pending {
                 new: new(9, 4, 1_010, 2, 3),
                 remover: 1,
-                switch: 1_010,
+                own_switch: 1_010,
             }),
             removing: Some((4, 2)),
             last: Some(Last {
@@ -1738,7 +1738,7 @@ mod tests {
         assert_eq!(again[..len], out[..len]);
         let pending = read.pending().unwrap();
         assert_eq!(pending.new, new(11, 5, 1_031, 1, 2).after(9));
-        assert_eq!(pending.switch, 1_040 + DECLINE_ROUNDS);
+        assert_eq!(pending.own_switch, 1_040 + DECLINE_ROUNDS);
         assert_eq!(read.old().count(), 1);
         assert_eq!(read.declined().count(), 1);
         assert_eq!(read.removing(), Some(2));

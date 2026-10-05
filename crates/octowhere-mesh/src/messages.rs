@@ -113,7 +113,7 @@ impl core::fmt::Display for Message {
 }
 
 /// What a node knows of a message by: its origin and sequence number.
-pub type Name = (u8, u32);
+pub type MessageId = (u8, u32);
 
 impl Message {
     #[must_use]
@@ -283,7 +283,7 @@ impl Message {
     }
 
     #[must_use]
-    pub fn name(&self) -> Name {
+    pub fn name(&self) -> MessageId {
         (self.origin, self.seq)
     }
 
@@ -443,21 +443,21 @@ pub struct Store {
 }
 
 /// 32 bits of SHA-256 over a message's origin and sequence number.
-fn hash((origin, seq): Name) -> u32 {
+fn hash((origin, seq): MessageId) -> u32 {
     let seq = seq.to_be_bytes();
     let hash: [u8; 32] = Sha256::digest([origin, seq[0], seq[1], seq[2], seq[3]]).into();
     u32::from_be_bytes([hash[0], hash[1], hash[2], hash[3]])
 }
 
 impl Store {
-    fn place(&self, (origin, seq): Name) -> Option<usize> {
+    fn place(&self, (origin, seq): MessageId) -> Option<usize> {
         self.messages
             .iter()
             .position(|held| held.seq == seq && held.origin == origin)
     }
 
     #[must_use]
-    pub fn get(&self, name: Name) -> Option<&Message> {
+    pub fn get(&self, name: MessageId) -> Option<&Message> {
         self.place(name).map(|at| &self.messages[at])
     }
 
@@ -549,14 +549,14 @@ impl Store {
     }
 
     /// Marks a message held as one this node has yet to take, to try again.
-    pub fn mark_unread(&mut self, name: Name) {
+    pub fn mark_unread(&mut self, name: MessageId) {
         if let Some(at) = self.place(name) {
             self.unread[at / 32] |= 1 << (at % 32);
         }
     }
 
     /// Counts a message as taken.
-    pub fn read(&mut self, name: Name) {
+    pub fn read(&mut self, name: MessageId) {
         if let Some(at) = self.place(name) {
             self.unread[at / 32] &= !(1 << (at % 32));
         }
@@ -571,7 +571,7 @@ impl Store {
     }
 
     /// Marks a message held to be sent.
-    pub fn mark(&mut self, name: Name) {
+    pub fn mark(&mut self, name: MessageId) {
         if let Some(at) = self.place(name) {
             self.unsent[at / 32] |= 1 << (at % 32);
         }
@@ -579,7 +579,7 @@ impl Store {
 
     /// Counts a message as sent: a packet carried it, or one that reached this node's
     /// neighbours did.
-    pub fn sent(&mut self, name: Name) {
+    pub fn sent(&mut self, name: MessageId) {
         if let Some(at) = self.place(name) {
             self.unsent[at / 32] &= !(1 << (at % 32));
         }

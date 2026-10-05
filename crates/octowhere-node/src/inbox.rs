@@ -7,7 +7,7 @@ use core::alloc::Allocator;
 
 use octowhere_mesh::{
     members,
-    messages::{Name, Store},
+    messages::{MessageId, Store},
 };
 
 use crate::view::{At, Carriage, MessageView, MessagesView};
@@ -65,12 +65,12 @@ impl<A: Allocator> Inbox<A> {
         id
     }
 
-    fn by_name(&mut self, (origin, seq): Name) -> Option<&mut MessageView> {
+    fn by_name(&mut self, (origin, seq): MessageId) -> Option<&mut MessageView> {
         self.view
             .find_mut(|message| message.from == origin && message.seq == seq && seq != 0)
     }
 
-    fn update(&mut self, name: Name, change: impl FnOnce(&mut MessageView) -> bool) {
+    fn update(&mut self, name: MessageId, change: impl FnOnce(&mut MessageView) -> bool) {
         if let Some(message) = self.by_name(name)
             && change(message)
         {
@@ -105,7 +105,7 @@ impl<A: Allocator> Inbox<A> {
     }
 
     /// A packet of this device's carried message `name`.
-    pub fn sent(&mut self, name: Name) {
+    pub fn sent(&mut self, name: MessageId) {
         self.update(name, |message| {
             let queued = message.carriage == Carriage::Queued;
             if queued {
@@ -116,7 +116,7 @@ impl<A: Allocator> Inbox<A> {
     }
 
     /// Another member's packet carried this device's message `name`.
-    pub fn relayed(&mut self, name: Name) {
+    pub fn relayed(&mut self, name: MessageId) {
         self.update(name, |message| {
             let earlier = matches!(message.carriage, Carriage::Queued | Carriage::Sent);
             if earlier {
@@ -151,7 +151,7 @@ impl<A: Allocator> Inbox<A> {
     #[expect(clippy::too_many_arguments)]
     pub fn arrived(
         &mut self,
-        name: Name,
+        name: MessageId,
         own: u8,
         to: Option<u8>,
         stamp: u32,

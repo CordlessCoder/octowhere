@@ -6,7 +6,7 @@
 use crate::{
     Ids,
     members::{GONE_LEN, Group, Requests},
-    messages::{Name, Store},
+    messages::{MessageId, Store},
     packet::{Builder, Entry, Hdop, Quality, positions_len},
     rekey::OnKey,
     table::Table,
@@ -48,7 +48,7 @@ pub struct Carried {
     pub on_key: bool,
     entries: [Entry; MAX_ENTRIES],
     positions: usize,
-    messages: [Name; MAX_MESSAGES],
+    messages: [MessageId; MAX_MESSAGES],
     carried: usize,
 }
 
@@ -61,7 +61,7 @@ impl Carried {
 
     /// The messages the packet carried.
     #[must_use]
-    pub fn messages(&self) -> &[Name] {
+    pub fn messages(&self) -> &[MessageId] {
         &self.messages[..self.carried]
     }
 

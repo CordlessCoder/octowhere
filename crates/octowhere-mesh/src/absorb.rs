@@ -70,9 +70,9 @@ pub struct Absorbed {
     pub summary: bool,
     /// Messages it carried.
     pub carried: usize,
-    carried_names: [messages::Name; MESSAGES],
+    carried_names: [messages::MessageId; MESSAGES],
     events: [Option<Event>; RECORDS],
-    arrivals: [messages::Name; MESSAGES],
+    arrivals: [messages::MessageId; MESSAGES],
     arrived: usize,
 }
 
@@ -84,13 +84,13 @@ impl Absorbed {
 
     /// The messages new to this node.
     #[must_use]
-    pub fn arrivals(&self) -> &[messages::Name] {
+    pub fn arrivals(&self) -> &[messages::MessageId] {
         &self.arrivals[..self.arrived]
     }
 
     /// Every message it carried, new to this node or not.
     #[must_use]
-    pub fn carried_names(&self) -> &[messages::Name] {
+    pub fn carried_names(&self) -> &[messages::MessageId] {
         &self.carried_names[..self.carried]
     }
 }

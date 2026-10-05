@@ -850,7 +850,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                 self.time.now()
             }
         };
-        let switch = self.local_at_round(pending.switch);
+        let switch = self.local_at_round(pending.own_switch);
         self.shown.removals.current = Some(self.removal(
             &pending.new,
             pending.remover,
@@ -2221,7 +2221,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                     .removals
                     .rekey
                     .pending()
-                    .map_or(0, |pending| pending.switch);
+                    .map_or(0, |pending| pending.own_switch);
                 info!(
                     "[REKEY] {} asks to remove {}: generation {} from round {} (now {}) unless declined",
                     remover, removed, generation, switch, round
@@ -2337,7 +2337,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         else {
             return;
         };
-        let missing: heapless::Vec<messages::Name, { IDS as usize }> = self
+        let missing: heapless::Vec<messages::MessageId, { IDS as usize }> = self
             .messages
             .iter()
             .filter(|message| {
@@ -2440,7 +2440,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
     fn switch_at(&self, now: i64) -> Option<i64> {
         let pending = self.removals.rekey.pending()?;
         let (time, _) = self.clock.at(now)?;
-        Some(now + i64::from(pending.switch) * ROUND_US - time)
+        Some(now + i64::from(pending.own_switch) * ROUND_US - time)
     }
 
     /// The member at `id` as the other member of a message stamped `stamp`: none when it joined
