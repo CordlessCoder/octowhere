@@ -267,9 +267,9 @@ and a feature names one. The check rebuilds a temporary manifest with a stable c
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 1,845,216 bytes, 11.78% of the 15,663,104-byte app partition that
-`partitions.csv` gives it (the plain build at `4abb8d6`; it was 1,847,216 after the mesh
-clean-up, `3a9d42e`, 1,846,768
+The image is currently 1,839,344 bytes, 11.74% of the 15,663,104-byte app partition that
+`partitions.csv` gives it (the plain build at `dca8b71`; it was 1,845,216 at `4abb8d6`,
+1,847,216 after the mesh clean-up, `3a9d42e`, 1,846,768
 once the firmware moved into `firmware/`, 1,848,064 at `03cc818`, and at `58ea45c` 1,835,136, and
 1,837,792 with the inject features).
 Since the move, panic locations name the local crates by absolute path, as they always named
