@@ -1669,15 +1669,15 @@ mod tests {
         assert_eq!(widths(22)[6], (92, 374));
     }
 
-    /// The fault screen rasterizes its giant name a glyph at a time, at half size, into a raster
-    /// of its own with four bytes a pixel on the internal heap. A 140 KB raster for the full
-    /// size failed to allocate there.
+    /// The fault screen rasterizes its giant name a glyph at a time, at half size, and draws it
+    /// doubled. The raster made at boot must hold the largest of those glyphs, since growing it
+    /// there can fail.
     #[test]
-    fn every_giant_glyph_rasters_within_40_kb() {
+    fn every_giant_glyph_fits_the_raster_reserved_at_boot() {
         let font = chrome::FONTS[SHAPIRO];
         for c in Part::ALL.into_iter().flat_map(|part| part.name().chars()) {
             let metrics = font.metrics(c, (NAME_PX / 2) as f32);
-            assert!(metrics.width * metrics.height * 4 < 40_000, "{c}");
+            chrome::fits(metrics.width, metrics.height);
         }
     }
 
