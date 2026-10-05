@@ -422,6 +422,14 @@ key, and a removal.
 - **Flooding.** A node relays each message new to it once, as soon as the channel lets it,
   oldest first. It counts as sent once a covering packet carried it, as an entry does (the
   cancel rule).
+- **Hearing it passed on.** A neighbour that has neighbours of its own outside the ones a
+  packet's sender reports passes the packet's new messages on, by the cancel rule, so hearing it
+  do so is the sign it heard them (owner, 2026-10-05; `octowhere-mesh`'s `relays`). After
+  sending a message, a node waits 10 s to hear each such neighbour carry it, or a later message
+  from its origin, or another relay reach that neighbour's neighbours. A neighbour already heard
+  carrying it is not waited for. A message not heard passed on goes again, three times at most.
+  Along a chain of relays a loss on one hop stops the flood there; this repairs it in seconds,
+  where waiting for the loss to show took a floor.
 - **Store and forward.** Every node holds every message for the message horizon, 24 hours
   from its timestamp, private ones included, and passes on any a neighbour lacks. The origin
   does not repeat it. A message reaches a member who comes back into range of anyone holding it
@@ -438,13 +446,16 @@ key, and a removal.
   every message it holds outside those ranges or among those lacked, unless its digest matches
   the summary's sender's. A summary takes at most 120 bytes; one too short for every origin says
   which it covers, and the next starts where it stopped. It is made before the backoff, since
-  with a full store that takes milliseconds. Three things make one due (owner, 2026-10-05):
+  with a full store that takes milliseconds. Four things make one due (owner, 2026-10-05):
   - a neighbour's digest has differed from its own for a round since the last of that
     neighbour's packets that agreed or brought it a message new to it, as records are asked for;
   - it takes a message whose origin's one before it, which it names, it does not hold: a message
     lost on the way, which a node hidden from the sender's next relay loses;
   - a neighbour's summary shows it holds the newest message from an origin that this node
-    lacks, which no gap shows.
+    lacks, which no gap shows;
+  - no message new to it has arrived for 10 s, and the last packet a neighbour brought one in
+    left its digest unlike this node's: the neighbour held more than it gave. In a flood a relay
+    holds the next message while it sends this one, so this shows a lost last message.
 
   A summary waits while the node has messages to send. Before it did, a remover with 30 key
   messages to send filled its packets with summaries instead, while every other node sent it
@@ -903,9 +914,12 @@ protocol does not need this.
   back past a switch it made, which would undo the removals after it, as declining after a
   switch does. The simulator's `parts_apart_through_two_removals_settle_once_they_meet`,
   ignored for now, stages it.
-- A message lost along a relay chain is repaired only as fast as its neighbours' packets come,
-  and a quiet neighbour sends at its floor. A relay chain of 12 took from 40 s to about 9
-  minutes to carry a removal's key messages to its far end in the simulator.
+- A message lost on a chain's last hop is repaired only as fast as the last node hears its
+  neighbour's next packet: no relay is expected of the last node, and a lone message leaves no
+  gap and no settling to show it. In the simulator, a removal crossed a chain of 12 in 40 to
+  120 s over ten seeds, against 40 s to about 9 minutes before relays were heard as
+  acknowledgements; a lone message crossed it in 4 to 90 s with every link losing a packet in
+  five.
 - Contention has run only in the simulator. On the boards: whether the modem's status sees a
   packet under way as the simulator assumes, how late the transmission starts after the check,
   and whether the header's 256ths keep two boards' clocks as close as slots did.
