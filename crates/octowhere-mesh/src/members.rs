@@ -937,9 +937,33 @@ enum Held {
     Former(usize),
 }
 
-/// A neighbour whose members digest differs from this node's in this many of its packets
-/// running is asked for every record it holds.
+/// A neighbour whose members or messages digest differs from this node's in this many of its
+/// packets running is asked for every record it holds, or sent a summary of the messages.
 pub const MISMATCHES: u8 = 2;
+
+/// For each id, how many of its packets running carried a digest unlike this node's.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Mismatches([u8; SLOTS]);
+
+impl Mismatches {
+    /// Counts a packet from `sender` whose digest `matched` this node's or not. Returns whether
+    /// that made [`MISMATCHES`] running, which starts the count again.
+    pub(crate) fn count(&mut self, sender: u8, matched: bool) -> bool {
+        let Some(count) = self.0.get_mut(usize::from(sender)) else {
+            return false;
+        };
+        if matched {
+            *count = 0;
+            return false;
+        }
+        *count += 1;
+        let due = *count >= MISMATCHES;
+        if due {
+            *count = 0;
+        }
+        due
+    }
+}
 
 /// The member records a node asks its neighbours for: a sender's own when the node holds none
 /// for it, and all of a neighbour's once their tables keep differing.
@@ -947,14 +971,13 @@ pub const MISMATCHES: u8 = 2;
 pub struct Requests {
     /// The ids the next packet asks for.
     pending: Ids,
-    /// For each id, how many of its packets running carried a digest unlike this node's.
-    mismatched: [u8; SLOTS],
+    mismatched: Mismatches,
 }
 
 impl Requests {
-    /// Takes a packet from `sender`, with the members digest it carried and the ids it asked
-    /// for. A request is answered only where the two tables differ.
-    pub fn heard(
+    /// Takes the members digest a packet from `sender` carried, and answers the ids it asked
+    /// for by marking `group`'s records of them to send, where the two tables differ.
+    pub fn answer(
         &mut self,
         group: &mut Group,
         sender: u8,
@@ -966,18 +989,10 @@ impl Requests {
         if group.slot(sender).is_none() {
             self.pending.insert(sender);
         }
-        if let Some(mismatched) = self.mismatched.get_mut(usize::from(sender)) {
-            match digest {
-                Some(theirs) if theirs != ours => {
-                    *mismatched += 1;
-                    if *mismatched >= MISMATCHES {
-                        self.pending = Ids::ALL;
-                        *mismatched = 0;
-                    }
-                }
-                Some(_) => *mismatched = 0,
-                None => {}
-            }
+        if let Some(theirs) = digest
+            && self.mismatched.count(sender, theirs == ours)
+        {
+            self.pending = Ids::ALL;
         }
         if let Some(ids) = asked
             && digest != Some(ours)
@@ -1215,29 +1230,29 @@ pub(crate) mod tests {
         let mut g = group(0, &[(0, 1), (3, 2)]);
         let mut requests = Requests::default();
         let ours = g.digest();
-        requests.heard(&mut g, 3, Some(ours), None);
+        requests.answer(&mut g, 3, Some(ours), None);
         assert_eq!(requests.pending(), Ids::EMPTY);
-        requests.heard(&mut g, 7, Some(ours), None);
+        requests.answer(&mut g, 7, Some(ours), None);
         assert_eq!(
             requests.pending(),
             Ids::of(7),
             "a sender it holds no record for"
         );
         requests.sent(Ids::of(7));
-        requests.heard(&mut g, 3, Some(ours ^ 1), None);
+        requests.answer(&mut g, 3, Some(ours ^ 1), None);
         assert_eq!(
             requests.pending(),
             Ids::EMPTY,
             "one packet may only be out of date"
         );
-        requests.heard(&mut g, 3, Some(ours), None);
-        requests.heard(&mut g, 3, Some(ours ^ 1), None);
+        requests.answer(&mut g, 3, Some(ours), None);
+        requests.answer(&mut g, 3, Some(ours ^ 1), None);
         assert_eq!(
             requests.pending(),
             Ids::EMPTY,
             "a match in between starts the count again"
         );
-        requests.heard(&mut g, 3, Some(ours ^ 1), None);
+        requests.answer(&mut g, 3, Some(ours ^ 1), None);
         assert_eq!(requests.pending(), Ids::ALL);
     }
 
@@ -1246,9 +1261,9 @@ pub(crate) mod tests {
         let mut g = group(0, &[(0, 1), (3, 2)]);
         let mut requests = Requests::default();
         let ours = g.digest();
-        requests.heard(&mut g, 3, Some(ours), Some(Ids::ALL));
+        requests.answer(&mut g, 3, Some(ours), Some(Ids::ALL));
         assert!(!g.has_unsent());
-        requests.heard(&mut g, 3, Some(ours ^ 1), Some(Ids::of(3).with(9)));
+        requests.answer(&mut g, 3, Some(ours ^ 1), Some(Ids::of(3).with(9)));
         assert_eq!(g.unsent(), Ids::of(3), "only the records held");
     }
 
@@ -1355,7 +1370,7 @@ pub(crate) mod tests {
         g.merge_gone(1, left(1, 2, 200), 0);
         let mut requests = Requests::default();
         let ours = g.digest();
-        requests.heard(&mut g, 1, Some(ours), None);
+        requests.answer(&mut g, 1, Some(ours), None);
         assert_eq!(requests.pending(), Ids::EMPTY);
     }
 

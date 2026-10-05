@@ -229,10 +229,10 @@ pub fn absorb<'p>(
             messages.sent(name);
         }
     }
-    requests.heard(group, sender, theirs, asked);
+    requests.answer(group, sender, theirs, asked);
     // A packet with no members digest is no full account of its sender.
     if theirs.is_some() {
-        summaries.heard(messages, sender, their_messages, summary);
+        summaries.answer(messages, sender, their_messages, summary);
     }
     absorbed.summary = summary.is_some();
     absorbed

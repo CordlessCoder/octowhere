@@ -7,7 +7,7 @@ use hkdf::Hkdf;
 use sha2::{Digest, Sha256};
 
 use crate::identity::{Identity, SIGNATURE_LEN, dh_public, verify};
-use crate::members::{MISMATCHES, PUBLIC_LEN};
+use crate::members::{Mismatches, PUBLIC_LEN};
 use crate::seal::{self, Inauthentic, Key, SIV_LEN};
 use crate::{AHEAD_S, IDS, Ids};
 
@@ -704,28 +704,20 @@ fn lacks(entry: Option<&[u8]>, seq: u32) -> bool {
 /// Which neighbours' messages differ from this node's, and whether a summary is to go out.
 #[derive(Clone, Debug, Default)]
 pub struct Summaries {
-    /// For each id, how many of its packets running carried a digest unlike this node's.
-    mismatched: [u8; IDS as usize],
+    mismatched: Mismatches,
     pending: bool,
     /// The origin the next summary starts from.
     next: u8,
 }
 
 impl Summaries {
-    /// Takes a packet from `sender` with the messages digest it carried, 0 for none, and the
-    /// summary it carried. A summary is answered only where the two stores differ.
-    pub fn heard(&mut self, store: &mut Store, sender: u8, theirs: u32, summary: Option<&[u8]>) {
+    /// Takes the messages digest a packet from `sender` carried, 0 for none, as an empty store
+    /// has, and answers the summary it carried by marking what `store` holds and the sender
+    /// lacks to send, where the two stores differ.
+    pub fn answer(&mut self, store: &mut Store, sender: u8, theirs: u32, summary: Option<&[u8]>) {
         let ours = store.digest();
-        if let Some(mismatched) = self.mismatched.get_mut(usize::from(sender)) {
-            if theirs == ours {
-                *mismatched = 0;
-            } else {
-                *mismatched += 1;
-                if *mismatched >= MISMATCHES {
-                    self.pending = true;
-                    *mismatched = 0;
-                }
-            }
+        if self.mismatched.count(sender, theirs == ours) {
+            self.pending = true;
         }
         if let Some(summary) = summary
             && theirs != ours
@@ -1099,15 +1091,15 @@ mod tests {
         s.insert(text(1, 1, 0, NOW), NOW);
         let ours = s.digest();
         let mut summaries = Summaries::default();
-        summaries.heard(&mut s, 3, ours ^ 1, None);
+        summaries.answer(&mut s, 3, ours ^ 1, None);
         assert!(!summaries.pending());
-        summaries.heard(&mut s, 3, ours, None);
-        summaries.heard(&mut s, 3, ours ^ 1, None);
+        summaries.answer(&mut s, 3, ours, None);
+        summaries.answer(&mut s, 3, ours ^ 1, None);
         assert!(
             !summaries.pending(),
             "a match between starts the count again"
         );
-        summaries.heard(&mut s, 3, ours ^ 1, None);
+        summaries.answer(&mut s, 3, ours ^ 1, None);
         assert!(summaries.pending());
         summaries.sent(0);
         assert!(!summaries.pending());
@@ -1121,9 +1113,9 @@ mod tests {
         let ours = s.digest();
         let mut summaries = Summaries::default();
         let empty = [0xff, 0xff, 0xff, 0xff];
-        summaries.heard(&mut s, 3, ours, Some(&empty));
+        summaries.answer(&mut s, 3, ours, Some(&empty));
         assert!(!s.has_unsent());
-        summaries.heard(&mut s, 3, 0, Some(&empty));
+        summaries.answer(&mut s, 3, 0, Some(&empty));
         assert!(s.has_unsent());
     }
 
