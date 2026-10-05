@@ -110,7 +110,6 @@ until the feature set is complete, because profiling an incomplete firmware pric
       `node.rs`).
     - The plain image grew 54,432 bytes over messages and removals, to 1,835,136. Check whether
       it crossed into padding before blaming the code ("Binary size" in `AGENTS.md`).
-    - Rerun `bench/stack-watermark` (the clean-up's entry below).
   - The consistency rules and the cost on a board, done (2026-10-04): the drawer's buttons take
     taps over 40 px (`a54b8eb`); the member face draws a full frame in under 100 ms, from 315
     without a fix and 123 with one (`80ac3cd`,
@@ -216,18 +215,17 @@ until the feature set is complete, because profiling an incomplete firmware pric
   screens' two 8,848-byte lists. Both are read on every frame that draws them, so measure
   each frame from PSRAM on the board before moving it; the title's identity frames already
   come close to their 33 ms.
-- Run the CO5300 crate on the board (2026-10-05). The driver is its own crate,
-  `crates/co5300`, generic over the bus (owner's choice), and has run only in its host tests,
-  which check every byte against the datasheet or the old driver. Flash master, and rerun
-  `bench/flush-shift` to see that the flush kept its time. The crate also has the datasheet's
-  other controls (`docs/datasheets/CO5300_Datasheet_V0.00.pdf`), which nothing calls yet: TE
-  off and its two modes, the TE line, reading the scan line (45h), the partial area and partial
-  mode, idle mode, deep standby, high-brightness mode and its level, sunlight enhancement and
-  the current limit. The datasheet has no scroll area. Try each on the board before a screen
-  relies on it. The scan line's reply is read on SIO0, where the datasheet's read diagram has
-  it; if it comes back as nothing but 00h or FFh, the module may wire the controller's output to
-  SIO1, which `DataMode::SingleTwoDataLines` reads. Whether the partial area takes the column
-  offset as windows do is not settled either.
+- Look at the CO5300 controls the panel alone shows (2026-10-05). The driver is its own crate,
+  `crates/co5300`, generic over the bus (owner's choice), and runs on both boards; its flush is
+  a few microseconds faster than the old driver's, the TE modes and the TE line count as the
+  datasheet says, and deep standby comes back (`docs/logs/display/co5300-crate-2026-10-05/`).
+  `bench/co5300-controls` steps through the rest, 6 s each with the step logged: the partial
+  area and partial mode, idle mode, high-brightness mode, sunlight enhancement and the current
+  limit, which only someone watching the panel can judge. Whether the partial area takes the
+  column offset as windows do is not settled. The datasheet has no scroll area. Reading the
+  controller does not work on this board: every read comes back as zeros, on either reply line
+  and at 5 MHz, which the datasheet's 100 ns read cycle needs, and the schematic leaves the
+  connector's pin 19 unconnected. The crate keeps the scan line for a board that wires it.
 - Build the protocol in [`LORA-PROTOCOL.md`](LORA-PROTOCOL.md), in its "Build order". Steps 1
   to 3 are done: pairing, the member table, its storage and the screens, paired between the two
   boards by the mesh's commands and through the screens (`docs/logs/lora/pairing-2026-10-02/`,
@@ -276,13 +274,28 @@ until the feature set is complete, because profiling an incomplete firmware pric
   [`ui-firmware-review/README.md`](ui-firmware-review/README.md): 112 findings, with the ones to
   take first. Its eight bugs are fixed (2026-10-04), and the rest state machine, the giant-glyph
   bound and most of the dead code (2026-10-05); the README lists what is left of those.
+- Decide how a member a restart has stranded gets its key (2026-10-05, found on the boards).
+  Key messages live in the message store, in PSRAM, and the protocol counts on neighbours to
+  give them back to a remover that restarted ("What is kept across a restart"). In a group of
+  two the only neighbour is the member waiting for the key, so it never switches: 1A:38 heard
+  1C:1C on the old key in a sweep and had no key message for it
+  (`docs/logs/lora/board-checks-2026-10-05/`). The same holds wherever every node that held
+  the message has restarted. The remover still has the new key and the member's public key, so
+  it could make the message again; or the messages for members still waited for could be kept
+  in flash.
+- Have a member back by pairing say it is on the group's key (2026-10-05, found on the boards).
+  A member sends its signed word that it is on the key only after a switch or a restart, so the
+  adder of a member that left and came back waits for it on the old key, and keeps sending
+  under that key in sweep rounds, until the member restarts or a day passes. Either the joining
+  device starts sending the word once it has joined, or the adder stops waiting for a member
+  it has just handed the key.
 - The mesh and node clean-up from the 2026-10-03 code-quality review is done (2026-10-05,
   `0a25c3d` to `3a9d42e`); `context/MESH-CLEANUP-PLAN.md` laid it out, and git has it at
-  `55167be`. Two things wait for the boards: flash both with master and check that they pair,
-  hear each other, switch on a phantom's removal, drop the old key on the members' on-key
-  records and rejoin after a restart, which the 2026-10-04 security fixes and the clean-up have
-  only run in the simulator; and rerun `bench/stack-watermark`, since the frames moved. Left
-  for whenever the code is touched anyway: `Group` mixes replicated data with send bookkeeping;
+  `55167be`. With the 2026-10-04 security fixes it has run on both boards: they restored their
+  groups from flash, heard each other, switched together on two phantoms' removals and dropped
+  the old key, and one rejoined after a restart; core 0's stack peaked at 52,472 of 105,068
+  bytes (`docs/logs/lora/board-checks-2026-10-05/`). Left for whenever the code is touched
+  anyway: `Group` mixes replicated data with send bookkeeping;
   positional bools (`Message::private` takes eight arguments) and `Clock`'s `(i64, i64)` tuples;
   mixed byte orders (do not churn; pick one for new formats); `seal`/`open` and
   `seal_bound`/`open_bound` could be one pair.

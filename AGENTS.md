@@ -16,8 +16,8 @@ initialization or peripheral mappings.
   configuration ("Build and test"). Its sources are under `firmware/src/`, below. The root is a
   second workspace, of everything else that builds with cargo, for the host.
 - `crates/co5300/` is the CO5300 controller's driver: its start-up, windows, brightness,
-  sleep and TE, and the datasheet's other controls, which nothing calls yet and the board has
-  not run (`context/BACKLOG.md`). It is generic over a QSPI bus trait, the reset and TE pins
+  sleep and TE, and the datasheet's other controls, which nothing calls yet; the board cannot
+  read the controller (`context/BACKLOG.md`). It is generic over a QSPI bus trait, the reset and TE pins
   and a delay, so it builds and tests on the host. `firmware/src/drivers/` holds the display path on the board:
   that trait on esp-hal's SPI DMA, and flushing the framebuffer to the panel.
 - `crates/octowhere-peripherals/` owns the I2C devices' drivers: touch, power, RTC,
@@ -268,8 +268,9 @@ and a feature names one. The check rebuilds a temporary manifest with a stable c
 
 Measure the flash image with `espflash save-image`, not the section totals. `xtensa-esp-elf-size`
 counts bytes that alignment padding absorbs, and the two disagree by a wide margin on this target.
-The image is currently 1,840,544 bytes, 11.75% of the 15,663,104-byte app partition that
-`partitions.csv` gives it (the plain build at `da358ab`; it was 1,839,344 at `dca8b71`, before
+The image is currently 1,840,576 bytes, 11.75% of the 15,663,104-byte app partition that
+`partitions.csv` gives it (the plain build at `def9052`; it was 1,840,544 at `da358ab`,
+1,839,344 at `dca8b71`, before
 the scan line's read buffer, 1,845,216 at `4abb8d6`,
 1,847,216 after the mesh clean-up, `3a9d42e`, 1,846,768
 once the firmware moved into `firmware/`, 1,848,064 at `03cc818`, and at `58ea45c` 1,835,136, and
@@ -374,7 +375,11 @@ its settled fields with a turning synthetic heading and logs every draw's time
 (`compass-field-bench`, summarised by `tools/compass-field-summary.py`); and
 `bench/flush-shift`, which times flushes on core 1 with no wait for TE, whole and in regions,
 at each pixel shift position, beside the region flush from before pixel shift
-(`flush-shift-bench`, summarised by `tools/flush-shift-summary.py`); and `bench/settings-save`,
+(`flush-shift-bench`, summarised by `tools/flush-shift-summary.py`), on the driver before its
+crate at `f5102d5` and on the crate at `0d3c617` (results in
+`docs/logs/display/co5300-crate-2026-10-05/`); and `bench/co5300-controls`, which steps the
+panel through the crate's other controls, 6 s each, and counts TE pulses in each mode
+(`co5300-controls-bench`); and `bench/settings-save`,
 which saves a key nothing reads every 3 s and logs each save's flash operations and how long
 it held the display core (`settings-save-bench`, summarised by `tools/settings-save-summary.py`); and
 `bench/startup-handover`, which replays the start-up 6 s after each handover, every other time
@@ -394,8 +399,8 @@ read two nodes' logs; results in `docs/logs/lora/crc-2026-10-02/`. And `bench/jt
 `tools/jtag-read`, a host tool on the owner's probe-rs fork that times reading a framebuffer
 over the USB JTAG with the core running and halted; the result is in `context/BACKLOG.md`. And
 `bench/stack-watermark` paints core 0's stack at boot and logs the deepest it has been used
-every 15 s (`stack-watermark-bench`, with the inject features to drive the boards); results
-under "Memory". And `bench/ui-allocations` counts the stage's heap requests on the host, the
+every 15 s (`stack-watermark-bench`, with the inject features to drive the boards), on master
+since `6b4cca0`; results under "Memory". And `bench/ui-allocations` counts the stage's heap requests on the host, the
 largest, the sizes asked most and the most held at once, through every start-up, on the faces
 and through the settings panel and the screens it opens, counting only the stage's own steps
 and draws (`crates/octowhere-ui/tests/heap_requests.rs`); results in `context/BACKLOG.md`. And
@@ -658,8 +663,10 @@ errata workaround, are in [`docs/hardware-notes.md`](docs/hardware-notes.md).
   grew with it, until a pairing overflowed the stack into the tasks' state. A group's records
   and a pairing's welcome now live on the heap: the radio task's poll takes 11,808 bytes,
   `Mesh::pair` 6,448 and `Mesh::run` 2,608, and the largest frames left are leaves,
-  `Group::restore` 6,000, Ed25519's `verify` 5,392 and `Group::clone` 5,136. The watermark
-  figures predate signing; remeasure before relying on them. With the member face, messages
+  `Group::restore` 6,000, Ed25519's `verify` 5,392 and `Group::clone` 5,136. Painted again at
+  `7311c7c` (2026-10-05), the deepest use was 42,892 bytes of 105,068 after the start-up and
+  52,472 through a pairing with the group screens drawn, a message each way and a removal, on
+  both boards. With the member face, messages
   and removals (2026-10-04) the radio task's poll takes 14,576 bytes and `Stage::advance`
   3,200, and core 0's stack is 107,068 bytes; after that day's security fixes (`03cc818`) the
   radio task's poll takes 15,824, and after the mesh clean-up (`3a9d42e`) 16,384, with
