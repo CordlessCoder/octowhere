@@ -1268,12 +1268,18 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                 info!("[MESH] a neighbour held more than it gave; a summary goes");
             }
         }
+        if let Some(own) = self.group.as_ref().map(|group| group.own()) {
+            self.relays.bench_answered(own);
+        }
         while let Some(name) = self.relays.due(now) {
             if self.messages.get(name).is_some() {
                 info!(
                     "[MSG] {}/{} not heard passed on; it goes again",
                     name.0, name.1
                 );
+                if let Some(own) = self.group.as_ref().map(|group| group.own()) {
+                    self.relays.bench_named(own, name);
+                }
                 self.messages.mark(name);
             } else {
                 self.relays.forget(name);
@@ -1300,7 +1306,11 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             self.listen(wake).await;
             return;
         }
-        let wait = self.draw(i64::from(STEPS), own) * STEP_US;
+        let steps = match holding.records {
+            true => crate::access::BENCH_RECORD_STEPS.load(core::sync::atomic::Ordering::Relaxed),
+            false => STEPS,
+        };
+        let wait = self.draw(i64::from(steps), own) * STEP_US;
         if self.listen(now + wait).await {
             return;
         }
@@ -1641,6 +1651,15 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                 self.inbox.relayed(name);
             }
         }
+        octowhere_mesh::relays::BENCH_NAMED_SETS.answer(
+            own,
+            header.sender,
+            absorbed
+                .carried_names()
+                .iter()
+                .copied()
+                .filter(|name| !absorbed.arrivals().contains(name)),
+        );
         self.relays.heard(
             own,
             header.sender,

@@ -11,6 +11,9 @@ pub const STEP_US: i64 = 10_000;
 /// A packet once due waits up to this many steps, so that the nodes that heard one packet do not
 /// all answer it at once.
 pub const STEPS: u32 = 32;
+/// Bench: the steps a packet holding records waits up to, in place of [`STEPS`].
+pub static BENCH_RECORD_STEPS: core::sync::atomic::AtomicU32 =
+    core::sync::atomic::AtomicU32::new(STEPS);
 /// A node that found the channel busy waits up to this many steps, past the longest packet.
 pub const BUSY_STEPS: u32 = 64;
 /// A node's floor and its news come up to this much early, drawn at each of its packets, so that
