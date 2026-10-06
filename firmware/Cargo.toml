@@ -69,6 +69,9 @@ pair-inject = ["octowhere-node/phantom"]
 # Lets a debugger touch and cover the screen, press the power key and read the screen back; see
 # `tools/touch-inject.py`.
 touch-inject = []
+# Logs when boot reaches each milestone and each part's check starts and ends, 9 s in; see
+# `tools/startup-timing.sh`.
+startup-timing-bench = []
 
 [patch.crates-io]
 tca9554 = { git = "https://github.com/CordlessCoder/tca9554-rs", rev = "d7b01d5" }

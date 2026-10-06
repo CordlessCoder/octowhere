@@ -215,6 +215,42 @@ mod rtc_inject {
         (mode != 0).then(|| (OCTOWHERE_RTC_INJECT_TIME.load(Ordering::Relaxed), mode))
     }
 }
+/// Boot's milestones in µs since the timer started, logged once the capture's reset has let USB
+/// reconnect.
+#[cfg(feature = "startup-timing-bench")]
+mod startup_timing {
+    use core::cell::RefCell;
+
+    use embassy_sync::blocking_mutex::CriticalSectionMutex;
+    use embassy_time::{Instant, Timer};
+
+    type Marks = heapless::Vec<(&'static str, &'static str, u64), 48>;
+
+    static MARKS: CriticalSectionMutex<RefCell<Marks>> =
+        CriticalSectionMutex::new(RefCell::new(heapless::Vec::new()));
+
+    pub fn mark(what: &'static str, how: &'static str) {
+        let at = Instant::now().as_micros();
+        MARKS.lock(|marks| {
+            let _ = marks.borrow_mut().push((what, how, at));
+        });
+    }
+
+    /// Logs the marks 9 s after boot, past the start-up's hand-over to the clock.
+    pub async fn log() {
+        Timer::at(Instant::from_secs(9)).await;
+        let power_on = matches!(
+            esp_hal::system::reset_reason(),
+            Some(esp_hal::rtc_cntl::SocResetReason::ChipPowerOn)
+        );
+        defmt::info!("[STARTUP] reset power_on={=bool}", power_on);
+        let marks = MARKS.lock(|marks| marks.borrow().clone());
+        for (what, how, at) in marks {
+            defmt::info!("[STARTUP] {=str} {=str} {=u64}", what, how, at);
+        }
+        defmt::info!("[STARTUP] done");
+    }
+}
 /// A position a debugger writes for the firmware to take as a GNSS fix, stamped with the RTC's
 /// time; `tools/fix-inject.py` does.
 #[cfg(feature = "fix-inject")]
@@ -1931,12 +1967,23 @@ async fn probe(
     if BOOT_REPORTS.try_send(Report::Started(part)).is_err() {
         warn!("[BOOT] report queue full, {} start not shown", part);
     }
+    #[cfg(feature = "startup-timing-bench")]
+    startup_timing::mark(part.name(), "start");
     let started = Instant::now();
     let outcome = match with_timeout(deadline, bring_up).await {
         Ok(Ok(())) => Outcome::Answered,
         Ok(Err(outcome)) => outcome,
         Err(TimeoutError) => Outcome::NoReply,
     };
+    #[cfg(feature = "startup-timing-bench")]
+    startup_timing::mark(
+        part.name(),
+        match outcome {
+            Outcome::Answered => "answered",
+            Outcome::NoReply => "no-reply",
+            Outcome::BadReply => "bad-reply",
+        },
+    );
     info!(
         "[BOOT] {} {} in {}ms",
         part,
@@ -1971,6 +2018,8 @@ struct Parts {
 
 #[embassy_executor::task]
 async fn async_main(spawner: Spawner) {
+    #[cfg(feature = "startup-timing-bench")]
+    startup_timing::mark("async_main", "enter");
     // A third of the heap lives in the RAM the bootloader frees, which is not static memory, so
     // core 0's stack gets the rest of DRAM.
     esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 72 * 1024);
@@ -2124,9 +2173,13 @@ async fn bring_up(spawner: Spawner, parts: Parts, zones: ZoneTracker, mesh: mesh
             parts.bus_interrupt,
         ))
         .start(esp_hal::interrupt::Priority::Priority1);
+    #[cfg(feature = "startup-timing-bench")]
+    startup_timing::mark("bring_up", "enter");
 
     // The I²C pull-ups share VCC3V3 with the secondary board.
     Timer::after(Duration::from_millis(board::I2C_POWER_SETTLE_MS)).await;
+    #[cfg(feature = "startup-timing-bench")]
+    startup_timing::mark("i2c", "powered");
 
     // A device can end a read early, which leaves the peripheral waiting for commands that never
     // run; without a deadline the driver yields for ever, and a yield on `BUS_EXECUTOR` starves
@@ -2169,6 +2222,8 @@ async fn bring_up(spawner: Spawner, parts: Parts, zones: ZoneTracker, mesh: mesh
     if reset_lora(i2c.clone()).await.is_err() {
         error!("[TCA9554] unavailable; the GNSS and LoRa resets and the RF switch are not driven");
     }
+    #[cfg(feature = "startup-timing-bench")]
+    startup_timing::mark("exio", "reset");
 
     let mut rtc = Pcf85063aRtc::new(i2c.clone());
     let touch_rst = Output::new(parts.touch_rst, Level::High, OutputConfig::default());
@@ -2208,6 +2263,8 @@ async fn bring_up(spawner: Spawner, parts: Parts, zones: ZoneTracker, mesh: mesh
             debug!("[GNSS] STARTUP settle_begin");
             Timer::at(Instant::MIN + GNSS_SETTLE).await;
             debug!("[GNSS] STARTUP settle_complete");
+            #[cfg(feature = "startup-timing-bench")]
+            startup_timing::mark("gnss-settle", "end");
         },
         probe(Part::Clock, CLOCK_DEADLINE, async {
             rtc.init().await.map_err(|_| Outcome::NoReply)?;
@@ -2398,6 +2455,11 @@ async fn bring_up(spawner: Spawner, parts: Parts, zones: ZoneTracker, mesh: mesh
         esp_alloc::HEAP.used(),
         PSRAM_HEAP.used()
     );
+    #[cfg(feature = "startup-timing-bench")]
+    {
+        startup_timing::mark("bring_up", "exit");
+        startup_timing::log().await;
+    }
 }
 
 /// Holds the radio in reset, then releases it listening. The GNSS reset is left released, since a
@@ -2675,8 +2737,22 @@ async fn frame_loop(
     let mut messages_seen = 0;
     #[cfg(feature = "touch-inject")]
     let mut injector = touch_inject::Injector::default();
+    #[cfg(feature = "startup-timing-bench")]
+    let mut timing_first = true;
+    #[cfg(feature = "startup-timing-bench")]
+    let mut timing_starting = true;
     loop {
         let start = Instant::now();
+        #[cfg(feature = "startup-timing-bench")]
+        {
+            if core::mem::take(&mut timing_first) {
+                startup_timing::mark("frame_loop", "first");
+            }
+            if timing_starting && !stage.starting_up() {
+                timing_starting = false;
+                startup_timing::mark("startup", "over");
+            }
+        }
         {
             let state = fb_st.get();
             let SwapState {
