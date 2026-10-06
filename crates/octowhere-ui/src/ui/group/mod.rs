@@ -1016,7 +1016,7 @@ impl Flow {
                 action(l, "BACK TO GROUP", false, ACTION, chrome::WHITE, None);
                 footer(l, COVER);
             }
-            Screen::Name { keyboard, .. } => keyboard.draw(font, l, ""),
+            Screen::Name { keyboard, .. } => keyboard.draw(font, l),
             Screen::NameFailed { .. } => {
                 head(l, "MY NAME", "NAME / LOCAL", None, FAULT, chrome::RED);
                 big(l, "SAVE FAILED", chrome::RED);

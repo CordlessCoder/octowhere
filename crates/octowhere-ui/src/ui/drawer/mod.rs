@@ -485,15 +485,18 @@ impl Drawer {
             return self.handle_draft(event, mail);
         }
         let content = match child {
-            Child::Thread(thread) => Some(messages::thread_height(thread, mail)),
-            Child::Recipients => Some(messages::picker_height(mail)),
+            Child::Thread(thread) => Some((
+                messages::thread_height(thread, mail),
+                messages::viewport(thread, mail).size.height as i32,
+            )),
+            Child::Recipients => Some((messages::picker_height(mail), VIEWPORT_HEIGHT)),
             Child::Review => self
                 .reviewing
-                .map(|text| messages::review_scroll(text.as_str(), mail) + VIEWPORT_HEIGHT),
+                .map(|text| (messages::review_scroll(text.as_str(), mail), 0)),
             _ => None,
         };
-        if let Some(content) = content {
-            let max = (content - VIEWPORT_HEIGHT).max(0);
+        if let Some((content, height)) = content {
+            let max = (content - height).max(0);
             match *event {
                 GestureEvent::DragStart(drag) => {
                     self.grab = if drag.offset().y.abs() >= drag.offset().x.abs() {
@@ -685,7 +688,8 @@ impl Drawer {
             {
                 self.child_scroll = top - below;
             }
-            let max = (messages::thread_height(thread, mail) - VIEWPORT_HEIGHT).max(0);
+            let height = messages::viewport(thread, mail).size.height as i32;
+            let max = (messages::thread_height(thread, mail) - height).max(0);
             self.child_scroll = self.child_scroll.clamp(0, max);
             self.thread_anchor = (self.child_scroll > 0)
                 .then(|| messages::thread_anchor(thread, self.child_scroll, mail))
@@ -803,11 +807,8 @@ impl Drawer {
             Some(Child::Recipients) => messages::picker(list, self.child_scroll, &mail),
             Some(Child::Draft) => {
                 if let Some(draft) = &self.draft {
-                    draft.keyboard.draw(
-                        context.font,
-                        list,
-                        &messages::draft_title(draft.to, &mail),
-                    );
+                    messages::draft_header(list, draft.to, &mail);
+                    draft.keyboard.draw(context.font, list);
                 }
             }
             Some(Child::Review) => {

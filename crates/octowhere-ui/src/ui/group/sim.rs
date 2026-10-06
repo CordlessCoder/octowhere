@@ -7,7 +7,7 @@ use heapless::Vec;
 use super::view::{
     Answer, At, Carriage, Decline, Done, End, GroupView, IDS, Mac, MemberView, MeshView,
     MessageView, MessagesView, Name, PairingView, Phase, Position, Reason, RecoveryPhase,
-    RecoveryView, RemovalStage, RemovalView, Request, Role, Unremovable,
+    RecoveryView, RemovalStage, RemovalView, Request, Role, Thread, Unremovable,
 };
 use crate::ui::gesture::Micros;
 
@@ -551,6 +551,20 @@ impl Sim {
                 self.answer(Answer::Left(ok));
             }
             Request::Send { to, text } => {
+                let to = match to {
+                    Thread::Group => None,
+                    Thread::Member(id, device) => {
+                        let holds = self.view.group.as_ref().is_some_and(|group| {
+                            group
+                                .member(id)
+                                .is_some_and(|member| member.device == device)
+                        });
+                        if !holds {
+                            return;
+                        }
+                        Some(id)
+                    }
+                };
                 let own = self.view.group.as_ref().map_or(0, |group| group.own);
                 let id = self.arrive(
                     Arrival {

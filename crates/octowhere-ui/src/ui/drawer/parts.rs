@@ -204,6 +204,16 @@ pub fn reason(list: &mut List, content: &str) {
     ));
 }
 
+/// A device's whole fingerprint, as sixteen hex digits.
+#[must_use]
+pub fn fingerprint(bytes: &[u8; 8]) -> Line {
+    let mut line = Line::new();
+    for byte in bytes {
+        _ = line.push_str(&format(format_args!("{byte:02X}")));
+    }
+    line
+}
+
 /// Lines of prose down the reading column from `top`.
 pub fn prose(list: &mut List, lines: &[&str], top: i32) {
     for (i, line) in lines.iter().enumerate() {

@@ -40,7 +40,7 @@ use crate::{
     view::{
         Answer, Decline, GroupView, MemberView, MeshView, MessagesView, PairingView, Position,
         RecoveryPhase, RecoveryView, Refusal, Refused, RemovalStage, RemovalView, RemovalsView,
-        Request, Text, Unremovable,
+        Request, Text, Thread, Unremovable,
     },
 };
 
@@ -119,6 +119,13 @@ pub enum Command {
     /// Sends text to one member, privately, or with `None` to the whole group.
     Send {
         to: Option<u8>,
+        text: Text,
+    },
+    /// Sends text privately to the member at `id`, if it is still the device with this
+    /// fingerprint.
+    SendDevice {
+        id: u8,
+        device: [u8; 8],
         text: Text,
     },
     /// Counts the message this device numbered so as read.
@@ -221,7 +228,14 @@ impl From<Request> for Command {
             Request::Cancel => Self::Cancel,
             Request::Leave => Self::Leave,
             Request::Rename(name) => Self::Rename(name),
-            Request::Send { to, text } => Self::Send { to, text },
+            Request::Send {
+                to: Thread::Group,
+                text,
+            } => Self::Send { to: None, text },
+            Request::Send {
+                to: Thread::Member(id, device),
+                text,
+            } => Self::SendDevice { id, device, text },
             Request::Read(id) => Self::Read(id),
             Request::Remove { id, device } => Self::RemoveDevice { id, device },
             Request::Keep { key } => Self::KeepKey(key),
@@ -983,6 +997,13 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                 self.shown.answer(Answer::Renamed(saved));
             }
             Command::Send { to, text } => self.queue_text(to, text),
+            Command::SendDevice { id, device, text } => {
+                if self.holds(id, device) {
+                    self.queue_text(Some(id), text);
+                } else {
+                    warn!("[MSG] {} is another device now; not sent", id);
+                }
+            }
             Command::Read(id) => {
                 self.inbox.read(id);
                 self.show_messages();
@@ -992,12 +1013,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                 self.shown.answer(Answer::Removing(started));
             }
             Command::RemoveDevice { id, device } => {
-                let same = self
-                    .group
-                    .as_ref()
-                    .and_then(|group| group.member(id))
-                    .is_some_and(|member| fingerprint(&member.public) == device);
-                let started = if same {
+                let started = if self.holds(id, device) {
                     self.remove(id).await
                 } else {
                     warn!("[REKEY] {} is another device now; not removed", id);
@@ -2422,6 +2438,15 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
     }
 
     /// Queues text to `to`, a member, or the whole group with `None`.
+    /// Whether the member at `id` is the device with fingerprint `device`. A removed member's id
+    /// can go to another device, which a request made before must not reach.
+    fn holds(&self, id: u8, device: [u8; 8]) -> bool {
+        self.group
+            .as_ref()
+            .and_then(|group| group.member(id))
+            .is_some_and(|member| fingerprint(&member.public) == device)
+    }
+
     fn queue_text(&mut self, to: Option<u8>, text: Text) {
         let Some(group) = &self.group else {
             warn!("[MSG] in no group to send to");

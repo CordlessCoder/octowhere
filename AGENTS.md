@@ -616,8 +616,9 @@ device's Ed25519 signature, which a node checks before taking them (the protocol
 "Signatures"); a check takes about 32 ms on the board, and a signature about 35. A node in no group sends nothing and keeps the
 radio asleep. Without a fix a node has no position of its own. Commands reach the mesh through
 `COMMANDS` in `firmware/src/mesh/device.rs`: start a pairing to add or join, choose a device found, answer the code, cancel,
-leave the group, rename, send text, remove a member while its id still holds the
-device named, and decline a removal, named by its new key. A device that leaves
+leave the group, rename, send text, privately only while the id still holds the device the
+conversation names, remove a member while its id still holds the device named, and decline a
+removal, named by its new key. A device that leaves
 sends its gone record in two packets, 10 s apart, before it forgets the key; a pairing started
 meanwhile waits for the first. Every node
 holds every message for 24 hours in a store in PSRAM, lost at a restart, and the summaries

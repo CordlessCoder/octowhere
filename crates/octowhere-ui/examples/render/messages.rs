@@ -142,5 +142,67 @@ pub fn frames() -> Vec<(String, Box<FB>)> {
     snap(&mut frames, "messages-write-long", &long);
     tap(&mut long, 333, 131);
     snap(&mut frames, "messages-review-long", &long);
+
+    // Ridge's whole name, and Moss taking the same name on another device.
+    let identity = || {
+        let mut driver = inbox(true);
+        for id in [1, 3] {
+            rename(&mut driver, id, "Ridge_Walker07!?");
+        }
+        driver
+    };
+    let mut ridge = identity();
+    tap(&mut ridge, 233, 265);
+    tap(&mut ridge, 233, 426);
+    type_text(&mut ridge, DRAFT);
+    snap(&mut frames, "messages-08-long-recipient-draft", &ridge);
+    tap(&mut ridge, 333, 131);
+    snap(&mut frames, "messages-09-long-recipient-review", &ridge);
+    // Removed while the review shows: SEND waits, and says why.
+    remove(&mut ridge, 1);
+    snap(&mut frames, "messages-10-recipient-removed-review", &ridge);
+    tap(&mut ridge, 233, 26);
+    snap(&mut frames, "messages-11-recipient-removed-draft", &ridge);
+    let mut other = identity();
+    tap(&mut other, 233, 426);
+    tap(&mut other, 233, 390);
+    type_text(&mut other, DRAFT);
+    snap(&mut frames, "messages-12-same-name-other-device", &other);
+    let mut group = identity();
+    tap(&mut group, 233, 426);
+    tap(&mut group, 233, 170);
+    type_text(&mut group, DRAFT);
+    snap(&mut frames, "messages-13-group-draft", &group);
+    let mut removed = identity();
+    remove(&mut removed, 1);
+    tap(&mut removed, 233, 265);
+    snap(
+        &mut frames,
+        "messages-14-removed-recipient-thread",
+        &removed,
+    );
     frames
+}
+
+fn rename(driver: &mut Driver, id: usize, name: &str) {
+    if let Some(member) = driver
+        .mesh
+        .as_mut()
+        .and_then(|mesh| mesh.view_mut().group.as_mut())
+        .and_then(|group| group.members[id].as_mut())
+    {
+        member.name = Name::new(name.as_bytes()).expect("a fixture name");
+    }
+    driver.wait(100_000);
+}
+
+fn remove(driver: &mut Driver, id: usize) {
+    if let Some(group) = driver
+        .mesh
+        .as_mut()
+        .and_then(|mesh| mesh.view_mut().group.as_mut())
+    {
+        group.members[id] = None;
+    }
+    driver.wait(100_000);
 }

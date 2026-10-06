@@ -6,8 +6,8 @@ use embedded_graphics::{prelude::Point, primitives::Rectangle};
 use heapless::Vec;
 
 use super::{
-    FIRST, VIEWPORT, VIEWPORT_HEIGHT, empty,
-    parts::{self, FOOTER, PAIR},
+    FIRST, VIEWPORT, WIDTH, empty,
+    parts::{self, CENTRE, FOOTER, PAIR},
     rows::{Scaled, age},
 };
 use crate::{
@@ -43,6 +43,16 @@ const REVIEW_TOP: i32 = 149;
 const REVIEW_PITCH: i32 = 25;
 /// The widest a title's ink may be at its smallest, past which it is cut short.
 const TITLE_WIDTH: u32 = 274;
+/// The recipient's whole name and what tells it apart: over the keyboard, and under a title.
+const DRAFT_NAME_TOP: i32 = 24;
+const DRAFT_IDENTITY_TOP: i32 = 47;
+const NAME_TOP: i32 = 93;
+const IDENTITY_TOP: i32 = 117;
+/// A conversation whose member has gone lists its messages under the member's name and
+/// fingerprint, and above why it cannot be written to.
+const ENDED_VIEWPORT: Rectangle = rect(0, 142, WIDTH, 370);
+const ENDED_REASON_TOP: i32 = 381;
+const GONE: &str = "Recipient is no longer a member.";
 /// The most conversations: the group's and one with each other member.
 const CONVERSATIONS: usize = IDS as usize + 1;
 
@@ -95,10 +105,11 @@ impl Mail<'_> {
         Some(member)
     }
 
-    /// Whether `device`, which this device had messages with, is no member now.
+    /// Whether `thread` is with a member whose id no longer holds its device, which a removal
+    /// or leaving the group ends. A device given the id later has a conversation of its own.
     #[must_use]
-    fn is_removed(&self, device: [u8; 8]) -> bool {
-        device != [0; 8] && self.member_with(device).is_none()
+    pub fn ended(&self, thread: Thread) -> bool {
+        matches!(thread, Thread::Member(..)) && !self.writable(thread)
     }
 
     /// `device`'s name: the member's now, or the name it had when its newest message here was
@@ -165,10 +176,69 @@ fn upper(text: &str) -> Line {
 fn label(thread: Thread, mail: &Mail) -> Line {
     match thread {
         Thread::Group => format(format_args!("ALL MEMBERS")),
-        Thread::Member(_, device) if mail.is_removed(device) => {
-            format(format_args!("PRIVATE / REMOVED"))
-        }
+        Thread::Member(..) if mail.ended(thread) => format(format_args!("PRIVATE / REMOVED")),
         Thread::Member(id, _) => format(format_args!("PRIVATE / [{id:02}]")),
+    }
+}
+
+/// Whom `thread` is with in full: the member's name with its case, or GROUP.
+fn full_name(thread: Thread, mail: &Mail) -> Line {
+    match thread {
+        Thread::Group => format(format_args!("GROUP")),
+        Thread::Member(id, device) => match mail.device_name(device) {
+            Some(name) => format(format_args!("{}", name.as_str())),
+            None => format(format_args!("MEMBER {id:02}")),
+        },
+    }
+}
+
+/// What tells `thread`'s recipient apart, and its colour: the member's id and its device's
+/// fingerprint, which two members of one name do not share.
+fn identity(thread: Thread, mail: &Mail) -> (Line, Color) {
+    match thread {
+        Thread::Group => (format(format_args!("ALL MEMBERS / GROUP")), chrome::VIOLET),
+        Thread::Member(_, device) if mail.ended(thread) => (
+            format(format_args!("REMOVED / {}", parts::fingerprint(&device))),
+            chrome::GRAY,
+        ),
+        Thread::Member(id, device) => (
+            format(format_args!(
+                "PRIVATE [{id:02}] / {}",
+                parts::fingerprint(&device)
+            )),
+            chrome::VIOLET,
+        ),
+    }
+}
+
+/// The recipient under a title: its whole name, and what tells it apart.
+fn recipient(list: &mut List, thread: Thread, mail: &Mail) {
+    list.text(parts::centred(
+        &full_name(thread, mail),
+        CENTRE,
+        NAME_TOP,
+        Face::Mono,
+        16,
+        chrome::WHITE,
+    ));
+    let (identity, color) = identity(thread, mail);
+    list.text(parts::centred(
+        &identity,
+        CENTRE,
+        IDENTITY_TOP,
+        Face::Mono,
+        11,
+        color,
+    ));
+}
+
+/// Where `thread`'s messages show.
+#[must_use]
+pub fn viewport(thread: Thread, mail: &Mail) -> Rectangle {
+    if mail.ended(thread) {
+        ENDED_VIEWPORT
+    } else {
+        VIEWPORT
     }
 }
 
@@ -235,19 +305,24 @@ pub fn inbox(list: &mut List, scroll: i32, mail: &Mail, now: Micros) {
         list.clip(Some(VIEWPORT));
         for (i, conversation) in conversations.iter().enumerate() {
             let top = VIEWPORT.top_left.y + FIRST + i as i32 * INBOX_ROW - scroll;
-            if visible(top, INBOX_ROW) {
+            if visible(VIEWPORT, top, INBOX_ROW) {
                 inbox_row(list, conversation, top, mail, now);
             }
         }
         list.clip(None);
-        parts::scroll_arc(list, inbox_height(&conversations), VIEWPORT_HEIGHT, scroll);
+        parts::scroll_arc(
+            list,
+            inbox_height(&conversations),
+            VIEWPORT.size.height as i32,
+            scroll,
+        );
     }
     parts::action(list, FOOTER, "NEW MESSAGE", mail.group.is_some());
 }
 
-/// Whether a row at `top`, `height` high, shows in the viewport.
-fn visible(top: i32, height: i32) -> bool {
-    top < VIEWPORT.top_left.y + VIEWPORT_HEIGHT && top + height > VIEWPORT.top_left.y
+/// Whether a row at `top`, `height` high, shows in `viewport`.
+fn visible(viewport: Rectangle, top: i32, height: i32) -> bool {
+    top < viewport.top_left.y + viewport.size.height as i32 && top + height > viewport.top_left.y
 }
 
 #[must_use]
@@ -390,12 +465,13 @@ pub fn thread_height(thread: Thread, mail: &Mail) -> i32 {
 
 /// The unread messages of `thread` whose rows show whole at `scroll`.
 pub fn shown_unread(thread: Thread, scroll: i32, mail: &Mail) -> Vec<u32, 8> {
+    let viewport = viewport(thread, mail);
     thread_rows(thread, mail)
         .filter(|(message, top, height)| {
-            let top = VIEWPORT.top_left.y + top - scroll;
+            let top = viewport.top_left.y + top - scroll;
             message.unread
-                && top >= VIEWPORT.top_left.y
-                && top + height <= VIEWPORT.top_left.y + VIEWPORT_HEIGHT
+                && top >= viewport.top_left.y
+                && top + height <= viewport.top_left.y + viewport.size.height as i32
         })
         .map(|(message, ..)| message.id)
         .take(8)
@@ -419,34 +495,57 @@ pub fn thread_anchor(thread: Thread, scroll: i32, mail: &Mail) -> Option<(u32, i
 }
 
 /// One conversation: its messages, newest first, each with its author, age, whole body and how
-/// far it has gone, and WRITE.
+/// far it has gone, and WRITE. One whose member has gone names it in full, as it was, and says
+/// why WRITE is unavailable.
 pub fn conversation(list: &mut List, thread: Thread, scroll: i32, mail: &Mail, now: Micros) {
     parts::back(list);
-    title(list, &mail.name(thread), mail.font);
-    let unread = mail
-        .newest_first(thread)
-        .filter(|message| message.unread)
-        .count();
-    let meta = match (thread, unread) {
-        (Thread::Group, unread) => format(format_args!("ALL MEMBERS / {unread:02} UNREAD")),
-        (Thread::Member(..), 0) => label(thread, mail),
-        (Thread::Member(..), unread) => {
-            format(format_args!("{} / {unread:02} UNREAD", label(thread, mail)))
-        }
-    };
-    parts::meta(list, &meta);
+    let ended = mail.ended(thread);
+    if ended {
+        parts::title(list, "PRIVATE", mail.font);
+        recipient(list, thread, mail);
+    } else {
+        title(list, &mail.name(thread), mail.font);
+        let unread = mail
+            .newest_first(thread)
+            .filter(|message| message.unread)
+            .count();
+        let meta = match (thread, unread) {
+            (Thread::Group, unread) => format(format_args!("ALL MEMBERS / {unread:02} UNREAD")),
+            (Thread::Member(..), 0) => label(thread, mail),
+            (Thread::Member(..), unread) => {
+                format(format_args!("{} / {unread:02} UNREAD", label(thread, mail)))
+            }
+        };
+        parts::meta(list, &meta);
+    }
+    let viewport = viewport(thread, mail);
     if mail.newest_first(thread).next().is_none() {
         empty(list, "NO MESSAGES", "Write the first one.");
     } else {
-        list.clip(Some(VIEWPORT));
+        list.clip(Some(viewport));
         for (message, top, height) in thread_rows(thread, mail) {
-            let top = VIEWPORT.top_left.y + top - scroll;
-            if visible(top, height) {
+            let top = viewport.top_left.y + top - scroll;
+            if visible(viewport, top, height) {
                 message_row(list, message, top, height, mail, now);
             }
         }
         list.clip(None);
-        parts::scroll_arc(list, thread_height(thread, mail), VIEWPORT_HEIGHT, scroll);
+        parts::scroll_arc(
+            list,
+            thread_height(thread, mail),
+            viewport.size.height as i32,
+            scroll,
+        );
+    }
+    if ended {
+        list.text(parts::centred(
+            GONE,
+            CENTRE,
+            ENDED_REASON_TOP,
+            Face::Sans,
+            14,
+            chrome::GRAY,
+        ));
     }
     parts::action(list, FOOTER, "WRITE", mail.writable(thread));
 }
@@ -543,7 +642,7 @@ pub fn picker(list: &mut List, scroll: i32, mail: &Mail) {
     list.clip(Some(VIEWPORT));
     for (i, &thread) in destinations(mail).iter().enumerate() {
         let top = VIEWPORT.top_left.y + FIRST + i as i32 * PICKER_ROW - scroll;
-        if visible(top, PICKER_ROW) {
+        if visible(VIEWPORT, top, PICKER_ROW) {
             let scaled = Scaled::new(top, PICKER_ROW);
             scaled.text(
                 list,
@@ -568,7 +667,12 @@ pub fn picker(list: &mut List, scroll: i32, mail: &Mail) {
         }
     }
     list.clip(None);
-    parts::scroll_arc(list, picker_height(mail), VIEWPORT_HEIGHT, scroll);
+    parts::scroll_arc(
+        list,
+        picker_height(mail),
+        VIEWPORT.size.height as i32,
+        scroll,
+    );
     parts::button(list, FOOTER, "BACK", true);
 }
 
@@ -584,15 +688,36 @@ pub fn picker_row_at(point: Point, scroll: i32, mail: &Mail) -> Option<Thread> {
         .flatten()
 }
 
-/// What the draft's title says: whom it goes to.
-#[must_use]
-pub fn draft_title(thread: Thread, mail: &Mail) -> Line {
-    let mut title = format(format_args!("TO {}", mail.name(thread)));
-    let widest = style(mail.font, chrome::WHITE, 26, Face::Title.index());
-    if widest.advance(&title) > TITLE_WIDTH as f32 {
-        title = parts::fitted(&widest, &title, TITLE_WIDTH as f32);
-    }
-    title
+/// Whom the draft goes to, over the keyboard: the member's whole name and what tells it apart,
+/// or GROUP.
+pub fn draft_header(list: &mut List, thread: Thread, mail: &Mail) {
+    list.text(match thread {
+        Thread::Group => parts::centred(
+            "GROUP",
+            CENTRE,
+            DRAFT_NAME_TOP,
+            Face::Title,
+            26,
+            chrome::WHITE,
+        ),
+        Thread::Member(..) => parts::centred(
+            &full_name(thread, mail),
+            CENTRE,
+            DRAFT_NAME_TOP,
+            Face::Mono,
+            18,
+            chrome::WHITE,
+        ),
+    });
+    let (identity, color) = identity(thread, mail);
+    list.text(parts::centred(
+        &identity,
+        CENTRE,
+        DRAFT_IDENTITY_TOP,
+        Face::Mono,
+        11,
+        color,
+    ));
 }
 
 fn review_lines(text: &str, mail: &Mail) -> Vec<core::ops::Range<usize>, { text::LINES }> {
@@ -614,22 +739,11 @@ pub fn review_scroll(text: &str, mail: &Mail) -> i32 {
 }
 
 /// The draft to read through before it is sent: whom it goes to, its whole text, scrolled,
-/// EDIT and SEND.
+/// EDIT and SEND. SEND waits on the recipient still being a member, and says so.
 pub fn review(list: &mut List, thread: Thread, text: &str, scroll: i32, mail: &Mail) {
     parts::back(list);
     parts::title(list, "REVIEW", mail.font);
-    let name = mail.name(thread);
-    let (meta, caption) = match thread {
-        Thread::Group => (
-            format(format_args!("TO GROUP / ALL MEMBERS")),
-            format(format_args!("TO ALL MEMBERS")),
-        ),
-        Thread::Member(..) => (
-            format(format_args!("TO {name} / PRIVATE")),
-            format(format_args!("PRIVATE TO {name}")),
-        ),
-    };
-    parts::meta(list, &meta);
+    recipient(list, thread, mail);
     list.clip(Some(REVIEW_VIEWPORT));
     for (i, line) in review_lines(text, mail).iter().enumerate() {
         list.text(parts::text(
@@ -652,14 +766,22 @@ pub fn review(list: &mut List, thread: Thread, text: &str, scroll: i32, mail: &M
     ));
     parts::button(list, PAIR[0], "EDIT", true);
     parts::action(list, PAIR[1], "SEND", mail.writable(thread));
-    list.text(parts::centred(
-        &caption,
-        parts::CENTRE,
-        430,
-        Face::Mono,
-        11,
-        chrome::GRAY,
-    ));
+    if mail.ended(thread) {
+        parts::reason(list, GONE);
+    } else {
+        let caption = match thread {
+            Thread::Group => "TO ALL MEMBERS",
+            Thread::Member(..) => "PRIVATE MESSAGE",
+        };
+        list.text(parts::centred(
+            caption,
+            CENTRE,
+            430,
+            Face::Mono,
+            11,
+            chrome::GRAY,
+        ));
+    }
 }
 
 #[cfg(test)]

@@ -356,9 +356,111 @@ fn a_removed_members_messages_are_not_shown_as_a_newcomers() {
         "{group:?}"
     );
     let private = texts(|child| matches!(child, Child::Thread(Thread::Member(..))));
+    for line in ["PRIVATE", "NORTH-1", "Recipient is no longer a member."] {
+        assert!(
+            private.iter().any(|text| text == line),
+            "{line}: {private:?}"
+        );
+    }
     assert!(
-        private.iter().any(|text| text == "PRIVATE / REMOVED"),
+        private.iter().any(|text| text.starts_with("REMOVED / ")),
         "{private:?}"
     );
-    assert!(private.iter().any(|text| text == "NORTH-1"), "{private:?}");
+}
+
+fn texts(driver: &Driver) -> Vec<String> {
+    driver.stage.drawer_text().map(str::to_owned).collect()
+}
+
+fn fingerprint(thread: Thread) -> String {
+    let Thread::Member(_, device) = thread else {
+        return String::new();
+    };
+    device.iter().map(|byte| format!("{byte:02X}")).collect()
+}
+
+/// Gives the member at `id` a new name, or with `device`, hands its id to another device.
+fn change_member(driver: &mut Driver, id: usize, name: &str, device: Option<[u8; 8]>) {
+    if let Some(member) = driver
+        .mesh
+        .as_mut()
+        .and_then(|mesh| mesh.view_mut().group.as_mut())
+        .and_then(|group| group.members[id].as_mut())
+    {
+        member.name = Name::new(name.as_bytes()).unwrap();
+        if let Some(device) = device {
+            member.device = device;
+        }
+    }
+    driver.wait(100_000);
+}
+
+/// The draft and its review name the recipient in full, with its id and its device's
+/// fingerprint, which tell two members of one name apart. A rename changes the name shown, not
+/// where the message goes.
+#[test]
+fn a_draft_names_its_recipient_by_name_id_and_device() {
+    let mut driver = start(true);
+    let ridge = member(&driver, 1);
+    let identity = format!("PRIVATE [01] / {}", fingerprint(ridge));
+    open_messages(&mut driver);
+    tap(&mut driver, 233, 265);
+    tap(&mut driver, 233, 426);
+    type_text(&mut driver, "on my way");
+    assert!(texts(&driver).contains(&identity), "{:?}", texts(&driver));
+    change_member(&mut driver, 1, "Ridge_Walker07!?", None);
+    for line in ["Ridge_Walker07!?", &identity] {
+        assert!(
+            texts(&driver).iter().any(|text| text == line),
+            "{line}: {:?}",
+            texts(&driver)
+        );
+    }
+    tap(&mut driver, 333, 131);
+    assert_eq!(child(&driver), Some(Child::Review));
+    for line in ["Ridge_Walker07!?", &identity, "PRIVATE MESSAGE"] {
+        assert!(
+            texts(&driver).iter().any(|text| text == line),
+            "{line}: {:?}",
+            texts(&driver)
+        );
+    }
+    tap(&mut driver, 306, 391);
+    let sent = *mesh(&driver).messages().iter().last().unwrap();
+    assert_eq!(sent.text(), "on my way");
+    assert_eq!(sent.thread(own(&driver)), ridge);
+}
+
+/// A recipient removed while its draft shows keeps the draft, and SEND waits, saying why. A
+/// device given its id afterwards does not take the draft over.
+#[test]
+fn a_draft_to_a_removed_member_keeps_its_text_and_cannot_be_sent() {
+    let mut driver = start(true);
+    let ridge = member(&driver, 1);
+    open_messages(&mut driver);
+    tap(&mut driver, 233, 265);
+    tap(&mut driver, 233, 426);
+    type_text(&mut driver, "on my way");
+    tap(&mut driver, 333, 131);
+    change_member(&mut driver, 1, "Newcomer", Some([0xAB; 8]));
+    let removed = format!("REMOVED / {}", fingerprint(ridge));
+    for line in [removed.as_str(), "Recipient is no longer a member."] {
+        assert!(
+            texts(&driver).iter().any(|text| text == line),
+            "{line}: {:?}",
+            texts(&driver)
+        );
+    }
+    assert!(!texts(&driver).iter().any(|text| text.contains("Newcomer")));
+    let before = mesh(&driver).messages().len();
+    tap(&mut driver, 306, 391);
+    assert_eq!(child(&driver), Some(Child::Review));
+    assert_eq!(mesh(&driver).messages().len(), before, "nothing sent");
+    tap(&mut driver, 160, 391);
+    assert_eq!(child(&driver), Some(Child::Draft));
+    assert!(
+        texts(&driver).iter().any(|text| text.contains("on my way")),
+        "{:?}",
+        texts(&driver)
+    );
 }

@@ -600,9 +600,10 @@ pub enum Request {
     Cancel,
     Leave,
     Rename(Name),
-    /// Sends text to one member, privately, or with `None` to the whole group.
+    /// Sends text to the whole group, or privately to a member while its id still holds the
+    /// device the conversation names.
     Send {
-        to: Option<u8>,
+        to: Thread,
         text: Text,
     },
     /// Counts the message this device numbered so as read.

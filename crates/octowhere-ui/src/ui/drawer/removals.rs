@@ -107,14 +107,6 @@ fn short(bytes: &[u8; 8]) -> Line {
     ))
 }
 
-fn full(bytes: &[u8; 8]) -> Line {
-    let mut line = Line::new();
-    for byte in bytes {
-        _ = line.push_str(&format(format_args!("{byte:02X}")));
-    }
-    line
-}
-
 /// The time left until `at` as two fields, whole `unit`s and sixtieths of one, rounded up, and
 /// when that next changes.
 fn left(at: i64, now: Micros, unit: Micros) -> (Line, Micros) {
@@ -580,8 +572,8 @@ pub fn details(list: &mut List, removal: &RemovalView, show: &Show) {
         ],
         214,
     );
-    let device = full(&removal.device);
-    let key = full(&removal.key);
+    let device = parts::fingerprint(&removal.device);
+    let key = parts::fingerprint(&removal.key);
     let switch = match removal.stage {
         RemovalStage::Pending {
             switch: Some(at), ..

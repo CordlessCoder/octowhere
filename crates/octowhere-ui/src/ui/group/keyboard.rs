@@ -514,17 +514,16 @@ impl Keyboard {
         self.caret_line(lines).saturating_sub(1)
     }
 
-    /// Draws the keyboard, under `title` for a message.
-    pub fn draw(&self, font: &FontdueRenderer<'static, Color>, list: &mut List, title: &str) {
+    /// Draws the keyboard. A message's leaves its recipient above the field to the caller.
+    pub fn draw(&self, font: &FontdueRenderer<'static, Color>, list: &mut List) {
         match self.field {
             Field::Name(_) => self.draw_name(font, list),
-            Field::Message => self.draw_message(font, list, title),
+            Field::Message => self.draw_message(font, list),
         }
         self.draw_keys(list);
     }
 
-    fn draw_message(&self, font: &FontdueRenderer<'static, Color>, list: &mut List, title: &str) {
-        list.centred(title, CENTRE, 28, Face::Title, 26, chrome::WHITE);
+    fn draw_message(&self, font: &FontdueRenderer<'static, Color>, list: &mut List) {
         list.outline(MESSAGE_FIELD, chrome::GRAY);
         let style = Self::message_style(font);
         let lines = self.message_lines(&style);

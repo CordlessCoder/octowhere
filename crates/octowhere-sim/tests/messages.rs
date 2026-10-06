@@ -161,3 +161,38 @@ fn messages_come_back_after_a_restart_neither_new_nor_unread() {
         "its acknowledgement came back too"
     );
 }
+
+/// A private message from the screens names its recipient's device as well as its id, and goes
+/// only while that id still holds that device: one taken by another device after a removal
+/// never receives a draft written to the first.
+#[test]
+fn a_private_message_goes_only_to_the_device_it_was_written_to() {
+    let mut sim = group(2, 12);
+    let device = sim
+        .view(0)
+        .and_then(|view| Some(view.group?.member(1)?.device))
+        .expect("node 0 knows node 1");
+    let text = |text: &str| Text::new(text.as_bytes()).expect("printable text");
+    let mut other = device;
+    other[0] ^= 1;
+    sim.command(
+        0,
+        Command::SendDevice {
+            id: 1,
+            device: other,
+            text: text("Not for you."),
+        },
+    );
+    sim.command(
+        0,
+        Command::SendDevice {
+            id: 1,
+            device,
+            text: text("For you."),
+        },
+    );
+    sim.run_to(sim.now_us() + 1_000);
+    assert_eq!(sim.count(0, "is another device now; not sent"), 1);
+    assert_eq!(message(&sim, 0, "Not for you."), None);
+    assert_eq!(carriage(&sim, 0, "For you."), Some(Carriage::Queued));
+}

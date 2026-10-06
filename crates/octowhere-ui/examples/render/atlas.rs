@@ -228,6 +228,22 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
             ("messages-write-empty", "MESSAGES / NEW DRAFT"),
             ("messages-write-long", "MESSAGES / LONG DRAFT"),
             ("messages-review-long", "MESSAGES / LONG REVIEW"),
+            ("messages-08-long-recipient-draft", "MESSAGES / WHOLE NAME"),
+            (
+                "messages-09-long-recipient-review",
+                "MESSAGES / REVIEW NAME",
+            ),
+            ("messages-12-same-name-other-device", "MESSAGES / SAME NAME"),
+            ("messages-13-group-draft", "MESSAGES / GROUP DRAFT"),
+            (
+                "messages-10-recipient-removed-review",
+                "MESSAGES / REMOVED REVIEW",
+            ),
+            (
+                "messages-11-recipient-removed-draft",
+                "MESSAGES / REMOVED DRAFT",
+            ),
+            ("messages-14-removed-recipient-thread", "MESSAGES / REMOVED"),
         ],
     ),
     (

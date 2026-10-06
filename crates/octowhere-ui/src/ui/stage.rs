@@ -18,7 +18,7 @@ use super::{
     group::{
         self, Flow,
         layout::{Backdrop, List},
-        view::{MeshView, MessagesView, Request, Thread},
+        view::{MeshView, MessagesView, Request},
     },
     identity,
     members::{self, Tap},
@@ -1304,13 +1304,7 @@ impl Stage {
             }
             drawer::Exit::Members => self.open_group(Flow::members(), now, effects),
             drawer::Exit::Leave => self.open_group(Flow::leave(), now, effects),
-            drawer::Exit::Send { to, text } => {
-                let to = match to {
-                    Thread::Group => None,
-                    Thread::Member(id, _) => Some(id),
-                };
-                effects.mesh = Some(Request::Send { to, text });
-            }
+            drawer::Exit::Send { to, text } => effects.mesh = Some(Request::Send { to, text }),
             drawer::Exit::Keep { key } => effects.mesh = Some(Request::Keep { key }),
         }
     }

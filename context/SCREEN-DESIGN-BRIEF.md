@@ -453,17 +453,29 @@ open:
   REVIEW is unavailable while the draft is blank, and SEND sends once and opens the
   conversation. The review leaves out the hand-off's "Send waits for your radio slot." under the
   character count, with nothing in its place (owner, 2026-10-05; `design/DECISIONS.md` 32).
+- **Whom a draft goes to** (the 2026-10-05 hand-off). The keyboard and the review name the
+  recipient by its whole name, case kept, and under it PRIVATE, its id and its device's
+  fingerprint, so two members of one name are told apart; the group's say GROUP and ALL
+  MEMBERS / GROUP. A draft is bound to the device it was written to, not the id: a rename
+  changes the name shown, and SEND names the device to the node, which sends nothing if the id
+  holds another device by then. A recipient removed while the draft shows keeps the draft; the
+  line reads REMOVED and the fingerprint, in gray, and the review's SEND is unavailable, with
+  "Recipient is no longer a member." in the caption's place. The private review's caption is
+  PRIVATE MESSAGE, and the group's keeps TO ALL MEMBERS.
 - **Wrapping.** A message's body breaks at spaces within 250 px, and inside a word too long for
   a line; rows grow to hold it, and it is never cut. An inbox preview is cut with an ellipsis at
   270 px.
-- **Names.** In capitals, in KH Interference Bold and Fraktion Mono. A title too wide at 26 px
-  is cut with an ellipsis; the caption under it gives the member's id. The draft has no
-  caption, so a long name there shows only its start. A member's current name shows wherever
-  its device is still a member, at any id.
-- **A removed member.** Its conversation keeps the name its device had, its caption reads
-  PRIVATE / REMOVED, and WRITE is unavailable. In the group's conversation its messages' sender
-  reads its name and / REMOVED, in gray. Neither has a render: take it to the next design
-  round.
+- **Names.** In capitals, in KH Interference Bold and Fraktion Mono, except the recipient's
+  whole name on the keyboard, the review and an ended conversation, which keeps its case. A
+  title too wide at 26 px is cut with an ellipsis; the caption under it gives the member's id.
+  A member's current name shows wherever its device is still a member, at any id.
+- **A removed member** (the 2026-10-05 hand-off). A conversation ends when its id no longer
+  holds its device, by a removal or by leaving the group. Its title reads PRIVATE, with the
+  name the device had and REMOVED / its fingerprint under it; its messages stay readable and
+  scroll between y 142 and 370, above "Recipient is no longer a member." and an unavailable
+  WRITE. A device given the id later has a conversation of its own. Its messages' sender, there
+  and in the group's conversation, reads its name and / REMOVED, in gray, in capitals as every
+  sender is, where the hand-off's render keeps the name's case.
 
 ## Removal as built
 
