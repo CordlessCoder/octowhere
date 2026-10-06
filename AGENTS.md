@@ -603,7 +603,7 @@ protocol's "Medium access"): the radio receives throughout, and a packet goes af
 backoff once the modem's status shows no packet under way, at once for a record or message, a
 round after the last for news of positions, and at the floor otherwise. The radio holds the I2C
 bus from that check until its transmission has started, since the switch to transmit is a
-write on it (`LoraPath::transmit_on`). The modem's RX on-going bit holds throughout continuous
+write on it (`LoraPath::lock`, whose `HeldPath` the radio's own switches cannot run beside). The modem's RX on-going bit holds throughout continuous
 receive, so the check reads only a preamble detected, the modem synchronised or a header read.
 Two boards ran it in `docs/logs/lora/contention-2026-10-05/`. The slots it replaced
 are on the `tdma` branch. Its packets carry neighbours, a digest of the member table, the member

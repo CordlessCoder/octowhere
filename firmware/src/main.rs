@@ -131,7 +131,7 @@ type LoraSpi = ExclusiveDevice<
 >;
 type SensorLora = Sx1272Lora<LoraSpi>;
 
-type I2cBusGuard = MutexGuard<'static, CriticalSectionRawMutex, I2cBus>;
+type I2cBusGuard<'a> = MutexGuard<'a, CriticalSectionRawMutex, I2cBus>;
 
 struct LoraPath {
     bus: &'static Mutex<CriticalSectionRawMutex, I2cBus>,
@@ -146,41 +146,51 @@ impl LoraPath {
     }
 
     /// Takes the I2C bus, so that nothing else on it comes between what the holder does next.
-    /// The switches below take it themselves, so a holder uses [`LoraPath::transmit_on`].
-    async fn lock(&self) -> I2cBusGuard {
-        let bus: &'static Mutex<CriticalSectionRawMutex, I2cBus> = self.bus;
-        bus.lock().await
-    }
-
-    async fn write_output(&mut self, bus: &mut I2cBus, output: u8) -> Result<(), ()> {
-        embedded_hal_async::i2c::I2c::write(
-            bus,
-            board::TCA9554_I2C_ADDR,
-            &[Self::OUTPUT_REGISTER, output],
-        )
-        .await
-        .map_err(|_| ())?;
-        self.output = output;
-        Ok(())
+    async fn lock(&mut self) -> HeldPath<'_> {
+        let bus = self.bus;
+        HeldPath {
+            bus: bus.lock().await,
+            path: self,
+        }
     }
 
     async fn receive(&mut self) -> Result<(), ()> {
-        let rx = 1 << board::EXIO_LORA_RX_SWITCH;
-        let tx = 1 << board::EXIO_LORA_TX_SWITCH;
-        let mut bus = self.lock().await;
-        self.write_output(&mut bus, (self.output | rx) & !tx).await
+        self.lock().await.receive().await
+    }
+}
+
+/// The RF switch with the I2C bus held. The path's own switches take the bus, so they are out
+/// of reach until this is dropped. That holds because the guard carries the path's lifetime: a
+/// `'static` guard would compile, and end the borrow at its last use with the bus still held.
+struct HeldPath<'a> {
+    path: &'a mut LoraPath,
+    bus: I2cBusGuard<'a>,
+}
+
+impl HeldPath<'_> {
+    const RX: u8 = 1 << board::EXIO_LORA_RX_SWITCH;
+    const TX: u8 = 1 << board::EXIO_LORA_TX_SWITCH;
+
+    async fn receive(&mut self) -> Result<(), ()> {
+        self.write_output((self.path.output | Self::RX) & !Self::TX)
+            .await
     }
 
     async fn transmit(&mut self) -> Result<(), ()> {
-        let mut bus = self.lock().await;
-        self.transmit_on(&mut bus).await
+        self.write_output((self.path.output | Self::TX) & !Self::RX)
+            .await
     }
 
-    /// Switches to transmit on the bus `bus` the caller holds.
-    async fn transmit_on(&mut self, bus: &mut I2cBus) -> Result<(), ()> {
-        let rx = 1 << board::EXIO_LORA_RX_SWITCH;
-        let tx = 1 << board::EXIO_LORA_TX_SWITCH;
-        self.write_output(bus, (self.output | tx) & !rx).await
+    async fn write_output(&mut self, output: u8) -> Result<(), ()> {
+        embedded_hal_async::i2c::I2c::write(
+            &mut *self.bus,
+            board::TCA9554_I2C_ADDR,
+            &[LoraPath::OUTPUT_REGISTER, output],
+        )
+        .await
+        .map_err(|_| ())?;
+        self.path.output = output;
+        Ok(())
     }
 }
 

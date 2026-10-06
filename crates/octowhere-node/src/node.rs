@@ -504,10 +504,10 @@ pub const RECEIVED_MAX: usize = 255;
 pub enum Sent {
     /// A packet was under way, or one arrived that is not yet read: nothing went.
     Busy,
-    /// It could not be loaded: nothing went.
+    /// It could not be loaded, or the antenna switched to transmit: nothing went.
     Failed,
-    /// It went, and was seen to finish if `true`.
-    Done(bool),
+    /// It went, starting at local time `started`, and was seen to finish if `finished`.
+    Done { started: i64, finished: bool },
 }
 
 /// A packet a radio received.
@@ -537,12 +537,12 @@ pub trait Radio {
     /// How late, on average, a packet's end is seen after it ends.
     fn seen_late_us(&self) -> i64;
     /// Sends `packet` at once, and leaves the radio as [`Radio::idle_receive`] does. Returns
-    /// whether it was seen to finish, or `None` when it could not be loaded.
+    /// whether it was seen to finish, or `None` when nothing went, as [`Sent::Failed`].
     async fn transmit(&mut self, packet: &[u8]) -> Option<bool>;
     /// Sends `packet` as [`Radio::transmit`] does if, while receiving, the channel is clear: no
     /// packet under way that the radio can detect, and none arrived that is not yet read.
     /// Nothing the radio waits on may come between the check and the transmission's start.
-    /// Leaves the radio receiving when it sends nothing.
+    /// Leaves the radio receiving when the channel is busy.
     async fn transmit_if_clear(&mut self, packet: &[u8]) -> Sent;
 }
 
@@ -1343,15 +1343,15 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         let _ = builder.gone(own, &leaving.gone);
         let len = builder.seal(leaving.group.key());
         let sent = self.radio.transmit_if_clear(&packet[..len]).await;
-        let Sent::Done(done) = sent else {
+        let Sent::Done { started, finished } = sent else {
             self.back_off(sent, own);
             return;
         };
-        self.access.sent(now, len, None);
-        info!("[MESH] told the group it left done={}", done);
+        self.access.sent(started, len, None);
+        info!("[MESH] told the group it left done={}", finished);
         if let Some(leaving) = &mut self.leaving {
             leaving.left -= 1;
-            leaving.next = now + LEAVE_GAP_US;
+            leaving.next = started + LEAVE_GAP_US;
         }
     }
 
@@ -1395,11 +1395,11 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         }
         let len = builder.seal(&key);
         let sent = self.radio.transmit_if_clear(&packet[..len]).await;
-        let Sent::Done(done) = sent else {
+        let Sent::Done { started, finished } = sent else {
             self.back_off(sent, own);
             return;
         };
-        self.access.sent(now, len, None);
+        self.access.sent(started, len, None);
         self.removals.sent_old(caught, lost, round);
         info!(
             "[REKEY] sent under generation {} round={} caught={:#010x} len={} done={}",
@@ -1407,7 +1407,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             round,
             caught.bits(),
             len,
-            done
+            finished
         );
     }
 
@@ -1734,14 +1734,14 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         );
         let len = builder.seal(group.key());
         let sent = self.radio.transmit_if_clear(&packet[..len]).await;
-        let Sent::Done(done) = sent else {
+        let Sent::Done { started, finished } = sent else {
             self.back_off(sent, own);
             return;
         };
         let spread = self.draw(SPREAD_US, own);
-        self.access.sent(now, len, Some(spread));
+        self.access.sent(started, len, Some(spread));
         self.relays
-            .sent(own, carried.neighbours, carried.messages(), now);
+            .sent(own, carried.neighbours, carried.messages(), started);
         if carried.on_key {
             self.removals.carried_on_key();
         }
@@ -1775,7 +1775,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             carried.neighbours.bits(),
             carried.messages().len(),
             carried.summary,
-            done
+            finished
         );
     }
 

@@ -157,7 +157,11 @@ impl Radio for SimRadio {
         if !self.world.is_clear(self.node) {
             return Sent::Busy;
         }
-        Sent::Done(self.transmit(packet).await.unwrap_or(false))
+        let started = self.world.nodes.borrow()[self.node].local(self.world.now());
+        match self.transmit(packet).await {
+            Some(finished) => Sent::Done { started, finished },
+            None => Sent::Failed,
+        }
     }
 
     async fn transmit(&mut self, packet: &[u8]) -> Option<bool> {
