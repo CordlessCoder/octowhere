@@ -238,8 +238,10 @@ impl<I: I2c> Axp2101Power<I> {
     }
 }
 
+/// Whether REG01's charging status is a charge phase: trickle, pre-charge, constant current or
+/// constant voltage.
 fn is_charging_status(status: u8) -> bool {
-    matches!(status & 0x07, 0b001..=0b011)
+    matches!(status & 0x07, 0b000..=0b011)
 }
 
 const ADC_ENABLE_INIT: u8 = ADC_VBAT | ADC_VBUS | ADC_VSYS | ADC_DIE_TEMPERATURE;
@@ -259,7 +261,7 @@ mod tests {
 
     #[test]
     fn charging_status_uses_status2_low_bits() {
-        assert!(!is_charging_status(0b000));
+        assert!(is_charging_status(0b000));
         assert!(is_charging_status(0b001));
         assert!(is_charging_status(0b010));
         assert!(is_charging_status(0b011));
