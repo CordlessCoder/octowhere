@@ -2292,7 +2292,7 @@ dependencies = [
 [[package]]
 name = "tca9554"
 version = "0.2.0"
-source = "git+https://github.com/CordlessCoder/tca9554-rs?rev=dd76e69#dd76e69113a05e18001cb0162304a85951accd8f"
+source = "git+https://github.com/CordlessCoder/tca9554-rs?rev=d7b01d5#d7b01d591d89028fedbf22ff7983e70f9cb99b66"
 dependencies = [
  "embassy-sync 0.8.0",
  "embedded-hal-async",

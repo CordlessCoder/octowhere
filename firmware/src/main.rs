@@ -40,7 +40,6 @@ use embassy_sync::{
 };
 use embassy_time::{Duration, Instant, TimeoutError, Timer, with_timeout};
 use embedded_graphics::prelude::*;
-use embedded_hal_async::i2c::I2c as _;
 use embedded_hal_bus::spi::ExclusiveDevice;
 use esp_hal::{
     dma_rx_buffer, dma_tx_buffer,
@@ -140,8 +139,6 @@ struct LoraPath {
 }
 
 impl LoraPath {
-    const OUTPUT_REGISTER: u8 = 0x01;
-
     fn new(bus: &'static Mutex<CriticalSectionRawMutex, I2cBus>, output: u8) -> Self {
         Self { bus, output }
     }
@@ -183,13 +180,10 @@ impl HeldPath<'_> {
     }
 
     async fn write_output(&mut self, output: u8) -> Result<(), ()> {
-        embedded_hal_async::i2c::I2c::write(
-            &mut *self.bus,
-            board::TCA9554_I2C_ADDR,
-            &[LoraPath::OUTPUT_REGISTER, output],
-        )
-        .await
-        .map_err(|_| ())?;
+        Tca9554::new(&mut *self.bus, board::EXPANDER)
+            .write_output(output)
+            .await
+            .map_err(|_| ())?;
         self.path.output = output;
         Ok(())
     }
@@ -2391,7 +2385,7 @@ async fn bring_up(spawner: Spawner, parts: Parts, zones: ZoneTracker, mesh: mesh
 /// Holds the radio in reset, then releases it listening. The GNSS reset is left released, since a
 /// reset clears the module's time; `pulse_gnss_reset` resets it when it has to be.
 async fn reset_lora(i2c: SharedI2cDevice) -> Result<(), ()> {
-    let mut exio = Tca9554::new(i2c, tca9554::Address::standard());
+    let mut exio = Tca9554::new(i2c, board::EXPANDER);
     let gps_reset = 1 << board::EXIO_GPS_RESET;
     let lora_reset = 1 << board::EXIO_LORA_RESET;
     let lora_rx_switch = 1 << board::EXIO_LORA_RX_SWITCH;
@@ -2473,17 +2467,14 @@ async fn send_reference_time(
 /// bit low (`reset_lora`, `LoraPath`), so only the direction changes here: a read and write of
 /// the output register would race `radio_task`'s writes of the RF switch.
 async fn pulse_gnss_reset(i2c: &mut SharedI2cDevice) -> Result<(), ()> {
-    const DIRECTION: u8 = 0x03;
     let reset = 1 << board::EXIO_GPS_RESET;
-    let mut direction = [0];
-    i2c.write_read(board::TCA9554_I2C_ADDR, &[DIRECTION], &mut direction)
-        .await
-        .map_err(|_| ())?;
-    i2c.write(board::TCA9554_I2C_ADDR, &[DIRECTION, direction[0] & !reset])
+    let mut exio = Tca9554::new(i2c, board::EXPANDER);
+    let direction = exio.read_direction().await.map_err(|_| ())?;
+    exio.write_direction(direction & !reset)
         .await
         .map_err(|_| ())?;
     Timer::after(Duration::from_millis(10)).await;
-    i2c.write(board::TCA9554_I2C_ADDR, &[DIRECTION, direction[0] | reset])
+    exio.write_direction(direction | reset)
         .await
         .map_err(|_| ())
 }

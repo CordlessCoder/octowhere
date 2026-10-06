@@ -28,8 +28,9 @@ pub const DISPLAY: co5300::Config = co5300::Config {
 pub const I2C_FREQ_HZ: u32 = 400_000;
 pub const I2C_POWER_SETTLE_MS: u64 = 80;
 
-// TCA9554 expander, and the bit index of each of its eight lines
-pub const TCA9554_I2C_ADDR: u8 = 0x20;
+// TCA9554 expander, the standard variant with A0-A2 low, and the bit index of each of its eight
+// lines
+pub const EXPANDER: tca9554::Address = tca9554::Address::standard();
 pub const EXIO_LORA_RESET: u8 = 0;
 pub const EXIO_LORA_RX_SWITCH: u8 = 1;
 pub const EXIO_LORA_TX_SWITCH: u8 = 2;
