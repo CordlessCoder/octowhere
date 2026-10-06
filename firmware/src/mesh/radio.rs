@@ -6,13 +6,7 @@ use embassy_time::{Duration, Timer};
 use esp_hal::gpio::Input;
 use sx127xlora::{
     driver::Sx127xError,
-    registers::{
-        FIFO_ADDR_PTR, FIFO_TX_BASE_ADDR, FIFO_TX_BASE_ADDR_VALUE, IRQ_FLAGS,
-        IRQ_FLAGS_VALID_HEADER_MASK, MODEM_STAT, MODEM_STAT_MODEM_STATUS_HEADER_INFO_VALID_MASK,
-        MODEM_STAT_MODEM_STATUS_SIGNAL_DETECTED, MODEM_STAT_MODEM_STATUS_SIGNAL_SYNCHRONIZED,
-        SYNC_WORD as SYNC_WORD_REGISTER,
-    },
-    types::{DeviceMode, OCP, PowerRamp, RxDone, TxConfig, TxDone},
+    types::{DeviceMode, IRQ, OCP, PowerRamp, RxDone, TxConfig, TxDone},
 };
 
 use octowhere_node::{Radio, Received, Sent};
@@ -24,14 +18,6 @@ use crate::{HeldPath, LoraPath, SensorLora};
 const SEND_TIMEOUT_US: i64 = 500_000;
 /// How often the radio's flags are read where `DIO0` does not follow them.
 const POLL_US: u64 = 1_000;
-const IRQ_TX_DONE: u8 = 0x08;
-const IRQ_RX_DONE: u8 = 0x40;
-/// The modem's status while a packet is under way: its preamble detected, then the modem
-/// synchronised to it and its header read. RX on-going holds throughout continuous receive,
-/// whatever is on the air, so it says nothing.
-const MODEM_BUSY: u8 = MODEM_STAT_MODEM_STATUS_SIGNAL_DETECTED
-    | MODEM_STAT_MODEM_STATUS_SIGNAL_SYNCHRONIZED
-    | MODEM_STAT_MODEM_STATUS_HEADER_INFO_VALID_MASK;
 
 pub struct BoardRadio {
     modem: Modem,
@@ -72,9 +58,9 @@ impl BoardRadio {
 }
 
 impl Modem {
-    /// Waits until local time `deadline` for the radio to raise `flag`, the one `DIO0` is mapped
-    /// to. Returns whether it did.
-    async fn wait_for(&mut self, flag: u8, deadline: i64) -> bool {
+    /// Waits until local time `deadline` for the radio to raise `I`, the interrupt `DIO0` is
+    /// mapped to. Returns whether it did.
+    async fn wait_for<I: IRQ>(&mut self, deadline: i64) -> bool {
         if self.dio0_follows {
             return matches!(
                 select(self.dio0.wait_for_high(), until(deadline)).await,
@@ -82,12 +68,7 @@ impl Modem {
             );
         }
         loop {
-            if self
-                .lora
-                .read(IRQ_FLAGS)
-                .await
-                .is_ok_and(|flags| flags & flag != 0)
-            {
+            if self.lora.interrupt_flag::<I>().await.unwrap_or(false) {
                 return true;
             }
             if local() >= deadline {
@@ -97,30 +78,23 @@ impl Modem {
         }
     }
 
-    /// Whether the channel is clear, from the modem's status over SPI, or `Err` where the modem
-    /// could not be read. The modem sees a preamble a few symbols in, so a packet that started
-    /// just before goes unseen.
+    /// Whether the channel is clear, or `Err` where the modem could not be read.
     async fn is_clear(&mut self) -> Result<bool, ()> {
         if self.dio0_follows && self.dio0.is_high() {
             return Ok(false);
         }
-        let flags = self.lora.read(IRQ_FLAGS).await.map_err(|_| ())?;
-        if flags & (IRQ_RX_DONE | IRQ_FLAGS_VALID_HEADER_MASK) != 0 {
-            return Ok(false);
-        }
-        let status = self.lora.read(MODEM_STAT).await.map_err(|_| ())?;
-        Ok(status & MODEM_BUSY == 0)
+        self.lora.rx_busy().await.map(|busy| !busy).map_err(|_| ())
     }
 
     /// Waits for the transmission started at local time `started` to end. Returns whether
     /// TxDone was seen.
     async fn wait_sent(&mut self, started: i64) -> bool {
-        let done = self.wait_for(IRQ_TX_DONE, started + SEND_TIMEOUT_US).await;
-        let flags = self.lora.read(IRQ_FLAGS).await.ok();
+        let done = self.wait_for::<TxDone>(started + SEND_TIMEOUT_US).await;
+        let flags = self.lora.irq_flags().await.ok();
         if !done {
             warn!("[MESH] TxDone not seen flags={}", flags);
         }
-        if self.dio0_follows && !done && flags.is_some_and(|flags| flags & IRQ_TX_DONE != 0) {
+        if self.dio0_follows && !done && flags.is_some_and(|flags| flags.contains::<TxDone>()) {
             warn!("[MESH] DIO0 did not rise for TxDone; polling the radio's flags from here");
             self.dio0_follows = false;
         }
@@ -130,22 +104,8 @@ impl Modem {
     /// Puts the packet in the radio's FIFO, ready to send on one mode change.
     async fn load(&mut self, packet: &[u8]) -> Result<(), ()> {
         self.receiving = false;
-        let lora = &mut self.lora;
-        lora.set_device_mode(DeviceMode::STDBY)
-            .await
-            .map_err(|_| ())?;
-        lora.map_dio0::<TxDone>().await.map_err(|_| ())?;
-        lora.clear_all_interrupts().await.map_err(|_| ())?;
-        lora.write(FIFO_TX_BASE_ADDR, FIFO_TX_BASE_ADDR_VALUE)
-            .await
-            .map_err(|_| ())?;
-        lora.write(FIFO_ADDR_PTR, FIFO_TX_BASE_ADDR_VALUE)
-            .await
-            .map_err(|_| ())?;
-        lora.write_fifo(packet).await.map_err(|_| ())?;
-        lora.set_payload_length(packet.len() as u8)
-            .await
-            .map_err(|_| ())
+        self.lora.load_tx(packet).await.map_err(|_| ())?;
+        self.lora.map_dio0::<TxDone>().await.map_err(|_| ())
     }
 
     /// Loads `packet`, switches `path` to transmit and starts sending. Returns the local time
@@ -173,7 +133,7 @@ impl Radio for BoardRadio {
         let lora = &mut self.modem.lora;
         let _ = lora.set_device_mode(DeviceMode::STDBY).await;
         let tuned = lora.set_frequency(frequency).await.is_ok()
-            && lora.write(SYNC_WORD_REGISTER, sync_word).await.is_ok();
+            && lora.set_sync_word(sync_word).await.is_ok();
         let powered = match TxConfig::new(OCP::new(true, 120), power, PowerRamp::Us40, false) {
             Ok(config) => lora.configure_tx(config).await.is_ok(),
             Err(_) => false,
@@ -213,7 +173,7 @@ impl Radio for BoardRadio {
 
     /// Waits until local time `deadline` for a packet to arrive. Returns whether one did.
     async fn wait_received(&mut self, deadline: i64) -> bool {
-        self.modem.wait_for(IRQ_RX_DONE, deadline).await
+        self.modem.wait_for::<RxDone>(deadline).await
     }
 
     /// How late, on average, a packet's end is seen after it: half a poll where the flags are
@@ -231,7 +191,7 @@ impl Radio for BoardRadio {
         let modem = &mut self.modem;
         let done = local();
         let packet = modem.lora.rx_packet().await;
-        let flags = modem.lora.read(IRQ_FLAGS).await.ok();
+        let flags = modem.lora.irq_flags().await.ok();
         let _ = modem.lora.clear_all_interrupts().await;
         match packet {
             #[cfg(feature = "pair-inject")]

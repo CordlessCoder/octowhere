@@ -208,7 +208,13 @@ impl<SPI: SpiDevice, V: Sx127xVariant> Sx127xLora<SPI, V> {
     pub async fn interrupt_flag<I: IRQ>(&mut self) -> Result<bool, Sx127xError<SPI::Error>> {
         #[cfg(feature = "defmt")]
         debug!("Sx127xLora.interrupt_flag");
-        Ok(self.read(IRQ_FLAGS).await? & <I as IRQ>::MASK != 0)
+        Ok(self.irq_flags().await?.contains::<I>())
+    }
+
+    /// Gets every interrupt flag.
+    #[maybe_async::maybe_async]
+    pub async fn irq_flags(&mut self) -> Result<IrqFlags, Sx127xError<SPI::Error>> {
+        Ok(IrqFlags(self.read(IRQ_FLAGS).await?))
     }
 
     /// Gets the received signal strength indicator (RSSI) in dBm of the last packet received.
@@ -548,15 +554,26 @@ impl<SPI: SpiDevice, V: Sx127xVariant> Sx127xLora<SPI, V> {
     }
 
     /// Gets the modem rx status.
-    ///
-    /// See: datasheet section 2.0.2
     #[maybe_async::maybe_async]
     pub async fn rx_status(&mut self) -> Result<RxStatus, Sx127xError<SPI::Error>> {
         #[cfg(feature = "defmt")]
         debug!("Sx127xLora.rx_status");
-        Ok(RxStatus::from(
-            self.read(MODEM_STAT).await? & MODEM_STAT_MODEM_STATUS_MASK,
-        ))
+        Ok(RxStatus::from(self.read(MODEM_STAT).await?))
+    }
+
+    /// Whether receive has a packet under way, or one received and not yet read: its preamble
+    /// detected, the modem synchronised to it, its header read, or RxDone raised. RX on-going
+    /// is left out, since it holds throughout continuous receive whatever is on the air. The
+    /// modem sees a preamble a few symbols in, so a packet that started just before is missed.
+    #[maybe_async::maybe_async]
+    pub async fn rx_busy(&mut self) -> Result<bool, Sx127xError<SPI::Error>> {
+        // The status first: a packet that ends between the two reads then shows in one of them.
+        let status = self.rx_status().await?;
+        if status.signal_detected() || status.signal_synchronized() || status.header_info_valid() {
+            return Ok(true);
+        }
+        let flags = self.irq_flags().await?;
+        Ok(flags.contains::<RxDone>() || flags.contains::<ValidHeader>())
     }
 
     /// Sets cyclic redundancy check (CRC) generation and verification on/off.
@@ -721,8 +738,18 @@ impl<SPI: SpiDevice, V: Sx127xVariant> Sx127xLora<SPI, V> {
     /// See: datasheet figure 9
     #[maybe_async::maybe_async]
     pub async fn tx(&mut self, payload: &[u8]) -> Result<(), Sx127xError<SPI::Error>> {
+        self.load_tx(payload).await?;
+        self.set_device_mode(DeviceMode::TX).await
+    }
+
+    /// Puts a payload in the FIFO with the radio in standby and its interrupts cleared, so that
+    /// setting [`DeviceMode::TX`] sends it.
+    ///
+    /// See: datasheet figure 9
+    #[maybe_async::maybe_async]
+    pub async fn load_tx(&mut self, payload: &[u8]) -> Result<(), Sx127xError<SPI::Error>> {
         #[cfg(feature = "defmt")]
-        debug!("Sx127xLora.tx: {:a}", payload);
+        debug!("Sx127xLora.load_tx: {:a}", payload);
         let payload_len = payload.len();
         if payload.is_empty() || payload_len > PAYLOAD_SIZE {
             #[cfg(feature = "defmt")]
@@ -733,15 +760,13 @@ impl<SPI: SpiDevice, V: Sx127xVariant> Sx127xLora<SPI, V> {
             return Err(Sx127xError::InvalidPayloadLength);
         }
 
-        self.write(FIFO_TX_BASE_ADDR, FIFO_TX_BASE_ADDR_VALUE)
-            .await?;
-
         self.set_device_mode(DeviceMode::STDBY).await?;
         self.clear_all_interrupts().await?;
+        self.write(FIFO_TX_BASE_ADDR, FIFO_TX_BASE_ADDR_VALUE)
+            .await?;
         self.write(FIFO_ADDR_PTR, FIFO_TX_BASE_ADDR_VALUE).await?;
         self.write_fifo(payload).await?;
-        self.set_payload_length(payload_len as u8).await?;
-        self.set_device_mode(DeviceMode::TX).await
+        self.set_payload_length(payload_len as u8).await
     }
 
     /// Reads bytes from the current FIFO address and advances the FIFO pointer.
@@ -1178,7 +1203,7 @@ impl<SPI: SpiDevice, V: Sx127xVariant> Sx127xLora<SPI, V> {
 
     /// Sets the LoRa sync word.
     #[maybe_async::maybe_async]
-    async fn set_sync_word(&mut self, sync_word: u8) -> Result<(), Sx127xError<SPI::Error>> {
+    pub async fn set_sync_word(&mut self, sync_word: u8) -> Result<(), Sx127xError<SPI::Error>> {
         #[cfg(feature = "defmt")]
         debug!("Sx127xLora.set_sync_word: {}", sync_word);
         self.write(SYNC_WORD, sync_word).await

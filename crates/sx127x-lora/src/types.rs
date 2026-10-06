@@ -388,24 +388,42 @@ impl OptimizedRxResponse {
 }
 
 // -------------------------------------------------------------------------------------------------
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub enum RxStatus {
-    SignalDetected,
-    SignalSynchronized,
-    RxOnGoing,
-    HeaderInfoValid,
-    #[default]
-    ModemClear,
+/// The modem's status bits, from `RegModemStat`. Several can be set at once.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct RxStatus(u8);
+impl RxStatus {
+    pub fn signal_detected(self) -> bool {
+        self.0 & registers::MODEM_STAT_MODEM_STATUS_SIGNAL_DETECTED != 0
+    }
+    pub fn signal_synchronized(self) -> bool {
+        self.0 & registers::MODEM_STAT_MODEM_STATUS_SIGNAL_SYNCHRONIZED != 0
+    }
+    pub fn rx_ongoing(self) -> bool {
+        self.0 & registers::MODEM_STAT_MODEM_STATUS_RX_ONGOING_MASK != 0
+    }
+    pub fn header_info_valid(self) -> bool {
+        self.0 & registers::MODEM_STAT_MODEM_STATUS_HEADER_INFO_VALID_MASK != 0
+    }
+    pub fn modem_clear(self) -> bool {
+        self.0 & registers::MODEM_STAT_MODEM_STATUS_MODEM_CLEAR_MASK != 0
+    }
 }
 impl From<u8> for RxStatus {
     fn from(value: u8) -> Self {
-        match value {
-            registers::MODEM_STAT_MODEM_STATUS_SIGNAL_DETECTED => RxStatus::SignalDetected,
-            registers::MODEM_STAT_MODEM_STATUS_SIGNAL_SYNCHRONIZED => RxStatus::SignalSynchronized,
-            registers::MODEM_STAT_MODEM_STATUS_RX_ONGOING_MASK => RxStatus::RxOnGoing,
-            registers::MODEM_STAT_MODEM_STATUS_HEADER_INFO_VALID_MASK => RxStatus::HeaderInfoValid,
-            _ => RxStatus::ModemClear,
-        }
+        RxStatus(value & registers::MODEM_STAT_MODEM_STATUS_MASK)
+    }
+}
+
+// -------------------------------------------------------------------------------------------------
+/// The interrupt flags, from `RegIrqFlags`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct IrqFlags(pub u8);
+impl IrqFlags {
+    /// Whether interrupt `I` is raised.
+    pub fn contains<I: IRQ>(self) -> bool {
+        self.0 & <I as IRQ>::MASK != 0
     }
 }
 

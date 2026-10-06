@@ -10,13 +10,16 @@ use sx127xlora::{
     registers::{
         DETECT_OPTIMIZE, FIFO, FIFO_RX_CURRENT_ADDR, FIFO_TX_BASE_ADDR_VALUE, FRF_LSB, FRF_MID,
         FRF_MSB, HOP_CHANNEL, HOP_CHANNEL_CRC_ON_PAYLOAD_MASK, INVERT_IQ, INVERT_IQ_2, IRQ_FLAGS,
-        IRQ_FLAGS_RX_DONE_MASK, IRQ_FLAGS_RX_TIMEOUT_MASK, MODEM_CONFIG_1, MODEM_CONFIG_2, OP_MODE,
-        OP_MODE_LOW_FREQUENCY_MODE_ON_MASK, OP_MODE_MODE_MASK, PA_CONFIG, PAYLOAD_LENGTH,
-        PKT_SNR_VALUE, RX_NB_BYTES, TEMP, VERSION,
+        IRQ_FLAGS_RX_DONE_MASK, IRQ_FLAGS_RX_TIMEOUT_MASK, IRQ_FLAGS_TX_DONE_MASK,
+        IRQ_FLAGS_VALID_HEADER_MASK, MODEM_CONFIG_1, MODEM_CONFIG_2, MODEM_STAT,
+        MODEM_STAT_MODEM_STATUS_HEADER_INFO_VALID_MASK, MODEM_STAT_MODEM_STATUS_RX_ONGOING_MASK,
+        MODEM_STAT_MODEM_STATUS_SIGNAL_DETECTED, MODEM_STAT_MODEM_STATUS_SIGNAL_SYNCHRONIZED,
+        OP_MODE, OP_MODE_LOW_FREQUENCY_MODE_ON_MASK, OP_MODE_MODE_MASK, PA_CONFIG, PAYLOAD_LENGTH,
+        PKT_SNR_VALUE, RX_NB_BYTES, SYNC_WORD, TEMP, VERSION,
     },
     types::{
-        Bandwidth, CodingRate, HeaderMode, OCP, PowerRamp, SpreadingFactor, Sx127xLoraConfig,
-        TxConfig,
+        Bandwidth, CodingRate, DeviceMode, HeaderMode, OCP, PowerRamp, RxDone, SpreadingFactor,
+        Sx127xLoraConfig, TxConfig, TxDone,
     },
 };
 
@@ -350,6 +353,25 @@ fn tx_uses_burst_fifo_and_clears_stale_interrupts() {
 }
 
 #[test]
+fn load_tx_leaves_the_payload_ready_in_standby() {
+    let mut driver = Sx1272Lora::new(sx1272_spi()).unwrap();
+    driver.set_device_mode(DeviceMode::RXCONTINUOUS).unwrap();
+    driver.spi.spi.registers[IRQ_FLAGS as usize] = IRQ_FLAGS_RX_DONE_MASK;
+
+    driver.load_tx(&[9, 8, 7]).unwrap();
+    let spi = &driver.spi.spi;
+
+    let base = FIFO_TX_BASE_ADDR_VALUE as usize;
+    assert_eq!(&spi.fifo[base..base + 3], &[9, 8, 7]);
+    assert_eq!(spi.registers[PAYLOAD_LENGTH as usize], 3);
+    assert_eq!(spi.registers[IRQ_FLAGS as usize], 0);
+    assert_eq!(
+        spi.registers[OP_MODE as usize] & OP_MODE_MODE_MASK,
+        DeviceMode::STDBY as u8
+    );
+}
+
+#[test]
 fn tx_rejects_empty_payloads() {
     let mut driver = Sx1272Lora::new(sx1272_spi()).unwrap();
 
@@ -455,4 +477,78 @@ fn public_configuration_cannot_bypass_sf6_header_validation() {
         result,
         Err(sx127xlora::driver::Sx127xError::SF6RequiresImplicitHeaderMode)
     ));
+}
+
+#[test]
+fn rx_status_keeps_every_bit_the_modem_sets() {
+    let mut spi = sx1272_spi();
+    spi.registers[MODEM_STAT as usize] = 0xe0
+        | MODEM_STAT_MODEM_STATUS_SIGNAL_DETECTED
+        | MODEM_STAT_MODEM_STATUS_SIGNAL_SYNCHRONIZED
+        | MODEM_STAT_MODEM_STATUS_RX_ONGOING_MASK;
+    let mut driver = Sx1272Lora::new(spi).unwrap();
+
+    let status = driver.rx_status().unwrap();
+
+    assert!(status.signal_detected());
+    assert!(status.signal_synchronized());
+    assert!(status.rx_ongoing());
+    assert!(!status.header_info_valid());
+    assert!(!status.modem_clear());
+}
+
+#[test]
+fn rx_busy_ignores_rx_ongoing_alone() {
+    let mut spi = sx1272_spi();
+    spi.registers[MODEM_STAT as usize] = MODEM_STAT_MODEM_STATUS_RX_ONGOING_MASK;
+    let mut driver = Sx1272Lora::new(spi).unwrap();
+
+    assert!(!driver.rx_busy().unwrap());
+}
+
+#[test]
+fn rx_busy_sees_a_packet_under_way() {
+    for bit in [
+        MODEM_STAT_MODEM_STATUS_SIGNAL_DETECTED,
+        MODEM_STAT_MODEM_STATUS_SIGNAL_SYNCHRONIZED,
+        MODEM_STAT_MODEM_STATUS_HEADER_INFO_VALID_MASK,
+    ] {
+        let mut spi = sx1272_spi();
+        spi.registers[MODEM_STAT as usize] = MODEM_STAT_MODEM_STATUS_RX_ONGOING_MASK | bit;
+        let mut driver = Sx1272Lora::new(spi).unwrap();
+
+        assert!(driver.rx_busy().unwrap(), "status bit {bit:#04x}");
+    }
+}
+
+#[test]
+fn rx_busy_sees_a_packet_not_yet_read() {
+    for flag in [IRQ_FLAGS_RX_DONE_MASK, IRQ_FLAGS_VALID_HEADER_MASK] {
+        let mut spi = sx1272_spi();
+        spi.registers[IRQ_FLAGS as usize] = flag;
+        let mut driver = Sx1272Lora::new(spi).unwrap();
+
+        assert!(driver.rx_busy().unwrap(), "flag {flag:#04x}");
+    }
+}
+
+#[test]
+fn irq_flags_reports_each_interrupt() {
+    let mut spi = sx1272_spi();
+    spi.registers[IRQ_FLAGS as usize] = IRQ_FLAGS_TX_DONE_MASK;
+    let mut driver = Sx1272Lora::new(spi).unwrap();
+
+    let flags = driver.irq_flags().unwrap();
+
+    assert!(flags.contains::<TxDone>());
+    assert!(!flags.contains::<RxDone>());
+}
+
+#[test]
+fn set_sync_word_writes_its_register() {
+    let mut driver = Sx1272Lora::new(sx1272_spi()).unwrap();
+
+    driver.set_sync_word(0x34).unwrap();
+
+    assert_eq!(driver.spi.spi.registers[SYNC_WORD as usize], 0x34);
 }
