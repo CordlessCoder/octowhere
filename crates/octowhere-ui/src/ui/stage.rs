@@ -1534,7 +1534,7 @@ impl Stage {
                 }
             }
             Key::Long if self.power_off.is_none() => {
-                self.route = None;
+                self.drop_drag(now);
                 let prior = power_off::Prior {
                     rest: prior,
                     level: prior_level,
@@ -1606,7 +1606,7 @@ impl Stage {
             }
             Rest::Darkening { since } => self.fade_on(0, rest::OFF_FADE, since, now),
             Rest::AlwaysOn | Rest::Off => {
-                self.route = None;
+                self.drop_drag(now);
                 self.close_drawer();
                 self.toast = None;
                 self.fade = None;
@@ -2222,6 +2222,22 @@ impl Stage {
         }
     }
 
+    /// Lets go of the drag in progress where its gesture will not end it, putting what it moved
+    /// back where it started.
+    fn drop_drag(&mut self, now: Micros) {
+        match self.route.take() {
+            Some(Route::Pager) => self.pager.cancel(now),
+            Some(Route::Sheet) => self.sheet.cancel(now),
+            Some(Route::Drawer) => self.drawer_sheet.cancel(now),
+            Some(Route::Grid) => {
+                if let Some(from) = self.grid.grabbed.take() {
+                    self.grid.snap_to(from, now);
+                }
+            }
+            Some(Route::Nowhere) | None => {}
+        }
+    }
+
     fn route_for(&self, drag: &Drag) -> Route {
         let offset = drag.offset();
         if self.sheet.is_closed() {
@@ -2350,7 +2366,7 @@ impl Stage {
             page.discard(effects);
             self.sheet.set(true);
         }
-        self.route = None;
+        self.drop_drag(now);
         if !self.sheet.is_closed() {
             self.face(Screen::Clock);
             self.sheet.go(false, now);

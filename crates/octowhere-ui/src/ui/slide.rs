@@ -39,12 +39,13 @@ impl Slide {
             return false;
         }
         match *event {
-            GestureEvent::Down(_) => self.back = None,
+            GestureEvent::Down(_) => {
+                self.back = None;
+                self.held = None;
+            }
             GestureEvent::DragStart(drag) => {
-                let offset = drag.offset();
-                if track.grab.contains(drag.start) && offset.x.abs() >= offset.y.abs() {
-                    self.held = Some(offset.x.clamp(0, track.travel));
-                }
+                self.held = (track.grab.contains(drag.start) && drag.is_horizontal())
+                    .then(|| drag.offset().x.clamp(0, track.travel));
             }
             GestureEvent::DragMove(drag) => {
                 if self.held.is_some() {
@@ -140,5 +141,17 @@ mod tests {
         let mut other = Slide::default();
         other.handle(&GestureEvent::DragStart(elsewhere), 0, &TRACK);
         assert!(!other.handle(&GestureEvent::DragEnd(elsewhere), 0, &TRACK));
+    }
+
+    #[test]
+    fn a_slide_cut_short_follows_no_later_drag() {
+        let start = Point::new(110, 372);
+        let mut slide = Slide::default();
+        slide.handle(&GestureEvent::DragStart(drag(start, start)), 0, &TRACK);
+        // Its end went elsewhere; a drag from off the handle follows.
+        let later = drag(Point::new(110, 300), Point::new(400, 300));
+        slide.handle(&GestureEvent::DragStart(later), 0, &TRACK);
+        slide.handle(&GestureEvent::DragMove(later), 0, &TRACK);
+        assert!(!slide.handle(&GestureEvent::DragEnd(later), 0, &TRACK));
     }
 }

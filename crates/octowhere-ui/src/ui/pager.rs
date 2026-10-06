@@ -99,15 +99,23 @@ impl Pager {
         self.settle(0.0, if forward { -self.width } else { self.width }, now);
     }
 
+    /// Lets go of a drag its gesture will not end, settling back to the page it started on.
+    pub fn cancel(&mut self, now: Micros) {
+        match self.motion {
+            Motion::Dragging { offset } => self.settle(offset as f32, 0, now),
+            Motion::Ignoring => self.motion = Motion::Rest,
+            Motion::Rest | Motion::Settling { .. } => {}
+        }
+    }
+
     pub fn handle(&mut self, event: &GestureEvent, now: Micros) {
         match *event {
             // Catching a settling page completes its move rather than grabbing it mid-way.
             GestureEvent::Down(_) => self.finish(),
             GestureEvent::DragStart(drag) => {
-                let offset = drag.offset();
-                self.motion = if offset.x.abs() >= offset.y.abs() {
+                self.motion = if drag.is_horizontal() {
                     Motion::Dragging {
-                        offset: self.clamp(offset.x),
+                        offset: self.clamp(drag.offset().x),
                     }
                 } else {
                     Motion::Ignoring

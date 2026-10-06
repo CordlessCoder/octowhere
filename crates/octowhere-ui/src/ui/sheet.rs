@@ -132,6 +132,13 @@ impl Sheet {
         self.settle_to(target, offset as f32, now);
     }
 
+    /// Lets go of a drag its gesture will not end, settling back to where it started.
+    pub fn cancel(&mut self, now: Micros) {
+        if let Motion::Dragging { from, offset } = self.motion {
+            self.settle_to(from == self.height, offset as f32, now);
+        }
+    }
+
     /// Animates to open or closed from wherever the panel is.
     pub fn go(&mut self, open: bool, now: Micros) {
         self.finish();

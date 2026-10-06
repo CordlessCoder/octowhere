@@ -1208,10 +1208,15 @@ const CLEAR_RAIL: Rail = Rail {
 
 impl Slide {
     /// Follows a drag that starts on the handle, and returns whether it let go at the target.
+    /// A drag whose end never came is let go by the next contact.
     pub fn handle(&mut self, rail: &Rail, event: &GestureEvent) -> bool {
         match *event {
-            GestureEvent::DragStart(drag) if rail.grab.contains(drag.start) => {
-                self.dragged = Some(drag.offset().x.clamp(0, rail.travel));
+            GestureEvent::Down(_) => self.dragged = None,
+            GestureEvent::DragStart(drag) => {
+                self.dragged = rail
+                    .grab
+                    .contains(drag.start)
+                    .then(|| drag.offset().x.clamp(0, rail.travel));
             }
             GestureEvent::DragMove(drag) if self.dragged.is_some() => {
                 self.dragged = Some(drag.offset().x.clamp(0, rail.travel));
@@ -1340,6 +1345,7 @@ impl Clear {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::gesture::Drag;
 
     #[test]
     fn a_drag_sets_any_percentage_from_ten_to_full() {
@@ -1350,6 +1356,29 @@ mod tests {
             [60, 66, 99, 223, 400, 460].map(Brightness::percent_at),
             [10, 10, 10, 47, 100, 100]
         );
+    }
+
+    #[test]
+    fn a_slide_cut_short_follows_no_later_drag() {
+        let drag = |from: Point, to: Point| Drag {
+            start: from,
+            current: to,
+            velocity: (0.0, 0.0),
+        };
+        let start = CLEAR_RAIL.handle.center();
+        let reach = Point::new(CLEAR_RAIL.travel, 0);
+        let mut slide = Slide::default();
+        slide.handle(&CLEAR_RAIL, &GestureEvent::DragStart(drag(start, start)));
+        slide.handle(
+            &CLEAR_RAIL,
+            &GestureEvent::DragMove(drag(start, start + reach / 2)),
+        );
+        // Its end went elsewhere; a drag from off the handle follows.
+        let elsewhere = Point::new(start.x, start.y + 120);
+        let later = drag(elsewhere, elsewhere + reach);
+        slide.handle(&CLEAR_RAIL, &GestureEvent::DragStart(later));
+        slide.handle(&CLEAR_RAIL, &GestureEvent::DragMove(later));
+        assert!(!slide.handle(&CLEAR_RAIL, &GestureEvent::DragEnd(later)));
     }
 
     #[test]

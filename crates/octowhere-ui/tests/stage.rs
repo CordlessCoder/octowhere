@@ -2336,6 +2336,37 @@ fn the_power_off_confirmation_cancels_by_its_button_a_cover_or_waiting() {
 }
 
 #[test]
+fn a_long_press_mid_drag_lets_the_pages_settle_back() {
+    let mut driver = resting_on(Screen::Clock, Timeout::Seconds15, false);
+    for step in 0..5 {
+        driver.touch(Some(Point::new(400 - step * 40, 233)));
+    }
+    driver.key(Key::Long);
+    driver.lift();
+    tap(&mut driver, 133, 118);
+    assert!(driver.stage.power_off().is_none());
+    driver.settle();
+    assert_eq!(driver.stage.screen(), Screen::Clock);
+    // With nothing moving, the timeout runs again.
+    wait_until(&mut driver, 16_000_000, |rest| rest != Rest::Awake);
+}
+
+#[test]
+fn a_long_press_mid_drag_lets_the_panel_settle_back() {
+    let mut driver = resting_on(Screen::Clock, Timeout::Seconds15, false);
+    for step in 0..5 {
+        driver.touch(Some(Point::new(233, 40 + step * 30)));
+    }
+    assert!(driver.stage.panel_offset() > 0);
+    driver.key(Key::Long);
+    driver.lift();
+    tap(&mut driver, 133, 118);
+    assert!(driver.stage.power_off().is_none());
+    driver.settle();
+    assert_eq!(driver.stage.panel_offset(), 0);
+}
+
+#[test]
 fn a_short_press_rests_the_screen_at_once_and_another_wakes_it() {
     let mut driver = resting_on(Screen::Compass, Timeout::Seconds15, false);
     let update = driver.key(Key::Short);

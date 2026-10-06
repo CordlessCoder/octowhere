@@ -30,6 +30,14 @@ impl Drag {
     pub fn offset(&self) -> Point {
         self.current - self.start
     }
+
+    /// Whether it has gone at least as far across as down or up. Taken at the drag's start, it
+    /// says which axis the drag is on.
+    #[must_use]
+    pub fn is_horizontal(&self) -> bool {
+        let offset = self.offset();
+        offset.x.abs() >= offset.y.abs()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
