@@ -255,9 +255,9 @@ panel will show, but they say nothing about draw time on the target. Commands ar
 of `examples/render.rs` and `tools/ui-sim/src/main.rs`. Keep the crate free of board
 dependencies: that is what lets the host build it, and its manifest enforces it.
 
-`host-tests` pulls the board-side modules it can test (`util` and `gnss_time`) in from
-`firmware/src/` by `#[path]` rather than copying them, so those must keep compiling for std on
-x86. Board-only drivers stay out of it. See [`host-tests/README.md`](host-tests/README.md).
+`host-tests` pulls the board-side modules it can test (`util`, `gnss_time` and
+`settings_queue`) in from `firmware/src/` by `#[path]` rather than copying them, so those must
+keep compiling for std on x86. Board-only drivers stay out of it. See [`host-tests/README.md`](host-tests/README.md).
 
 The data-cache settings in [`firmware/.cargo/config.toml`](firmware/.cargo/config.toml) affect
 drawing and SPI flush timings. Change them only with a measurement.
@@ -476,8 +476,8 @@ Core 1 owns the display SPI/DMA path.
   from `ZONE_CHOICE`, publishes the zone through `ZONE_STATE`, and queues a new zone for
   `settings_task`. It stays out of `BUS_EXECUTOR` because a yield there polls the task again at
   once, which would hold off the frame loop for the whole lookup.
-- `settings_task`, in thread mode, owns the flash and saves what `SETTINGS_WRITES` and the
-  mesh's `GROUP_WRITES` queue.
+- `settings_task`, in thread mode, owns the flash and saves the settings and the mesh's state
+  queued through `saves`.
 - `boot_key_task`, in thread mode, owns GPIO0 and passes the BOOT key's short and long presses
   to the frame loop through `BOOT_KEY_PRESSES`. The stage takes them as `Input::boot_key` and
   does nothing with them yet.
@@ -629,8 +629,8 @@ ends; the protocol's "The exchange as built" has the frames and their order, and
 `docs/logs/lora/pairing-2026-10-02/` the first pairings between the two boards. The group
 screens send the commands, and `pair-inject` lets `tools/pair-inject.py` send them over the USB
 JTAG too; `docs/logs/lora/pairing-screens-2026-10-02/` has a pairing through the screens. The
-mesh asks `settings_task` to store the group through `GROUP_WRITES` and waits for
-`GROUP_SAVED` where a pairing's commit depends on it. Keys and nonces come from the hardware's
+mesh asks `settings_task` to store the group through `saves`, and waits for the write's
+result where a pairing's commit depends on it. Keys and nonces come from the hardware's
 true random source, which `async_main` enables with the ADC's noise and leaves on. A board whose `DIO0` rises with no flag raised has its
 flags polled instead, 1 ms apart; one board did until a joint was reworked
 (`docs/hardware-notes.md`).

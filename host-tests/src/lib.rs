@@ -24,6 +24,12 @@ pub const SWAP_SEND_BOUND: () = ();
 #[path = "../../firmware/src/gnss_time.rs"]
 pub mod gnss_time;
 
+#[path = "../../firmware/src/settings_queue.rs"]
+pub mod settings_queue;
+
+#[cfg(test)]
+mod settings_writes;
+
 #[cfg(test)]
 mod gnss;
 

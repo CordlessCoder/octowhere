@@ -158,18 +158,18 @@ pub struct BoardGroupStore;
 
 impl GroupStore for BoardGroupStore {
     fn queue(&self, write: GroupWrite) -> Option<u32> {
-        crate::queue_group_write(write)
+        crate::saves::queue_group(write)
     }
 
     async fn send(&self, write: GroupWrite) -> u32 {
-        crate::send_group_write(write).await
+        crate::saves::send_group(write).await
     }
 
     fn result(&self, number: u32) -> Option<bool> {
-        crate::group_result(number)
+        crate::saves::group_result(number)
     }
 
     async fn saved(&self, number: u32) -> bool {
-        crate::group_saved(number).await
+        crate::saves::group_saved(number).await
     }
 }

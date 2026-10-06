@@ -89,21 +89,7 @@ pub struct Saved {
     pub always_on: Option<AlwaysOn>,
 }
 
-/// One change to save.
-#[derive(Clone, Copy, Debug)]
-pub enum Write {
-    /// Where GNSS placed the device.
-    AutomaticZone(ZoneId),
-    /// A zone chosen by hand, which puts the zone in manual mode.
-    ManualZone(ZoneId),
-    /// Back to automatic mode.
-    Automatic,
-    Brightness(u8),
-    Timeout(Timeout),
-    AlwaysOn(AlwaysOn),
-    /// Forget every setting.
-    Clear,
-}
+pub use crate::settings_queue::Write;
 
 /// The mesh's state as stored.
 #[derive(Default)]

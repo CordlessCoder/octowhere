@@ -23,7 +23,7 @@ use alloc::{alloc::Allocator, boxed::Box};
 use core::{
     cell::{Cell, RefCell},
     future::Future,
-    sync::atomic::{AtomicBool, AtomicU32, Ordering},
+    sync::atomic::{AtomicBool, Ordering},
 };
 use defmt::{debug, error, info, warn};
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
@@ -95,6 +95,7 @@ use esp_alloc as _;
 use esp_backtrace as _;
 
 mod mesh;
+mod saves;
 #[cfg(feature = "touch-inject")]
 mod touch_inject;
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -263,23 +264,6 @@ static MOTION_STATE: Signal<CriticalSectionRawMutex, Motion> = Signal::new();
 /// fast.
 static COMPASS_ACTIVE: AtomicBool = AtomicBool::new(false);
 static COMPASS_RECALIBRATE: AtomicBool = AtomicBool::new(false);
-/// Settings for `settings_task` to save. A full queue drops the newest, which the next change of
-/// the same setting supersedes.
-static SETTINGS_WRITES: Channel<CriticalSectionRawMutex, settings::Write, 4> = Channel::new();
-/// How many writes went into `SETTINGS_WRITES`, and how many `settings_task` has finished,
-/// saved or not. Equal, nothing queued is left to save.
-static SETTINGS_QUEUED: AtomicU32 = AtomicU32::new(0);
-static SETTINGS_DONE: AtomicU32 = AtomicU32::new(0);
-/// The mesh's state for `settings_task` to save, counted in `SETTINGS_QUEUED` with the settings.
-static GROUP_WRITES: Channel<CriticalSectionRawMutex, settings::GroupWrite, 2> = Channel::new();
-/// `GROUP_WRITES` queued and done, numbered in the order they go, so that a waiter can tell its
-/// own write's result from one queued ahead of it. One task queues them at a time.
-static GROUP_QUEUED: AtomicU32 = AtomicU32::new(0);
-static GROUP_DONE: AtomicU32 = AtomicU32::new(0);
-/// Whether each of the last 32 group writes reached the flash, at its number's bit.
-static GROUP_RESULTS: AtomicU32 = AtomicU32::new(0);
-/// Signalled as each group write is done.
-static GROUP_SAVED: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 /// Power key presses, from `sensor_task`, which owns the PMIC, for the frame loop.
 static KEY_PRESSES: Channel<CriticalSectionRawMutex, PowerKey, 2> = Channel::new();
 /// BOOT key presses, from `boot_key_task`, for the frame loop.
@@ -968,27 +952,16 @@ async fn boot_key_task(mut key: Input<'static>) {
 #[embassy_executor::task]
 async fn settings_task(mut store: Store) {
     loop {
-        let write = select(SETTINGS_WRITES.receive(), GROUP_WRITES.receive()).await;
+        let taken = saves::take().await;
         let started = Instant::now();
-        let saved = match &write {
+        let saved = match taken.write() {
             Either::First(write) => settings::with_display_core_held(|| store.save(*write)).await,
             Either::Second(write) => {
-                let saved = settings::with_display_core_held(|| store.save_mesh(write)).await;
-                let number = GROUP_DONE.load(Ordering::Relaxed).wrapping_add(1);
-                let bit = 1 << (number % 32);
-                if saved {
-                    GROUP_RESULTS.fetch_or(bit, Ordering::Relaxed);
-                } else {
-                    GROUP_RESULTS.fetch_and(!bit, Ordering::Relaxed);
-                }
-                GROUP_DONE.store(number, Ordering::Release);
-                GROUP_SAVED.signal(());
-                saved
+                settings::with_display_core_held(|| store.save_mesh(write)).await
             }
         };
-        SETTINGS_DONE.fetch_add(1, Ordering::Release);
         let took = started.elapsed().as_micros();
-        match (write, saved) {
+        match (taken.write(), saved) {
             (Either::First(write), true) => info!("[SETTINGS] {} saved in {}us", write, took),
             (Either::First(write), false) => {
                 warn!("[SETTINGS] {} not saved, after {}us", write, took);
@@ -998,40 +971,7 @@ async fn settings_task(mut store: Store) {
                 warn!("[SETTINGS] {} not saved, after {}us", write, took);
             }
         }
-    }
-}
-
-/// Queues a change to the mesh's state without waiting, and returns its number for
-/// [`group_result`], or `None` when the queue is full.
-fn queue_group_write(write: settings::GroupWrite) -> Option<u32> {
-    GROUP_WRITES.try_send(write).ok()?;
-    SETTINGS_QUEUED.fetch_add(1, Ordering::Relaxed);
-    Some(GROUP_QUEUED.fetch_add(1, Ordering::Relaxed).wrapping_add(1))
-}
-
-/// Queues a change to the mesh's state, waiting for room, and returns its number for
-/// [`group_saved`].
-async fn send_group_write(write: settings::GroupWrite) -> u32 {
-    SETTINGS_QUEUED.fetch_add(1, Ordering::Relaxed);
-    GROUP_WRITES.send(write).await;
-    GROUP_QUEUED.fetch_add(1, Ordering::Relaxed).wrapping_add(1)
-}
-
-/// Whether the group write numbered `number` reached the flash, once it is done. Only the last
-/// 32 writes' results are kept.
-fn group_result(number: u32) -> Option<bool> {
-    // Wrapping: a write up to half the range behind is done.
-    (GROUP_DONE.load(Ordering::Acquire).wrapping_sub(number) < u32::MAX / 2)
-        .then(|| GROUP_RESULTS.load(Ordering::Relaxed) & 1 << (number % 32) != 0)
-}
-
-/// Waits for the group write numbered `number` and says whether it reached the flash.
-async fn group_saved(number: u32) -> bool {
-    loop {
-        if let Some(saved) = group_result(number) {
-            return saved;
-        }
-        GROUP_SAVED.wait().await;
+        taken.done(saved);
     }
 }
 
@@ -1566,7 +1506,7 @@ async fn zone_task(mut zones: ZoneTracker) {
         match select(ZONE_FIX.wait(), ZONE_CHOICE.wait()).await {
             Either::First((latitude, longitude)) => {
                 if let Some(zone) = zones.follow(latitude, longitude).await {
-                    queue_write(settings::Write::AutomaticZone(zone));
+                    saves::queue(settings::Write::AutomaticZone(zone));
                 }
             }
             Either::Second(choice) => zones.choose(choice),
@@ -2096,7 +2036,7 @@ fn mesh_start(saved: settings::MeshSaved) -> mesh::Start {
     let seed = saved.seed.or_else(|| {
         let seed = mesh::random::<32>()?;
         info!("[MESH] made this device's key pair");
-        if queue_group_write(settings::GroupWrite::Identity(seed)).is_none() {
+        if saves::queue_group(settings::GroupWrite::Identity(seed)).is_none() {
             warn!("[MESH] the key pair could not be queued to store");
         }
         Some(seed)
@@ -2858,13 +2798,13 @@ async fn frame_loop(
                     }
                 };
                 if let Some((earlier, _)) = pending_write.replace((write, 2)) {
-                    queue_write(earlier);
+                    saves::queue(earlier);
                 }
             }
             if update.power_off {
                 // Nothing more will show, so a write need not wait for its frame.
                 if let Some((write, _)) = pending_write.take() {
-                    queue_write(write);
+                    saves::queue(write);
                 }
                 power_off_after = Some(2);
             }
@@ -2917,7 +2857,7 @@ async fn frame_loop(
             if swaps > 1 {
                 pending_write = Some((write, swaps - 1));
             } else {
-                queue_write(write);
+                saves::queue(write);
             }
         }
         match power_off_after {
@@ -2931,19 +2871,11 @@ async fn frame_loop(
     }
 }
 
-fn queue_write(write: settings::Write) {
-    if SETTINGS_WRITES.try_send(write).is_ok() {
-        SETTINGS_QUEUED.fetch_add(1, Ordering::Relaxed);
-    } else {
-        warn!("[SETTINGS] queue full, {} not saved", write);
-    }
-}
-
 /// Powers the board off once the settings queued before it are saved. `gnss_task` has parked
 /// the GNSS module first.
 async fn power_off(power: &mut Axp2101Power<SharedI2cDevice>) {
     let settled = with_timeout(SETTINGS_SETTLE, async {
-        while SETTINGS_DONE.load(Ordering::Acquire) != SETTINGS_QUEUED.load(Ordering::Relaxed) {
+        while !saves::all_done() {
             Timer::after(Duration::from_millis(10)).await;
         }
     })

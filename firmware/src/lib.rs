@@ -9,6 +9,7 @@ pub mod board;
 pub mod drivers;
 pub mod gnss_time;
 pub mod settings;
+pub mod settings_queue;
 pub mod util;
 
 pub use octowhere_peripherals as peripherals;
