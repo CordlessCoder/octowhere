@@ -105,8 +105,8 @@ pub fn dim_level(set: u8) -> u8 {
 
 /// The display's level for `percent` of full.
 #[must_use]
-pub fn level_of(percent: u8) -> u8 {
-    ((255 * u16::from(percent) + 50) / 100) as u8
+pub const fn level_of(percent: u8) -> u8 {
+    ((255 * percent as u16 + 50) / 100) as u8
 }
 
 /// Whether the screen rests on the always-on face, and how bright it is there.

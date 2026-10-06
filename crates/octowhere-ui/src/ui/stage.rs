@@ -467,6 +467,11 @@ impl Stage {
 
     #[must_use]
     pub fn new(peripherals: PeripheralState) -> Self {
+        // A level read back from the flash keeps the floor the editor keeps.
+        let peripherals = PeripheralState {
+            brightness: peripherals.brightness.max(second::FLOOR_LEVEL),
+            ..peripherals
+        };
         Self {
             screen: Screen::ALL[0],
             raw_touch: [None; 2],
@@ -2326,8 +2331,19 @@ impl Stage {
         let Some(store) = effects.store else {
             return;
         };
-        update.store = Some(store);
         let mut zone = self.peripherals.clock.zone();
+        // Each save holds the display core, so one that changes nothing is not made.
+        let unchanged = match store {
+            Store::Brightness(level) => level == self.peripherals.brightness,
+            Store::ManualZone(id) => zone.mode == ZoneMode::Manual && zone.zone == Some(id),
+            Store::AutomaticZone => zone.mode == ZoneMode::Automatic,
+            Store::Timeout(timeout) => timeout == self.peripherals.timeout,
+            Store::AlwaysOn(choice) => choice == self.peripherals.always_on,
+            Store::Clear => false,
+        };
+        if !unchanged {
+            update.store = Some(store);
+        }
         match store {
             Store::Brightness(level) => {
                 self.peripherals.brightness = level;
@@ -2344,7 +2360,10 @@ impl Stage {
             Store::Timeout(timeout) => self.peripherals.timeout = timeout,
             Store::AlwaysOn(choice) => self.peripherals.always_on = choice,
             Store::Clear => {
-                zone.mode = ZoneMode::Automatic;
+                zone = ZoneState {
+                    mode: ZoneMode::Automatic,
+                    zone: None,
+                };
                 self.peripherals.timeout = Timeout::default();
                 self.peripherals.always_on = AlwaysOn::Off;
                 self.peripherals.brightness = DEFAULT_BRIGHTNESS;

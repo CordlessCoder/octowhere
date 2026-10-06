@@ -395,6 +395,8 @@ const TRACK_HEIGHT: u32 = 19;
 const STEPS: i32 = 10;
 /// The lowest level, which keeps the screen readable enough to undo.
 const FLOOR_PERCENT: i32 = 10;
+/// The display's level at [`FLOOR_PERCENT`].
+pub const FLOOR_LEVEL: u8 = super::rest::level_of(FLOOR_PERCENT as u8);
 
 impl Brightness {
     #[must_use]

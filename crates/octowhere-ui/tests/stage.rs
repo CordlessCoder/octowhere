@@ -1223,6 +1223,39 @@ fn clearing_takes_a_drag_all_the_way_to_the_target() {
     assert_eq!(stored(&updates), Some(Store::Clear));
     assert!(driver.stage.page().is_none());
     assert_eq!(driver.stage.peripherals().brightness, 120);
+    // The zone goes with the rest, until a fix places the device again.
+    assert_eq!(
+        driver.stage.peripherals().clock.zone(),
+        octowhere_ui::ui::clock::ZoneState {
+            mode: ZoneMode::Automatic,
+            zone: None,
+        }
+    );
+}
+
+#[test]
+fn a_choice_already_in_force_is_not_saved_again() {
+    let mut driver = open_panel(Screen::Clock);
+    assert_eq!(
+        driver.stage.peripherals().clock.zone().mode,
+        ZoneMode::Automatic
+    );
+    tap(&mut driver, 150, 115);
+    let updates = tap(&mut driver, 233, 342);
+    assert_eq!(stored(&updates), None);
+    assert!(driver.stage.page().is_none());
+}
+
+#[test]
+fn a_stored_level_under_the_floor_comes_up_to_it() {
+    let stage = Stage::new(PeripheralState {
+        brightness: 3,
+        ..PeripheralState::default()
+    });
+    assert_eq!(
+        stage.peripherals().brightness,
+        octowhere_ui::ui::second::FLOOR_LEVEL
+    );
 }
 
 #[test]

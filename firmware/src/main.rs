@@ -451,6 +451,7 @@ impl ZoneTracker {
                 self.looked_up_at = None;
                 if matches!(choice, ZoneChoice::Cleared) {
                     self.manual = None;
+                    self.automatic = None;
                 }
             }
         }
