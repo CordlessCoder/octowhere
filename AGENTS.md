@@ -206,18 +206,27 @@ From the root:
 
 ```text
 cargo fmt --all --check
-cargo test --workspace --locked
+cargo nextest run --workspace --locked
+cargo test --workspace --doc --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo test -p octowhere-node --locked
+cargo nextest run -p octowhere-node --locked --no-tests=pass
 cargo clippy -p octowhere-node --all-targets --locked -- -D warnings
-cargo test -p octowhere-node --locked --features phantom
-cargo test -p octowhere-tz --locked --no-default-features
+cargo nextest run -p octowhere-node --locked --features phantom
+cargo nextest run -p octowhere-tz --locked --no-default-features
 cargo clippy -p octowhere-tz --all-targets --locked --no-default-features -- -D warnings
 cargo clippy -p ui-web --target wasm32-unknown-unknown --locked -- -D warnings
-cargo test -p sx127xlora --locked --features sync
-cargo test -p sx127xlora --locked --features sync,half_duplex
+cargo nextest run -p sx127xlora --locked --features sync
+cargo nextest run -p sx127xlora --locked --features sync,half_duplex
 cargo clippy -p sx127xlora --all-targets --locked --features sync -- -D warnings
 ```
+
+Tests run under cargo-nextest (owner, 2026-10-06; `cargo install cargo-nextest --locked`),
+which runs every test of every binary at once, where `cargo test` runs the binaries one after
+another: the workspace took 45 s against 160 s. It runs no doctests, so the second line does:
+`host-tests` holds a compile-fail check that a `util::Swap` half whose value is not `Send`
+stays on its thread. Without its `run` feature the node has no tests, which nextest counts as
+a failure unless told otherwise. nextest shows a test's output only when it fails; its
+`--no-capture` shows it as it comes, a test at a time, as `OCTOWHERE_SIM_LOG=1` needs.
 
 From `firmware/`:
 
@@ -228,7 +237,7 @@ cargo clippy --release --offline -- -D warnings
 ```
 
 A build of the whole workspace turns on, in each crate, every feature any member asks of it.
-So `cargo test --workspace` tests the node with the simulator's `run`, `log` and `phantom`,
+So the workspace's tests run the node with the simulator's `run`, `log` and `phantom`,
 and `octowhere-tz` with its boundaries; the lines with `-p` test them without. The radio
 driver's register tests (`crates/sx127x-lora/tests/driver_sync.rs`) build only with its
 blocking `sync` feature, which no member asks for, so only the last three lines check them;
