@@ -105,6 +105,61 @@ fn crowded(count: usize, now: u64) -> GroupView {
     GroupView { own: 0, members }
 }
 
+/// The 2026-10-05 hand-off's crowded fixture: Kestrel, member 1, at `bearing` 150 m away with
+/// a position 23 s old, and thirty more in four runs, each run's bearings from its first to its
+/// last and its ages from its youngest to its oldest, in seconds.
+fn sectors(now: u64, bearing: f64, runs: [(f64, f64, usize, u64, u64); 4]) -> GroupView {
+    let mut members = [None; IDS as usize];
+    members[0] = Some(member("Octowhere", now));
+    let ago = |seconds: u64| now as i64 - (seconds * SECOND) as i64;
+    members[1] = Some(MemberView {
+        heard: Some(ago(7)),
+        position: Position::At(ago(23)),
+        coordinates: Some(at(DUBLIN, bearing, 150.0)),
+        device: [0x9c, 0x2a, 0x7f, 0x10, 0xe5, 0x31, 0xa8, 1],
+        ..member("Kestrel", now)
+    });
+    let mut id = 2;
+    for (first, last, count, youngest, oldest) in runs {
+        for i in 0..count {
+            let share = i as f64 / (count - 1) as f64;
+            members[id] = Some(MemberView {
+                heard: Some(ago(60)),
+                position: Position::At(ago(youngest + ((oldest - youngest) as f64 * share) as u64)),
+                coordinates: Some(at(DUBLIN, (first + (last - first) * share) % 360.0, 400.0)),
+                device: [0x9c, 0x2a, 0x7f, 0x10, 0, 0, 0, id as u8],
+                ..member(UNPLACED[id % UNPLACED.len()], now)
+            });
+            id += 1;
+        }
+    }
+    GroupView { own: 0, members }
+}
+
+const RUNS: [(f64, f64, usize, u64, u64); 4] = [
+    (35.0, 61.0, 7, 11, 1_080),
+    (118.0, 154.0, 8, 23, 420),
+    (218.0, 246.0, 8, 120, 1_080),
+    (305.0, 335.0, 7, 11, 180),
+];
+const NORTH_RUNS: [(f64, f64, usize, u64, u64); 4] = [
+    (350.0, 374.0, 7, 11, 1_080),
+    (100.0, 137.0, 8, 23, 420),
+    (195.0, 230.0, 8, 120, 1_080),
+    (267.0, 293.0, 7, 11, 180),
+];
+
+/// Taps the middle until member `id` is selected.
+fn select(driver: &mut Driver, id: u8) {
+    for _ in 0..IDS {
+        if driver.stage.member() == Some(id) {
+            return;
+        }
+        driver.tap(Point::new(233, 233));
+        driver.wait(20_000);
+    }
+}
+
 /// The readings: a fix in Dublin taken 8 s ago with HDOP 1.1, or none.
 fn sensors(now: u64, fix: bool) -> Sensors {
     let base = super::sensors();
@@ -125,9 +180,15 @@ fn sensors(now: u64, fix: bool) -> Sensors {
 
 /// The compass reading whose true heading, with Dublin's declination, is [`HEADING`].
 fn compass(heading: bool) -> CompassView {
+    compass_at(heading.then_some(HEADING))
+}
+
+/// The compass reading whose true heading, with Dublin's declination, is `heading`.
+fn compass_at(heading: Option<f64>) -> CompassView {
     let base = super::sensors();
     let declination = members::declination(&base.gnss, &base.clock).expect("Dublin has one");
-    let magnetic = (HEADING - f64::from(declination)).rem_euclid(360.0);
+    let magnetic = (heading.unwrap_or(0.0) - f64::from(declination)).rem_euclid(360.0);
+    let heading = heading.is_some();
     CompassView {
         live: true,
         calibration_percent: 100,
@@ -215,5 +276,22 @@ pub fn frames() -> Vec<(String, Box<FB>)> {
         swiping.wait(16_667 * (step as u64 + 1) - 16_667 * step as u64);
     }
     snap(&mut frames, "members-swiping", &swiping);
+
+    // The 2026-10-05 hand-off's sectors.
+    let mut exact = face(|now| Some(sectors(now, 43.0, RUNS)), true, true);
+    select(&mut exact, 1);
+    snap(&mut frames, "members-05-crowded-selected-exact", &exact);
+    select(&mut exact, 2);
+    snap(&mut frames, "members-06-next-peer-exact", &exact);
+    let mut north = face(|now| Some(sectors(now, 358.0, NORTH_RUNS)), true, true);
+    north.motion(Motion {
+        compass: compass_at(Some(0.0)),
+    });
+    north.wait(20_000);
+    select(&mut north, 1);
+    snap(&mut frames, "members-07-north-crossing-cluster", &north);
+    let mut north_up = face(|now| Some(sectors(now, 43.0, RUNS)), true, false);
+    select(&mut north_up, 1);
+    snap(&mut frames, "members-08-crowded-north-up", &north_up);
     frames
 }

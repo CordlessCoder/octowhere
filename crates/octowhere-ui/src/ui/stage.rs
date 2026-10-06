@@ -440,8 +440,8 @@ pub struct Stage {
     /// next.
     members_list: Option<alloc::boxed::Box<List>>,
     members_spare: Option<alloc::boxed::Box<List>>,
-    /// The member the face shows selected.
-    member: Option<u8>,
+    /// The member the face shows selected, by its device.
+    member: Option<[u8; 8]>,
     /// The declination where the device last had a fix, and the true heading the member face
     /// turns by.
     declination: Option<f32>,
@@ -814,10 +814,17 @@ impl Stage {
         })
     }
 
-    /// The member the member face shows selected.
+    /// The id of the member the member face shows selected.
     #[must_use]
     pub fn member(&self) -> Option<u8> {
-        self.member
+        let device = self.member?;
+        let (id, _) = self
+            .mesh
+            .group
+            .as_ref()?
+            .members()
+            .find(|(_, member)| member.device == device)?;
+        Some(id)
     }
 
     /// How far a face has moved off the panel, sideways or down.
@@ -1412,7 +1419,7 @@ impl Stage {
     /// Takes a tap on the member face: the next member, or the screen that lists them.
     fn tap_members(&mut self, point: Point, now: Micros) {
         match members::tap(&self.members_context(now), point) {
-            Some(Tap::Select(id)) => self.member = Some(id),
+            Some(Tap::Select(device)) => self.member = Some(device),
             Some(Tap::Members) => {
                 self.sheet.set(true);
                 self.page = Some((Page::Group(Flow::members()), now));

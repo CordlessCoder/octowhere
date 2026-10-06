@@ -558,15 +558,21 @@ build chose what the hand-off left open:
 - **Freshness glyph.** The solid square under 5 minutes, the hourglass after: the hand-off's
   proposal, taken as it stands.
 - **Selection.** The freshest position first, then whichever member was chosen while it has a
-  position. A tap within 160 px of the centre, inside the rim labels, or on the coordinates'
-  box, selects the next member by id. Nodes are not touch targets.
-- **Crowding.** Members whose rim labels would come within 6 px of each other share one node at
-  their bearings' mean, labelled with the member it shows and how many more it holds:
-  `05 +2 / 23S`. It shows the selected member if it holds it, and otherwise the freshest. The
-  neighbours that overlap most merge first. Selection steps through every member, so each can
-  be shown on its own with its exact bearing in the middle. A shared node stands at the mean,
-  not at any one member's bearing. The hand-off left 32 members open, and there is no render of
-  this.
+  position, kept by its device, so a device given the id later is not taken for it. A tap
+  within 160 px of the centre, inside the rim labels, or on the coordinates' box, selects the
+  next member by id. Nodes are not touch targets.
+- **Crowding** (the 2026-10-05 hand-off). Members whose rim labels would come within 6 px of
+  each other's ink are drawn as a sector: a 1 px arc at radius 205 over the least arc that holds
+  their bearings, across north where that is shorter, with a radial mark at each end, and
+  across it at radius 174 their count and their ages' youngest and oldest, `08 PEERS /
+  23S-07M`, in `GRAY`. An age this device cannot tell makes it `23S-07M / UNKNOWN`, or AGE
+  UNKNOWN. Members at one bearing are a sector of a single mark. The selected member keeps its
+  own node and label at its exact bearing, and the members crowding it make its sector, whose
+  arc is `LIME`, with no summary on the rim and `SECTOR +07 / 11S-18M` under the middle, its
+  count and ages leaving the selected member out. The labels' ink is measured as it runs along
+  its circle; the neighbours that overlap most merge first, and a member with room keeps its
+  own node. Only the members' angles relative to each other decide it, so turning the face
+  never regroups it. The forward tick hides under a sector as under a node.
 - **Distance.** Whole metres below a kilometre, kilometres to a tenth below 100 km and whole
   kilometres beyond, the figure shrinking from 39 px to fit 100 px. The name shrinks from 25 px
   to 14 px to fit the left column, and is cut short past that.

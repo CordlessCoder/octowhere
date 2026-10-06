@@ -4,9 +4,10 @@
 //! without members' positions, the face keeps its grid and ring and says what it lacks.
 //!
 //! The ring is not a map: every member sits on it at the same radius, whatever its distance.
-//! Members whose rim labels would overlap share one node, labelled with the member it shows
-//! and how many more it holds, at their bearings' mean; a tap in the middle steps the selection
-//! through every member with a position, so each can be shown on its own.
+//! Members whose rim labels would overlap are drawn as a sector, an arc over the bearings they
+//! span with their count and their ages' range, never as a member at their mean (2026-10-05
+//! hand-off). The selected member keeps its own node at its own bearing; a tap in the middle
+//! steps the selection through every member with a position, so each can be shown on its own.
 
 use embedded_graphics::{
     prelude::{Point, Size},
@@ -46,6 +47,15 @@ const NORTH_RADIUS: f32 = 226.0;
 const NODE_HALF: i32 = 12;
 /// How far apart two rim labels keep their ink along the label ring.
 const LABEL_GAP: f32 = 6.0;
+/// Half a rim label's ink height, which brings its inner corners nearer the centre.
+const LABEL_HALF_HEIGHT: f32 = 5.0;
+/// A sector's arc, how far its end marks reach either side of it, and where its summary is
+/// centred.
+const SECTOR_RADIUS: f32 = 205.0;
+const SECTOR_MARK: f32 = 4.0;
+const SUMMARY_RADIUS: f32 = 174.0;
+/// The caption under the middle that sums up the rest of the selected member's sector.
+const SECTOR_TOP: i32 = 372;
 /// A whole ring, a little over a turn so that it has no seam.
 const WHOLE: (i16, i16) = (-900, 2720);
 /// The grid's pitch, which is a texture and not a scale, and how far out it is drawn: the
@@ -82,15 +92,16 @@ pub struct Context<'a> {
     /// Whole degrees clockwise from true north to the top edge, while the heading can be
     /// trusted and turned to true north.
     pub heading: Option<u16>,
-    /// The member chosen last, which the face keeps while it has a position.
-    pub selected: Option<u8>,
+    /// The member chosen last, by its device, which the face keeps while it has a position.
+    pub selected: Option<[u8; 8]>,
     pub now: Micros,
 }
 
 /// What a tap on the face asks for.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Tap {
-    Select(u8),
+    /// The member with this device.
+    Select([u8; 8]),
     /// The group's members, from the face with no member placed.
     Members,
     /// The group screen, from the face with no group.
@@ -101,6 +112,7 @@ pub enum Tap {
 #[derive(Clone, Copy, Debug)]
 struct Placed {
     id: u8,
+    device: [u8; 8],
     coordinates: (i32, i32),
     /// How old the position is, or `None` while this device has no UTC to age it by.
     age: Option<Micros>,
@@ -201,6 +213,7 @@ fn placed(group: &GroupView, now: Micros) -> Placements {
             }
             Some(Placed {
                 id,
+                device: member.device,
                 coordinates: member.coordinates?,
                 age,
                 heard: member.heard.map(elapsed),
@@ -209,11 +222,11 @@ fn placed(group: &GroupView, now: Micros) -> Placements {
         .collect()
 }
 
-/// The member `selected` names while it is placed, or else the freshest position.
-fn chosen(placed: &[Placed], selected: Option<u8>) -> Option<&Placed> {
+/// The member whose device `selected` names while it is placed, or else the freshest position.
+fn chosen(placed: &[Placed], selected: Option<[u8; 8]>) -> Option<&Placed> {
     placed
         .iter()
-        .find(|each| Some(each.id) == selected)
+        .find(|each| Some(each.device) == selected)
         .or_else(|| freshest(placed.iter()))
 }
 
@@ -245,7 +258,7 @@ pub fn tap(context: &Context, point: Point) -> Option<Tap> {
             .iter()
             .find(|each| each.id > current)
             .or(placed.first())
-            .map(|each| Tap::Select(each.id))
+            .map(|each| Tap::Select(each.device))
     };
     match state(context, &placed) {
         State::NoGroup => BUTTON.contains(point).then_some(Tap::Group),
@@ -260,12 +273,12 @@ pub fn tap(context: &Context, point: Point) -> Option<Tap> {
     }
 }
 
-/// Builds the face into `list`, and returns the member it shows selected.
+/// Builds the face into `list`, and returns the device of the member it shows selected.
 pub fn build(
     context: &Context,
     font: &FontdueRenderer<'static, Color>,
     list: &mut List,
-) -> Option<u8> {
+) -> Option<[u8; 8]> {
     list.clear();
     list.set_backdrop(Backdrop::Grid(context.heading.unwrap_or(0)));
     let placed = context
@@ -329,7 +342,7 @@ pub fn build(
             }
         }
     }
-    selected.map(|each| each.id)
+    selected.map(|each| each.device)
 }
 
 fn plural(count: usize) -> &'static str {
@@ -488,56 +501,163 @@ impl core::fmt::Display for Degrees {
     }
 }
 
-/// A node on the ring: one member, or several whose labels would overlap.
+/// What sits on the rim: one member with its node and label, or a sector of members whose labels
+/// would overlap, drawn as an arc over their bearings with a summary of them. The selected member
+/// keeps its own node and label, at its own bearing, in whichever it falls in.
 #[derive(Clone, Copy, Debug)]
-struct Mark {
-    /// Degrees clockwise from true north: its members' bearings' mean.
-    bearing: f32,
-    /// Its members' ids, as bits.
+struct Rim {
+    /// Where its members' bearings start on screen, in degrees clockwise from up, and how far
+    /// they run clockwise from there: the least arc that holds them all.
+    start: f32,
+    extent: f32,
+    /// Its members' ids, as bits, the selected one's included.
     ids: u32,
+    /// The selected member's id and its angle on screen, if it is among them.
+    selected: Option<(u8, f32)>,
+    /// What its node, labels and arc take of the rim, as angles clockwise from `start`; the
+    /// first may be negative.
+    covers: (f32, f32),
 }
 
-impl Mark {
+impl Rim {
     fn count(&self) -> u32 {
         self.ids.count_ones()
     }
+
+    fn is_sector(&self) -> bool {
+        self.count() > 1
+    }
+
+    fn holds(&self, placed: &Placed) -> bool {
+        self.ids & 1 << placed.id != 0
+    }
+
+    fn middle(&self) -> f32 {
+        around(self.start + self.extent / 2.0)
+    }
 }
 
-/// Gathers the members at `bearings` into marks whose rim labels keep apart, merging the
-/// neighbours that overlap most first. Every label's age takes at most three characters, so a
-/// mark's width depends only on how many members it holds, not on which it shows.
-fn marks(
-    placed: &[Placed],
-    bearings: &[f32],
-    font: &FontdueRenderer<'static, Color>,
-) -> Vec<Mark, { IDS as usize }> {
-    let label = style(font, chrome::WHITE, 11, Face::Mono.index());
-    let measure = |text: &str| label.baseline_bounds(text, Point::zero()).size.width as f32;
-    let widths = [
-        measure("00 / 00S"),
-        measure("00 +0 / 00S"),
-        measure("00 +00 / 00S"),
-    ];
-    let width = |mark: &Mark| match mark.count() {
-        1 => widths[0],
-        2..=10 => widths[1],
-        _ => widths[2],
+/// A member's rim label: its id and its position's age.
+fn member_label(placed: &Placed) -> Line {
+    let age_text = placed.age.map_or_else(|| line("--"), age);
+    format(format_args!("{:02} / {age_text}", placed.id))
+}
+
+/// The youngest and oldest of the ages of `members`, which a mean would misstate, and whether
+/// any is unknown, which is never taken for young.
+fn age_range<'a>(members: impl Iterator<Item = &'a Placed>) -> Line {
+    let mut known: Option<(Micros, Micros)> = None;
+    let mut unknown = false;
+    for each in members {
+        match each.age {
+            Some(age) => {
+                known =
+                    Some(known.map_or((age, age), |(least, most)| (least.min(age), most.max(age))));
+            }
+            None => unknown = true,
+        }
+    }
+    let Some((least, most)) = known else {
+        return line("AGE UNKNOWN");
     };
-    let mut marks: Vec<Mark, { IDS as usize }> = placed
+    let (least, most) = (age(least), age(most));
+    let mut range = if least == most {
+        least
+    } else {
+        format(format_args!("{least}-{most}"))
+    };
+    if unknown {
+        _ = range.push_str(" / UNKNOWN");
+    }
+    range
+}
+
+/// A sector's summary: how many members it holds and their ages' range.
+fn summary(rim: &Rim, placed: &[Placed]) -> Line {
+    format(format_args!(
+        "{:02} PEERS / {}",
+        rim.count(),
+        age_range(placed.iter().filter(|each| rim.holds(each)))
+    ))
+}
+
+/// The degrees either side of its middle that text `width` pixels wide takes when it runs
+/// along the circle of `radius`, its inner corners included.
+fn half_angle(width: f32, radius: f32) -> f32 {
+    libm::atan2f(width / 2.0, radius - LABEL_HALF_HEIGHT).to_degrees()
+}
+
+/// `degrees` brought into `-180.0..180.0`.
+fn signed(degrees: f32) -> f32 {
+    around(degrees + 180.0) - 180.0
+}
+
+/// Gathers the members at `angles` on screen into what the rim shows, so that no two labels'
+/// ink comes within [`LABEL_GAP`] of each other: the neighbours that overlap most merge first,
+/// into a sector, and the selected member, which never moves, takes its neighbours into its own.
+/// Only the members' angles relative to each other count, so turning the face does not regroup
+/// it.
+fn crowd(
+    placed: &[Placed],
+    angles: &[f32],
+    selected: Option<u8>,
+    font: &FontdueRenderer<'static, Color>,
+) -> Vec<Rim, { IDS as usize }> {
+    let label = style(font, chrome::WHITE, 11, Face::Mono.index());
+    let width = |text: &str| label.baseline_bounds(text, Point::zero()).size.width as f32;
+    let node = libm::atan2f(
+        NODE_HALF as f32 * core::f32::consts::SQRT_2,
+        NODE_RADIUS - NODE_HALF as f32,
+    )
+    .to_degrees();
+    let member = |id: u8| placed.iter().find(|each| each.id == id);
+    let covers = |rim: &Rim| -> (f32, f32) {
+        let (mut from, mut to) = (0.0, rim.extent);
+        let mut take = |at: f32, half: f32| {
+            from = f32::min(from, at - half);
+            to = f32::max(to, at + half);
+        };
+        if let Some((id, angle)) = rim.selected {
+            let text = member(id).map(member_label).unwrap_or_default();
+            take(
+                around(angle - rim.start),
+                half_angle(width(&text), LABEL_RADIUS).max(node),
+            );
+        } else if rim.is_sector() {
+            take(
+                rim.extent / 2.0,
+                half_angle(width(&summary(rim, placed)), SUMMARY_RADIUS),
+            );
+        } else if let Some(each) = placed.iter().find(|each| rim.holds(each)) {
+            take(
+                0.0,
+                half_angle(width(&member_label(each)), LABEL_RADIUS).max(node),
+            );
+        }
+        (from, to)
+    };
+    let gap = (LABEL_GAP / (SUMMARY_RADIUS - LABEL_HALF_HEIGHT)).to_degrees();
+    let mut rims: Vec<Rim, { IDS as usize }> = placed
         .iter()
-        .zip(bearings)
-        .map(|(each, &bearing)| Mark {
-            bearing,
-            ids: 1 << each.id,
+        .zip(angles)
+        .map(|(each, &angle)| {
+            let mut rim = Rim {
+                start: angle,
+                extent: 0.0,
+                ids: 1 << each.id,
+                selected: (Some(each.id) == selected).then_some((each.id, angle)),
+                covers: (0.0, 0.0),
+            };
+            rim.covers = covers(&rim);
+            rim
         })
         .collect();
-    marks.sort_unstable_by(|a, b| a.bearing.total_cmp(&b.bearing));
-    while marks.len() > 1 {
-        let n = marks.len();
+    rims.sort_unstable_by(|a, b| a.start.total_cmp(&b.start));
+    while rims.len() > 1 {
+        let n = rims.len();
         let overlap = |i: usize| {
-            let (a, b) = (&marks[i], &marks[(i + 1) % n]);
-            let apart = around(b.bearing - a.bearing).to_radians() * LABEL_RADIUS;
-            (width(a) + width(b)) / 2.0 + LABEL_GAP - apart
+            let (a, b) = (&rims[i], &rims[(i + 1) % n]);
+            gap - signed(b.start + b.covers.0 - (a.start + a.covers.1))
         };
         let Some(i) = (0..n)
             .map(|i| (i, overlap(i)))
@@ -548,21 +668,24 @@ fn marks(
             break;
         };
         let j = (i + 1) % n;
-        let (a, b) = (marks[i], marks[j]);
-        let apart = around(b.bearing - a.bearing);
-        let (na, nb) = (a.count() as f32, b.count() as f32);
-        marks[i] = Mark {
-            bearing: around(a.bearing + apart * nb / (na + nb)),
+        let (a, b) = (rims[i], rims[j]);
+        let mut merged = Rim {
+            start: a.start,
+            extent: around(b.start - a.start) + b.extent,
             ids: a.ids | b.ids,
+            selected: a.selected.or(b.selected),
+            covers: (0.0, 0.0),
         };
-        marks.remove(j);
-        marks.sort_unstable_by(|a, b| a.bearing.total_cmp(&b.bearing));
+        merged.covers = covers(&merged);
+        rims[i] = merged;
+        rims.remove(j);
+        rims.sort_unstable_by(|a, b| a.start.total_cmp(&b.start));
     }
-    marks
+    rims
 }
 
-/// The ring with its nodes, gapped under each, the forward tick, the north mark and the
-/// middle's heading marker.
+/// The ring with its nodes, gapped under each, the sectors, the forward tick, the north mark
+/// and the middle's heading marker.
 fn ring(
     list: &mut List,
     context: &Context,
@@ -571,27 +694,33 @@ fn ring(
     own: (i32, i32),
     font: &FontdueRenderer<'static, Color>,
 ) {
+    // Every angle on screen is an absolute bearing less the one heading, so that nothing on
+    // the rim drifts from another as the face turns.
     let turn = f32::from(context.heading.unwrap_or(0));
-    let bearings: Vec<f32, { IDS as usize }> = placed
+    let angles: Vec<f32, { IDS as usize }> = placed
         .iter()
-        .map(|each| bearing_distance(own, each.coordinates).0)
+        .map(|each| around(bearing_distance(own, each.coordinates).0 - turn))
         .collect();
-    let marks = marks(placed, &bearings, font);
-    // Each mark's angle on screen, clockwise from up, its node's centre and the ring's gap
-    // under it.
-    let nodes: Vec<(f32, Point, (f32, f32)), { IDS as usize }> = marks
+    let rims = crowd(placed, &angles, selected, font);
+    // Each node's member, its angle on screen, its centre and the ring's gap under it: every
+    // member on its own, and the selected member in its sector.
+    let nodes: Vec<(u8, f32, Point, (f32, f32)), { IDS as usize }> = rims
         .iter()
-        .map(|mark| {
-            let angle = around(mark.bearing - turn);
+        .filter_map(|rim| {
+            let (id, angle) = match rim.selected {
+                Some(selected) => selected,
+                None if !rim.is_sector() => (rim.ids.trailing_zeros() as u8, rim.start),
+                None => return None,
+            };
             let node = on_circle(angle, NODE_RADIUS);
-            (angle, node, gap(angle, node))
+            Some((id, angle, node, gap(angle, node, RING)))
         })
         .collect();
     match nodes.len() {
         0 => list.arc(ring_arc(WHOLE)),
         n => {
-            for (i, &(angle, _, (_, after))) in nodes.iter().enumerate() {
-                let (next, _, (before, _)) = nodes[(i + 1) % n];
+            for (i, &(_, angle, _, (_, after))) in nodes.iter().enumerate() {
+                let (_, next, _, (before, _)) = nodes[(i + 1) % n];
                 let mut end = next - before;
                 let start = angle + after;
                 while end <= start {
@@ -601,43 +730,77 @@ fn ring(
             }
         }
     }
-    let tick_clear = nodes.iter().all(|&(angle, _, (before, after))| {
-        let from_up = if angle > 180.0 { angle - 360.0 } else { angle };
-        from_up > before + 1.0 || from_up < -after - 1.0
-    });
+    let up_clear = |from: f32, to: f32| {
+        let from_up = signed(from);
+        from_up > 1.0 || from_up + (to - from) < -1.0
+    };
+    let tick_clear = nodes
+        .iter()
+        .all(|&(_, angle, _, (before, after))| up_clear(angle - before, angle + after))
+        && rims
+            .iter()
+            .filter(|rim| rim.is_sector())
+            .all(|rim| up_clear(rim.start, rim.start + rim.extent));
     if tick_clear {
         list.path(&[(932, 60), (932, 112)], 4, chrome::GRAY);
     }
     north(list, context.heading);
-    for (mark, &(angle, node, _)) in marks.iter().zip(&nodes) {
-        let shown = placed
-            .iter()
-            .find(|each| Some(each.id) == selected && mark.ids & 1 << each.id != 0)
-            .or_else(|| freshest(placed.iter().filter(|each| mark.ids & 1 << each.id != 0)));
-        let Some(shown) = shown else {
+    for rim in rims.iter().filter(|rim| rim.is_sector()) {
+        let color = if rim.selected.is_some() {
+            chrome::LIME
+        } else {
+            chrome::GRAY
+        };
+        sector(list, rim, &nodes, color);
+        if rim.selected.is_none() {
+            list.push(Shape::Turned(Turned {
+                text: summary(rim, placed),
+                face: Face::Mono,
+                size: 11,
+                color,
+                center: on_circle(rim.middle(), SUMMARY_RADIUS),
+                angle: tenths(rim.middle()),
+            }));
+        }
+    }
+    for &(id, angle, node, _) in &nodes {
+        let Some(each) = placed.iter().find(|each| each.id == id) else {
             continue;
         };
-        let color = if Some(shown.id) == selected {
+        let color = if Some(id) == selected {
             chrome::LIME
         } else {
             chrome::WHITE
         };
-        node_frame(list, node, shown.age.is_some_and(|age| age < RECENT), color);
-        let age_text = shown.age.map_or_else(|| line("--"), age);
-        let more = mark.count() - 1;
-        let label = if more == 0 {
-            format(format_args!("{:02} / {age_text}", shown.id))
-        } else {
-            format(format_args!("{:02} +{more} / {age_text}", shown.id))
-        };
+        node_frame(list, node, each.age.is_some_and(|age| age < RECENT), color);
         list.push(Shape::Turned(Turned {
-            text: label,
+            text: member_label(each),
             face: Face::Mono,
             size: 11,
             color,
             center: on_circle(angle, LABEL_RADIUS),
             angle: tenths(angle),
         }));
+    }
+    if let Some(rim) = rims
+        .iter()
+        .find(|rim| rim.selected.is_some() && rim.is_sector())
+    {
+        let others = placed
+            .iter()
+            .filter(|each| rim.holds(each) && Some(each.id) != selected);
+        list.centred(
+            &format(format_args!(
+                "SECTOR +{:02} / {}",
+                rim.count() - 1,
+                age_range(others)
+            )),
+            233,
+            SECTOR_TOP,
+            Face::Mono,
+            11,
+            chrome::GRAY,
+        );
     }
     list.arc(Arc {
         center: CENTER,
@@ -651,6 +814,60 @@ fn ring(
     } else {
         list.path(&[(900, 932), (964, 932)], 4, chrome::GRAY);
         list.path(&[(932, 900), (932, 964)], 4, chrome::GRAY);
+    }
+}
+
+/// A sector's arc over its members' bearings, broken where a node sits on it, and the radial
+/// marks at its ends; one whose members share a bearing is a single mark.
+fn sector(list: &mut List, rim: &Rim, nodes: &[(u8, f32, Point, (f32, f32))], color: Color) {
+    let end = rim.start + rim.extent;
+    // The angles under the node a sector holds, where neither its arc nor its marks are drawn.
+    let under: Option<(f32, f32)> = rim.selected.and_then(|(id, _)| {
+        let &(_, angle, node, _) = nodes.iter().find(|held| held.0 == id)?;
+        let (before, after) = gap(angle, node, SECTOR_RADIUS);
+        let at = rim.start + around(angle - rim.start);
+        Some((at - before, at + after))
+    });
+    let mut arc = |from: f32, to: f32| {
+        if to > from {
+            list.arc(Arc {
+                center: CENTER,
+                radius: (SECTOR_RADIUS * 4.0) as u16,
+                width: 4,
+                span: (tenths(from - 90.0), tenths(to - 90.0)),
+                color,
+            });
+        }
+    };
+    match under {
+        Some((from, to)) => {
+            arc(rim.start, from.min(end));
+            arc(to.max(rim.start), end);
+        }
+        None => arc(rim.start, end),
+    }
+    for at in [rim.start, end] {
+        if under.is_some_and(|(from, to)| (from..=to).contains(&at)) {
+            continue;
+        }
+        let quarter = |radius: f32| {
+            let (sin, cos) = libm::sincosf(at.to_radians());
+            (
+                libm::roundf((CX + sin * radius) * 4.0) as i16,
+                libm::roundf((CY - cos * radius) * 4.0) as i16,
+            )
+        };
+        list.path(
+            &[
+                quarter(SECTOR_RADIUS - SECTOR_MARK),
+                quarter(SECTOR_RADIUS + SECTOR_MARK),
+            ],
+            4,
+            color,
+        );
+        if rim.extent == 0.0 {
+            break;
+        }
     }
 }
 
@@ -690,11 +907,12 @@ fn node_frame(list: &mut List, node: Point, recent: bool, color: Color) {
     }
 }
 
-/// How far, in degrees either side of a node at `angle`, the ring runs under its frame.
-fn gap(angle: f32, node: Point) -> (f32, f32) {
+/// How far, in degrees either side of a node at `angle`, the circle of `radius` runs under its
+/// frame.
+fn gap(angle: f32, node: Point, radius: f32) -> (f32, f32) {
     let outside = |degrees: f32| {
         let (sin, cos) = libm::sincosf(degrees.to_radians());
-        let (x, y) = (CX + sin * RING, CY - cos * RING);
+        let (x, y) = (CX + sin * radius, CY - cos * radius);
         (x - node.x as f32).abs().max((y - node.y as f32).abs()) > NODE_HALF as f32 + 0.5
     };
     let side = |direction: f32| {
@@ -1017,6 +1235,158 @@ mod tests {
         assert_eq!(distance(999.6), (line("1.0"), "KILOMETRES"));
         assert_eq!(distance(12_340.0).0, "12.3");
         assert_eq!(distance(464_000.0), (line("464"), "KILOMETRES"));
+    }
+
+    fn font() -> FontdueRenderer<'static, Color> {
+        FontdueRenderer::new(
+            chrome::FontdueRendererCtx::new_rc(),
+            20,
+            chrome::WHITE,
+            chrome::FONTS,
+        )
+    }
+
+    /// Members 1 on, at `angles` on screen, each `age` seconds old if it has one.
+    fn members(angles: &[(f32, Option<u64>)]) -> (Placements, Vec<f32, { IDS as usize }>) {
+        let placed = (1..)
+            .zip(angles)
+            .map(|(id, &(_, age))| Placed {
+                id,
+                device: [id; 8],
+                coordinates: (0, 0),
+                age: age.map(|age| age * SECOND),
+                heard: None,
+            })
+            .collect();
+        (placed, angles.iter().map(|&(angle, _)| angle).collect())
+    }
+
+    /// Where each rim's ink starts and ends on screen, in order round the face.
+    fn spans(rims: &[Rim]) -> std::vec::Vec<(f32, f32)> {
+        rims.iter()
+            .map(|rim| (rim.start + rim.covers.0, rim.start + rim.covers.1))
+            .collect()
+    }
+
+    fn assert_apart(rims: &[Rim]) {
+        let gap = (LABEL_GAP / (SUMMARY_RADIUS - LABEL_HALF_HEIGHT)).to_degrees();
+        let spans = spans(rims);
+        for i in 0..spans.len() {
+            let next = spans[(i + 1) % spans.len()];
+            if spans.len() > 1 {
+                let apart = signed(next.0 - spans[i].1);
+                assert!(apart >= gap - 1e-3, "{i}: {apart} in {spans:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_crowded_ring_keeps_every_label_apart_and_the_selection_exact() {
+        // 31 members, a dense run of eleven and the rest spread by the golden angle.
+        let angles: std::vec::Vec<(f32, Option<u64>)> = (1..32u16)
+            .map(|id| {
+                let angle = if id < 12 {
+                    40.0 + f32::from(id)
+                } else {
+                    f32::from(id) * 137.5 % 360.0
+                };
+                (angle, Some(u64::from(id) * 7))
+            })
+            .collect();
+        let (placed, angles) = members(&angles);
+        let font = font();
+        for selected in [3, 20] {
+            for turn in [0.0, 137.0, 359.5] {
+                let turned: Vec<f32, { IDS as usize }> =
+                    angles.iter().map(|angle| around(angle - turn)).collect();
+                let rims = crowd(&placed, &turned, Some(selected), &font);
+                assert_apart(&rims);
+                let held: u32 = rims.iter().map(|rim| rim.ids).fold(0, |all, ids| {
+                    assert_eq!(all & ids, 0, "a member in two places");
+                    all | ids
+                });
+                assert_eq!(held.count_ones(), 31);
+                let rim = rims
+                    .iter()
+                    .find(|rim| rim.selected.is_some())
+                    .expect("the selected member is on the rim");
+                assert_eq!(
+                    rim.selected,
+                    Some((selected, turned[usize::from(selected) - 1]))
+                );
+                assert!(rims.iter().filter(|rim| rim.is_sector()).count() >= 1);
+            }
+        }
+    }
+
+    #[test]
+    fn turning_the_face_does_not_regroup_it() {
+        let angles: std::vec::Vec<(f32, Option<u64>)> = (0..20u16)
+            .map(|i| (f32::from(i * i) * 7.3 % 360.0, Some(30)))
+            .collect();
+        let (placed, angles) = members(&angles);
+        let font = font();
+        let groups = |turn: f32| {
+            let turned: Vec<f32, { IDS as usize }> =
+                angles.iter().map(|angle| around(angle - turn)).collect();
+            let mut ids: std::vec::Vec<u32> = crowd(&placed, &turned, Some(4), &font)
+                .iter()
+                .map(|rim| rim.ids)
+                .collect();
+            ids.sort_unstable();
+            ids
+        };
+        let first = groups(0.0);
+        for turn in [1.0, 45.5, 180.0, 271.25, 359.0] {
+            assert_eq!(groups(turn), first, "{turn}");
+        }
+    }
+
+    #[test]
+    fn a_sector_across_north_spans_the_least_arc() {
+        let (placed, angles) = members(&[
+            (355.0, Some(11)),
+            (358.0, Some(20)),
+            (2.0, Some(60)),
+            (5.0, Some(1_080)),
+            (180.0, Some(30)),
+        ]);
+        let rims = crowd(&placed, &angles, Some(5), &font());
+        let sector = rims.iter().find(|rim| rim.is_sector()).unwrap();
+        assert_eq!(sector.count(), 4);
+        assert!((sector.start - 355.0).abs() < 1e-3, "{sector:?}");
+        assert!((sector.extent - 10.0).abs() < 1e-3, "{sector:?}");
+        assert_eq!(summary(sector, &placed), "04 PEERS / 11S-18M");
+    }
+
+    #[test]
+    fn coincident_bearings_are_a_sector_of_no_width() {
+        let (placed, angles) = members(&[(90.0, Some(11)); 5]);
+        let rims = crowd(&placed, &angles, None, &font());
+        assert_eq!(rims.len(), 1);
+        assert_eq!((rims[0].count(), rims[0].extent), (5, 0.0));
+        // With one of them selected, it keeps its node, and the rest are its sector.
+        let rims = crowd(&placed, &angles, Some(2), &font());
+        assert_eq!(rims.len(), 1);
+        assert_eq!(rims[0].selected, Some((2, 90.0)));
+    }
+
+    #[test]
+    fn members_with_room_keep_their_own_nodes() {
+        let (placed, angles) = members(&[(0.0, Some(1)), (90.0, None), (180.0, Some(3_600))]);
+        let rims = crowd(&placed, &angles, Some(1), &font());
+        assert_eq!(rims.len(), 3);
+        assert!(rims.iter().all(|rim| !rim.is_sector()));
+    }
+
+    #[test]
+    fn an_age_range_is_its_youngest_and_oldest() {
+        let (placed, _) = members(&[(0.0, Some(23)), (0.0, Some(420)), (0.0, Some(60))]);
+        assert_eq!(age_range(placed.iter()), "23S-07M");
+        assert_eq!(age_range(placed[..1].iter()), "23S");
+        let (unknown, _) = members(&[(0.0, Some(23)), (0.0, None)]);
+        assert_eq!(age_range(unknown.iter()), "23S / UNKNOWN");
+        assert_eq!(age_range(unknown[1..].iter()), "AGE UNKNOWN");
     }
 
     #[test]

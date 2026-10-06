@@ -61,14 +61,17 @@ fn member(now: u64) -> MemberView {
 /// A group of eight, this device first, with `placed` members of [`PLACED`] placed at `now`.
 fn group(placed: &[(f64, f64, u64)], now: u64) -> GroupView {
     let mut members = [None; IDS as usize];
-    for slot in members.iter_mut().take(8) {
-        *slot = Some(member(now));
+    for (id, slot) in members.iter_mut().enumerate().take(8) {
+        *slot = Some(MemberView {
+            device: [0x9c, 0x2a, 0x7f, 0x10, 0, 0, 0, id as u8],
+            ..member(now)
+        });
     }
     for (id, &(bearing, metres, age)) in placed.iter().enumerate() {
-        members[id + 1] = Some(MemberView {
+        members[id + 1] = members[id + 1].map(|member| MemberView {
             position: Position::At(now as i64 - (age * SECOND) as i64),
             coordinates: Some(at(DUBLIN, bearing, metres)),
-            ..member(now)
+            ..member
         });
     }
     GroupView { own: 0, members }
@@ -214,6 +217,7 @@ fn every_member_of_a_crowded_ring_can_be_selected() {
                 f64::from(id) * 137.5 % 360.0
             };
             group.members[usize::from(id)] = Some(MemberView {
+                device: [0x9c, 0x2a, 0x7f, 0x10, 0, 0, 0, id],
                 position: Position::At(now as i64 - i64::from(id) * SECOND as i64),
                 coordinates: Some(at(DUBLIN, bearing, 100.0 * f64::from(id))),
                 ..member(now)

@@ -206,6 +206,13 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
             ("members-heading-unavailable", "MEMBERS / NORTH UP"),
             ("members-selected-next", "MEMBERS / NEXT"),
             ("members-crowded", "MEMBERS / CROWDED"),
+            ("members-05-crowded-selected-exact", "MEMBERS / SECTOR"),
+            ("members-06-next-peer-exact", "MEMBERS / SECTOR NEXT"),
+            (
+                "members-07-north-crossing-cluster",
+                "MEMBERS / ACROSS NORTH",
+            ),
+            ("members-08-crowded-north-up", "MEMBERS / SECTOR NORTH UP"),
             ("members-no-own-fix", "MEMBERS / NO OWN FIX"),
             ("members-none", "MEMBERS / NO POSITIONS"),
             ("members-no-group", "MEMBERS / NO GROUP"),
