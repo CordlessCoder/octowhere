@@ -219,7 +219,7 @@ fn rows(events: &Events) -> Rows {
     events
         .ordered()
         .map(|event| {
-            let height = rows::height(event);
+            let height = rows::height(&event);
             let row = (event.id, top, height);
             top += height;
             row
@@ -569,7 +569,7 @@ impl Drawer {
                         }
                     }
                     _ => {
-                        if rows::dismiss_button(event)
+                        if rows::dismiss_button(&event)
                             .is_some_and(|area| parts::pressed(area, point))
                             && events.dismiss(id).is_ok()
                         {
@@ -823,7 +823,7 @@ impl Drawer {
         match self.child {
             Some(Child::Event(id)) => {
                 if let Some(event) = context.events.get(id) {
-                    rows::detail(list, event, context);
+                    rows::detail(list, &event, context);
                 }
             }
             Some(Child::Manage) => manage(list, context),
@@ -901,7 +901,7 @@ impl Drawer {
                 let top = VIEWPORT.top_left.y + top - offset;
                 if top < VIEWPORT.top_left.y + VIEWPORT_HEIGHT && top + height > VIEWPORT.top_left.y
                 {
-                    rows::row(list, event, top, height, context);
+                    rows::row(list, &event, top, height, context);
                 }
             }
             list.clip(None);

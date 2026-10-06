@@ -13,12 +13,12 @@ use super::{
 use crate::{
     chrome::{self, Color, FontdueRenderer},
     ui::{
+        events::CONVERSATIONS,
         gesture::Micros,
         group::{
             layout::{Face, Line, List, format, rect},
             view::{
-                Carriage, GroupView, IDS, MemberView, MessageView, MessagesView, Name, TEXT_MAX,
-                Thread,
+                Carriage, GroupView, MemberView, MessageView, MessagesView, Name, TEXT_MAX, Thread,
             },
         },
         text::{self, style, wrap},
@@ -53,8 +53,6 @@ const IDENTITY_TOP: i32 = 117;
 const ENDED_VIEWPORT: Rectangle = rect(0, 142, WIDTH, 370);
 const ENDED_REASON_TOP: i32 = 381;
 const GONE: &str = "Recipient is no longer a member.";
-/// The most conversations: the group's and one with each other member.
-const CONVERSATIONS: usize = IDS as usize + 1;
 
 /// What the messages screens show: the messages and the group they come from.
 #[derive(Clone, Copy)]
@@ -251,27 +249,35 @@ pub struct Conversation {
     pub unread: usize,
 }
 
-/// The conversations with messages, newest first.
+/// The conversations with messages, newest first, as many as [`CONVERSATIONS`]: every one with
+/// unread messages before any without, so that only one past the bound of those can be left out.
 #[must_use]
 pub fn conversations(mail: &Mail) -> Vec<Conversation, CONVERSATIONS> {
     let own = mail.own();
     let mut list: Vec<Conversation, CONVERSATIONS> = Vec::new();
+    for unread_only in [true, false] {
+        for message in mail.all().rev() {
+            let thread = message.thread(own);
+            if (unread_only && !message.unread) || list.iter().any(|held| held.thread == thread) {
+                continue;
+            }
+            let conversation = Conversation {
+                thread,
+                newest: message.id,
+                at: message.at,
+                unread: 0,
+            };
+            if list.push(conversation).is_err() {
+                break;
+            }
+        }
+    }
     for message in mail.all() {
         let thread = message.thread(own);
-        match list.iter_mut().find(|held| held.thread == thread) {
-            Some(held) => {
-                held.newest = message.id;
-                held.at = message.at;
-                held.unread += usize::from(message.unread);
-            }
-            None => {
-                _ = list.push(Conversation {
-                    thread,
-                    newest: message.id,
-                    at: message.at,
-                    unread: usize::from(message.unread),
-                });
-            }
+        if let Some(held) = list.iter_mut().find(|held| held.thread == thread) {
+            held.newest = message.id;
+            held.at = message.at;
+            held.unread += usize::from(message.unread);
         }
     }
     list.sort_unstable_by_key(|held| core::cmp::Reverse((held.at, held.newest)));

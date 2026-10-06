@@ -385,8 +385,21 @@ targets). The Messages root beside it is the inbox ("Messages as built"). The
 backdrop is the settings panel's halftone, breathing on the 10 s cycle and kept 2 px clear of
 every text's ink. Where the build chose what the hand-off left open:
 
-- **Capacity.** 16 events in RAM, lost at a restart. A new event takes the place of the oldest
-  settled one, a read one first; an event still going on is never dropped.
+- **Capacity** (the 2026-10-05 hand-off). Events live in RAM and a restart loses them. Live
+  events are kept by the state they show and never dropped: a GNSS incident under way, a
+  removal the mesh shows, this device's own removal while the mesh says so, and a conversation
+  with unread messages. Only settled events are history, at most 16; a new one takes the place
+  of the oldest, a read one first. So the drawer can list more than 16, up to 16 + 4 + 64, and
+  its counts, scroll and unread arc follow all of them. A live event cannot be dismissed or
+  cleared, since its state would bring it back; it is history once that state ends, keeping
+  its id, so an open detail and the list's scroll anchor stay with it. A conversation's event
+  holds only its thread, counts and newest message's number; the bodies stay in the message
+  store. The list takes 4,208 bytes, against 1,704 before. The inbox and the conversations'
+  events hold 64 each, the group and every member and as many devices again that held their
+  ids; the inbox lists every conversation with unread messages before any without. Only a
+  65th conversation with unread messages, which needs 31 members replaced within a day, waits
+  untold and unlisted until an older one is read; the unread arc and the inbox's count include
+  it throughout.
 - **One event each.** A GNSS incident runs from the module stopping to its answering again.
   The user is told of a new incident, its escalation to a fault and the module answering
   again: each marks the event unread, moves it to the top, and shows a toast. The second and

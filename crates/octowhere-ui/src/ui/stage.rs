@@ -1471,7 +1471,7 @@ impl Stage {
         {
             drawer::toast(
                 &mut list,
-                event,
+                &event,
                 &drawer::Context {
                     events: &self.events,
                     gnss: &self.peripherals.gnss,
