@@ -247,6 +247,17 @@ impl<A: Allocator> Removals<A> {
         {
             self.notify = Some((removed, old.0, old.1));
         }
+        if switched.rival {
+            // A member given its place back is no longer told it was removed, and the members
+            // queued were queued for keys undone: each is queued again when heard.
+            self.notify
+                .take_if(|(id, ..)| switched.restored.contains(*id));
+            self.removal_notice.take_if(|notice| {
+                matches!(notice.message.to(), To::Member(id) if switched.restored.contains(id))
+            });
+            self.catch_up.clear();
+            self.kept.forget_after(group.generation());
+        }
         self.kept.keep_only(group.generation(), switched.remover);
         self.changed_kept = Ids::ALL;
         self.switch_round = Some(self.round);

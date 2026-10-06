@@ -523,7 +523,9 @@ Owner, 2026-10-03, except where it says otherwise.
   switch keeps the key before both, and the day the first switch gave; one that removes nobody
   gives the member back and leaves nothing to decline. Any other key that removes nobody leaves
   the last removal to decline, so that no member can take the day away with an empty removal.
-  The members that switched have heard the device on the new key, so they send it no key
+  A rival that goes back past later switches (see "Two at once") can be declined only before
+  its switch: the key the node leaves is not the one the rival replaced, so neither is a state
+  to go back to. The members that switched have heard the device on the new key, so they send it no key
   message again.
 - **The new key.** The remover makes a random group key and sends it to each remaining member as
   a private message, a key message, with its generation, one past the current key's, the round
@@ -600,12 +602,23 @@ Owner, 2026-10-03, except where it says otherwise.
   replace, and the nodes that switched to the winner send it to the members on the loser. The
   other remover makes its removal again under the winner once the member it removed is back.
   A node that switched to the losing key puts back the record of the member that key removed,
-  as the node held it before that switch (owner, 2026-10-04). One of an earlier generation is
-  stale. The simulator's rival scenarios stage these (`crates/octowhere-sim`).
+  as the node held it before that switch (owner, 2026-10-04). A rival can also win over a key
+  a node has switched past since, where its part of the group removed again before the parts
+  met, or switched for a second removal before the rival reached it. The node goes back past
+  every switch since: it puts back the members those keys removed, removes the rival's, and
+  makes its own removals again under the rival (owner, 2026-10-06). It ranks a rival only
+  against a key it still keeps, so up to four switches back; a part further ahead stays apart.
+  The messages the losing part sent while apart are kept and passed on under the rival's key,
+  which the members the losing part removed may hold until they are removed again (owner,
+  2026-10-06). A rival older than the keys kept is stale. The simulator's rival scenarios stage
+  these (`crates/octowhere-sim`).
 - **What is kept across a restart.** A pending removal, the old keys and which members each
-  still waits for, and the key kept to decline the last removal after its switch; the record of
-  the member the last switch removed, the key the group's key replaced, and the removals this
-  device makes again after a rival won over them. The key messages themselves are in the message store, so a restarted node
+  still waits for and the generation of the key message that catches each one's members up,
+  and the key kept to decline the last removal after its switch; for each of the last four
+  switches, who removed, the key it replaced and the member it removed, with that member's
+  record for the last switch alone; and the removals this device makes again after a rival won
+  over them. A member put back without its record has it again from the nodes that never
+  removed it. The key messages themselves are in the message store, so a restarted node
   gets them back from its neighbours within the horizon. A node also keeps in flash the key
   messages for each member still waited for once the round after the switch has passed, and
   deletes them once it waits for that member no more (owner, 2026-10-05): in a group of two,
@@ -918,11 +931,6 @@ protocol does not need this.
   in about 2^16 tries, but the lowest ids, the founder's first, win every race. Each device's
   user is shown both and can decline the one they do not want. Bounding a key message's switch
   round and refusing a key that names no member stop the cheapest uses (owner, 2026-10-03).
-- Two parts of a group apart, one of which removes twice while the other removes once, stay on
-  different keys when the other's removal wins over the first part's first. A node does not go
-  back past a switch it made, which would undo the removals after it, as declining after a
-  switch does. The simulator's `parts_apart_through_two_removals_settle_once_they_meet`,
-  ignored for now, stages it.
 - A message lost on a chain's last hop is repaired only as fast as the last node hears its
   neighbour's next packet: no relay is expected of the last node, and a lone message leaves no
   gap and no settling to show it. In the simulator, a removal crossed a chain of 12 in 40 to

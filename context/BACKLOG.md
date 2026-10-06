@@ -34,10 +34,10 @@ until the feature set is complete, because profiling an incomplete firmware pric
     that each switch before they meet, and a restart before the losing remover removes again.
     Parts apart never settled on one key, in none of 30 seeds; they settle in all of 60 now,
     28 to 69 minutes after they meet. The fixes and the owner's choices of 2026-10-04 are in
-    `LORA-PROTOCOL.md`, "Two at once". Left as the protocol's "Open" item, with an ignored
-    scenario: parts apart where one part removes twice. A second removal still pending as the
-    parts meet ends the same way (2026-10-06, seed 24 of `group(4, _)` with three phantoms): the
-    losing part hears the winning key only after its own second switch.
+    `LORA-PROTOCOL.md`, "Two at once". Parts apart where one part removed twice, or switched for
+    a second removal before the winner reached it, now go back past every switch since (owner,
+    2026-10-06): 40 seeds of each settle, at the median about 10 and 13 minutes after they meet,
+    and within 19.
   - Step 4 is built (2026-10-04): `tools/ui-sim --boards <n>` (up to six) and the web
     simulator's MESH module (up to four) run devices side by side, each a stage stepped on its
     node's clock, taking the node's views and passing its screens' requests on. A click on a

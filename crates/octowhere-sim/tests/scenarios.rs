@@ -447,10 +447,10 @@ fn a_removal_lost_to_a_rival_is_made_again_after_a_restart() {
     assert!(settled, "after {} s:{}", sim.now_s(), stored(&sim, 4));
 }
 
-/// Two parts apart, one of which switches twice. The part ahead does not go back past its own
-/// switches to the rival that won the first, so they stay apart (`LORA-PROTOCOL.md`, "Open").
+/// Two parts apart, one of which switches twice. The part ahead goes back past both of its
+/// switches to the rival that won the first, and its remover makes both removals again
+/// (`LORA-PROTOCOL.md`, "Two at once").
 #[test]
-#[ignore = "a part two removals ahead keeps its own keys"]
 fn parts_apart_through_two_removals_settle_once_they_meet() {
     let mut sim = group(4, 300);
     phantoms(&mut sim, 4, 3);
@@ -465,9 +465,25 @@ fn parts_apart_through_two_removals_settle_once_they_meet() {
         (2..4).all(|node| sim.count(node, "switched to generation 2") == 1)
     });
     sim.link_all(Link::default());
-    let settled = sim.run_while_not(12 * 60 * 60, |sim| {
-        let first = sim.key(0);
-        (1..4).all(|node| sim.key(node) == first && sim.members(node) == sim.members(0))
+    let settled = sim.run_while_not(12 * 60 * 60, |sim| settled(sim, 4, 3, 0b1111));
+    assert!(settled, "after {} s:{}", sim.now_s(), stored(&sim, 4));
+}
+
+/// The same with the second removal still pending as the parts meet. The part ahead hears the
+/// winning key only after its second switch, in this seed, and goes back past both.
+#[test]
+fn parts_meeting_during_a_second_removal_settle() {
+    let mut sim = group(4, 24);
+    phantoms(&mut sim, 4, 3);
+    split(&sim);
+    sim.command(0, Command::Remove(6));
+    sim.command(2, Command::Remove(4));
+    sim.run_while_not(60 * 60, |sim| {
+        (0..4).all(|node| sim.count(node, "switched to generation 1") == 1)
     });
-    assert!(settled, "{}", stored(&sim, 4));
+    sim.command(2, Command::Remove(5));
+    sim.run_while_not(60 * 60, |sim| sim.count(3, "asks to remove 5") == 1);
+    sim.link_all(Link::default());
+    let settled = sim.run_while_not(12 * 60 * 60, |sim| settled(sim, 4, 3, 0b1111));
+    assert!(settled, "after {} s:{}", sim.now_s(), stored(&sim, 4));
 }

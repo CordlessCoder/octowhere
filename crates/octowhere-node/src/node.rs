@@ -21,7 +21,7 @@ use octowhere_mesh::{
     },
     packet::{Entry, Hdop, Header, MAX_PACKET, Plain, Quality, Record, Sealing, Source, Timebase},
     pair::{Done, End, Identity, MAX_FRAME, Pairing, Phase, Role},
-    rekey::{Learned, NewKey, Rekey, key_fingerprint},
+    rekey::{Learned, NewKey, OLD_KEYS, Rekey, key_fingerprint},
     relays::Relays,
     schedule::{
         ROUND_US, airtime_us, is_sweep_round, round_at, round_start_s, second_at, stored_round_at,
@@ -1509,7 +1509,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             {
                 return Opened::Old {
                     header: plain.header,
-                    old: (old.key.clone(), old.generation, old.catches_up_with()),
+                    old: (old.key.clone(), old.generation, old.catches_up_with),
                 };
             }
         }
@@ -1675,8 +1675,8 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
     }
 
     /// Takes from a packet under an old key, opened, the key messages of this node's
-    /// generation: rivals of the key it switched to, which reach it no other way once both
-    /// parts of the group have switched. Nothing else in it is taken.
+    /// generation and the few before it: rivals of the keys it switched to, which reach it no
+    /// other way once both parts of the group have switched. Nothing else in it is taken.
     fn take_rivals(&mut self, plain: &[u8]) {
         let (Some(group), Ok(plain), Some((time, _))) = (
             &self.group,
@@ -1690,7 +1690,12 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             let Record::Message(message) = record else {
                 continue;
             };
-            if !message.is_key() || message.generation() != Some(generation) {
+            // Older than a key this node can still rank, it is no rival it could take.
+            if !message.is_key()
+                || !message
+                    .generation()
+                    .is_some_and(|of| generation.wrapping_sub(of) < OLD_KEYS as u16)
+            {
                 continue;
             }
             match self.messages.insert(message, round_start_s(time)) {
@@ -2200,7 +2205,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             switched.remover,
             switched.removed
         );
-        if let Some(restored) = switched.restored {
+        for restored in switched.restored.iter() {
             warn!("[REKEY] a rival key won; {} is a member again", restored);
             self.unsaved.slot(restored);
         }
