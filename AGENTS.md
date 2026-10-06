@@ -164,6 +164,10 @@ initialization or peripheral mappings.
 - [`context/ui-firmware-review/`](context/ui-firmware-review/README.md) is the 2026-10-04
   code-quality review of the UI crate and the firmware at `b8ab7ca`: its brief, each
   reviewer's findings, and in the README the bugs verified and the findings to take first.
+- [`context/driver-comparison-2026-10-06.md`](context/driver-comparison-2026-10-06.md) weighs
+  the drivers we wrote for the touch controller, PMIC, RTC, magnetometer, panel and GNSS
+  against crates.io's for the same chips, and says why each stays ours. Read it before
+  swapping one for a published crate.
 - [`context/POWER-INVESTIGATION.md`](context/POWER-INVESTIGATION.md) holds what the device's
   power was found to depend on (2026-10-04), from datasheets and sources, none of it measured:
   the parts' draw, esp-rtos's light sleep and what it would break, and contention against slots
