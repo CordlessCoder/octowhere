@@ -657,6 +657,19 @@ impl Group {
         self.digest.set(None);
     }
 
+    /// The gone records whose ids new members took, with those ids, oldest first.
+    pub fn former(&self) -> impl Iterator<Item = (u8, Gone)> + '_ {
+        self.held.former.iter().flatten().copied()
+    }
+
+    /// Keeps `former` as gone records whose ids new members took, as a pairing's welcome
+    /// carries them. None is to be sent: the group they came from holds them.
+    pub fn restore_former(&mut self, former: impl IntoIterator<Item = (u8, Gone)>) {
+        for (id, gone) in former {
+            self.keep_former(id, gone);
+        }
+    }
+
     /// The ids whose slots changed since the last call.
     pub fn take_changed(&mut self) -> Ids {
         core::mem::take(&mut self.changed)

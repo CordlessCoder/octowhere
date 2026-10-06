@@ -21,7 +21,9 @@
 use crate::IDS;
 pub use crate::identity::Identity;
 use crate::identity::{SIGNATURE_LEN, dh_public};
-use crate::members::{Group, MAC_LEN, Member, Name, PUBLIC_LEN, RECORD_MAX_LEN, Slot, stamp};
+use crate::members::{
+    FORMER, GONE_LEN, Gone, Group, MAC_LEN, Member, Name, PUBLIC_LEN, RECORD_MAX_LEN, Slot, stamp,
+};
 use crate::seal::{self, Key, SIV_LEN};
 use alloc::boxed::Box;
 
@@ -29,8 +31,9 @@ use hkdf::Hkdf;
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
 
-/// 2 added the key's generation and gone records to the group's transfer.
-pub const VERSION: u8 = 2;
+/// 2 added the key's generation and gone records to the group's transfer, 3 the gone records of
+/// ids since given to new members.
+pub const VERSION: u8 = 3;
 /// The radio's largest payload.
 pub const MAX_FRAME: usize = 255;
 pub const NONCE_LEN: usize = 16;
@@ -85,8 +88,8 @@ const SEALED_HEADER: usize = 2 + SESSION_LEN;
 const PART_HEADER: usize = 3;
 const PART_DATA: usize = MAX_FRAME - SEALED_HEADER - SIV_LEN - PART_HEADER;
 /// The key, its generation, the joining device's id, the count, then each slot's record behind
-/// its length.
-const WELCOME_MAX: usize = 32 + 2 + 2 + IDS as usize * (1 + RECORD_MAX_LEN);
+/// its length; then the count of former members' gone records, and each of them.
+const WELCOME_MAX: usize = 32 + 2 + 2 + IDS as usize * (1 + RECORD_MAX_LEN) + 1 + FORMER * GONE_LEN;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -1043,6 +1046,16 @@ fn welcome(group: &Group, id: u8, out: &mut [u8; WELCOME_MAX]) -> usize {
         count += 1;
     }
     out[35] = count;
+    let former_at = len;
+    len += 1;
+    let mut former = 0;
+    for (id, gone) in group.former() {
+        let record: &mut [u8; GONE_LEN] = (&mut out[len..len + GONE_LEN]).try_into().unwrap();
+        gone.encode(id, record);
+        len += GONE_LEN;
+        former += 1;
+    }
+    out[former_at] = former;
     len
 }
 
@@ -1061,16 +1074,28 @@ fn read_welcome(blob: &[u8]) -> Option<Group> {
         slots[usize::from(id)] = Some(slot);
         rest = after;
     }
-    if !rest.is_empty() {
+    let (&count, mut rest) = rest.split_first()?;
+    let mut former = [None; FORMER];
+    for held in former.iter_mut().take(usize::from(count)) {
+        let (record, after) = rest.split_at_checked(GONE_LEN)?;
+        *held = Some(Gone::decode(record)?);
+        rest = after;
+    }
+    if usize::from(count) > FORMER || !rest.is_empty() {
         return None;
     }
-    Group::restore(key, generation, own, slots)
+    let mut group = Group::restore(key, generation, own, slots)?;
+    group.restore_former(former.into_iter().flatten());
+    Some(group)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::members::{GONE_LEN, Gone, tests::member};
+    use crate::members::{
+        Merged,
+        tests::{left, member, signed},
+    };
 
     /// The welcome as [`welcome`] wrote it before slots had one encoding.
     fn welcome_as_first_written(group: &Group, id: u8) -> alloc::vec::Vec<u8> {
@@ -1110,7 +1135,31 @@ mod tests {
         let group = Group::restore(Key::new([6; 32]), 9, 0, slots).unwrap();
         let mut blob = [0; WELCOME_MAX];
         let len = welcome(&group, 31, &mut blob);
-        assert_eq!(blob[..len], welcome_as_first_written(&group, 31));
+        let mut expected = welcome_as_first_written(&group, 31);
+        // No former members, since version 3.
+        expected.push(0);
+        assert_eq!(blob[..len], expected);
+    }
+
+    /// A device paired in at an id a member left keeps that member's gone record, and so
+    /// refuses the member's older record rather than give up its id.
+    #[test]
+    fn a_welcome_carries_the_members_whose_ids_were_given_again() {
+        let mut slots = [None; IDS as usize];
+        slots[0] = Some(Slot::Member(member(1, 100)));
+        slots[2] = Some(Slot::Gone(left(2, 2, 200)));
+        let mut group = Group::restore(Key::new([6; 32]), 9, 0, slots).unwrap();
+        group.enrol(2, signed(2, 4, 300));
+        let mut blob = [0; WELCOME_MAX];
+        let len = welcome(&group, 2, &mut blob);
+        let mut theirs = read_welcome(&blob[..len]).unwrap();
+        assert_eq!(
+            theirs.former().collect::<alloc::vec::Vec<_>>(),
+            [(2, left(2, 2, 200))]
+        );
+        assert_eq!(theirs.merge(2, signed(2, 2, 150), None), Merged::Unchanged);
+        assert_eq!(theirs.own(), 2);
+        assert!(read_welcome(&blob[..len - 1]).is_none());
     }
 
     #[test]

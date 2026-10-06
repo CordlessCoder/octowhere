@@ -674,7 +674,8 @@ comes. Being built.
   signs it: the welcome gives it its id and the time the adding device dates the record, it
   builds the same record the adding device built, and it returns the signature with its last
   acknowledgement. The adding device checks it before storing the member. The welcome carries
-  every other record with its signature.
+  every other record with its signature, and the gone records of earlier members whose ids it
+  gave again.
 - **Gone records.** One that a device sends as it leaves is signed by that device, after the
   domain string `octowhere gone`, over its id, public key and time. One that a removal makes is
   made by every node at its own switch, carries no signature, and is never sent. A node takes a
@@ -753,8 +754,11 @@ transcript. A key whose shared secret is not contributory ends the pairing.
   cancel, or a failed store; it is sent three times, a second apart. A device the other never hears
   from again reaches its own deadline.
 - **Transfer.** Once the joining device's accept and its own user's confirmation are both in, the
-  adding device sends the group key, the joining device's id and every member's record, 226 bytes
-  a part. Each part waits for its acknowledgement and is resent a second later without it; 30 s
+  adding device sends the group key, the joining device's id and every member's record, and
+  the gone records of up to eight earlier members whose ids it gave again, 226 bytes a part.
+  Without those, a device paired in at such an id could take the earlier member's older record
+  for a rival and move to another id. They came with version 3 of the frames (2026-10-06), and
+  a device refuses frames of another version, so both devices of a pairing need it. Each part waits for its acknowledgement and is resent a second later without it; 30 s
   without progress loses contact. A full group of 32 is ten parts.
 - **Commit order.** The joining device stores the group before it acknowledges the last part. The
   adding device stores the new member on that acknowledgement, then sends done, and stays 5 s to
