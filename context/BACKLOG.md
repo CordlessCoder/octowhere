@@ -199,6 +199,15 @@ until the feature set is complete, because profiling an incomplete firmware pric
   controller does not work on this board: every read comes back as zeros, on either reply line
   and at 5 MHz, which the datasheet's 100 ns read cycle needs, and the schematic leaves the
   connector's pin 19 unconnected. The crate keeps the scan line for a board that wires it.
+- Shorten the display's start-up (owner, 2026-10-06). `second_core` brings the CO5300 up in
+  `Co5300::new` (`crates/co5300/src/lib.rs`), beside core 0's `bring_up`, so it can delay only
+  the first frame the panel shows. Its fixed waits come to about 260 ms: the reset's 10 ms low
+  and a second pulse, 120 ms after the reset (`RESET_MS`), 120 ms after sleep out (`SLPOUT_MS`)
+  and 10 ms after `MADCTL`. Check each against the datasheet's minimum. The second reset pulse
+  comes from the vendor's driver, not the datasheet; drop it if a board starts without it.
+  Nothing marks when the display is up: `bench/startup-timing` has the frame loop's first frame
+  at 852 to 909 ms from the timer's start, but neither core 1's start nor `[DISPLAY] OK`. Add
+  those marks first, to see whether the first flush waits for the display at all.
 - Build step 7 of [`LORA-PROTOCOL.md`](LORA-PROTOCOL.md)'s "Build order", pruning relays from
   the gossiped graph (its "Pruning, later"). Steps 1 to 4 and 6 are built, with their screens,
   and ran on the two boards; contention replaced the slots on 2026-10-05 (owner; the protocol's
@@ -357,8 +366,6 @@ until the feature set is complete, because profiling an incomplete firmware pric
   - The display's flush now streams into the window `Co5300::set_window` returns. Both boards
     ran it with no errors logged; look at a panel through a few page turns and a drag of the
     settings panel to confirm nothing is offset.
-  - The CO5300's reset sends a second low pulse straight after the first, from the vendor's
-    driver; the datasheet asks for one. Dropping it needs a board start-up to confirm.
 - Left by the 2026-10-05 hand-off (`design/DECISIONS.md` 34), which asks for both:
   - The crowded member face's step and draw time on a board, and the drawer's with more than 16
     rows. Two boards can place one member at most, so it needs a `bench/` branch that stands 31
