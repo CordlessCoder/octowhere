@@ -11,6 +11,7 @@ enum Event {
     Begin(u8, u32, Lanes),
     Stream(Vec<u8>),
     End,
+    Abandon,
     Read(u8, u32, usize),
     Reset(bool),
     DelayUs(u32),
@@ -31,6 +32,11 @@ impl Bus for Recorder {
         lanes: Lanes,
         data: &[u8],
     ) -> Result<(), Infallible> {
+        assert!(
+            data.len() <= MAX_PARAMETERS,
+            "{} parameter bytes",
+            data.len()
+        );
         let event = Event::Write(instruction, address, lanes, data.to_vec());
         self.0.borrow_mut().push(event);
         Ok(())
@@ -49,8 +55,9 @@ impl Bus for Recorder {
     }
 
     async fn stream(&mut self, fill: impl FnOnce(&mut [u8]) -> usize) -> Result<(), Infallible> {
-        let mut buffer = [0; 8];
+        let mut buffer = [0; STREAM_ROOM];
         let written = fill(&mut buffer);
+        assert!(written <= STREAM_ROOM, "{written} bytes written");
         self.0
             .borrow_mut()
             .push(Event::Stream(buffer[..written].to_vec()));
@@ -60,6 +67,10 @@ impl Bus for Recorder {
     async fn end(&mut self) -> Result<(), Infallible> {
         self.0.borrow_mut().push(Event::End);
         Ok(())
+    }
+
+    fn abandon(&mut self) {
+        self.0.borrow_mut().push(Event::Abandon);
     }
 
     /// Answers every read with [`REPLY`].
@@ -282,7 +293,15 @@ fn a_window_goes_out_offset_with_inclusive_ends() {
 
 #[test]
 fn windows_widen_to_the_grain_and_stay_on_the_panel() {
-    let window = |x, y, w, h| even_window(&PANEL, x, y, w, h);
+    let window = |x, y, w, h| {
+        let Window {
+            x,
+            y,
+            width,
+            height,
+        } = even_window(&PANEL, x, y, w, h);
+        (x, y, width, height)
+    };
     assert_eq!(window(0, 0, 466, 466), (0, 0, 466, 466));
     assert_eq!(
         window(3, 5, 4, 4),
@@ -307,6 +326,26 @@ fn windows_widen_to_the_grain_and_stay_on_the_panel() {
 }
 
 #[test]
+fn a_window_set_is_the_one_returned() {
+    let (mut display, log) = started();
+    taken(&log);
+    let window = block_on(display.set_window(3, 5, 4, 4)).unwrap();
+    assert_eq!(
+        window,
+        Window {
+            x: 2,
+            y: 4,
+            width: 6,
+            height: 6
+        }
+    );
+    assert_eq!(
+        taken(&log),
+        vec![command(0x2A, &[0, 8, 0, 13]), command(0x2B, &[0, 4, 0, 9])]
+    );
+}
+
+#[test]
 fn pixels_open_with_a_quad_ramwr_and_pass_each_fill_through() {
     let (mut display, log) = started();
     taken(&log);
@@ -327,6 +366,25 @@ fn pixels_open_with_a_quad_ramwr_and_pass_each_fill_through() {
             Event::Begin(0x12, 0x2C00, Lanes::Quad),
             Event::Stream(vec![0xF8, 0x00]),
             Event::End,
+        ]
+    );
+}
+
+#[test]
+fn pixels_dropped_unfinished_close_the_transaction() {
+    let (mut display, log) = started();
+    taken(&log);
+    block_on(async {
+        let mut pixels = display.pixels().await?;
+        pixels.fill(|_| 0).await
+    })
+    .unwrap();
+    assert_eq!(
+        taken(&log),
+        vec![
+            Event::Begin(0x12, 0x2C00, Lanes::Quad),
+            Event::Stream(vec![]),
+            Event::Abandon,
         ]
     );
 }

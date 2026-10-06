@@ -17,6 +17,13 @@ pub enum Lanes {
     Quad,
 }
 
+/// The most parameter bytes any command here sends.
+pub const MAX_PARAMETERS: usize = 4;
+
+/// The least room a [`Bus::stream`] lends its `fill`, which holds a pixel in every
+/// [`ColorMode`].
+pub const STREAM_ROOM: usize = 256;
+
 /// Half-duplex QSPI writes under chip select, as the controller takes them: an 8-bit
 /// instruction on one line, then a 24-bit address and the data on the transaction's
 /// [`Lanes`].
@@ -27,7 +34,8 @@ pub enum Lanes {
 pub trait Bus {
     type Error;
 
-    /// Writes `data` after `instruction` and `address`, as one transaction.
+    /// Writes `data`, at most [`MAX_PARAMETERS`] bytes, after `instruction` and `address`, as
+    /// one transaction.
     async fn write(
         &mut self,
         instruction: u8,
@@ -45,12 +53,17 @@ pub trait Bus {
         lanes: Lanes,
     ) -> Result<(), Self::Error>;
 
-    /// Adds data to the open transaction: `fill` writes into the buffer it is lent and returns
-    /// how many bytes it wrote. The bus may hold them back until its buffer fills.
+    /// Adds data to the open transaction: `fill` writes into the buffer it is lent, at least
+    /// [`STREAM_ROOM`] bytes, and returns how many bytes it wrote, no more than that buffer
+    /// holds. The bus may hold them back until its buffer fills.
     async fn stream(&mut self, fill: impl FnOnce(&mut [u8]) -> usize) -> Result<(), Self::Error>;
 
     /// Sends what the stream holds back and closes the transaction.
     async fn end(&mut self) -> Result<(), Self::Error>;
+
+    /// Closes the open transaction at once, without what the stream holds back, so that the
+    /// next transaction is not taken as part of it.
+    fn abandon(&mut self);
 
     /// Reads `buffer.len()` bytes after `instruction` and `address`, all on one line. The
     /// controller takes a read's clock cycle no shorter than 100 ns, so at 10 MHz at most.
@@ -199,6 +212,8 @@ impl<B: Bus, RST: OutputPin, TE: Wait, D: DelayNs, C: ColorMode> Co5300<B, RST, 
         Ok(display)
     }
 
+    /// The datasheet asks for one low pulse over 10 µs. The second, and the edge between them,
+    /// come from the vendor's driver this one was first translated from.
     async fn hardware_reset(&mut self) -> Result<(), RST::Error> {
         self.reset.set_low()?;
         self.delay.delay_ms(10).await;
@@ -213,9 +228,12 @@ impl<B: Bus, RST: OutputPin, TE: Wait, D: DelayNs, C: ColorMode> Co5300<B, RST, 
     async fn start(&mut self) -> Result<(), B::Error> {
         self.command(CMD_SLPOUT, &[]).await?;
         self.delay.delay_ms(SLPOUT_MS).await;
+        // The user command set, which every command here is from.
         self.command(CMD_PAGE, &[0x00]).await?;
+        // Pixels written over SPI go to the frame memory (SPI_WRAM).
         self.command(CMD_SPIMODECTL, &[0x80]).await?;
-        // The brightness block on, without dimming between levels.
+        // The brightness block on (BCTRL), without dimming between levels. Without it the
+        // brightness set is ignored.
         self.command(CMD_WCTRLD1, &[0x20]).await?;
         self.set_hbm_brightness(0xFF).await?;
         self.set_brightness(0).await?;
@@ -235,16 +253,24 @@ impl<B: Bus, RST: OutputPin, TE: Wait, D: DelayNs, C: ColorMode> Co5300<B, RST, 
             .await
     }
 
-    /// Sets the window the next pixels go into, widened to the controller's 2 × 2 grain and
-    /// clipped to the panel.
-    pub async fn set_window(&mut self, x: u16, y: u16, w: u16, h: u16) -> Result<(), B::Error> {
-        let (x, y, w, h) = even_window(&self.config, x, y, w, h);
-        let x_start = x + self.config.column_offset;
-        let y_start = y + self.config.row_offset;
-        let columns = [x_start.to_be_bytes(), (x_start + w - 1).to_be_bytes()];
-        let rows = [y_start.to_be_bytes(), (y_start + h - 1).to_be_bytes()];
+    /// Sets the window the next pixels go into: `x, y, w, h` widened to the controller's 2 × 2
+    /// grain and clipped to the panel, at least one cell. Returns that window, which the pixels
+    /// must fill.
+    pub async fn set_window(&mut self, x: u16, y: u16, w: u16, h: u16) -> Result<Window, B::Error> {
+        let window = even_window(&self.config, x, y, w, h);
+        let x_start = window.x + self.config.column_offset;
+        let y_start = window.y + self.config.row_offset;
+        let columns = [
+            x_start.to_be_bytes(),
+            (x_start + window.width - 1).to_be_bytes(),
+        ];
+        let rows = [
+            y_start.to_be_bytes(),
+            (y_start + window.height - 1).to_be_bytes(),
+        ];
         self.command(CMD_CASET, columns.as_flattened()).await?;
-        self.command(CMD_PASET, rows.as_flattened()).await
+        self.command(CMD_PASET, rows.as_flattened()).await?;
+        Ok(window)
     }
 
     /// Starts the pixels for the window last set, from its top-left corner. They open with
@@ -254,7 +280,10 @@ impl<B: Bus, RST: OutputPin, TE: Wait, D: DelayNs, C: ColorMode> Co5300<B, RST, 
         self.bus
             .begin(WRITE_QUAD, u32::from(CMD_RAMWR) << 8, Lanes::Quad)
             .await?;
-        Ok(Pixels { bus: &mut self.bus })
+        Ok(Pixels {
+            bus: &mut self.bus,
+            open: true,
+        })
     }
 
     /// Sets the brightness, from 0, dark, to 255.
@@ -391,11 +420,21 @@ impl<B: Bus, RST: OutputPin, TE: Wait, D: DelayNs, C: ColorMode> Co5300<B, RST, 
     }
 }
 
-/// Pixels going into the window last set. [`finish`](Self::finish) must close them: until it
-/// does, the bus holds the transaction open.
+/// A window of the panel, in panel coordinates.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Window {
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    pub height: u16,
+}
+
+/// Pixels going into the window last set. [`finish`](Self::finish) sends the last of them and
+/// closes the transaction; dropped before it, they close it without what the bus held back.
 #[must_use]
 pub struct Pixels<'a, B: Bus> {
     bus: &'a mut B,
+    open: bool,
 }
 
 impl<B: Bus> Pixels<'_, B> {
@@ -404,14 +443,24 @@ impl<B: Bus> Pixels<'_, B> {
         self.bus.stream(fill).await
     }
 
-    pub async fn finish(self) -> Result<(), B::Error> {
-        self.bus.end().await
+    pub async fn finish(mut self) -> Result<(), B::Error> {
+        let ended = self.bus.end().await;
+        self.open = false;
+        ended
+    }
+}
+
+impl<B: Bus> Drop for Pixels<'_, B> {
+    fn drop(&mut self) {
+        if self.open {
+            self.bus.abandon();
+        }
     }
 }
 
 /// The window `x, y, w, h` on the 2 × 2 grain: its corner down to even, its far edges up to
 /// even, clipped to the panel and at least 2 × 2.
-fn even_window(config: &Config, x: u16, y: u16, w: u16, h: u16) -> (u16, u16, u16, u16) {
+fn even_window(config: &Config, x: u16, y: u16, w: u16, h: u16) -> Window {
     let (width, height) = (usize::from(config.width), usize::from(config.height));
     let x0 = usize::from(x).min(width.saturating_sub(1)) & !1;
     let y0 = usize::from(y).min(height.saturating_sub(1)) & !1;
@@ -429,7 +478,12 @@ fn even_window(config: &Config, x: u16, y: u16, w: u16, h: u16) -> (u16, u16, u1
     if y1 <= y0 {
         y1 = (y0 + 2).min(height);
     }
-    (x0 as u16, y0 as u16, (x1 - x0) as u16, (y1 - y0) as u16)
+    Window {
+        x: x0 as u16,
+        y: y0 as u16,
+        width: (x1 - x0) as u16,
+        height: (y1 - y0) as u16,
+    }
 }
 
 #[cfg(test)]

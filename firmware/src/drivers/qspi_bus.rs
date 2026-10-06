@@ -1,6 +1,6 @@
 // The CO5300's QSPI bus on esp-hal's SPI DMA, streaming pixels through two DMA buffers.
 
-use co5300::{Bus, Lanes};
+use co5300::{Bus, Lanes, STREAM_ROOM};
 use esp_hal::Async;
 use esp_hal::dma::{DmaRxBuf, DmaTxBuf, EmptyBuf};
 use esp_hal::gpio::Output;
@@ -56,7 +56,7 @@ impl<'d> QspiBus<'d> {
         fill_swap_with: impl FnOnce(&mut [u8]) -> usize,
     ) -> Result<(), esp_hal::spi::Error> {
         if self.buffered == 0 {
-            self.buffered = fill_swap_with(self.active.as_mut().unwrap().as_mut_slice());
+            self.buffered = filled(fill_swap_with, self.active.as_mut().unwrap().as_mut_slice());
             return Ok(());
         }
         let buffered = self.buffered;
@@ -80,7 +80,7 @@ impl<'d> QspiBus<'d> {
                 return Err(error);
             }
         };
-        let new = fill_swap_with(swap.as_mut_slice());
+        let new = filled(fill_swap_with, swap.as_mut_slice());
         let (spi, active) = transfer.wait();
         self.spi = Some(spi);
         self.active = Some(swap);
@@ -88,6 +88,14 @@ impl<'d> QspiBus<'d> {
         self.buffered = new;
         Ok(())
     }
+}
+
+/// Lends `buffer` to `fill`, and returns how many bytes it wrote.
+fn filled(fill: impl FnOnce(&mut [u8]) -> usize, buffer: &mut [u8]) -> usize {
+    let room = buffer.len();
+    let written = fill(buffer);
+    assert!(written <= room, "a fill wrote {written} bytes into {room}");
+    written
 }
 
 /// A read's clock, under the controller's 10 MHz.
@@ -198,11 +206,10 @@ impl Bus for QspiBus<'_> {
 
     async fn stream(&mut self, fill: impl FnOnce(&mut [u8]) -> usize) -> Result<(), Self::Error> {
         let active = self.active.as_mut().unwrap();
-        if self.buffered > active.len().saturating_sub(256) {
+        if self.buffered > active.capacity() - STREAM_ROOM {
             return self.send(fill);
         }
-        let new = fill(&mut active.as_mut_slice()[self.buffered..]);
-        self.buffered += new;
+        self.buffered += filled(fill, &mut active.as_mut_slice()[self.buffered..]);
         Ok(())
     }
 
@@ -210,6 +217,11 @@ impl Bus for QspiBus<'_> {
         let sent = self.send(|_| 0);
         self.cs.set_high();
         sent
+    }
+
+    fn abandon(&mut self) {
+        self.buffered = 0;
+        self.cs.set_high();
     }
 
     /// The reply comes on SIO0, the panel's only line that runs both ways on the board's

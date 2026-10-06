@@ -153,22 +153,24 @@ where
     C::Bytes: AsRef<[u8]>,
 {
     let (width, height) = (WIDTH as i32, HEIGHT as i32);
-    let even_down = |v: i32, length: i32| (v.clamp(0, length) & !1).min(length - 2);
-    let even_up = |v: i32, length: i32| ((v.clamp(0, length) + 1) & !1).min(length);
-    let (x0, y0) = (even_down(x0, width), even_down(y0, height));
-    let (x1, y1) = (
-        even_up(x1, width).max(x0 + 2),
-        even_up(y1, height).max(y0 + 2),
-    );
+    let (x0, x1) = (x0.clamp(0, width), x1.clamp(0, width));
+    let (y0, y1) = (y0.clamp(0, height), y1.clamp(0, height));
+    let window = display
+        .set_window(
+            x0 as u16,
+            y0 as u16,
+            (x1 - x0).max(0) as u16,
+            (y1 - y0).max(0) as u16,
+        )
+        .await?;
+    let (x0, y0) = (i32::from(window.x), i32::from(window.y));
+    let (x1, y1) = (x0 + i32::from(window.width), y0 + i32::from(window.height));
     let bpp = C::BYTES_PER_PIXEL;
-    let span = (x1 - x0) as usize;
+    let span = usize::from(window.width);
     let (left, from, right) = crate::ui::shift::columns(x0, x1, width, shift.x);
     let middle = (span - left - right) * bpp;
     let row_bytes = span * bpp;
 
-    display
-        .set_window(x0 as u16, y0 as u16, span as u16, (y1 - y0) as u16)
-        .await?;
     let mut stream = display.pixels().await?;
     let (mut y, mut done) = (y0, 0);
     while y < y1 {
