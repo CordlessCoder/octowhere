@@ -442,7 +442,11 @@ key, and a removal.
 - **Summary.** A node sends a summary of the messages it holds: for each origin, the oldest and
   newest sequence numbers it holds, and those it knows it lacks between them. A message names
   the origin's one before it, which is how a node knows. Sequence numbers skip at a restart, so
-  a gap in the numbers alone says nothing. A neighbour that hears a summary marks to be sent
+  a gap in the numbers alone says nothing. The first message after a restart names none, since
+  the origin's store went with the restart, so a node counts every number below it, down to the
+  one it holds before, as possibly lacked (2026-10-06). The origin's last message before the
+  restart then comes back from a neighbour that holds it; a range nobody holds anything in
+  costs eight bytes of the summary and brings nothing. A neighbour that hears a summary marks to be sent
   every message it holds outside those ranges or among those lacked, unless its digest matches
   the summary's sender's. A summary takes at most 120 bytes; one too short for every origin says
   which it covers, and the next starts where it stopped. It is made before the backoff, since

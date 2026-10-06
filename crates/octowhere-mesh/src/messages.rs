@@ -612,7 +612,8 @@ impl Store {
     /// length and the origin the next summary starts from. It holds the origins it covers as a
     /// set, then for each covered origin with messages, the origin, its oldest and newest
     /// sequence numbers, and the gaps between them, each as the number held before it and the
-    /// last missing. A covered origin with no entry has nothing here. It starts from origin
+    /// last missing. The gap before a message that names no number before it, the first after
+    /// its origin restarted, runs up to that message. A covered origin with no entry has nothing here. It starts from origin
     /// `first`, so that summaries too short for every origin take turns.
     pub fn summary(&self, out: &mut [u8], first: u8) -> (usize, u8) {
         if out.len() < 4 {
@@ -636,9 +637,15 @@ impl Store {
             len += 10;
             let (mut newest, mut holes) = (first.seq, 0);
             while let Some(next) = self.next_from(origin, newest) {
-                if next.prev > newest && holes < HOLES_MAX && len + 8 <= out.len() {
+                // The first message after its origin restarted names no number before it, so
+                // whatever the origin sent before it may be missing.
+                let before = match next.prev {
+                    0 => next.seq - 1,
+                    prev => prev,
+                };
+                if before > newest && holes < HOLES_MAX && len + 8 <= out.len() {
                     out[len..len + 4].copy_from_slice(&newest.to_be_bytes());
-                    out[len + 4..len + 8].copy_from_slice(&next.prev.to_be_bytes());
+                    out[len + 4..len + 8].copy_from_slice(&before.to_be_bytes());
                     len += 8;
                     holes += 1;
                 }
@@ -1126,6 +1133,11 @@ mod tests {
             answered(&chain, &[1, 2, 3, 64, 70]),
             [65, 66],
             "a gap the chain shows"
+        );
+        assert_eq!(
+            answered(&chain, &[1, 2, 64, 65, 66, 70]),
+            [3],
+            "the last before a restart"
         );
         assert_eq!(answered(&chain, &[]), [1, 2, 3, 64, 65, 66, 70]);
     }
