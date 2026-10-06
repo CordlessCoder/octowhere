@@ -414,6 +414,12 @@ until the feature set is complete, because profiling an incomplete firmware pric
     settings panel to confirm nothing is offset.
   - The CO5300's reset sends a second low pulse straight after the first, from the vendor's
     driver; the datasheet asks for one. Dropping it needs a board start-up to confirm.
+- Left by the 2026-10-05 hand-off (`design/DECISIONS.md` 34), which asks for both:
+  - The crowded member face's step and draw time on a board, and the drawer's with more than 16
+    rows. Two boards can place one member at most, so it needs a `bench/` branch that stands 31
+    synthetic positions in, timed as `bench/runtime-screens` timed the faces. Sorting a crowded
+    ring into sectors measures every label's ink, about 60 measurements a step at 31 members.
+  - Stills of the new states from a board's framebuffer; the package has host renders.
 
 ## Deferred, with detail elsewhere
 
