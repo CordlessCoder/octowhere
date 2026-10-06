@@ -14,7 +14,7 @@ use octowhere_mesh::{
     absorb::{Event, State, When, absorb},
     clock::{Clock, UTC_BOUND_US},
     compose::{Sources, compose},
-    members::{Gone, Group, Member, Name, Requests, fingerprint},
+    members::{Gone, Group, Member, Name, PUBLIC_LEN, Requests, fingerprint},
     messages::{
         self, BODY_MAX, Insert, Message, Pairwise, SETTLE_US, Sequence, Store, Summaries, TEXT_MAX,
         To, kind,
@@ -283,6 +283,7 @@ pub fn publish_start(start: &Start, now: i64, device: &impl Device) {
         start.group.as_deref(),
         now,
         utc_now(device, now),
+        &mut Fingerprints::default(),
     );
     device.publish(&mut view);
 }
@@ -304,6 +305,28 @@ struct Shown {
     /// A founding's wait, under way or ended, until another pairing starts.
     recovery: Option<RecoveryView>,
     removals: RemovalsView,
+}
+
+/// Each id's public key and its fingerprint, so that a publish hashes only a key that changed.
+struct Fingerprints([Option<([u8; PUBLIC_LEN], [u8; 8])>; IDS as usize]);
+
+impl Default for Fingerprints {
+    fn default() -> Self {
+        Self([None; IDS as usize])
+    }
+}
+
+impl Fingerprints {
+    fn of(&mut self, index: usize, public: &[u8; PUBLIC_LEN]) -> [u8; 8] {
+        match &mut self.0[index] {
+            Some((key, made)) if key == public => *made,
+            slot => {
+                let made = fingerprint(public);
+                *slot = Some((*public, made));
+                made
+            }
+        }
+    }
 }
 
 impl Shown {
@@ -357,6 +380,7 @@ impl Shown {
         group: Option<&Group>,
         now: i64,
         utc: Option<i64>,
+        fingerprints: &mut Fingerprints,
     ) {
         // Named in full, so that a field added to the view cannot be left unfilled.
         let MeshView {
@@ -397,8 +421,7 @@ impl Shown {
             *slot = group.member(id).map(|member| MemberView {
                 name: member.name,
                 mac: member.mac,
-                // PERF: a SHA-256 for every member at every publish.
-                device: fingerprint(&member.public),
+                device: fingerprints.of(index, &member.public),
                 // A device that knew no UTC dated the record 0.
                 joined: (member.joined != 0)
                     .then(|| local_at(member.joined))
@@ -644,6 +667,7 @@ pub struct Mesh<R, T, G, D, S, A: Allocator> {
     heard: [Option<i64>; IDS as usize],
     /// What the screens are shown.
     shown: Shown,
+    fingerprints: Box<Fingerprints>,
     /// The view [`publish`] fills.
     view: Box<MeshView>,
     /// Every message the node holds.
@@ -718,6 +742,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             timebase_shown: None,
             heard: [None; IDS as usize],
             shown: Shown::new(true),
+            fingerprints: Box::default(),
             view: blank_view(),
             messages: zeroed_in(alloc.clone()),
             inbox: Inbox::new(zeroed_in(alloc.clone())),
@@ -752,8 +777,14 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         let now = self.time.now();
         let utc = self.utc(now);
         self.shown.heard = self.heard;
-        self.shown
-            .fill(&mut self.view, &self.me, self.group.as_ref(), now, utc);
+        self.shown.fill(
+            &mut self.view,
+            &self.me,
+            self.group.as_ref(),
+            now,
+            utc,
+            &mut self.fingerprints,
+        );
         self.device.publish(&mut self.view);
         self.show_messages();
     }
@@ -1853,7 +1884,14 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                     _ => self.group.as_ref(),
                 };
                 self.shown.heard = self.heard;
-                self.shown.fill(&mut self.view, &self.me, group, now, utc);
+                self.shown.fill(
+                    &mut self.view,
+                    &self.me,
+                    group,
+                    now,
+                    utc,
+                    &mut self.fingerprints,
+                );
                 self.device.publish(&mut self.view);
             }
             if pairing.is_over(now) {
@@ -2896,7 +2934,15 @@ pub async fn offline(
     let mut view = blank_view();
     loop {
         let now = time.now();
-        shown.fill(&mut view, &me, group.as_ref(), now, utc_now(device, now));
+        let utc = utc_now(device, now);
+        shown.fill(
+            &mut view,
+            &me,
+            group.as_ref(),
+            now,
+            utc,
+            &mut Fingerprints::default(),
+        );
         device.publish(&mut view);
         match commands.receive().await {
             Command::Leave => {
