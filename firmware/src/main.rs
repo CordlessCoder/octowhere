@@ -1318,6 +1318,8 @@ async fn gnss_task(task: GnssTask) {
     if configure {
         let configured = configure_gnss(&mut gnss, &mut nmea_parser).await;
         info!("[GNSS] configured={}", configured.is_ok());
+        #[cfg(feature = "startup-timing-bench")]
+        startup_timing::mark("GNSS-config", "end");
         if configured.is_ok()
             && reference_time
             && let Some(rtc) = &mut rtc
