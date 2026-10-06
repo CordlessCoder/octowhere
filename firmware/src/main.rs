@@ -219,21 +219,72 @@ mod rtc_inject {
 /// reconnect.
 #[cfg(feature = "startup-timing-bench")]
 mod startup_timing {
-    use core::cell::RefCell;
+    use core::{
+        cell::RefCell,
+        sync::atomic::{AtomicU32, Ordering},
+    };
 
     use embassy_sync::blocking_mutex::CriticalSectionMutex;
     use embassy_time::{Instant, Timer};
+
+    use super::Part;
 
     type Marks = heapless::Vec<(&'static str, &'static str, u64), 48>;
 
     static MARKS: CriticalSectionMutex<RefCell<Marks>> =
         CriticalSectionMutex::new(RefCell::new(heapless::Vec::new()));
 
+    /// The steps with a word of their own in [`OCTOWHERE_STARTUP_MARKS`], in its order.
+    /// `tools/startup-timing-read.py` lists them the same.
+    const STEPS: [(&str, &str); 7] = [
+        ("bring_up", "enter"),
+        ("i2c", "powered"),
+        ("exio", "reset"),
+        ("gnss-settle", "end"),
+        ("GNSS-config", "end"),
+        ("frame_loop", "first"),
+        ("startup", "over"),
+    ];
+    const PARTS_FROM: usize = STEPS.len();
+    const OUTCOMES_FROM: usize = PARTS_FROM + 2 * Part::ALL.len();
+    const POWER_ON: usize = OUTCOMES_FROM + Part::ALL.len();
+    const WORDS: usize = POWER_ON + 1;
+
+    /// The marks as words a debugger reads without a reset, for a cold start, since opening
+    /// the serial port restarts the board: each step's time in µs since the timer started, 0
+    /// before it, then each part's start and end, then each part's outcome, 1 answered, 2 no
+    /// reply and 3 a bad reply, then 1 + whether the reset read as a power-on.
+    #[unsafe(no_mangle)]
+    static OCTOWHERE_STARTUP_MARKS: [AtomicU32; WORDS] = [const { AtomicU32::new(0) }; WORDS];
+
     pub fn mark(what: &'static str, how: &'static str) {
         let at = Instant::now().as_micros();
         MARKS.lock(|marks| {
             let _ = marks.borrow_mut().push((what, how, at));
         });
+        let words = &OCTOWHERE_STARTUP_MARKS;
+        if let Some(step) = STEPS.iter().position(|&step| step == (what, how)) {
+            words[step].store(at as u32, Ordering::Relaxed);
+        } else if let Some(part) = Part::ALL.iter().position(|part| part.name() == what) {
+            let ended = how != "start";
+            words[PARTS_FROM + 2 * part + usize::from(ended)].store(at as u32, Ordering::Relaxed);
+            let outcome = match how {
+                "answered" => 1,
+                "no-reply" => 2,
+                "bad-reply" => 3,
+                _ => 0,
+            };
+            if ended {
+                words[OUTCOMES_FROM + part].store(outcome, Ordering::Relaxed);
+            }
+        }
+        if (what, how) == STEPS[0] {
+            let power_on = matches!(
+                esp_hal::system::reset_reason(),
+                Some(esp_hal::rtc_cntl::SocResetReason::ChipPowerOn)
+            );
+            words[POWER_ON].store(1 + u32::from(power_on), Ordering::Relaxed);
+        }
     }
 
     /// Logs the marks 9 s after boot, past the start-up's hand-over to the clock.
@@ -2018,8 +2069,6 @@ struct Parts {
 
 #[embassy_executor::task]
 async fn async_main(spawner: Spawner) {
-    #[cfg(feature = "startup-timing-bench")]
-    startup_timing::mark("async_main", "enter");
     // A third of the heap lives in the RAM the bootloader frees, which is not static memory, so
     // core 0's stack gets the rest of DRAM.
     esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 72 * 1024);

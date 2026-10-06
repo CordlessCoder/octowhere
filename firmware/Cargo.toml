@@ -69,8 +69,9 @@ pair-inject = ["octowhere-node/phantom"]
 # Lets a debugger touch and cover the screen, press the power key and read the screen back; see
 # `tools/touch-inject.py`.
 touch-inject = []
-# Logs when boot reaches each milestone and each part's check starts and ends, 9 s in; see
-# `tools/startup-timing.sh`.
+# Logs when boot reaches each milestone and each part's check starts and ends, 9 s in, and keeps
+# them for a debugger to read after a cold start; see `tools/startup-timing.sh` and
+# `tools/startup-timing-read.py`.
 startup-timing-bench = []
 
 [patch.crates-io]

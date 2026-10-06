@@ -1,8 +1,9 @@
 # /// script
 # requires-python = ">=3.11"
 # ///
-"""Summarises tools/startup-timing.sh's captures: each milestone's median time since the timer
-started, per board, in ms, and each part's check from start to end.
+"""Summarises tools/startup-timing.sh's captures, and tools/startup-timing-read.py's reads: each
+milestone's median time since the timer started, per board, in ms, and each part's check from
+start to end.
 
 Usage: uv run tools/startup-timing-summary.py <out-dir> [<out-dir>...]
 """
@@ -15,13 +16,20 @@ from pathlib import Path
 MARK = re.compile(r"\[STARTUP\] (\S+) (\S+) (\d+)")
 MAC = re.compile(r"\[MESH\] id=.* mac=\[([0-9a-f, ]+)\]")
 RESET = re.compile(r"\[STARTUP\] reset power_on=(\w+)")
+BOARD = re.compile(r"\[STARTUP\] board (\w+)")
 
 
 def read(path):
     text = path.read_text(errors="replace")
     marks = [(m[1], m[2], int(m[3])) for m in MARK.finditer(text)]
     mac = MAC.search(text)
-    board = "".join(mac[1].split(", ")[-2:]) if mac else path.stem.split("-")[0] + "?"
+    named = BOARD.search(text)
+    if mac:
+        board = "".join(mac[1].split(", ")[-2:])
+    elif named:
+        board = named[1]
+    else:
+        board = path.stem.split("-")[0] + "?"
     reset = RESET.search(text)
     return board, marks, reset and reset[1]
 
