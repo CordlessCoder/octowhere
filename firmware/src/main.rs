@@ -1025,13 +1025,19 @@ async fn sensor_task(task: SensorTask) {
             let percent = power.get_battery_percent().await.ok();
             let charging = power.is_charging().await.ok();
             let usb = power.is_vbus_in().await.ok();
-            state.battery = present.map(|present| Battery {
-                present,
-                percent: percent.unwrap_or(0).min(100),
-                millivolts: battery_mv.unwrap_or(0),
-                charging: charging.unwrap_or(false),
-                usb: usb.unwrap_or(false),
-            });
+            // A reading that failed keeps the last whole one rather than stand in a value.
+            match (present, percent, battery_mv, charging, usb) {
+                (Some(present), Some(percent), Some(millivolts), Some(charging), Some(usb)) => {
+                    state.battery = Some(Battery {
+                        present,
+                        percent: percent.min(100),
+                        millivolts,
+                        charging,
+                        usb,
+                    });
+                }
+                _ => warn!("[PMIC] battery read failed"),
+            }
             debug!(
                 "[PMIC] sample battery_present={} VBAT={}mV VBUS={}mV VSYS={}mV",
                 battery_present, battery_mv, vbus_mv, vsys_mv
