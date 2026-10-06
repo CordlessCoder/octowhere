@@ -435,15 +435,17 @@ Core 1 owns the display SPI/DMA path.
   `GNSS_STATE` and the zone from `ZONE_STATE`. It publishes a whole `SensorSnapshot` through the
   `SENSOR_STATE` signal every 250 ms, and passes each fix to `zone_task` through `ZONE_FIX`. It
   passes the PMIC's power key presses to the frame loop through `KEY_PRESSES`. Once
-  `GNSS_PARKED` is set, it waits for `SETTINGS_DONE` to reach `SETTINGS_QUEUED` and has the PMIC
-  power the board off. Every settings write goes through `queue_write`, which keeps that count.
+  `GNSS_PARKED` is set, it waits for every write queued to be saved and has the PMIC power the
+  board off, and restarts the board if it is still running 3 s later (owner, 2026-10-06). Every
+  write reaches `settings_task` through `firmware/src/saves.rs`, which keeps each setting's
+  latest change until it is saved, so that none is dropped.
 - `gnss_task`, on `BUS_EXECUTOR`, owns the GNSS module. The module sends a burst of NMEA each
   second, and the task reads it only from 100 ms before the burst is due until it has drained,
   leaving the bus alone between. It publishes the parsed state through `GNSS_STATE` and times
   UTC on the local timer from each fix's burst (`gnss_time`, read with `gps_utc`). When the
-  frame loop sets `POWER_OFF`, once the panel is off, it saves the module's navigation data and
-  sets `GNSS_PARKED`. After 8 failed reads in a row, or 10 s of reads with nothing in them, it
-  resets the module through the I/O expander, at most once a minute, configures it again and
+  frame loop sets `POWER_OFF`, once the panel is off, it has the module save its navigation
+  data, waits up to 2 s for it to say it has, and sets `GNSS_PARKED`. After 8 failed reads in a
+  row, or 10 s of reads with nothing in them, it resets the module through the I/O expander, at most once a minute, configures it again and
   sends it the RTC's time. It reports through `GNSS_HEALTH` whether it is resetting the module,
   how many resets have failed since it last answered, and when it last answered and gave a
   fix, which the frame loop passes to the stage for its events.

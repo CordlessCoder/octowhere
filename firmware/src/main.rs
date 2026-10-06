@@ -53,7 +53,7 @@ use esp_hal::{
 use esp_println as _;
 use lc76g::{
     GnssDateTime, GnssError, GnssState, Lc76g, LowPowerMode, NmeaOutputRate, NmeaParser,
-    NmeaSentence, NmeaUpdate, PairCommandBuilder,
+    NmeaSentence, NmeaUpdate, PairAckStatus, PairCommandBuilder,
 };
 #[cfg(feature = "fontdue-target-bench")]
 use octowhere::fontdue;
@@ -299,6 +299,12 @@ struct GpsTime {
     updated: Instant,
 }
 
+/// How long the board may run on after the PMIC was told to power off, before it restarts.
+const POWER_OFF_GRACE: Duration = Duration::from_secs(3);
+/// How long powering off waits for the GNSS module to save its navigation data.
+const NAVIGATION_SAVE: Duration = Duration::from_secs(2);
+/// The `PAIR` command that saves the module's navigation data, which its answer names.
+const SAVE_NAVIGATION: u16 = 511;
 /// How long powering off waits for the settings queued before it to be saved.
 const SETTINGS_SETTLE: Duration = Duration::from_secs(3);
 /// A zone choice from the settings panel, for `zone_task`, which owns the zone.
@@ -997,10 +1003,8 @@ async fn sensor_task(task: SensorTask) {
     loop {
         Timer::after(Duration::from_millis(250)).await;
 
-        if GNSS_PARKED.try_take().is_some()
-            && let Some(power) = &mut power
-        {
-            power_off(power).await;
+        if GNSS_PARKED.try_take().is_some() {
+            power_off(power.as_mut()).await;
         }
         if let Some(power) = &mut power {
             match power.take_key_press().await {
@@ -1245,7 +1249,13 @@ async fn gnss_task(task: GnssTask) {
         if let Some(due) = due.filter(|_| !missed) {
             let start = due - BURST_EARLY + DITHER_STEP * (bursts % DITHER_STEPS);
             if let Either::Second(()) = select(Timer::at(start), POWER_OFF.wait()).await {
-                park_gnss(&mut gnss, navigation_saved.is_some()).await;
+                park_gnss(
+                    &mut gnss,
+                    &mut nmea_parser,
+                    &mut nmea,
+                    navigation_saved.is_some(),
+                )
+                .await;
             }
         }
 
@@ -1257,7 +1267,13 @@ async fn gnss_task(task: GnssTask) {
         let mut failures = 0u32;
         let (seen, mut available) = loop {
             if POWER_OFF.try_take().is_some() {
-                park_gnss(&mut gnss, navigation_saved.is_some()).await;
+                park_gnss(
+                    &mut gnss,
+                    &mut nmea_parser,
+                    &mut nmea,
+                    navigation_saved.is_some(),
+                )
+                .await;
             }
             if failures >= GNSS_STUCK_FAILURES || last_data.elapsed() >= GNSS_STUCK_SILENCE {
                 // Every reset since it last answered has failed by now.
@@ -1272,7 +1288,13 @@ async fn gnss_task(task: GnssTask) {
                     && let Either::Second(()) =
                         select(Timer::at(at + GNSS_RESET_INTERVAL), POWER_OFF.wait()).await
                 {
-                    park_gnss(&mut gnss, navigation_saved.is_some()).await;
+                    park_gnss(
+                        &mut gnss,
+                        &mut nmea_parser,
+                        &mut nmea,
+                        navigation_saved.is_some(),
+                    )
+                    .await;
                 }
                 resets += 1;
                 warn!(
@@ -1487,14 +1509,47 @@ fn unix_micros(utc: GnssDateTime) -> i64 {
 }
 
 /// Has the GNSS module copy its navigation data to its flash when it has had a fix, for a hot
-/// start, then tells `sensor_task` to power off. The module is not read again.
-async fn park_gnss(gnss: &mut Lc76g<SharedI2cDevice, embassy_time::Delay>, fixed: bool) -> ! {
+/// start, and waits for it to say the copy is done, then tells `sensor_task` to power off.
+async fn park_gnss(
+    gnss: &mut Lc76g<SharedI2cDevice, embassy_time::Delay>,
+    parser: &mut NmeaParser,
+    nmea: &mut [u8],
+    fixed: bool,
+) -> ! {
     if fixed {
-        let saved = gnss.save_navigation_data().await;
-        info!("[GNSS] navigation data saved={}", saved.is_ok());
+        let saved = match gnss.save_navigation_data().await {
+            Ok(()) => with_timeout(NAVIGATION_SAVE, navigation_saved(gnss, parser, nmea))
+                .await
+                .ok(),
+            Err(_) => Some(false),
+        };
+        info!("[GNSS] navigation data saved={}", saved);
     }
     GNSS_PARKED.signal(());
     core::future::pending().await
+}
+
+/// Reads the GNSS module until it answers the request to save its navigation data, and returns
+/// whether the save took.
+async fn navigation_saved(
+    gnss: &mut Lc76g<SharedI2cDevice, embassy_time::Delay>,
+    parser: &mut NmeaParser,
+    nmea: &mut [u8],
+) -> bool {
+    loop {
+        Timer::after(Duration::from_millis(100)).await;
+        let Ok(chunk) = gnss.read_nmea_chunk(nmea).await else {
+            continue;
+        };
+        for &byte in chunk {
+            if let Ok(Some(NmeaUpdate::PairAck(ack))) = parser.push(byte)
+                && ack.command == SAVE_NAVIGATION
+                && ack.status != PairAckStatus::Processing
+            {
+                return ack.status == PairAckStatus::Accepted;
+            }
+        }
+    }
 }
 
 /// Follows the zone under each fix, and the zone chosen in the settings panel. It stays in thread
@@ -2871,9 +2926,10 @@ async fn frame_loop(
     }
 }
 
-/// Powers the board off once the settings queued before it are saved. `gnss_task` has parked
+/// Powers the board off once the settings queued before it are saved, through the PMIC where
+/// there is one, and restarts the board if it is still running after. `gnss_task` has parked
 /// the GNSS module first.
-async fn power_off(power: &mut Axp2101Power<SharedI2cDevice>) {
+async fn power_off(power: Option<&mut Axp2101Power<SharedI2cDevice>>) -> ! {
     let settled = with_timeout(SETTINGS_SETTLE, async {
         while !saves::all_done() {
             Timer::after(Duration::from_millis(10)).await;
@@ -2886,7 +2942,17 @@ async fn power_off(power: &mut Axp2101Power<SharedI2cDevice>) {
     info!("[POWER] powering off");
     // The log line gets out before the rails drop.
     Timer::after(Duration::from_millis(50)).await;
-    if power.power_off().await.is_err() {
-        error!("[POWER] power off failed");
+    if let Some(power) = power {
+        for _ in 0..2 {
+            if power.power_off().await.is_ok() {
+                break;
+            }
+            error!("[POWER] power off failed");
+        }
     }
+    // Still running, the PMIC did not cut the power: start again rather than sit dark.
+    Timer::after(POWER_OFF_GRACE).await;
+    error!("[POWER] still running after powering off; restarting");
+    Timer::after(Duration::from_millis(50)).await;
+    esp_hal::system::software_reset();
 }
