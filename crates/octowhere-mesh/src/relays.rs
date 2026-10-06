@@ -43,6 +43,57 @@ pub static BENCH_ANSWER: core::sync::atomic::AtomicBool =
 /// Bench: whether a message sent again names the neighbours still waited for, and a named
 /// neighbour that holds it answers so, at no cost.
 pub static BENCH_NAMED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+/// Bench: whether each sender names the neighbours that are to pass its messages on, and only
+/// those do, at no cost on the air.
+pub static BENCH_DESIGNATE: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+/// Bench: the neighbours each id's last packet named to pass its messages on.
+pub static BENCH_DESIGNATED: [core::sync::atomic::AtomicU32; IDS as usize] =
+    [const { core::sync::atomic::AtomicU32::new(0) }; IDS as usize];
+
+/// Bench: the neighbours the node at id `own` names: as few as reach every node two hops away
+/// that its neighbours report, those that alone reach one first.
+#[must_use]
+pub fn bench_designate(relays: &Relays, own: u8, neighbours: Ids) -> Ids {
+    let mut two = Ids::EMPTY;
+    for id in neighbours.iter() {
+        two = two | beyond(&relays.reported, own, id);
+    }
+    let mut left = two & !neighbours;
+    let mut chosen = Ids::EMPTY;
+    for far in left.iter() {
+        let mut reaching = neighbours
+            .iter()
+            .filter(|&id| beyond(&relays.reported, own, id).contains(far));
+        if let (Some(only), None) = (reaching.next(), reaching.next()) {
+            chosen.insert(only);
+        }
+    }
+    for id in chosen.iter() {
+        left = left & !beyond(&relays.reported, own, id);
+    }
+    while !left.is_empty() {
+        let Some(best) = neighbours
+            .iter()
+            .filter(|&id| !chosen.contains(id))
+            .max_by_key(|&id| {
+                (
+                    (beyond(&relays.reported, own, id) & left).iter().count(),
+                    u8::MAX - id,
+                )
+            })
+        else {
+            break;
+        };
+        if (beyond(&relays.reported, own, best) & left).is_empty() {
+            break;
+        }
+        chosen.insert(best);
+        left = left & !beyond(&relays.reported, own, best);
+    }
+    chosen
+}
+
 /// Bench: the neighbours each message sent again named: (sender, message, named).
 pub struct BenchNamed(core::cell::UnsafeCell<heapless::Vec<(u8, MessageId, Ids), 4096>>);
 // SAFETY: the bench runs every node on one thread.
@@ -156,10 +207,29 @@ impl Relays {
     /// carrying `carried`: each neighbour with a neighbour of its own outside them is to pass
     /// the messages on, unless it was heard carrying them already.
     pub fn sent(&mut self, own: u8, neighbours: Ids, carried: &[MessageId], now: i64) {
-        let relaying = neighbours
-            .iter()
-            .filter(|&id| !(beyond(&self.reported, own, id) & !neighbours).is_empty())
-            .collect::<Ids>();
+        let relaying = match BENCH_DESIGNATE.load(core::sync::atomic::Ordering::Relaxed) {
+            true => Ids::from_bits(
+                BENCH_DESIGNATED[usize::from(own)].load(core::sync::atomic::Ordering::Relaxed),
+            ),
+            false => neighbours
+                .iter()
+                .filter(|&id| !(beyond(&self.reported, own, id) & !neighbours).is_empty())
+                .collect::<Ids>(),
+        };
+        for &name in carried {
+            if !BENCH_DESIGNATE.load(core::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
+            match self.carriers.iter_mut().find(|(held, _)| *held == name) {
+                Some((_, carriers)) => carriers.insert(own),
+                None => {
+                    if self.carriers.is_full() {
+                        self.carriers.pop_front();
+                    }
+                    let _ = self.carriers.push_back((name, Ids::of(own)));
+                }
+            }
+        }
         for &name in carried {
             let carriers = self
                 .carriers
@@ -203,6 +273,14 @@ impl Relays {
             sets.remove(0);
         }
         let _ = sets.push((own, name, waiting.expected));
+    }
+
+    /// Bench: whether the node at id `own` has carried `name`.
+    #[must_use]
+    pub fn bench_carried(&self, own: u8, name: MessageId) -> bool {
+        self.carriers
+            .iter()
+            .any(|&(held, carriers)| held == name && carriers.contains(own))
     }
 
     /// Bench: takes the answers addressed to the node at id `own`.
