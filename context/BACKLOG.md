@@ -14,10 +14,9 @@ until the feature set is complete, because profiling an incomplete firmware pric
     `GroupStore` whose writes can fail, a source of `Commands`, and the allocator its two large
     stores are made in. It logs through defmt on the board and `log` on the host. The view and
     `GroupWrite` moved into the crate with it, and the UI re-exports the view where it was.
-    `firmware/src/mesh.rs` holds the board's side. Not yet confirmed on the boards: run
-    `board-scripts/check.sh` on a build at or after the move. It was blocked on 2026-10-04 by
-    the boards overloading each other's receivers up close (every packet one way failed its
-    CRC at −6 dBm). The node keeps its async code; there was no state-machine rewrite.
+    `firmware/src/mesh.rs` holds the board's side, which has run on both boards since
+    (`docs/logs/lora/board-checks-2026-10-05/`). The node keeps its async code; there was no
+    state-machine rewrite.
   - Step 2, the air, is built (2026-10-04): `crates/octowhere-sim` runs the nodes on virtual
     time with an executor that jumps to the next timer. A packet occupies its channel for its
     airtime (`schedule::airtime_us`); a node hears it only if it was receiving on that channel
@@ -52,10 +51,10 @@ until the feature set is complete, because profiling an incomplete firmware pric
 - The design agent's 2026-10-04 hand-off, which the owner approved, is built (2026-10-04, up
   to `9d7311d`): `octowhere-mesh-runtime-handoff-2026-10-04/` (local, like the design files;
   start at its `IMPLEMENTATION-HANDOFF.md`). It answers the round the owner handed off on
-  2026-10-03 (`design/handoffs/MESH-FEATURES-ROUND-BRIEF-2026-10-03.md`). What it asks back,
-  the captures and the report on glyphs, costs, choices and departures from the renders, is
-  `context/design-captures-2026-10-04.7z` (local, ignored by git), not yet sent. What is left
-  of each part is under it, in its section 7's order:
+  2026-10-03 (`design/handoffs/MESH-FEATURES-ROUND-BRIEF-2026-10-03.md`). What it asked back
+  went to the design agent as `context/design-captures-2026-10-04.7z` (local, ignored by git),
+  and the 2026-10-05 hand-off answered part of it. What is left of each part is under it, in
+  its section 7's order:
   - Events, done (`66dc772`): the drawer, its details and management, dismissal, toasts that
     wake a resting screen, the unread arc, and the GNSS module's health from its task
     (`SCREEN-DESIGN-BRIEF.md`, "Events as built"; on a board in
@@ -70,11 +69,6 @@ until the feature set is complete, because profiling an incomplete firmware pric
       (`docs/logs/display/runtime-screens-2026-10-04/`). The grid's lines still find a distance
       at every pixel near them, and could be drawn by a line rasteriser instead; judge it with
       a calibrated compass turning.
-    - Its step adds stack: `members::build` takes 4,576 bytes on the frame loop's path,
-      `Stage::advance` grew 768 bytes and the radio task's poll 768 (the coordinates in the
-      view). The watermark is due with removals' (below).
-    - The merged nodes for crowded rings, the 5-minute freshness glyph and tap-to-select are
-      engineering choices without a render. Take them to the next design round.
     - WMM2025 holds until 2030.0; after that the face stays north up until the model's
       successor is built in.
   - Messages, done (2026-10-04): what the node can read of its store in the view, each with how
@@ -82,14 +76,8 @@ until the feature set is complete, because profiling an incomplete firmware pric
     draft on the keyboard, its review, sending, arrival toasts and an event per conversation
     (`SCREEN-DESIGN-BRIEF.md`, "Messages as built"; two boards in
     `docs/logs/lora/messages-2026-10-04/`). Open:
-    - The read rule (a whole row shown for a second), one event per conversation, MARK ALL READ
-      reading events only, RECOVERED, and keeping one draft are engineering choices without a
-      render. Take them to the next design round.
-    - A removed member's conversation, marked PRIVATE / REMOVED with WRITE unavailable, and its
-      group messages' sender marked / REMOVED, have no render (2026-10-04; they once named
-      their sender by member id, so a device paired in at the freed id showed as their writer).
-      Take them to the next design round.
-    - The draft's title cuts a long name short, and the draft shows no id.
+    - One event per conversation, MARK ALL READ reading events only, RECOVERED, and keeping one
+      draft are engineering choices without a render. Take them to the next design round.
     - Every step rebuilds an open conversation's rows, wrapping each message: measure it with a
       full store on a board.
     - Copying the messages to the screens holds a critical section for as long as the copy,
@@ -102,8 +90,6 @@ until the feature set is complete, because profiling an incomplete firmware pric
     boards in `docs/logs/lora/removal-2026-10-04/`). Open:
     - DETAILS, DECLINED HERE, a losing rival's detail, REMOVE UNAVAILABLE, and the removal
       events' rows and toasts have no render. Take them to the next design round.
-    - Adding while a member is being removed is refused, and the refusal does not yet link to
-      the request, which the hand-off asks for where the data allows.
     - A removal a later one replaced can no longer be declined from the screens. If this device
       then declines the later one before its switch, the node could decline the earlier again,
       but no screen offers it.
@@ -121,15 +107,6 @@ until the feature set is complete, because profiling an incomplete firmware pric
   BOOT and outlined text stay deferred (the hand-off). Not the design agent's: the rule that
   settles rival removals, now the lower remover's id (owner, 2026-10-04; `LORA-PROTOCOL.md`,
   "Two at once").
-- Build the 2026-09-26 design, [`design/`](design/README.md), which the owner approved in full
-  (`design/DECISIONS.md`). One piece at a time, each compared against the hand-off's renders
-  (`tools/design-compare.py`), reviewed by the owner in `ui-sim`, and measured on the board
-  before it is committed. Built: the shared pieces (`VIOLET`, `DEEP_BLUE`, several scatter
-  fields on one grid), the start-up (S1 self-test, G19 identity, G17 card), the K1 clock,
-  the H2b always-on face, S1 settings with D3 inner screens, and C1 compass. Their on-target
-  draw times are in `docs/logs/display/settings-draw-2026-09-26.md` and
-  `docs/logs/display/compass-c1-draw-2026-09-26.md`. The owner found every screen good and
-  legible on the panel (2026-10-01).
 - Shorten settings saves further, if the remaining pause shows. Since `bde7924` each write is
   programmed rather than rewriting its sector, and a save holds the display core for about
   23 ms at the median, 85 ms at most, from 272 and 2,011 ms (`bench/settings-save`,
@@ -210,46 +187,26 @@ until the feature set is complete, because profiling an incomplete firmware pric
   feature) and the mesh's PSRAM stores (the node's `zeroed_in`, handed `&PSRAM_HEAP`). The
   node is generic over that allocator already, under `octowhere-node`'s nightly `run` feature.
   The other host crates build on stable,
-  which lacks it until 1.100.0, by mid-November 2026. The owner accepts nightly on the host
-  (2026-10-03), so this need not wait: the UI crate's lines in "Build and test" in `AGENTS.md`
-  would move from `+stable` to `+nightly`; `tools/ui-sim` and `tools/ui-web`, which build it,
-  are on nightly already, for the simulator. The candidates are the identity's title, 36,660 bytes, and the group
+  and the host workspace is on nightly too, so nothing waits on the API's stabilisation. The
+  candidates are the identity's title, 36,660 bytes, and the group
   screens' two 8,848-byte lists. Both are read on every frame that draws them, so measure
   each frame from PSRAM on the board before moving it; the title's identity frames already
   come close to their 33 ms.
-- The CO5300 driver is its own crate, `crates/co5300`, generic over the bus (owner's choice,
-  2026-10-05), and runs on both boards: its flush is a few microseconds faster than the old
-  driver's, the TE modes and the TE line count as the datasheet says, deep standby comes back,
-  and the partial area, idle mode, high-brightness mode, sunlight enhancement and the current
-  limit look right on the panel (owner, 2026-10-05, through `bench/co5300-controls`;
-  `docs/logs/display/co5300-crate-2026-10-05/`). Nothing calls those yet. The datasheet has no
-  scroll area. Reading the
+- The CO5300 crate's other controls, the partial area, idle mode, high-brightness mode,
+  sunlight enhancement and the current limit, look right on the panel (owner, 2026-10-05,
+  through `bench/co5300-controls`; `docs/logs/display/co5300-crate-2026-10-05/`), and nothing
+  calls them yet. The datasheet has no scroll area. Reading the
   controller does not work on this board: every read comes back as zeros, on either reply line
   and at 5 MHz, which the datasheet's 100 ns read cycle needs, and the schematic leaves the
   connector's pin 19 unconnected. The crate keeps the scan line for a board that wires it.
-- Build the protocol in [`LORA-PROTOCOL.md`](LORA-PROTOCOL.md), in its "Build order". Steps 1
-  to 3 are done: pairing, the member table, its storage and the screens, paired between the two
-  boards by the mesh's commands and through the screens (`docs/logs/lora/pairing-2026-10-02/`,
-  `docs/logs/lora/pairing-screens-2026-10-02/`). Step 4 is done too: listening to members and
-  neighbours with a sweep every 13 rounds, the cancel rule, and a changed member record sent in
-  the next slot (`docs/logs/lora/founding-and-listening-2026-10-02/`). Shuffled slots and member
-  records on request are done (`docs/logs/lora/refresh-and-recovery-2026-10-03/`), and so is
-  the mesh's side of step 6: leaving tells the group, messages are held and passed on by every
-  node, and a member can be removed by moving the group to a new key
-  (`docs/logs/lora/step6-2026-10-03/`). After a review of the whole mesh on 2026-10-03 the
-  records, gone records and key messages are signed on an Ed25519 identity, a removal can be
-  declined for a day after its switch, and a member that missed switches is caught up one
-  generation at a time (the protocol's "Signatures" and "Removing a member";
-  `docs/logs/lora/signing-2026-10-03/`). A member deaf through two removals was caught up on
-  the boards in 19 minutes, and the run found an old key kept for good for a member a later
-  removal took, fixed in `d6b9389` (`docs/logs/lora/catch-up-2026-10-03/`). What is left of
-  step 6 is its screens, which need a design round: sending and reading messages, a removal's
-  confirmation, and removing a member.
-  Contention replaced the slots on 2026-10-05 (owner; the protocol's "Medium access"), which
-  drops step 5, CAD; the slots are on the `tdma` branch. It ran on the two boards
-  (`docs/logs/lora/contention-2026-10-05/`). Then step 7.
-  REFRESH DEVICES is retired, with the mesh's refresh command and view
-  (`design/DECISIONS.md` 34).
+- Build step 7 of [`LORA-PROTOCOL.md`](LORA-PROTOCOL.md)'s "Build order", pruning relays from
+  the gossiped graph (its "Pruning, later"). Steps 1 to 4 and 6 are built, with their screens,
+  and ran on the two boards; contention replaced the slots on 2026-10-05 (owner; the protocol's
+  "Medium access"), which dropped step 5, and the slots are on the `tdma` branch. Board runs
+  not referenced elsewhere: listening and the cancel rule
+  (`docs/logs/lora/founding-and-listening-2026-10-02/`), signing
+  (`docs/logs/lora/signing-2026-10-03/`), and a member deaf through two removals caught up in
+  19 minutes (`docs/logs/lora/catch-up-2026-10-03/`).
 - Measure what the device draws once the owner's PPK2 is to hand (owner, 2026-10-04). It says
   whether continuous receive fits the budget, now that the mesh contends for the channel, and
   whether the firmware light-sleeps with the screen dark. The findings, the esp-hal wake-lock gap the owner
@@ -277,20 +234,13 @@ until the feature set is complete, because profiling an incomplete firmware pric
   [`ui-firmware-review/README.md`](ui-firmware-review/README.md): 112 findings, with the ones to
   take first. Its eight bugs are fixed (2026-10-04), and the rest state machine, the giant-glyph
   bound and most of the dead code (2026-10-05); the README lists what is left of those.
-- The mesh and node clean-up from the 2026-10-03 code-quality review is done (2026-10-05,
-  `0a25c3d` to `3a9d42e`); `context/MESH-CLEANUP-PLAN.md` laid it out, and git has it at
-  `55167be`. With the 2026-10-04 security fixes it has run on both boards: they restored their
-  groups from flash, heard each other, switched together on two phantoms' removals and dropped
-  the old key, and one rejoined after a restart; core 0's stack peaked at 52,472 of 105,068
-  bytes (`docs/logs/lora/board-checks-2026-10-05/`). The two gaps that run found are closed, on
-  the owner's choices and run on both boards the same day: a node keeps the key messages of
-  members still waited for in flash, so a remover that restarts can still catch them up
-  (`e1b7176`), and an adder stops waiting for a member it pairs back in (`14fd37f`). Once, the
-  boards did not hear each other for 20 minutes, which nothing in the logs explains; watch for
-  it. Left for whenever the code is touched anyway: `Group` mixes replicated data with send bookkeeping;
-  positional bools (`Message::private` takes eight arguments) and `Clock`'s `(i64, i64)` tuples;
-  mixed byte orders (do not churn; pick one for new formats); `seal`/`open` and
-  `seal_bound`/`open_bound` could be one pair.
+- Left by the mesh and node clean-up of 2026-10-05 (`0a25c3d` to `3a9d42e`; its plan is in git
+  at `55167be`), for whenever the code is touched anyway: `Group` mixes replicated data with
+  send bookkeeping; positional bools (`Message::private` takes eight arguments) and `Clock`'s
+  `(i64, i64)` tuples; mixed byte orders (do not churn; pick one for new formats);
+  `seal`/`open` and `seal_bound`/`open_bound` could be one pair. Once, in its board run
+  (`docs/logs/lora/board-checks-2026-10-05/`), the boards did not hear each other for 20
+  minutes, which nothing in the logs explains; watch for it.
 - Finish what step 3's screens leave open (`SCREEN-DESIGN-BRIEF.md`, "Group and pairing as
   built"):
   - Every group screen's legibility on the panel, which nobody has judged yet. Typing on the
