@@ -1,0 +1,11 @@
+[package]
+name = "octowhere-ui-script"
+version = "0.1.0"
+edition = "2024"
+description = "Steps octowhere's screens on a simulated clock against a scripted mesh, for tests, renders and the simulators"
+
+[dependencies]
+embedded-graphics = "0.8.2"
+heapless = "0.9.3"
+libm = "0.2.16"
+octowhere-ui = { path = "../octowhere-ui", default-features = false }

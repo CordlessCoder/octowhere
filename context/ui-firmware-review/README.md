@@ -64,7 +64,9 @@ frame figures in them are the reviewers' (list sizes on wasm32, frames from thei
   command and once for the pixels (firmware, Duplication), and the commented-out code and the
   stale headers went with the old files (firmware, Comments). Two of the old driver's resets
   disagreed; the crate keeps the one the board ran.
-- Left for the owner: the scripted mesh behind a feature (ui-runtime, Public surface).
+- The scripted mesh, with the script driver that holds it, moved into
+  `crates/octowhere-ui-script` rather than behind a feature (owner's choice; ui-runtime, Public
+  surface), so the firmware no longer links either.
 
 ## Worth acting on first, besides the bugs
 

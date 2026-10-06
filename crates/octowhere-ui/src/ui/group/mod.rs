@@ -7,7 +7,6 @@
 
 pub mod keyboard;
 pub mod layout;
-pub mod sim;
 pub use octowhere_node::view;
 pub mod words;
 

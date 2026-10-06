@@ -36,11 +36,11 @@ use octowhere_ui::{
         compass::CompassView,
         rest::{AlwaysOn, Rest, Timeout},
         screens::{Battery, Gnss, PeripheralState, Screen},
-        script::Driver,
         stage::{Input, Key, Motion, Sensors, Stage, Touch},
         startup::{Outcome, Part, Report},
     },
 };
+use octowhere_ui_script::Driver;
 
 fn main() {
     let out = std::env::args_os().nth(1).map_or_else(

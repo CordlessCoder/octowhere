@@ -14,11 +14,11 @@ use octowhere_ui::{
         members,
         rest::Timeout,
         screens::{Gnss, GnssHealth, PeripheralState, Screen},
-        script::Driver,
         second::Page,
         stage::{Motion, Sensors, Stage},
     },
 };
+use octowhere_ui_script::Driver;
 
 const SECOND: u64 = 1_000_000;
 const DUBLIN: (i32, i32) = (533_498_000, -62_603_000);

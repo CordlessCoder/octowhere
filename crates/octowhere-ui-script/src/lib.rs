@@ -1,21 +1,24 @@
 //! Drives a [`Stage`] on a simulated clock, one frame per step, the way the firmware's frame
 //! loop feeds it. Tests assert against it, and `tools/ui-sim` plays and records scenes written
 //! on it, so a scene comes out the same every run.
+#![no_std]
+
+extern crate alloc;
+
+pub mod sim;
 
 use alloc::{boxed::Box, vec::Vec};
 
 use embedded_graphics::prelude::Point;
-
-use super::{
+use octowhere_ui::ui::{
     gesture::Micros,
-    group::{
-        sim::Sim,
-        view::{MeshView, MessagesView, Request},
-    },
+    group::view::{MeshView, MessagesView, Request},
     screens::{PeripheralState, Screen},
     stage::{Input, Key, Motion, Sensors, Stage, Touch, TouchGesture, Update},
     startup::{Outcome, Part, Report},
 };
+
+use self::sim::Sim;
 
 /// The time between steps.
 pub const FRAME: Micros = 16_667;

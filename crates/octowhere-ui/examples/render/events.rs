@@ -8,10 +8,10 @@ use octowhere_ui::{
     ui::{
         rest::{AlwaysOn, Timeout},
         screens::{Gnss, GnssHealth, PeripheralState, Screen},
-        script::Driver,
         stage::{Sensors, Stage},
     },
 };
+use octowhere_ui_script::Driver;
 
 const SECOND: u64 = 1_000_000;
 

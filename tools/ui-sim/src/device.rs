@@ -8,14 +8,12 @@ use minifb::Key;
 use octowhere_ui::ui::{
     clock::{ClockState, ZoneMode, ZoneState},
     compass::CompassView,
-    group::{
-        sim::Sim as Scripted,
-        view::{MessagesView, Request},
-    },
+    group::view::{MessagesView, Request},
     screens::{Battery, Gnss, GnssHealth, PeripheralState},
     stage::{Input, Key as PowerKey, Motion, Sensors, Stage, Store, Touch, TouchGesture, Update},
     startup::Report,
 };
+use octowhere_ui_script::sim::Sim as Scripted;
 
 use crate::{Panel, scenes};
 

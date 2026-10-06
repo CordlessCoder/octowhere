@@ -8,14 +8,16 @@ use octowhere_ui::{
     ui::{
         group::{
             keyboard::{Mode, taps},
-            sim::{self, Arrival, Sim},
             view::{Carriage, MessagesView, Name},
         },
         rest::Timeout,
         screens::{PeripheralState, Screen},
-        script::Driver,
         stage::Stage,
     },
+};
+use octowhere_ui_script::{
+    Driver,
+    sim::{self, Arrival, Sim},
 };
 
 const SECOND: u64 = 1_000_000;

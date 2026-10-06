@@ -23,7 +23,6 @@ pub mod rest;
 pub mod reveal;
 pub mod scatter;
 pub mod screens;
-pub mod script;
 pub mod second;
 pub mod sheet;
 pub mod shift;

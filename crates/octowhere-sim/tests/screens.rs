@@ -1,5 +1,5 @@
 //! Devices whose screens drive their nodes, as the simulators show several side by side: each
-//! a stage on `octowhere-ui`'s script driver, stepped on its node's clock, taking the views the
+//! a stage on `octowhere-ui-script`'s driver, stepped on its node's clock, taking the views the
 //! node publishes and passing on the requests its screens make.
 
 use std::{cell::RefCell, rc::Rc};
@@ -11,9 +11,9 @@ use octowhere_ui::ui::{
     group::view::{Done, MeshView, Phase, Request},
     rest::Timeout,
     screens::{PeripheralState, Screen},
-    script::{Driver, MeshLink},
     stage::Stage,
 };
+use octowhere_ui_script::{Driver, MeshLink};
 
 /// A device's node on the shared air.
 struct Node {

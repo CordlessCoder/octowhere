@@ -11,15 +11,15 @@ use octowhere_ui::{
     ui::{
         drawer::Child,
         events::Kind,
-        group::{
-            sim::{self, SWITCH_AFTER, Sim},
-            view::{Decline, Name, RemovalStage, RemovalView, Request},
-        },
+        group::view::{Decline, Name, RemovalStage, RemovalView, Request},
         rest::Timeout,
         screens::{PeripheralState, Screen},
-        script::Driver,
         stage::Stage,
     },
+};
+use octowhere_ui_script::{
+    Driver,
+    sim::{self, SWITCH_AFTER, Sim},
 };
 
 const SECOND: u64 = 1_000_000;

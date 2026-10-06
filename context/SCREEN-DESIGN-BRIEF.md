@@ -302,8 +302,8 @@ digits and a scroll its rows. The scatter is the panel's. The firmware publishes
 screens show (`group::view`): this device's name and address, the stored group's members, when
 each was last heard directly and when its position was observed, the radio's state at boot,
 the pairing under way and a founder's wait. The screens ask the mesh through
-`Request`, and `group::sim` stands in for the mesh on the host. Where the build interpreted the
-two hand-offs:
+`Request`, and `octowhere_ui_script::sim` stands in for the mesh on the host. Where the build
+interpreted the two hand-offs:
 
 - **No names before the code.** Announcements carry only keys and addresses (owner), so a
   device found shows its 12-digit address and NAME NOT SENT YET, and the code screens name the
@@ -557,8 +557,8 @@ open:
   35 px to 28 px before it is cut.
 - **Captions.** The drawer's 12 px caption under every title, where the removal renders set it
   at 11 px.
-- **Host.** The scripted mesh (`group::sim`) runs a removal with an eight-minute switch and a day
-  to decline.
+- **Host.** The scripted mesh (`octowhere_ui_script::sim`) runs a removal with an eight-minute
+  switch and a day to decline.
 
 ## Member face as built
 

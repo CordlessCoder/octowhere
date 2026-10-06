@@ -55,8 +55,8 @@ initialization or peripheral mappings.
   `OCTOWHERE_SIM_LOG=1` prints them as they come. `tests/security.rs` stages the open items of
   the mesh's security review, with a recording of the air and a bare radio that replays or
   forges packets. `tests/screens.rs` drives devices through
-  their screens instead, each stage on `octowhere-ui`'s script driver linked to its node
-  (`script::MeshLink`). The simulators run it open-ended through its `air`: from the host's
+  their screens instead, each stage on `octowhere-ui-script`'s driver linked to its node
+  (`MeshLink`). The simulators run it open-ended through its `air`: from the host's
   UTC, paced by the host's clock at up to 120 times, but at the host's pace while a finger or
   key is down and 0.6 s after, so that presses keep their length on a device's clock; with a
   bounded log, links changed live, and nodes powered off and on. Needs nightly, as the node
@@ -72,8 +72,8 @@ initialization or peripheral mappings.
   shift's positions against burn-in and the column split the flush shares, `always_on`, the
   face the screen rests on, `power_off`, the power key's confirmation, `group`, the group,
   name and pairing screens, drawn from a list of what each shows (`layout`), with the mesh's
-  published state and the requests they make of it in `view`, from `octowhere-node`, and a
-  simulated mesh for the host in `sim`, `events`, what happened at run time (GNSS incidents,
+  published state and the requests they make of it in `view`, from `octowhere-node`, `events`,
+  what happened at run time (GNSS incidents,
   messages and removals), each one entry through its life, `drawer`, the Events and Messages
   drawer an upward drag opens, its details, the conversations, drafts and their review
   (`messages`), a removal's request, its decline and two that compete (`removals`), the
@@ -82,12 +82,17 @@ initialization or peripheral mappings.
   from lists as the group screens are and from the shared parts of the 2026-10-04 hand-off's
   consistency rules (`parts`), `members`, the member face: the members' bearings round a ring
   turned to the true heading over a grid that keeps to true north, `stroke`, antialiased paths,
-  arcs and polygons, `stage`, which holds the screen state and turns touch
-  and readings into redraws and settings to store, and `script`, which steps a stage on a
-  simulated clock for tests and scenes. `src/chrome.rs` is the font and draw-target layer, and
+  arcs and polygons, and `stage`, which holds the screen state and turns touch and readings
+  into redraws and settings to store. `src/chrome.rs` is the font and draw-target layer, and
   `src/framebuffer.rs` holds the pixels. The firmware re-exports its `chrome`, `framebuffer`,
   `motion` and `ui` modules. The UI keeps re-exporting the motion modules under `ui::` for
   existing screen and test paths.
+- `crates/octowhere-ui-script/` steps a stage on a simulated clock for tests, renders and the
+  simulators (`Driver`), and links one to a mesh node outside it (`MeshLink`). Its `sim` is a
+  mesh for the host, which answers the group screens' requests with a scripted device on the
+  other side of a pairing and synthetic names and positions. It is a crate of its own so that
+  the firmware does not link it; `octowhere-ui`'s tests and examples take it as a
+  dev-dependency.
 - `firmware/src/main.rs` holds both cores, the bring-up of the parts behind the self-test, the
   sensor and motion tasks, and the frame loop, which feeds the stage and flushes what it draws.
 - `firmware/src/board.rs` holds display geometry, the TCA9554 line indices, and the I2C
@@ -121,7 +126,7 @@ initialization or peripheral mappings.
   WebAssembly with a page that runs it in a browser, controls in place of the desktop's keys.
   Both run several devices side by side too, each a stage on the firmware's own mesh node on
   `octowhere-sim`'s air, with the link matrix and the air's speed editable while they run;
-  one device alone keeps the scripted mesh (`ui::group::sim`). The web simulator's
+  one device alone keeps the scripted mesh (`octowhere_ui_script::sim`). The web simulator's
   `build.sh` writes the static site to `dist/`, `deploy.sh` copies it to a server over SSH,
   and `.github/workflows/ui-web.yml` publishes it to GitHub Pages. `tools/design-compare.py`
   puts screens beside the design's renders. `tools/` also holds the bench scripts.
@@ -250,8 +255,8 @@ Every release build emits one `linker_messages` warning about a LOAD segment wit
 It is expected for this target and is not a regression.
 
 The UI runs on the host through `crates/octowhere-ui`. Its tests drive a `Stage` through
-`ui::script::Driver` with taps, swipes and readings, and check that a redraw clipped to tiles
-matches a full one. `tools/ui-sim` plays scenes written on the same driver, from its
+`octowhere-ui-script`'s `Driver` with taps, swipes and readings, and check that a redraw clipped
+to tiles matches a full one. `tools/ui-sim` plays scenes written on the same driver, from its
 `scenes.rs`, and records them to GIF or MP4 the same every run, which is the way to share an
 animation. Its MP4s are 4:4:4 H.264, which keeps the panel's thin coloured lines sharp. 4:2:0
 smears them, and doubling the size to keep a colour sample per pixel breaks players' scaling

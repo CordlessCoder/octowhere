@@ -13,18 +13,20 @@ use octowhere_ui::ui::{
     gesture::Micros,
     group::{
         keyboard::{Mode, taps},
-        sim::{self, Arrival, Sim},
         view::{Carriage, GroupView, IDS, MemberView, MessagesView, Name, Position},
     },
     panel::Cell,
     rest::{AlwaysOn, Timeout},
     screens::PeripheralState,
     screens::{Battery, Gnss, Screen},
-    script::{self, Driver},
     second::Store,
     stage::Stage,
     stage::{Key, Motion, Sensors},
     startup::{Outcome, Part, Report},
+};
+use octowhere_ui_script::{
+    self as script, Driver,
+    sim::{self, Arrival, Sim},
 };
 
 pub struct Scene {

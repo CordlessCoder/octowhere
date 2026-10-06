@@ -85,12 +85,9 @@ use minifb::{Key, KeyRepeat, MouseButton, MouseMode, Scale, Window, WindowOption
 use octowhere_ui::{
     board::{LCD_HEIGHT, LCD_WIDTH},
     chrome::{Clip, FB},
-    ui::{
-        script::{self, Driver},
-        shift,
-        stage::Stage,
-    },
+    ui::{shift, stage::Stage},
 };
+use octowhere_ui_script::{self as script, Driver};
 
 mod air;
 mod buttons;

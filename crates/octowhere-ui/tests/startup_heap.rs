@@ -9,11 +9,9 @@ use std::{
 use embedded_graphics::prelude::Point;
 use octowhere_ui::{
     chrome::FB,
-    ui::{
-        script::Driver,
-        startup::{Outcome, Part},
-    },
+    ui::startup::{Outcome, Part},
 };
+use octowhere_ui_script::Driver;
 
 /// The bytes allocated and not yet freed.
 static LIVE: AtomicIsize = AtomicIsize::new(0);

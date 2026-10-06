@@ -12,11 +12,11 @@ use octowhere_ui::{
         events::{Gnss, Kind},
         rest::{self, AlwaysOn, Rest, Timeout},
         screens::{Gnss as Reading, GnssHealth, PeripheralState, Screen},
-        script::Driver,
         second::Page,
         stage::{Input, Sensors, Stage, Update},
     },
 };
+use octowhere_ui_script::Driver;
 
 const SECOND: u64 = 1_000_000;
 

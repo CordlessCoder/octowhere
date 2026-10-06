@@ -3,14 +3,14 @@
 
 use embedded_graphics::prelude::Point;
 use octowhere_ui::ui::{
-    group::{
-        sim::{self, Sim},
-        view::{Done, End, MeshView, Phase, Reason},
-    },
+    group::view::{Done, End, MeshView, Phase, Reason},
     rest::Timeout,
     screens::{PeripheralState, Screen},
-    script::Driver,
     stage::Stage,
+};
+use octowhere_ui_script::{
+    Driver,
+    sim::{self, Sim},
 };
 
 fn start(group: Option<u8>) -> Driver<'static> {

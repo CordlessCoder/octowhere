@@ -3,13 +3,15 @@
 //! walk every group screen without a radio. Its names, addresses, codes and ages are synthetic.
 
 use heapless::Vec;
-
-use super::view::{
-    Answer, At, Carriage, Decline, Done, End, GroupView, IDS, Mac, MemberView, MeshView,
-    MessageView, MessagesView, Name, PairingView, Phase, Position, Reason, RecoveryPhase,
-    RecoveryView, Refusal, Refused, RemovalStage, RemovalView, Request, Role, Thread, Unremovable,
+use octowhere_ui::ui::{
+    gesture::Micros,
+    group::view::{
+        Answer, At, Carriage, Decline, Done, End, GroupView, IDS, Mac, MemberView, MeshView,
+        MessageView, MessagesView, Name, PairingView, Phase, Position, Reason, RecoveryPhase,
+        RecoveryView, Refusal, Refused, RemovalStage, RemovalView, Request, Role, Thread,
+        Unremovable,
+    },
 };
-use crate::ui::gesture::Micros;
 
 const SECOND: Micros = 1_000_000;
 const SEARCH: Micros = 120 * SECOND;

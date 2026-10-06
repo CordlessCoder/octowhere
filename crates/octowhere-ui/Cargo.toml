@@ -30,4 +30,5 @@ octowhere-node = { path = "../octowhere-node" }
 
 [dev-dependencies]
 critical-section = { version = "1.2.0", features = ["std"] }
+octowhere-ui-script = { path = "../octowhere-ui-script" }
 png = "0.18.1"

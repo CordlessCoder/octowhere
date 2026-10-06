@@ -13,11 +13,11 @@ use octowhere_ui::{
         compass_screen::{Accents, CENTER as COMPASS_CENTER},
         gesture::{LIFT_GRACE, Micros, SILENT_LIFT},
         screens::Screen,
-        script::{self, Driver},
         stage::{Input, Motion, Sensors, Stage, Touch, TouchGesture},
         startup::{Outcome, Part},
     },
 };
+use octowhere_ui_script::{self as script, Driver};
 
 /// Steps until the compass page's entry has faded in.
 fn settled_on_compass() -> Driver<'static> {

@@ -13,3 +13,4 @@ octowhere-node = { path = "../octowhere-node", features = ["run", "log", "phanto
 critical-section = { version = "1.2.0", features = ["std"] }
 embedded-graphics = "0.8.2"
 octowhere-ui = { path = "../octowhere-ui", default-features = false }
+octowhere-ui-script = { path = "../octowhere-ui-script" }

@@ -24,7 +24,6 @@ use octowhere_ui::{
         clock::{ClockState, ZoneMode, ZoneState},
         compass::CompassView,
         drawer::{Child, Root},
-        group::sim::Sim as Mesh,
         group::view::{MessagesView, Request},
         rest::Rest,
         screens::{Battery, Gnss, GnssHealth, PeripheralState, Screen},
@@ -34,6 +33,7 @@ use octowhere_ui::{
         startup::{Outcome, Part, Report},
     },
 };
+use octowhere_ui_script::sim::Sim as Mesh;
 
 const WIDTH: usize = LCD_WIDTH as usize;
 const HEIGHT: usize = LCD_HEIGHT as usize;

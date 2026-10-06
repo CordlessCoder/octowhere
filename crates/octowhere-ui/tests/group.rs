@@ -7,15 +7,15 @@ use embedded_graphics::prelude::Point;
 use octowhere_ui::{
     chrome::{Clip, Dirty, FB},
     ui::{
-        group::{
-            sim::{self, PeerUser, Sim},
-            view::{Done, End, MeshView, Phase, Reason, Refusal, Refused, Role},
-        },
+        group::view::{Done, End, MeshView, Phase, Reason, Refusal, Refused, Role},
         rest::{Rest, Timeout},
         screens::{PeripheralState, Screen},
-        script::Driver,
         stage::{Key, Stage},
     },
+};
+use octowhere_ui_script::{
+    Driver,
+    sim::{self, PeerUser, Sim},
 };
 
 fn start(group: Option<u8>) -> Driver<'static> {
