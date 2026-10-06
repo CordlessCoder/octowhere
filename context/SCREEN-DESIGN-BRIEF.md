@@ -51,8 +51,8 @@ item at once: where the other members are, messages, removing a member, a GNSS f
 time, where outlined text belongs, and what the BOOT key does. The owner scopes it with the
 design agent.
 
-The last round added the radio to the start-up's self-test, a REFRESH DEVICES control to the
-group screens, and a founder's wait for the device it added. Its brief is
+The 2026-10-03 round added the radio to the start-up's self-test, a REFRESH DEVICES control to
+the group screens, since retired, and a founder's wait for the device it added. Its brief is
 `design/handoffs/REFRESH-AND-RADIO-ROUND-BRIEF-2026-10-03.md`, and the owner approved its
 hand-off, `design/handoffs/octowhere-radio-refresh-handoff-2026-10-03/` (`design/DECISIONS.md`
 entry 29). It is built, and the two boards ran it on 2026-10-03
@@ -301,7 +301,7 @@ it draws each step, and a step damages only the items that differ, so a countdow
 digits and a scroll its rows. The scatter is the panel's. The firmware publishes what the
 screens show (`group::view`): this device's name and address, the stored group's members, when
 each was last heard directly and when its position was observed, the radio's state at boot,
-the pairing under way, a refresh and a founder's wait. The screens ask the mesh through
+the pairing under way and a founder's wait. The screens ask the mesh through
 `Request`, and `group::sim` stands in for the mesh on the host. Where the build interpreted the
 two hand-offs:
 
@@ -354,25 +354,13 @@ two hand-offs:
   every button without a note under its label centres the label by its ink, where the pairing
   hand-off set it 13 px high. REMOVE and its UNAVAILABLE keep their places as a block.
 - **The status glyph** stays at the top right of the 2026-10-03 screens, where their renders
-  leave it out, since every other group screen has one: the group's on a refresh, the wait's
-  orange on CHECK MEMBER, GROUP PENDING and END CURRENT WAIT?, and the fault's red on NO
+  leave it out, since every other group screen has one: the wait's orange on CHECK MEMBER, GROUP PENDING and END CURRENT WAIT?, and the fault's red on NO
   RADIO and SAVE FAILED.
-- **MEMBERS** moves its list down to y 244 under the refresh strip, showing a row and part of
-  the next. A row's own layout is the pairing hand-off's, 1 to 2 px lower than the 2026-10-03
-  render. BACK's tap region there ends at y 141, short of the strip at y 148 (owner).
-- **REFRESH DEVICES** is to be retired (owner, 2026-10-05; `design/DECISIONS.md` 33): every device
-  listens throughout now, so a refresh only counts who it heard. Until a design round removes it,
-  it stays as built. The strip reads LISTENING and the time left while a refresh runs, and NO
-  RADIO in red without one. It opens the refresh running, an ended one the first time after it
-  ends, and otherwise the screen that starts one, which has BACK (owner). So a second refresh can
-  start: the hand-off had the strip open a kept result every time, and the result offers no way to
-  start another. Every result offers VIEW MEMBERS (owner). A refresh counts the devices it heard
-  packets from itself, and apart from those the members the group gained while it ran, by address,
-  so a member that moved to another id is not counted as new. Its result says REFRESH ENDED, or
-  NOTHING NEW when it neither heard nor learned anything. One that a pairing stopped says REFRESH
-  STOPPED / PAIRING TOOK THE RADIO with what it had by then. The caption under the title reads
-  REFRESH / JUST ENDED for a minute, then its age. Without a group or with a pairing under way it
-  says why it cannot run.
+- **MEMBERS** shows two whole rows, y 194 to 406, under its count at y 168, with a rule
+  closing the list at y 406 (the 2026-10-05 hand-off). A row's own layout is the pairing
+  hand-off's. REFRESH DEVICES is retired with its screens and its events (owner, 2026-10-05;
+  `design/DECISIONS.md` 34), and nothing replaces the strip. Events live in RAM, so no refresh
+  record outlives the update that removed them.
 - **A founder's wait.** The hub shows GROUP PENDING with the device it waits for and the time
   left, and its PAIR asks END CURRENT WAIT? first, which BACK leaves. The wait ends only when a
   new pairing actually starts. CHECK MEMBER counts down, says STORING THE GROUP once the
@@ -382,7 +370,7 @@ two hand-offs:
   GROUP goes on to the hub as it now is.
 
 Host stills of every state are in the `render` example, named after the hand-offs' renders
-where they match, and the atlas's GROUP + NAME, PAIRING and REFRESH + RECOVERY sections. The boards' own
+where they match, and the atlas's GROUP + NAME, PAIRING and RECOVERY sections. The boards' own
 framebuffers through a pairing, a rename and a cover are in
 `docs/logs/lora/pairing-screens-2026-10-02/`. Typing on the 39 px keys with a finger is
 accurate and responsive (owner, 2026-10-02). Nobody has judged legibility on the panel yet.
@@ -399,12 +387,10 @@ every text's ink. Where the build chose what the hand-off left open:
 
 - **Capacity.** 16 events in RAM, lost at a restart. A new event takes the place of the oldest
   settled one, a read one first; an event still going on is never dropped.
-- **One event each.** A GNSS incident runs from the module stopping to its answering again, a
-  refresh from its start to its result. The user is told of a new incident, its escalation to
-  a fault, the module answering again and a refresh's end: each marks the event unread, moves
-  it to the top, and shows a toast. The second and third resets update the incident quietly. A
-  refresh started on this device begins read. A refresh a pairing stops shows REFRESH STOPPED,
-  which has no render.
+- **One event each.** A GNSS incident runs from the module stopping to its answering again.
+  The user is told of a new incident, its escalation to a fault and the module answering
+  again: each marks the event unread, moves it to the top, and shows a toast. The second and
+  third resets update the incident quietly.
 - **Order.** Running operations first, then the latest told-of change first.
 - **GNSS.** The GNSS task's own recovery drives it: RECOVERING when it finds the module stuck (8
   failed reads, or 10 s without NMEA) and resets it, at most once a minute; GNSS FAULT once

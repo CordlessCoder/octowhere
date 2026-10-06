@@ -296,50 +296,6 @@ fn leaving_and_joining_at_once_still_tells_the_group() {
     assert!(told, "node 0 heard node 1 go");
 }
 
-/// The refresh session a node's view shows.
-fn refresh_session(sim: &Sim, node: usize) -> Option<u32> {
-    sim.view(node)?.refresh.map(|refresh| refresh.session)
-}
-
-/// A node that leaves its group and founds another goes on numbering its refreshes, which the
-/// screens tell apart by number.
-#[test]
-fn refreshes_count_on_across_leaving_and_founding() {
-    let mut sim = pair(10);
-    sim.run_while_not(30 * 60, |sim| sim.count(1, "heard id=0") >= 1);
-    sim.command(1, Command::Refresh);
-    let ended = sim.run_while_not(10 * 60, |sim| sim.count(1, "refresh ended") == 1);
-    assert!(ended, "the first refresh ended");
-    assert_eq!(refresh_session(&sim, 1), Some(1));
-
-    sim.command(1, Command::Leave);
-    let left = sim.run_while_not(10 * 60, |sim| sim.count(1, "left the group") == 1);
-    assert!(left, "node 1 left");
-    let joiner = sim.add(alone(2), Config::default());
-    sim.link_all(Link::default());
-    sim.command(1, Command::Add);
-    sim.command(joiner, Command::Join);
-    let found = sim.run_while_not(5 * 60, |sim| sim.count(1, "[PAIR] found 0") >= 1);
-    assert!(found, "node 1 found the joining device");
-    sim.command(1, Command::Choose(0));
-    let compared = sim.run_while_not(5 * 60, |sim| {
-        sim.count(1, "[PAIR] code") == 1 && sim.count(joiner, "[PAIR] code") == 1
-    });
-    assert!(compared, "both show a code");
-    sim.command(1, Command::Accept);
-    sim.command(joiner, Command::Accept);
-    let done = sim.run_while_not(5 * 60, |sim| {
-        sim.count(1, "Done(Added") == 1 && sim.count(joiner, "Done(Joined") == 1
-    });
-    assert!(done, "node 1 founded a group");
-    sim.run_for(10);
-    assert_eq!(refresh_session(&sim, 1), None);
-
-    sim.command(1, Command::Refresh);
-    sim.run_for(10);
-    assert_eq!(refresh_session(&sim, 1), Some(2));
-}
-
 /// `count` nodes of one group, all in reach of each other, once each has heard every other.
 fn group(count: u8, seed: u64) -> Sim {
     let mut sim = Sim::new(seed);

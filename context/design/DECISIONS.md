@@ -181,3 +181,14 @@ Recorded 2026-09-26. These override the hand-off where they differ.
     counts who it heard. Removing it changes the group screens around the members list, the
     refresh screens and the events drawer's refresh rows, so it waits for a design round; until
     then the refresh stays as built.
+34. **The 2026-10-05 incremental hand-off** (owner, 2026-10-05), in
+    `context/octowhere-incremental-handoff-2026-10-05/`, kept locally like the others, approved
+    in full, to be built. It retires REFRESH DEVICES and gives MEMBERS back its two whole rows;
+    shows a message's recipient by full name, id and device fingerprint, and binds a draft to
+    that device; draws crowded bearings as sectors with the selected member at its exact
+    bearing; marks a message too tall for the screen read only once every line has been seen;
+    keeps live and actionable events beyond the 16 kept as history; and links an add refused
+    for a removal to that removal's request. Its own "Implementation response requested" lists
+    what the build reports back. The refresh's records needed no migration: events live in RAM,
+    so the update that removes the refresh restarts the device without any, and the mesh's
+    refresh command and view went with it.

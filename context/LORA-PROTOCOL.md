@@ -117,8 +117,8 @@ the channel is clear (`octowhere-node`'s `access`).
   draw the same step.
 - **Duty.** After each transmission a node is silent for nine times its airtime, which keeps it
   under band O's 10% at any moment.
-- **The floor** is a little under three rounds, so that a node listening for three rounds, in a
-  first sweep or a refresh, hears every node in reach.
+- **The floor** is a little under three rounds, so that a node listening for three rounds, as
+  in a first sweep, hears every node in reach.
 - **Sweep rounds** are every round of a timebase whose index is a multiple of 13, about every
   10 minutes. Every node listens throughout anyway; what is left of them is a cadence for a
   removal (see "Removing a member"). In one, a node sends its word that it is on the group's key
@@ -235,9 +235,8 @@ node, those whose RTCs held the time too, refused records stamped in 2026 as an 
   its records 0, which lose every merge. Groups started this way merge to the lowest root as
   soon as they hear each other. A node that gets a fix moves to GPS time, and the nodes timing
   from it follow within two of its packets.
-- **Refreshing.** REFRESH DEVICES on the screens counts the members heard directly for three
-  rounds (owner, 2026-10-03), apart from those the group gained while it ran, and a pairing stops
-  it. Every member in reach sends within a floor, so the count is whole.
+- **Refreshing** is retired (owner, 2026-10-05; `design/DECISIONS.md` 33 and 34). Every node
+  listens throughout, so every member in reach is heard within a floor without one.
 - **Ageing.** A node's own GPS time counts as GPS while a fix has refined it within 30 minutes.
   After that the node ranks as its own root, so a node with a live fix takes the group over.
 

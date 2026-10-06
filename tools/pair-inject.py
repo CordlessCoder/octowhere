@@ -10,7 +10,6 @@
     uv run tools/pair-inject.py accept | decline | mismatch | cancel | leave
     uv run tools/pair-inject.py name "Ana's watch"
     uv run tools/pair-inject.py deaf 40
-    uv run tools/pair-inject.py refresh
     uv run tools/pair-inject.py send 1 "meet at the car"
     uv run tools/pair-inject.py send group "back in 10"
     uv run tools/pair-inject.py remove 2
@@ -21,8 +20,7 @@ The commands stand in for the screens until they are built: `add` and `join` sta
 `choose` picks a device the adding side found, `accept`, `decline` and `mismatch` answer the code,
 and `cancel` ends a pairing. `leave` tells the group and forgets it, and `name` renames this
 device. `deaf` makes a pairing, or the mesh, drop every frame it hears for that many seconds, up to
-255, to lose an acknowledgement or a switch on purpose. `refresh` listens throughout for three rounds, as REFRESH DEVICES
-does. `send` sends text, up to 160 printable ASCII characters, to the member with that id,
+255, to lose an acknowledgement or a switch on purpose. `send` sends text, up to 160 printable ASCII characters, to the member with that id,
 privately, or to the whole group. `remove` removes the member with that id from the group, and
 `keep` declines another member's removal of the member with that id, before its switch or
 within a day after it. `phantom` enrols a member no device stands
@@ -38,7 +36,7 @@ import sys
 from elftools.elf.elffile import ELFFile
 
 CODES = {"add": 1, "join": 2, "choose": 3, "accept": 4, "decline": 5, "mismatch": 6,
-         "cancel": 7, "leave": 8, "name": 9, "deaf": 10, "refresh": 11, "send": 12, "remove": 13, "keep": 14, "phantom": 15}
+         "cancel": 7, "leave": 8, "name": 9, "deaf": 10, "send": 12, "remove": 13, "keep": 14, "phantom": 15}
 COMMAND = "OCTOWHERE_PAIR_COMMAND"
 NAME = "OCTOWHERE_PAIR_NAME"
 TEXT = "OCTOWHERE_PAIR_TEXT"

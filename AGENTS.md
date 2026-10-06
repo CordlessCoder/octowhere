@@ -74,7 +74,7 @@ initialization or peripheral mappings.
   name and pairing screens, drawn from a list of what each shows (`layout`), with the mesh's
   published state and the requests they make of it in `view`, from `octowhere-node`, and a
   simulated mesh for the host in `sim`, `events`, what happened at run time (GNSS incidents,
-  refreshes and removals), each one entry through its life, `drawer`, the Events and Messages
+  messages and removals), each one entry through its life, `drawer`, the Events and Messages
   drawer an upward drag opens, its details, the conversations, drafts and their review
   (`messages`), a removal's request, its decline and two that compete (`removals`), the
   toasts that tell of an event and the unread arc, `slide`, the deliberate slide that confirms
@@ -616,9 +616,8 @@ device's Ed25519 signature, which a node checks before taking them (the protocol
 "Signatures"); a check takes about 32 ms on the board, and a signature about 35. A node in no group sends nothing and keeps the
 radio asleep. Without a fix a node has no position of its own. Commands reach the mesh through
 `COMMANDS` in `firmware/src/mesh/device.rs`: start a pairing to add or join, choose a device found, answer the code, cancel,
-leave the group, rename, refresh, send text, remove a member while its id still holds the
-device named, and decline a removal, named by its new key.
-A refresh counts the members heard for three rounds; a pairing stops it. A device that leaves
+leave the group, rename, send text, remove a member while its id still holds the
+device named, and decline a removal, named by its new key. A device that leaves
 sends its gone record in two packets, 10 s apart, before it forgets the key; a pairing started
 meanwhile waits for the first. Every node
 holds every message for 24 hours in a store in PSRAM, lost at a restart, and the summaries
@@ -748,7 +747,7 @@ All default off. None belongs in normal firmware behavior.
   longer sets the clock until the firmware restarts.
 - `pair-inject` lets `tools/pair-inject.py` give the mesh its commands over the USB JTAG,
   beside the screens: add, join, choose, accept, decline, mismatch, cancel, leave, rename,
-  refresh, send, remove and keep. Its `deaf` makes a pairing or the mesh drop what it hears for
+  send, remove and keep. Its `deaf` makes a pairing or the mesh drop what it hears for
   a while, to lose a frame or a switch on purpose, and its `phantom` enrols a member no device
   stands behind, so that two boards can try a removal with a member left to tell.
 - `fix-inject` lets `tools/fix-inject.py` stand a position in for a GNSS fix over the USB JTAG,

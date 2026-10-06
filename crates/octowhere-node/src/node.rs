@@ -1,7 +1,6 @@
 //! Runs the location mesh on a radio: listens throughout, sends this node's packets when the
 //! channel is clear (`access`), and keeps the timebase that names their times. Pairing takes the
-//! radio over, on a channel of its own, until it ends. A refresh counts the members heard for
-//! three rounds when the screens ask. `octowhere_mesh` holds the protocol and
+//! radio over, on a channel of its own, until it ends. `octowhere_mesh` holds the protocol and
 //! `context/LORA-PROTOCOL.md` the design.
 
 use alloc::boxed::Box;
@@ -13,7 +12,7 @@ use embassy_futures::select::{Either, Either3, select, select3};
 use octowhere_mesh::{
     IDS, Ids, Zeroable,
     absorb::{Event, State, When, absorb},
-    clock::{Clock, SWEEP_US, UTC_BOUND_US},
+    clock::{Clock, UTC_BOUND_US},
     compose::{Sources, compose},
     members::{Gone, Group, Member, Name, Requests, fingerprint},
     messages::{
@@ -40,8 +39,8 @@ use crate::{
     unsaved::{Due, Unsaved},
     view::{
         Answer, Decline, GroupView, MemberView, MeshView, MessagesView, PairingView, Position,
-        RecoveryPhase, RecoveryView, RefreshPhase, RefreshView, Refusal, Refused, RemovalStage,
-        RemovalView, RemovalsView, Request, Text, Unremovable,
+        RecoveryPhase, RecoveryView, Refusal, Refused, RemovalStage, RemovalView, RemovalsView,
+        Request, Text, Unremovable,
     },
 };
 
@@ -117,8 +116,6 @@ pub enum Command {
     /// Forgets the group.
     Leave,
     Rename(Name),
-    /// Listens throughout for three rounds.
-    Refresh,
     /// Sends text to one member, privately, or with `None` to the whole group.
     Send {
         to: Option<u8>,
@@ -224,7 +221,6 @@ impl From<Request> for Command {
             Request::Cancel => Self::Cancel,
             Request::Leave => Self::Leave,
             Request::Rename(name) => Self::Rename(name),
-            Request::Refresh => Self::Refresh,
             Request::Send { to, text } => Self::Send { to, text },
             Request::Read(id) => Self::Read(id),
             Request::Remove { id, device } => Self::RemoveDevice { id, device },
@@ -285,10 +281,9 @@ struct Shown {
     refusal: Option<Refusal>,
     answered: u32,
     answer: Option<Answer>,
-    /// The node's `heard` and `refresh`, copied in as it renders. Protocol decisions read the
-    /// node's own, never these.
+    /// The node's `heard`, copied in as it renders. Protocol decisions read the node's own,
+    /// never this.
     heard: [Option<i64>; IDS as usize],
-    refresh: Option<RefreshView>,
     /// The newest position held for each id: its UTC second and its coordinates. Kept past the
     /// table's expiry, so an old position shows as old rather than never received.
     positions: [Option<(u32, (i32, i32))>; IDS as usize],
@@ -308,7 +303,6 @@ impl Shown {
             answer: None,
             heard: [None; IDS as usize],
             positions: [None; IDS as usize],
-            refresh: None,
             recovery: None,
             removals: RemovalsView::default(),
         }
@@ -361,7 +355,6 @@ impl Shown {
             refusal,
             answered,
             answer,
-            refresh,
             recovery,
             removals,
         } = view;
@@ -373,7 +366,6 @@ impl Shown {
         *refusal = self.refusal;
         *answered = self.answered;
         *answer = self.answer;
-        *refresh = self.refresh;
         *recovery = self.recovery;
         *removals = self.removals;
         let Some(group) = group else {
@@ -626,9 +618,6 @@ pub struct Mesh<R, T, G, D, S, A: Allocator> {
     leaving: Option<Box<Leaving>>,
     /// The member records the next packet asks for.
     requests: Requests,
-    /// The members' addresses as a refresh under way started, which tell the members it learns
-    /// from one that moved to another id.
-    refresh_known: Option<Box<[Option<[u8; 6]>; IDS as usize]>>,
     /// What changed in the group and its removals and is not yet queued to be stored.
     unsaved: Unsaved,
     clock: Clock,
@@ -639,11 +628,6 @@ pub struct Mesh<R, T, G, D, S, A: Allocator> {
     timebase_shown: Option<Timebase>,
     /// When each id was last heard sending, on the local clock.
     heard: [Option<i64>; IDS as usize],
-    /// The refresh under way, or the last, while the group stays this device's.
-    refresh: Option<RefreshView>,
-    /// The refreshes started since boot, which number them: the screens take a session no
-    /// higher than the last they saw for one already told.
-    refreshes: u32,
     /// What the screens are shown.
     shown: Shown,
     /// The view [`publish`] fills.
@@ -712,7 +696,6 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             founding: None,
             leaving: None,
             requests: Requests::default(),
-            refresh_known: None,
             unsaved: Unsaved::default(),
             clock: Clock::new(own, now),
             table: Table::new(own),
@@ -720,8 +703,6 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             sweep_at: None,
             timebase_shown: None,
             heard: [None; IDS as usize],
-            refresh: None,
-            refreshes: 0,
             shown: Shown::new(true),
             view: blank_view(),
             messages: zeroed_in(alloc.clone()),
@@ -757,7 +738,6 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         let now = self.time.now();
         let utc = self.utc(now);
         self.shown.heard = self.heard;
-        self.shown.refresh = self.refresh;
         self.shown
             .fill(&mut self.view, &self.me, self.group.as_ref(), now, utc);
         self.device.publish(&mut self.view);
@@ -983,8 +963,6 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                 if left {
                     self.forget_messages();
                     self.unsaved.group_replaced();
-                    self.refresh = None;
-                    self.refresh_known = None;
                     info!("[MESH] left the group");
                 } else {
                     warn!("[MESH] not left");
@@ -1004,7 +982,6 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                 }
                 self.shown.answer(Answer::Renamed(saved));
             }
-            Command::Refresh => self.start_refresh(),
             Command::Send { to, text } => self.queue_text(to, text),
             Command::Read(id) => {
                 self.inbox.read(id);
@@ -1178,7 +1155,6 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         let now = self.time.now();
         self.take_readings(own);
         self.clock.tick(now, self.device.rtc_utc(now));
-        self.update_refresh(now);
         let timebase = self.clock.at(now).map(|(_, timebase)| timebase);
         if timebase != self.timebase_shown {
             log_timebase(timebase, self.clock.is_sweeping(now));
@@ -1453,7 +1429,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         }
     }
 
-    /// Receives until local time `end`, making a switch and ending a refresh as they come.
+    /// Receives until local time `end`, making a switch as it comes.
     /// Returns whether it took a packet or made a switch, after which the step looks afresh at
     /// what is due.
     async fn listen(&mut self, end: i64) -> bool {
@@ -1462,9 +1438,6 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         }
         loop {
             let now = self.time.now();
-            if self.update_refresh(now) {
-                self.publish();
-            }
             if self.switch_at(now).is_some_and(|at| at <= now) {
                 self.switch_key();
                 return true;
@@ -1472,11 +1445,10 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             if now >= end {
                 return false;
             }
-            let close = [self.refresh_until(), self.switch_at(now)]
-                .into_iter()
-                .flatten()
+            let close = self
+                .switch_at(now)
                 .filter(|&at| at > now)
-                .fold(end, i64::min);
+                .map_or(end, |at| at.min(end));
             if self.radio.wait_received(close).await {
                 self.receive().await;
                 return true;
@@ -1566,13 +1538,6 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         let arrival = self.clock.arrival(&header, start, done);
         if let Some(heard) = self.heard.get_mut(usize::from(header.sender)) {
             *heard = Some(done);
-        }
-        if let Some(refresh) = &mut self.refresh
-            && refresh.is_listening()
-            && header.sender != group.own()
-            && header.sender < IDS
-        {
-            refresh.heard |= 1 << header.sender;
         }
         let round = round_at(header.start());
         self.table.heard(header.sender, round);
@@ -1805,7 +1770,6 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             info!("[MESH] no longer listening for the device a founding left unconfirmed");
         }
         self.shown.recovery = None;
-        self.stop_refresh(self.time.now());
         self.shown.sessions += 1;
         self.shown.refusal = None;
         let session = self.shown.sessions;
@@ -1867,7 +1831,6 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                     _ => self.group.as_ref(),
                 };
                 self.shown.heard = self.heard;
-                self.shown.refresh = self.refresh;
                 self.shown.fill(&mut self.view, &self.me, group, now, utc);
                 self.device.publish(&mut self.view);
             }
@@ -1969,7 +1932,6 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                 self.unsaved.group_replaced();
                 if role == Role::Join || !had_group {
                     self.restart(own);
-                    self.refresh = None;
                 }
             }
             // A founder whose write failed has sent its done all the same, so the joining
@@ -2838,86 +2800,6 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
     fn set_recovery(&mut self, phase: RecoveryPhase) {
         if let Some(recovery) = &mut self.shown.recovery {
             recovery.phase = phase;
-        }
-    }
-
-    /// Starts a refresh, which listens throughout for three rounds and goes on sending in this
-    /// node's slot. One under way keeps its time.
-    fn start_refresh(&mut self) {
-        let Some(group) = &self.group else {
-            warn!("[MESH] no group to refresh");
-            return;
-        };
-        if self.refresh.is_some_and(|refresh| refresh.is_listening()) {
-            return;
-        }
-        let now = self.time.now();
-        self.clock.sweep_to(now + SWEEP_US);
-        self.refresh_known = Some(Box::new(core::array::from_fn(|id| {
-            group.member(id as u8).map(|member| member.mac)
-        })));
-        self.refreshes += 1;
-        self.refresh = Some(RefreshView {
-            session: self.refreshes,
-            phase: RefreshPhase::Listening {
-                until: now + SWEEP_US,
-            },
-            heard: 0,
-            learned: 0,
-        });
-        info!("[MESH] refreshing for {}s", SWEEP_US / 1_000_000);
-    }
-
-    /// When the refresh under way ends.
-    fn refresh_until(&self) -> Option<i64> {
-        match self.refresh?.phase {
-            RefreshPhase::Listening { until } => Some(until),
-            _ => None,
-        }
-    }
-
-    /// Notes the members a refresh under way has learned, and ends it at its time. Returns
-    /// whether that changed what the screens show.
-    fn update_refresh(&mut self, now: i64) -> bool {
-        let (Some(refresh), Some(group), Some(known)) = (
-            &mut self.refresh,
-            &self.group,
-            self.refresh_known.as_deref(),
-        ) else {
-            return false;
-        };
-        let RefreshPhase::Listening { until } = refresh.phase else {
-            return false;
-        };
-        // A timebase taken up or a fix ends a sweep; a refresh listens on to its end.
-        if now < until {
-            self.clock.sweep_to(until);
-        }
-        let before = *refresh;
-        refresh.learned = group
-            .members()
-            .filter(|(_, member)| !known.contains(&Some(member.mac)))
-            .fold(0, |learned, (id, _)| learned | 1 << id);
-        if now >= until {
-            refresh.phase = RefreshPhase::Ended { at: until };
-            info!(
-                "[MESH] refresh ended heard={:#010x} learned={:#010x}",
-                refresh.heard, refresh.learned
-            );
-            self.refresh_known = None;
-        }
-        *refresh != before
-    }
-
-    /// Ends a refresh under way early, as a pairing takes the radio.
-    fn stop_refresh(&mut self, now: i64) {
-        self.update_refresh(now);
-        if let Some(refresh) = &mut self.refresh
-            && refresh.is_listening()
-        {
-            refresh.phase = RefreshPhase::Interrupted { at: now };
-            self.refresh_known = None;
-            info!("[MESH] refresh stopped for a pairing");
         }
     }
 }

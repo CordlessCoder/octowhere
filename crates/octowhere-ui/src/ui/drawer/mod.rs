@@ -120,7 +120,7 @@ pub enum Exit {
     /// A downward pull that began at the top of a root's list: the stage takes the drag on, to
     /// close the drawer with it.
     Pull,
-    /// VIEW MEMBERS: the group's members, over the faces.
+    /// VIEW GROUP: the group's members, over the faces.
     Members,
     /// SEND: the draft goes to the mesh, once.
     Send {
@@ -565,11 +565,8 @@ impl Drawer {
                         }
                     }
                     _ => {
-                        let (members, dismiss) = rows::detail_buttons(event);
-                        if members.is_some_and(|area| parts::pressed(area, point)) {
-                            return Exit::Members;
-                        }
-                        if dismiss.is_some_and(|area| parts::pressed(area, point))
+                        if rows::dismiss_button(event)
+                            .is_some_and(|area| parts::pressed(area, point))
                             && events.dismiss(id).is_ok()
                         {
                             self.child = None;

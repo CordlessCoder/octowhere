@@ -222,7 +222,6 @@ pub fn look(removal: &RemovalView, own: u8, now: Micros) -> Look {
         lines,
         toast,
         hint: "VIEW REQUEST",
-        rail: None,
     }
 }
 
@@ -241,7 +240,6 @@ pub fn removed_look(by: u8, name: &Name) -> Look {
         ],
         toast: format(format_args!("You were removed by {}.", name.as_str())),
         hint: "VIEW NOTICE",
-        rail: None,
     }
 }
 

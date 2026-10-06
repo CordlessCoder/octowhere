@@ -1,6 +1,6 @@
 //! What the group screens know of the mesh, as the firmware publishes it: this device, its
-//! group, the pairing under way, a refresh, the wait of a device that founded a group, and how
-//! the last leave or rename went. And what the screens ask of the mesh in return.
+//! group, the pairing under way, the wait of a device that founded a group, and how the last
+//! leave or rename went. And what the screens ask of the mesh in return.
 
 use heapless::Vec;
 pub use octowhere_mesh::{
@@ -107,42 +107,6 @@ pub struct PairingView {
     pub group: Option<(u8, u8)>,
 }
 
-/// Where a refresh is. It listens throughout for three rounds, sending in its slot as usual.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RefreshPhase {
-    Listening {
-        until: At,
-    },
-    /// It ran its whole time.
-    Ended {
-        at: At,
-    },
-    /// A pairing took the radio first.
-    Interrupted {
-        at: At,
-    },
-}
-
-/// The refresh under way, or the last one, for as long as this device keeps its group.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RefreshView {
-    /// Counts up from 1 with each refresh started since boot.
-    pub session: u32,
-    pub phase: RefreshPhase,
-    /// The ids of the devices it heard packets from directly, as a set.
-    pub heard: u32,
-    /// The ids of the members the group gained while it ran, as a set. A member learned from
-    /// another's packet need not be among those heard.
-    pub learned: u32,
-}
-
-impl RefreshView {
-    #[must_use]
-    pub fn is_listening(&self) -> bool {
-        matches!(self.phase, RefreshPhase::Listening { .. })
-    }
-}
-
 /// Where the wait of a device that founded a group without hearing the last acknowledgement is.
 /// The group is not this device's until it is stored.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -227,7 +191,6 @@ pub struct MeshView {
     /// Leaves and renames answered since boot, and the last answer.
     pub answered: u32,
     pub answer: Option<Answer>,
-    pub refresh: Option<RefreshView>,
     /// A founding's wait, under way or ended, until another pairing starts.
     pub recovery: Option<RecoveryView>,
     pub removals: RemovalsView,
@@ -297,7 +260,6 @@ impl Default for MeshView {
             refusal: None,
             answered: 0,
             answer: None,
-            refresh: None,
             recovery: None,
             removals: RemovalsView::default(),
         }
@@ -320,7 +282,6 @@ impl MeshView {
             refusal,
             answered,
             answer,
-            refresh,
             recovery,
             removals,
         } = other;
@@ -333,7 +294,6 @@ impl MeshView {
         self.refusal = *refusal;
         self.answered = *answered;
         self.answer = *answer;
-        self.refresh = *refresh;
         self.recovery = *recovery;
         self.removals = *removals;
     }
@@ -640,8 +600,6 @@ pub enum Request {
     Cancel,
     Leave,
     Rename(Name),
-    /// Listens throughout for three rounds, to find group members near now.
-    Refresh,
     /// Sends text to one member, privately, or with `None` to the whole group.
     Send {
         to: Option<u8>,

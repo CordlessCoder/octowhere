@@ -1,17 +1,14 @@
 //! The runtime events the drawer lists, from the 2026-10-04 hand-off: what happened, whether it
 //! is still going on, and whether the user has opened it. An event keeps one identity through its
-//! life: a GNSS incident from the receiver stopping to its answering again, a refresh from its
-//! start to its result, a conversation's messages while it has unread ones. Events live in RAM,
+//! life: a GNSS incident from the receiver stopping to its answering again, a conversation's
+//! messages while it has unread ones, a removal from its request to its end. Events live in RAM,
 //! and a restart loses them.
 
 use heapless::Vec;
 
 use super::{
     gesture::Micros,
-    group::view::{
-        Decline, MessagesView, Name, RefreshPhase, RefreshView, RemovalStage, RemovalView,
-        RemovalsView, Thread,
-    },
+    group::view::{Decline, MessagesView, Name, RemovalStage, RemovalView, RemovalsView, Thread},
     screens::GnssHealth,
 };
 
@@ -28,7 +25,6 @@ pub type Id = u32;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Kind {
     Gnss(Gnss),
-    Refresh(RefreshView),
     /// A conversation's new messages: how many are unread, the newest told of, and its sender.
     Messages {
         thread: Thread,
@@ -83,7 +79,6 @@ impl Event {
     pub fn protected(&self) -> Option<Protected> {
         match self.kind {
             Kind::Gnss(Gnss::Recovering { .. } | Gnss::Fault { .. }) => Some(Protected::Unresolved),
-            Kind::Refresh(refresh) if refresh.is_listening() => Some(Protected::Unfinished),
             Kind::Removal(removal) => match removal.stage {
                 RemovalStage::Pending { .. } => Some(Protected::Unfinished),
                 // The mesh says when its day has passed.
@@ -93,10 +88,7 @@ impl Event {
                 } => Some(Protected::Declinable),
                 _ => None,
             },
-            Kind::Gnss(Gnss::Responding)
-            | Kind::Refresh(_)
-            | Kind::Messages { .. }
-            | Kind::Removed { .. } => None,
+            Kind::Gnss(Gnss::Responding) | Kind::Messages { .. } | Kind::Removed { .. } => None,
         }
     }
 
@@ -122,8 +114,6 @@ pub struct Events {
     next: Id,
     /// The GNSS incident under way, until the receiver answers again.
     incident: Option<Id>,
-    /// The latest refresh an event was made for, so that it is not made again.
-    refresh_session: u32,
     /// The events of two removals that compete, the winner first, while the mesh shows both.
     rivals: Option<[Id; 2]>,
 }
@@ -300,28 +290,6 @@ impl Events {
             Some(_) => None,
         }
     }
-
-    /// Follows the mesh's refresh. A refresh started here begins read; its end is told of. A
-    /// refresh first seen after it ended makes no event.
-    pub fn refresh(&mut self, refresh: Option<&RefreshView>, now: Micros) -> Option<Id> {
-        let refresh = refresh?;
-        let held = self.list.iter().find_map(|event| match event.kind {
-            Kind::Refresh(held) if held.session == refresh.session => Some((event.id, held)),
-            _ => None,
-        });
-        match held {
-            None if refresh.is_listening() && refresh.session > self.refresh_session => {
-                self.refresh_session = refresh.session;
-                self.add(Kind::Refresh(*refresh), false, now);
-                None
-            }
-            None => None,
-            Some((id, held)) => {
-                let ends = held.is_listening() && !refresh.is_listening();
-                self.change(id, Kind::Refresh(*refresh), ends, now)
-            }
-        }
-    }
 }
 
 impl Events {
@@ -494,17 +462,6 @@ impl Events {
     }
 }
 
-/// How long a refresh has run, out of its whole time, on the stage's clock.
-#[must_use]
-pub fn elapsed(refresh: &RefreshView, now: Micros) -> Option<(Micros, Micros)> {
-    let RefreshPhase::Listening { until } = refresh.phase else {
-        return None;
-    };
-    let whole = octowhere_mesh::clock::SWEEP_US as Micros;
-    let left = (until.max(0) as Micros).saturating_sub(now).min(whole);
-    Some((whole - left, whole))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -515,15 +472,6 @@ mod tests {
             failed_resets,
             last_response: None,
             last_fix: None,
-        }
-    }
-
-    fn refresh(session: u32, phase: RefreshPhase, heard: u32) -> RefreshView {
-        RefreshView {
-            session,
-            phase,
-            heard,
-            learned: 0,
         }
     }
 
@@ -559,50 +507,20 @@ mod tests {
         assert_eq!(events.len(), 2);
     }
 
-    #[test]
-    fn a_refresh_keeps_one_event_from_start_to_result() {
-        let mut events = Events::default();
-        let listening = RefreshPhase::Listening { until: 1_000 };
-        assert_eq!(events.refresh(Some(&refresh(1, listening, 0)), 0), None);
-        let id = events.ordered().next().unwrap().id;
-        assert!(!events.get(id).unwrap().unread);
-        assert!(events.get(id).unwrap().ongoing());
-        assert_eq!(events.refresh(Some(&refresh(1, listening, 0b10)), 10), None);
-        let ended = RefreshPhase::Ended { at: 1_000 };
-        assert_eq!(
-            events.refresh(Some(&refresh(1, ended, 0b10)), 1_000),
-            Some(id)
-        );
-        let event = events.get(id).unwrap();
-        assert!(event.unread);
-        assert!(!event.ongoing());
-        assert_eq!(events.len(), 1);
-    }
-
-    #[test]
-    fn a_dismissed_or_cleared_refresh_does_not_come_back() {
-        let mut events = Events::default();
-        let listening = RefreshPhase::Listening { until: 1_000 };
-        let ended = RefreshPhase::Ended { at: 1_000 };
-        events.refresh(Some(&refresh(1, listening, 0)), 0);
-        let id = events.refresh(Some(&refresh(1, ended, 0)), 1_000).unwrap();
-        assert_eq!(events.dismiss(id), Ok(()));
-        events.refresh(Some(&refresh(1, ended, 0)), 2_000);
-        assert!(events.is_empty());
-        // A refresh first seen ended makes nothing either.
-        events.refresh(Some(&refresh(2, ended, 0)), 3_000);
-        assert!(events.is_empty());
+    /// A GNSS incident that has settled, made unread at `at`.
+    fn settled(events: &mut Events, at: Micros) -> Id {
+        let id = events.gnss(&health(true, 0), at).unwrap();
+        events.gnss(&health(false, 0), at + 1);
+        id
     }
 
     #[test]
     fn going_on_events_cannot_be_dismissed_or_cleared() {
         let mut events = Events::default();
         let fault = events.gnss(&health(true, 3), 0).unwrap();
-        events.refresh(
-            Some(&refresh(1, RefreshPhase::Listening { until: 100 }, 0)),
-            1,
-        );
-        let running = events.ordered().next().unwrap().id;
+        let running = events
+            .removals(&shown(Some(removal(1, 2, PENDING)), None), Some(0), 1)
+            .unwrap();
         assert_eq!(
             events.dismiss(fault),
             Err(Kept::Protected(Protected::Unresolved))
@@ -622,12 +540,8 @@ mod tests {
     #[test]
     fn clearing_keeps_unread_events() {
         let mut events = Events::default();
-        let listening = RefreshPhase::Listening { until: 1_000 };
-        let ended = RefreshPhase::Ended { at: 1_000 };
-        events.refresh(Some(&refresh(1, listening, 0)), 0);
-        let first = events.refresh(Some(&refresh(1, ended, 0)), 1).unwrap();
-        events.refresh(Some(&refresh(2, listening, 0)), 2);
-        let second = events.refresh(Some(&refresh(2, ended, 0)), 3).unwrap();
+        let first = settled(&mut events, 0);
+        let second = settled(&mut events, 2);
         events.read(first);
         events.clear_read();
         assert!(events.get(first).is_none());
@@ -638,40 +552,29 @@ mod tests {
     fn running_operations_come_first_then_the_latest_change() {
         let mut events = Events::default();
         let fault = events.gnss(&health(true, 3), 50).unwrap();
-        events.refresh(
-            Some(&refresh(1, RefreshPhase::Listening { until: 1_000 }, 0)),
-            10,
-        );
+        let removal_at = |stage| shown(Some(removal(1, 2, stage)), None);
+        let pending = events.removals(&removal_at(PENDING), Some(0), 10).unwrap();
         let order: alloc::vec::Vec<_> = events.ordered().map(|event| event.id).collect();
-        assert_eq!(order[1], fault);
-        let ended = events
-            .refresh(
-                Some(&refresh(1, RefreshPhase::Ended { at: 1_000 }, 0)),
-                1_000,
-            )
-            .unwrap();
+        assert_eq!(order, [pending, fault]);
+        let switched = RemovalStage::Switched {
+            at: 1_000,
+            decline: Decline::Until(2_000),
+        };
+        events.removals(&removal_at(switched), Some(0), 1_000);
         let order: alloc::vec::Vec<_> = events.ordered().map(|event| event.id).collect();
-        assert_eq!(order, [ended, fault]);
+        assert_eq!(order, [pending, fault], "switched, it is the latest change");
     }
 
     #[test]
     fn a_full_list_drops_its_oldest_settled_event() {
         let mut events = Events::default();
         let fault = events.gnss(&health(true, 3), 0).unwrap();
-        for session in 1..=CAPACITY as u32 {
-            let at = Micros::from(session) * 10;
-            events.refresh(
-                Some(&refresh(
-                    session,
-                    RefreshPhase::Listening { until: 1_000 },
-                    0,
-                )),
-                at,
-            );
-            events.refresh(
-                Some(&refresh(session, RefreshPhase::Ended { at: 0 }, 0)),
-                at + 1,
-            );
+        for at in 1..=CAPACITY as i64 {
+            let removed = RemovalsView {
+                removed_by: Some((2, Name::from_mac(&[0, 0, 0, 0, 0, 2]), at)),
+                ..RemovalsView::default()
+            };
+            events.removals(&removed, None, at as Micros * 10);
         }
         assert_eq!(events.len(), CAPACITY);
         assert!(events.get(fault).is_some(), "the fault is still going on");
@@ -817,20 +720,5 @@ mod tests {
         ));
         assert_eq!(events.removals(&views, Some(0), 70), None);
         assert_eq!(events.len(), 1);
-    }
-
-    #[test]
-    fn elapsed_counts_up_to_the_refresh_window() {
-        let whole = octowhere_mesh::clock::SWEEP_US as Micros;
-        let view = refresh(
-            1,
-            RefreshPhase::Listening {
-                until: (whole + 1_000) as i64,
-            },
-            0,
-        );
-        assert_eq!(elapsed(&view, 1_000), Some((0, whole)));
-        assert_eq!(elapsed(&view, 28_000_000), Some((27_999_000, whole)));
-        assert_eq!(elapsed(&view, whole * 2), Some((whole, whole)));
     }
 }

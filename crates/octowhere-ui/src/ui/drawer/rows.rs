@@ -6,23 +6,23 @@ use embedded_graphics::primitives::Rectangle;
 
 use super::{
     Context,
-    parts::{self, FOOTER, FOOTER_HIGH, PAIR, Symbol},
+    parts::{self, FOOTER, FOOTER_HIGH, Symbol},
     removals,
 };
 use crate::{
     chrome::{self, Color},
     ui::{
-        events::{Event, FAULT_RESETS, Gnss, Kind, elapsed},
+        events::{Event, FAULT_RESETS, Gnss, Kind},
         gesture::Micros,
         group::{
             layout::{Align, Face, Line, List, format, rect},
-            view::{RefreshPhase, RefreshView, Thread},
+            view::Thread,
         },
         text,
     },
 };
 
-/// A settled row's height, and a running operation's, which adds its time rail.
+/// A settled row's height, and a running operation's.
 const ROW: i32 = 178;
 const ONGOING_ROW: i32 = 210;
 /// The list's middle row, where rows show full size, and the edge scaling's law: full size
@@ -51,12 +51,6 @@ pub struct Look {
     pub toast: Line,
     /// Where a tap leads.
     pub hint: &'static str,
-    /// A running operation's time so far and its whole time.
-    pub rail: Option<(Micros, Micros)>,
-}
-
-fn plural(count: u32, one: &'static str, many: &'static str) -> &'static str {
-    if count == 1 { one } else { many }
 }
 
 #[must_use]
@@ -74,7 +68,6 @@ pub fn look(event: &Event, context: &Context) -> Look {
             ],
             toast: format(format_args!("Reset attempt {attempt} of {FAULT_RESETS}.")),
             hint: "VIEW RECEIVER",
-            rail: None,
         },
         Kind::Gnss(Gnss::Fault { failed }) => Look {
             state: "ACTIVE",
@@ -88,7 +81,6 @@ pub fn look(event: &Event, context: &Context) -> Look {
             ],
             toast: format(format_args!("{failed} resets failed. Retrying.")),
             hint: "VIEW RECEIVER",
-            rail: None,
         },
         Kind::Gnss(Gnss::Responding) => Look {
             state: "RESOLVED",
@@ -116,9 +108,7 @@ pub fn look(event: &Event, context: &Context) -> Look {
                 }
             )),
             hint: "VIEW RECEIVER",
-            rail: None,
         },
-        Kind::Refresh(refresh) => refresh_look(&refresh, context.now),
         Kind::Removal(removal) => removals::look(&removal, context.own(), context.now),
         Kind::Removed { by, name, .. } => removals::removed_look(by, &name),
         Kind::Messages {
@@ -160,82 +150,8 @@ pub fn look(event: &Event, context: &Context) -> Look {
                     format(format_args!("New message from {sender}."))
                 },
                 hint: "OPEN CONVERSATION",
-                rail: None,
             }
         }
-    }
-}
-
-fn refresh_look(refresh: &RefreshView, now: Micros) -> Look {
-    let heard = refresh.heard.count_ones();
-    let learned = refresh.learned.count_ones();
-    let heard_line = || {
-        if heard == 0 {
-            format(format_args!("No devices heard this time."))
-        } else {
-            format(format_args!(
-                "{heard} {} heard",
-                plural(heard, "device", "devices")
-            ))
-        }
-    };
-    let (state, title, lines, hint) = match refresh.phase {
-        RefreshPhase::Listening { .. } => (
-            "ONGOING",
-            "REFRESHING",
-            [
-                format(format_args!("Listening for group devices.")),
-                format(format_args!(
-                    "{heard} heard / {learned} {} learned",
-                    plural(learned, "member", "members")
-                )),
-            ],
-            "VIEW REFRESH",
-        ),
-        RefreshPhase::Ended { .. } => (
-            "COMPLETED",
-            "REFRESH ENDED",
-            [
-                heard_line(),
-                if learned == 0 {
-                    format(format_args!("No new members learned."))
-                } else {
-                    format(format_args!(
-                        "{learned} new {} learned",
-                        plural(learned, "member", "members")
-                    ))
-                },
-            ],
-            "VIEW RESULTS",
-        ),
-        RefreshPhase::Interrupted { .. } => (
-            "STOPPED",
-            "REFRESH STOPPED",
-            [
-                format(format_args!("A pairing took the radio.")),
-                heard_line(),
-            ],
-            "VIEW RESULTS",
-        ),
-    };
-    let toast = if heard == 0 {
-        format(format_args!("No devices heard this time."))
-    } else {
-        format(format_args!(
-            "{heard} heard / {learned} new {} learned",
-            plural(learned, "member", "members")
-        ))
-    };
-    Look {
-        state,
-        state_color: chrome::GRAY,
-        title: format(format_args!("{title}")),
-        color: chrome::WHITE,
-        symbol: Symbol::Exchange,
-        lines,
-        toast,
-        hint,
-        rail: elapsed(refresh, now),
     }
 }
 
@@ -276,23 +192,10 @@ pub fn age_due(elapsed: Micros) -> Micros {
     unit - elapsed % unit
 }
 
-fn clock(time: Micros) -> Line {
-    let seconds = time / SECOND;
-    format(format_args!("{:02}:{:02}", seconds / 60, seconds % 60))
-}
-
-/// The time an event's row shows by its state: a running operation's time left, or how long
-/// ago it last changed. Notes in `list` when it next changes.
-fn row_time(event: &Event, look: &Look, now: Micros, list: &mut List) -> Line {
-    if let Some((done, whole)) = look.rail {
-        list.changes_at(now + SECOND - done % SECOND);
-        return format(format_args!("{} LEFT", clock(whole - done)));
-    }
+/// How long ago an event's row last changed. Notes in `list` when that next changes.
+fn row_time(event: &Event, now: Micros, list: &mut List) -> Line {
     let elapsed = now.saturating_sub(event.at);
     list.changes_at(now + age_due(elapsed));
-    if matches!(event.kind, Kind::Refresh(_)) && elapsed < 10 * SECOND {
-        return format(format_args!("JUST ENDED"));
-    }
     format(format_args!("{} AGO", age(elapsed)))
 }
 
@@ -432,7 +335,7 @@ fn arrow(list: &mut List, scaled: &Scaled, x: i32, y: i32, color: Color) {
 pub fn row(list: &mut List, event: &Event, top: i32, height: i32, context: &Context) {
     let look = look(event, context);
     let scaled = Scaled::new(top, height);
-    let time = row_time(event, &look, context.now, list);
+    let time = row_time(event, context.now, list);
     scaled.text(
         list,
         look.state,
@@ -458,30 +361,7 @@ pub fn row(list: &mut List, event: &Event, top: i32, height: i32, context: &Cont
             chrome::WHITE,
         );
     }
-    let hint_top = match look.rail {
-        Some((done, whole)) => {
-            let rail = rect(118, top + 113, 354, top + 117);
-            list.fill(scaled.rect(rail), chrome::TRACK);
-            let filled = (236 * done / whole.max(1)) as i32;
-            if filled > 0 {
-                list.fill(
-                    scaled.rect(rect(118, top + 113, 118 + filled, top + 117)),
-                    chrome::WHITE,
-                );
-            }
-            let caption = format(format_args!("ELAPSED {} / {}", clock(done), clock(whole)));
-            scaled.text(
-                list,
-                &caption,
-                (118, top + 127),
-                Face::Mono,
-                11,
-                chrome::GRAY,
-            );
-            top + 151
-        }
-        None => top + 119,
-    };
+    let hint_top = top + 119;
     scaled.text(
         list,
         look.hint,
@@ -607,15 +487,13 @@ fn message_toast(list: &mut List, look: &Look) {
     ));
 }
 
-/// Where an event's detail puts VIEW MEMBERS, if it has it, and DISMISS. A removal's detail
-/// places its own.
+/// Where an event's detail puts DISMISS. A removal's detail places its own buttons.
 #[must_use]
-pub fn detail_buttons(event: &Event) -> (Option<Rectangle>, Option<Rectangle>) {
+pub fn dismiss_button(event: &Event) -> Option<Rectangle> {
     match event.kind {
-        Kind::Refresh(_) => (Some(PAIR[0]), Some(PAIR[1])),
-        Kind::Gnss(_) if event.protected().is_some() => (None, Some(FOOTER_HIGH)),
-        Kind::Gnss(_) | Kind::Messages { .. } => (None, Some(FOOTER)),
-        Kind::Removal(_) | Kind::Removed { .. } => (None, None),
+        Kind::Gnss(_) if event.protected().is_some() => Some(FOOTER_HIGH),
+        Kind::Gnss(_) | Kind::Messages { .. } => Some(FOOTER),
+        Kind::Removal(_) | Kind::Removed { .. } => None,
     }
 }
 
@@ -630,14 +508,6 @@ pub fn detail(list: &mut List, event: &Event, context: &Context) {
         Kind::Gnss(Gnss::Recovering { .. }) => ("GNSS", "EVENT / RECOVERING"),
         Kind::Gnss(Gnss::Fault { .. }) => ("GNSS", "EVENT / ACTIVE"),
         Kind::Gnss(Gnss::Responding) => ("GNSS", "EVENT / RESOLVED"),
-        Kind::Refresh(refresh) => (
-            "REFRESH",
-            match refresh.phase {
-                RefreshPhase::Listening { .. } => "EVENT / ONGOING",
-                RefreshPhase::Ended { .. } => "EVENT / COMPLETED",
-                RefreshPhase::Interrupted { .. } => "EVENT / STOPPED",
-            },
-        ),
         Kind::Messages { .. } => ("MESSAGES", "EVENT / NEW"),
     };
     let look = look(event, context);
@@ -729,74 +599,5 @@ pub fn detail(list: &mut List, event: &Event, context: &Context) {
         }
         // Drawn by their own screens above.
         Kind::Removal(_) | Kind::Removed { .. } => {}
-        Kind::Refresh(refresh) => {
-            let heard = refresh.heard.count_ones();
-            let learned = refresh.learned.count_ones();
-            let heard_line = if heard == 0 {
-                format(format_args!("No devices were heard."))
-            } else {
-                format(format_args!(
-                    "{heard} {} heard.",
-                    plural(heard, "device was", "devices were")
-                ))
-            };
-            let learned_line = if learned == 0 {
-                format(format_args!("No new members were learned."))
-            } else {
-                format(format_args!(
-                    "{learned} new {} learned.",
-                    plural(learned, "member was", "members were")
-                ))
-            };
-            let (prose, first): ([Line; 2], (&str, Line)) = match refresh.phase {
-                RefreshPhase::Listening { .. } => {
-                    let (done, whole) = look.rail.unwrap_or((0, 0));
-                    list.changes_at(now + SECOND - done % SECOND);
-                    (
-                        [
-                            format(format_args!("Listening for group devices.")),
-                            format(format_args!("{heard} heard so far.")),
-                        ],
-                        ("TIME LEFT", clock(whole - done)),
-                    )
-                }
-                RefreshPhase::Ended { at } => {
-                    let at = at.max(0) as Micros;
-                    list.changes_at(now + age_due(now.saturating_sub(at)));
-                    (
-                        [heard_line, learned_line],
-                        ("COMPLETED", ago(Some(at), "AGO")),
-                    )
-                }
-                RefreshPhase::Interrupted { at } => {
-                    let at = at.max(0) as Micros;
-                    list.changes_at(now + age_due(now.saturating_sub(at)));
-                    (
-                        [
-                            format(format_args!("A pairing took the radio.")),
-                            heard_line,
-                        ],
-                        ("STOPPED", ago(Some(at), "AGO")),
-                    )
-                }
-            };
-            parts::prose(list, &[&prose[0], &prose[1]], 199);
-            let heard = format(format_args!("{heard:02}"));
-            let learned = format(format_args!("{learned:02}"));
-            parts::figures(
-                list,
-                &[
-                    (first.0, &first.1),
-                    ("DEVICES HEARD", &heard),
-                    ("MEMBERS LEARNED", &learned),
-                ],
-            );
-            parts::button(list, PAIR[0], "VIEW MEMBERS", true);
-            let finished = event.protected().is_none();
-            parts::button(list, PAIR[1], "DISMISS", finished);
-            if !finished {
-                parts::reason(list, "Available when finished.");
-            }
-        }
     }
 }

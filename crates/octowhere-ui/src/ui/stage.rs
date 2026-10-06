@@ -948,9 +948,6 @@ impl Stage {
                 self.announce(id, now, &mut update);
             }
         }
-        if let Some(id) = self.events.refresh(self.mesh.refresh.as_ref(), now) {
-            self.announce(id, now, &mut update);
-        }
         if core::mem::take(&mut self.messages_changed)
             && let Some(messages) = self.messages.as_deref()
             && let Some(id) = self.events.messages(

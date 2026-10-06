@@ -10,7 +10,6 @@ use octowhere_ui::{
     ui::{
         drawer::{Child, Root},
         events::{Gnss, Kind},
-        group::view::{RefreshPhase, RefreshView},
         rest::{self, AlwaysOn, Rest, Timeout},
         screens::{Gnss as Reading, GnssHealth, PeripheralState, Screen},
         script::Driver,
@@ -50,18 +49,6 @@ fn health(driver: &mut Driver, recovering: bool, failed_resets: u8) -> Update {
         },
         ..Sensors::default()
     })
-}
-
-fn refresh(driver: &mut Driver, phase: RefreshPhase) {
-    driver.stage.update_mesh(|mesh| {
-        mesh.refresh = Some(RefreshView {
-            session: 1,
-            phase,
-            heard: 0b110,
-            learned: 0,
-        });
-    });
-    driver.wait(50_000);
 }
 
 fn open_drawer(driver: &mut Driver) {
@@ -228,30 +215,24 @@ fn a_resolved_incident_dismisses_and_the_list_empties() {
 }
 
 #[test]
-fn a_running_refresh_is_kept_by_clearing_and_dismissing() {
+fn an_unresolved_fault_is_kept_by_clearing_and_dismissing() {
     let mut driver = start();
-    let until = (driver.now() + 135 * SECOND) as i64;
-    refresh(&mut driver, RefreshPhase::Listening { until });
-    assert_eq!(
-        driver.stage.toast(),
-        None,
-        "a refresh started here is not told"
-    );
-    assert_eq!(driver.stage.events().ongoing(), 1);
+    health(&mut driver, true, 3);
+    driver.wait(6 * SECOND);
     open_drawer(&mut driver);
+    // Opening it reads it, and its DISMISS waits.
+    tap(&mut driver, 233, 170);
+    tap(&mut driver, 233, 391);
+    tap(&mut driver, 233, 26);
+    assert_eq!(driver.stage.events().unread(), 0);
     tap(&mut driver, 233, 426);
     tap(&mut driver, 233, 300);
     assert_eq!(driver.stage.events().len(), 1);
     assert_eq!(child(&driver), Some(Child::Manage), "nothing to clear");
+    health(&mut driver, false, 0);
     tap(&mut driver, 233, 426);
     tap(&mut driver, 233, 170);
-    tap(&mut driver, 306, 391);
-    assert_eq!(driver.stage.events().len(), 1);
-    driver.wait(135 * SECOND);
-    let at = driver.now() as i64;
-    refresh(&mut driver, RefreshPhase::Ended { at });
-    assert_eq!(driver.stage.events().ongoing(), 0);
-    tap(&mut driver, 306, 391);
+    tap(&mut driver, 233, 426);
     assert!(driver.stage.events().is_empty());
 }
 
@@ -271,8 +252,6 @@ fn the_drawers_damage_redraws_what_changed() {
         assert_eq!(wrong, 0, "step {steps}: {wrong} pixels differ");
         steps += 1;
     });
-    let until = (driver.now() + 135 * SECOND) as i64;
-    refresh(&mut driver, RefreshPhase::Listening { until });
     health(&mut driver, true, 0);
     driver.wait(2 * SECOND);
     health(&mut driver, true, 3);

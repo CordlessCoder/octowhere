@@ -81,6 +81,7 @@ fn sim<'a>(driver: &'a mut Driver<'_>) -> &'a mut Sim {
 
 /// MEMBERS, from the group screen.
 const MEMBERS: (i32, i32) = (159, 353);
+/// Where MEMBERS had its refresh strip.
 const STRIP: (i32, i32) = (233, 178);
 const BACK: (i32, i32) = (132, 115);
 const ACTION: (i32, i32) = (233, 353);
@@ -454,142 +455,46 @@ fn group_screens_redraw_only_what_changed() {
 }
 
 #[test]
-fn a_refresh_runs_in_the_background_and_shows_its_result_once() {
-    let mut driver = awake_hub(Some(8));
-    tap(&mut driver, MEMBERS.0, MEMBERS.1);
-    assert!(shows(&driver, "REFRESH DEVICES"), "{:?}", shown(&driver));
-    tap(&mut driver, STRIP.0, STRIP.1);
-    assert!(shows(&driver, "START REFRESH"), "{:?}", shown(&driver));
-    // Opening the refresh asks nothing of the mesh.
-    assert!(view(&driver).refresh.is_none());
-    tap(&mut driver, ACTION.0, ACTION.1);
-    assert!(
-        view(&driver)
-            .refresh
-            .is_some_and(|refresh| refresh.is_listening())
-    );
-    assert!(shows(&driver, "LISTENING"), "{:?}", shown(&driver));
-    assert!(shows(&driver, "02:15"), "{:?}", shown(&driver));
-    tap(&mut driver, BACK.0, BACK.1);
-    assert!(shows(&driver, "LISTENING  02:15"), "{:?}", shown(&driver));
-    // A cover goes to the clock, and the refresh carries on.
-    driver.cover();
-    driver.settle();
-    assert!(driver.stage.page().is_none());
-    driver.wait(60_000_000);
-    assert!(
-        view(&driver)
-            .refresh
-            .is_some_and(|refresh| refresh.is_listening())
-    );
-    driver.wait(80_000_000);
-    assert!(
-        !view(&driver)
-            .refresh
-            .is_some_and(|refresh| refresh.is_listening())
-    );
-    // A minute on, the result says how old it is.
-    driver.wait(60_000_000);
-    open_group(&mut driver);
-    tap(&mut driver, MEMBERS.0, MEMBERS.1);
-    assert!(shows(&driver, "REFRESH DEVICES"), "{:?}", shown(&driver));
-    // The strip opens the ended refresh once.
-    tap(&mut driver, STRIP.0, STRIP.1);
-    for line in [
-        "REFRESH ENDED",
-        "02 DEVICES HEARD",
-        "NO NEW MEMBERS LEARNED",
-        "DIRECT AGES UPDATED",
-        "VIEW MEMBERS",
-    ] {
-        assert!(shows(&driver, line), "{line}: {:?}", shown(&driver));
-    }
-    assert!(
-        driver
-            .stage
-            .group_text()
-            .any(|line| line.starts_with("REFRESH / ") && line.ends_with(" AGO")),
-        "{:?}",
-        shown(&driver)
-    );
-    tap(&mut driver, ACTION.0, ACTION.1);
-    tap(&mut driver, STRIP.0, STRIP.1);
-    assert!(shows(&driver, "START REFRESH"), "{:?}", shown(&driver));
-}
-
-#[test]
-fn a_refresh_shows_its_whole_time_until_the_mesh_takes_it_up() {
-    let mut driver = awake_hub(Some(8));
-    tap(&mut driver, MEMBERS.0, MEMBERS.1);
-    tap(&mut driver, STRIP.0, STRIP.1);
-    let left: Rc<RefCell<Vec<String>>> = Rc::default();
-    let watching = Rc::clone(&left);
-    driver.observe(move |stage, _| {
-        if stage.group_text().any(|line| line == "LISTENING") {
-            watching.borrow_mut().extend(
-                stage
-                    .group_text()
-                    .filter(|line| line.contains(':'))
-                    .map(String::from),
-            );
+fn members_shows_two_whole_rows_and_no_refresh_with_or_without_a_radio() {
+    for radio in [true, false] {
+        let mut driver = hub(Some(8));
+        sim(&mut driver).view_mut().radio = radio;
+        driver.wait(100_000);
+        tap(&mut driver, MEMBERS.0, MEMBERS.1);
+        for line in ["08 MEMBERS / DRAG LIST", "01-02 / 08 / TAP FOR DETAILS"] {
+            assert!(shows(&driver, line), "{line}: {:?}", shown(&driver));
         }
-    });
-    tap(&mut driver, ACTION.0, ACTION.1);
-    let left = left.borrow();
-    assert!(!left.is_empty());
-    assert!(left.iter().all(|left| left == "02:15"), "{left:?}");
+        for gone in ["REFRESH DEVICES", "NO RADIO"] {
+            assert!(!shows(&driver, gone), "{gone}: {:?}", shown(&driver));
+        }
+        // Where the refresh strip was, a tap does nothing.
+        tap(&mut driver, STRIP.0, STRIP.1);
+        assert!(
+            shows(&driver, "08 MEMBERS / DRAG LIST"),
+            "{:?}",
+            shown(&driver)
+        );
+        // The second row shows whole, and opens its member.
+        tap(&mut driver, 233, 395);
+        assert!(shows(&driver, "GROUP / ID 01"), "{:?}", shown(&driver));
+    }
 }
 
 #[test]
-fn back_on_members_does_not_reach_the_refresh_strip() {
-    let mut driver = hub(Some(8));
+fn a_group_of_one_lists_this_device_alone() {
+    let mut driver = hub(Some(1));
     tap(&mut driver, MEMBERS.0, MEMBERS.1);
-    tap(&mut driver, 120, 152);
-    assert!(shows(&driver, "START REFRESH"), "{:?}", shown(&driver));
-    tap(&mut driver, BACK.0, BACK.1);
-    tap(&mut driver, 120, 138);
-    assert!(shows(&driver, "08 MEMBERS"), "{:?}", shown(&driver));
-}
-
-#[test]
-fn a_refresh_that_learns_a_member_says_so_apart_from_those_heard() {
-    let mut driver = awake_hub(Some(8));
-    sim(&mut driver).refresh_learns = true;
-    tap(&mut driver, MEMBERS.0, MEMBERS.1);
-    tap(&mut driver, STRIP.0, STRIP.1);
-    tap(&mut driver, ACTION.0, ACTION.1);
-    // It ends while it shows, and the result replaces the countdown.
-    driver.wait(136_000_000);
-    for line in [
-        "REFRESH / JUST ENDED",
-        "02 DEVICES HEARD",
-        "01 NEW MEMBER LEARNED",
-        "AGES REMAIN IN THE MEMBER LIST",
-    ] {
+    for line in ["01 MEMBERS / DRAG LIST", "01-01 / 01 / TAP FOR DETAILS"] {
         assert!(shows(&driver, line), "{line}: {:?}", shown(&driver));
     }
-    assert_eq!(
-        view(&driver).group.as_ref().map(|group| group.count()),
-        Some(9)
-    );
 }
 
 #[test]
-fn a_device_without_a_radio_cannot_refresh() {
+fn back_on_members_reaches_down_to_the_list() {
     let mut driver = hub(Some(8));
-    sim(&mut driver).view_mut().radio = false;
-    driver.wait(100_000);
     tap(&mut driver, MEMBERS.0, MEMBERS.1);
-    assert!(shows(&driver, "NO RADIO"), "{:?}", shown(&driver));
-    tap(&mut driver, STRIP.0, STRIP.1);
-    assert!(
-        shows(&driver, "RADIO DID NOT START"),
-        "{:?}",
-        shown(&driver)
-    );
-    assert!(view(&driver).refresh.is_none());
-    tap(&mut driver, ACTION.0, ACTION.1);
-    assert!(shows(&driver, "NO RADIO"), "{:?}", shown(&driver));
+    tap(&mut driver, 120, 188);
+    assert!(shows(&driver, "08 MEMBERS"), "{:?}", shown(&driver));
 }
 
 /// Founding a group whose last acknowledgement never comes, as far as the wait.
@@ -735,29 +640,22 @@ fn watched(driver: &mut Driver) -> (Rc<RefCell<Buffers>>, Rc<std::cell::Cell<boo
 }
 
 #[test]
-fn refresh_and_recovery_screens_redraw_only_what_changed() {
+fn members_and_recovery_screens_redraw_only_what_changed() {
     let mut driver = awake_hub(Some(8));
-    sim(&mut driver).refresh_learns = true;
     let (buffers, on) = watched(&mut driver);
     tap(&mut driver, MEMBERS.0, MEMBERS.1);
-    tap(&mut driver, STRIP.0, STRIP.1);
-    tap(&mut driver, ACTION.0, ACTION.1);
-    // The countdown, a member heard, back to the list as it counts, and a scroll.
-    driver.wait(3_000_000);
-    on.set(false);
-    driver.wait(15_000_000);
-    on.set(true);
-    driver.wait(3_000_000);
-    tap(&mut driver, BACK.0, BACK.1);
+    // Ages tick, the list scrolls down and back, and a minute passes unwatched.
     driver.wait(2_000_000);
     driver.swipe(Point::new(233, 380), Point::new(233, 280), 300_000);
     driver.wait(1_000_000);
-    on.set(false);
-    driver.wait(120_000_000);
-    on.set(true);
-    tap(&mut driver, STRIP.0, STRIP.1);
+    driver.swipe(Point::new(233, 250), Point::new(233, 350), 300_000);
     driver.wait(1_000_000);
-    tap(&mut driver, ACTION.0, ACTION.1);
+    on.set(false);
+    driver.wait(60_000_000);
+    on.set(true);
+    driver.wait(2_000_000);
+    tap(&mut driver, BACK.0, BACK.1);
+    driver.wait(1_000_000);
 
     let mut founder = founding_unconfirmed(Some(20_000_000));
     let (founding, on) = watched(&mut founder);

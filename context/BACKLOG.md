@@ -248,9 +248,8 @@ until the feature set is complete, because profiling an incomplete firmware pric
   Contention replaced the slots on 2026-10-05 (owner; the protocol's "Medium access"), which
   drops step 5, CAD; the slots are on the `tdma` branch. It ran on the two boards
   (`docs/logs/lora/contention-2026-10-05/`). Then step 7.
-  REFRESH DEVICES is to be retired (owner, 2026-10-05; `design/DECISIONS.md` 33): that needs
-  a design round for the group screens, the refresh screens and the drawer's refresh rows,
-  and then the mesh's refresh command and view can go too.
+  REFRESH DEVICES is retired, with the mesh's refresh command and view
+  (`design/DECISIONS.md` 34).
 - Measure what the device draws once the owner's PPK2 is to hand (owner, 2026-10-04). It says
   whether continuous receive fits the budget, now that the mesh contends for the channel, and
   whether the firmware light-sleeps with the screen dark. The findings, the esp-hal wake-lock gap the owner

@@ -7,7 +7,7 @@ use heapless::Vec;
 use super::view::{
     Answer, At, Carriage, Decline, Done, End, GroupView, IDS, Mac, MemberView, MeshView,
     MessageView, MessagesView, Name, PairingView, Phase, Position, Reason, RecoveryPhase,
-    RecoveryView, RefreshPhase, RefreshView, RemovalStage, RemovalView, Request, Role, Unremovable,
+    RecoveryView, RemovalStage, RemovalView, Request, Role, Unremovable,
 };
 use crate::ui::gesture::Micros;
 
@@ -15,8 +15,6 @@ const SECOND: Micros = 1_000_000;
 const SEARCH: Micros = 120 * SECOND;
 const COMPARE: Micros = 60 * SECOND;
 const STALL: Micros = 30 * SECOND;
-/// A refresh's three rounds.
-const REFRESH: Micros = 135 * SECOND;
 /// How long a founding listens for the joining device.
 const RECOVERY: Micros = 600 * SECOND;
 
@@ -46,11 +44,6 @@ enum Next {
     Stored,
     /// Joining: the adding device's last word arrives.
     Finished,
-    /// A refresh hears a member's packet.
-    RefreshHears(u8),
-    /// A refresh learns a member added elsewhere.
-    RefreshLearns,
-    RefreshEnds,
     /// The founded group's joining device is heard.
     JoinerHeard,
     /// The founded group is stored, or its write fails.
@@ -67,12 +60,8 @@ pub struct Sim {
     pub final_reply_lost: bool,
     /// How long after a founding's wait starts its joining device is heard, if ever.
     pub joiner_heard_after: Option<Micros>,
-    /// A refresh learns of a member added elsewhere, as well as hearing two it knows.
-    pub refresh_learns: bool,
     /// When a founding's wait ends.
     recovery_until: Option<Micros>,
-    /// The refreshes started, which number them, as the node's do.
-    refreshes: u32,
     next: Option<(Micros, Next)>,
     changed: bool,
     messages: alloc::boxed::Box<MessagesView>,
@@ -224,9 +213,7 @@ impl Sim {
             store_fails: false,
             final_reply_lost: false,
             joiner_heard_after: Some(215 * SECOND),
-            refresh_learns: false,
             recovery_until: None,
-            refreshes: 0,
             next: None,
             changed: true,
             messages: MessagesView::boxed(),
@@ -509,11 +496,6 @@ impl Sim {
                     Role::Join
                 };
                 self.view.recovery = None;
-                if let Some(refresh) = &mut self.view.refresh
-                    && refresh.is_listening()
-                {
-                    refresh.phase = RefreshPhase::Interrupted { at: now as At };
-                }
                 self.view.sessions += 1;
                 let group = self
                     .view
@@ -562,32 +544,11 @@ impl Sim {
                 let ok = !self.store_fails;
                 if ok {
                     self.view.group = None;
-                    self.view.refresh = None;
                     self.view.recovery = None;
                     self.view.removals = Default::default();
                     self.next = None;
                 }
                 self.answer(Answer::Left(ok));
-            }
-            Request::Refresh
-                if self.view.radio
-                    && self.view.group.is_some()
-                    && !active
-                    && !self
-                        .view
-                        .refresh
-                        .is_some_and(|refresh| refresh.is_listening()) =>
-            {
-                self.refreshes += 1;
-                self.view.refresh = Some(RefreshView {
-                    session: self.refreshes,
-                    phase: RefreshPhase::Listening {
-                        until: (now + REFRESH) as At,
-                    },
-                    heard: 0,
-                    learned: 0,
-                });
-                self.next = Some((now + 20 * SECOND, Next::RefreshHears(1)));
             }
             Request::Send { to, text } => {
                 let own = self.view.group.as_ref().map_or(0, |group| group.own);
@@ -924,50 +885,6 @@ impl Sim {
                 }),
                 None,
             ),
-            (Next::RefreshHears(id), _) => {
-                if let Some(member) = self
-                    .view
-                    .group
-                    .as_mut()
-                    .and_then(|group| group.members[usize::from(id)].as_mut())
-                {
-                    member.heard = Some(now as At);
-                    if let Some(refresh) = &mut self.view.refresh {
-                        refresh.heard |= 1 << id;
-                    }
-                }
-                self.next = Some(match id {
-                    1 => (now + 30 * SECOND, Next::RefreshHears(2)),
-                    _ if self.refresh_learns => (now + 20 * SECOND, Next::RefreshLearns),
-                    _ => (self.refresh_ends(), Next::RefreshEnds),
-                });
-            }
-            (Next::RefreshLearns, _) => {
-                if let Some(group) = &mut self.view.group
-                    && let Some(id) = (0..IDS).find(|&id| group.members[usize::from(id)].is_none())
-                {
-                    group.members[usize::from(id)] = Some(MemberView {
-                        name: name("Fell Runner"),
-                        mac: [0x48, 0xa1, 0xb2, 0xc3, 0x22, id],
-                        device: device(&[0x48, 0xa1, 0xb2, 0xc3, 0x22, id]),
-                        joined: Some(now as At - 3_600 * SECOND as At),
-                        heard: None,
-                        position: Position::Never,
-                        coordinates: None,
-                    });
-                    if let Some(refresh) = &mut self.view.refresh {
-                        refresh.learned |= 1 << id;
-                    }
-                }
-                self.next = Some((self.refresh_ends(), Next::RefreshEnds));
-            }
-            (Next::RefreshEnds, _) => {
-                if let Some(refresh) = &mut self.view.refresh
-                    && let RefreshPhase::Listening { until } = refresh.phase
-                {
-                    refresh.phase = RefreshPhase::Ended { at: until };
-                }
-            }
             (Next::JoinerHeard, _) => {
                 self.set_recovery(RecoveryPhase::Storing);
                 self.next = Some((now + SECOND / 20, Next::RecoveryStored));
@@ -1000,13 +917,6 @@ impl Sim {
                 self.set_recovery(phase);
             }
             (_, None) => {}
-        }
-    }
-
-    fn refresh_ends(&self) -> Micros {
-        match self.view.refresh.map(|refresh| refresh.phase) {
-            Some(RefreshPhase::Listening { until }) => until as Micros,
-            _ => 0,
         }
     }
 

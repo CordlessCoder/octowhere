@@ -99,7 +99,6 @@ pub mod inject {
                         }
                     }
                 }
-                11 => Command::Refresh,
                 13 => Command::Remove(argument),
                 14 => Command::Keep(argument),
                 15 => Command::Phantom,
