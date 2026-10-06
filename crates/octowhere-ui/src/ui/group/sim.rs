@@ -7,7 +7,7 @@ use heapless::Vec;
 use super::view::{
     Answer, At, Carriage, Decline, Done, End, GroupView, IDS, Mac, MemberView, MeshView,
     MessageView, MessagesView, Name, PairingView, Phase, Position, Reason, RecoveryPhase,
-    RecoveryView, RemovalStage, RemovalView, Request, Role, Thread, Unremovable,
+    RecoveryView, Refusal, Refused, RemovalStage, RemovalView, Request, Role, Thread, Unremovable,
 };
 use crate::ui::gesture::Micros;
 
@@ -488,7 +488,22 @@ impl Sim {
     pub fn request(&mut self, request: Request, now: Micros) {
         self.changed = true;
         let active = self.phase().is_some_and(|phase| !phase.is_final());
+        let removing = self
+            .view
+            .removals
+            .current
+            .filter(|current| matches!(current.stage, RemovalStage::Pending { .. }));
         match request {
+            // As the node does, adding waits for a removal's switch.
+            Request::Add if let Some(removing) = removing => {
+                self.view.sessions += 1;
+                self.view.pairing = None;
+                self.view.refusal = Some(Refusal {
+                    session: self.view.sessions,
+                    role: Role::Add,
+                    refused: Refused::Removing { key: removing.key },
+                });
+            }
             Request::Add | Request::Join if !active => {
                 let role = if request == Request::Add {
                     Role::Add
@@ -601,14 +616,15 @@ impl Sim {
                     .as_ref()
                     .and_then(|group| group.member(id))
                     .filter(|member| id != own && member.device == device);
-                let underway =
-                    self.view.removals.current.is_some_and(|current| {
-                        matches!(current.stage, RemovalStage::Pending { .. })
-                    });
+                let underway = self
+                    .view
+                    .removals
+                    .current
+                    .filter(|current| matches!(current.stage, RemovalStage::Pending { .. }));
                 let started = if member.is_none() {
                     Err(Unremovable::Changed)
-                } else if underway {
-                    Err(Unremovable::Underway)
+                } else if let Some(underway) = underway {
+                    Err(Unremovable::Underway { key: underway.key })
                 } else if self.store_fails {
                     Err(Unremovable::Unsaved)
                 } else {

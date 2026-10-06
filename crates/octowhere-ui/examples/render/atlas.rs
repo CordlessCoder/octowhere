@@ -161,6 +161,8 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
             ("add-cancelled", "CANCELLED"),
             ("add-full", "GROUP FULL"),
             ("add-no-radio", "NO RADIO"),
+            ("add-refused-removing", "ADD / REMOVING"),
+            ("add-refused-request-gone", "ADD / REQUEST GONE"),
         ],
     ),
     (

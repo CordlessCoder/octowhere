@@ -78,8 +78,9 @@ pub enum Refused {
     InGroup,
     /// No true random source for the keys.
     NoRandom,
-    /// Adding: a member is being removed, and the group is about to change its key.
-    Removing,
+    /// Adding: a member is being removed, and the group is about to change its key, by the
+    /// removal with this new key's fingerprint.
+    Removing { key: [u8; 8] },
 }
 
 /// A pairing the mesh would not start, by the session it was asked for in.
@@ -163,8 +164,8 @@ pub enum Answer {
 pub enum Unremovable {
     /// No timebase to time its switch on: no GPS time, and none taken from a member.
     NoTime,
-    /// Another removal is under way.
-    Underway,
+    /// Another removal is under way: the one with this new key's fingerprint.
+    Underway { key: [u8; 8] },
     /// The id no longer holds the device asked for.
     Changed,
     /// The sequence numbers its key messages take could not be stored.

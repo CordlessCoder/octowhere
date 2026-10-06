@@ -244,6 +244,8 @@ struct Session {
     cancelled: bool,
     /// The last parts count seen, which the screens after the transfer keep showing.
     parts: Option<(u8, u8)>,
+    /// The removal a refusal names was gone when VIEW REQUEST was tapped.
+    request_gone: bool,
 }
 
 impl Session {
@@ -258,6 +260,7 @@ impl Session {
             chose: None,
             cancelled: false,
             parts: None,
+            request_gone: false,
         }
     }
 
@@ -308,6 +311,8 @@ enum Screen {
     RemoveUnavailable {
         id: u8,
         why: NotRemoved,
+        /// The request its VIEW REQUEST names was gone when it was tapped.
+        gone: bool,
     },
     Leave {
         from: From,
@@ -399,6 +404,16 @@ impl Flow {
                 asked: None,
                 back: None,
             },
+        }
+    }
+
+    /// Shows the request VIEW REQUEST names unavailable, as the stage found it gone when it was
+    /// tapped. No other request stands in for it.
+    pub fn request_gone(&mut self) {
+        match &mut self.screen {
+            Screen::Pairing(session) => session.request_gone = true,
+            Screen::RemoveUnavailable { gone, .. } => *gone = true,
+            _ => {}
         }
     }
 
@@ -554,7 +569,11 @@ impl Flow {
                 if asked.is_some() {
                     None
                 } else if let Some(why) = cannot_remove(mesh, id, &device) {
-                    Some(Screen::RemoveUnavailable { id, why })
+                    Some(Screen::RemoveUnavailable {
+                        id,
+                        why,
+                        gone: false,
+                    })
                 } else if slide.handle(event, now, &removals::SLIDE) {
                     *request = Some(Request::Remove { id, device });
                     *asked = Some(mesh.answered);
@@ -571,19 +590,20 @@ impl Flow {
             Screen::Removing { .. } => {
                 (tapped(TOP_HIT) || pressed(FOOTER)).then_some(Screen::Members(Scroll::default()))
             }
-            Screen::RemoveUnavailable { id, why } => {
-                let underway = why == &NotRemoved::Mesh(Unremovable::Underway);
-                match mesh.removals.current {
-                    Some(removal) if underway && pressed(FOOTER) => {
-                        return Exit::Request(removal.key);
+            Screen::RemoveUnavailable { id, why, gone } => match *why {
+                NotRemoved::Mesh(Unremovable::Underway { key }) if pressed(FOOTER) => {
+                    if *gone {
+                        None
+                    } else {
+                        return Exit::Request(key);
                     }
-                    _ if tapped(TOP_HIT) => Some(Screen::Member {
-                        id: *id,
-                        from: From::Members,
-                    }),
-                    _ => pressed(FOOTER).then_some(Screen::Members(Scroll::default())),
                 }
-            }
+                _ if tapped(TOP_HIT) => Some(Screen::Member {
+                    id: *id,
+                    from: From::Members,
+                }),
+                _ => pressed(FOOTER).then_some(Screen::Members(Scroll::default())),
+            },
             Screen::Leave { from } => {
                 let from = *from;
                 if tapped(NAV_HIT) {
@@ -693,7 +713,20 @@ impl Flow {
                 }
             }
             Screen::Full | Screen::NoRadio(_) => tapped(ACTION).then_some(Screen::Hub),
-            Screen::Pairing(session) => handle_pairing(session, event, mesh, memory, now, request),
+            // Refused while a removal is under way, its VIEW REQUEST opens that removal, which
+            // the refusal names, whatever is under way by the time it is tapped.
+            Screen::Pairing(session) => match session.refused(mesh) {
+                Some(Refused::Removing { key }) => {
+                    if tapped(NAV_HIT) {
+                        Some(Screen::Hub)
+                    } else if tapped(ACTION) && !session.request_gone {
+                        return Exit::Request(key);
+                    } else {
+                        None
+                    }
+                }
+                _ => handle_pairing(session, event, mesh, memory, now, request),
+            },
         };
         if let Some(next) = next {
             self.screen = next;
@@ -729,6 +762,7 @@ impl Flow {
                 Some(Answer::Removing(Err(why))) => Some(Screen::RemoveUnavailable {
                     id: *id,
                     why: NotRemoved::Mesh(why),
+                    gone: false,
                 }),
                 _ => return (Exit::Stay, slide.step(now)),
             },
@@ -948,7 +982,9 @@ impl Flow {
                     }
                 }
             }
-            Screen::RemoveUnavailable { id, why } => remove_unavailable(l, *id, *why, mesh, font),
+            Screen::RemoveUnavailable { id, why, gone } => {
+                remove_unavailable(l, *id, *why, *gone, mesh, font);
+            }
             Screen::Leave { .. } => {
                 head(
                     l,
@@ -1458,14 +1494,11 @@ fn cannot_remove(mesh: &MeshView, id: u8, device: &[u8; 8]) -> Option<NotRemoved
         Some(NotRemoved::NoRadio)
     } else if member.is_none_or(|member| member.device != *device) {
         Some(NotRemoved::Mesh(Unremovable::Changed))
-    } else if mesh
-        .removals
-        .current
-        .is_some_and(|removal| matches!(removal.stage, RemovalStage::Pending { .. }))
-    {
-        Some(NotRemoved::Mesh(Unremovable::Underway))
     } else {
-        None
+        mesh.removals
+            .current
+            .filter(|removal| matches!(removal.stage, RemovalStage::Pending { .. }))
+            .map(|removal| NotRemoved::Mesh(Unremovable::Underway { key: removal.key }))
     }
 }
 
@@ -1473,7 +1506,11 @@ fn cannot_remove(mesh: &MeshView, id: u8, device: &[u8; 8]) -> Option<NotRemoved
 fn remove(mesh: &MeshView, id: u8) -> Option<Screen> {
     let device = mesh.group.as_ref()?.member(id)?.device;
     Some(match cannot_remove(mesh, id, &device) {
-        Some(why) => Screen::RemoveUnavailable { id, why },
+        Some(why) => Screen::RemoveUnavailable {
+            id,
+            why,
+            gone: false,
+        },
         None => Screen::RemoveConfirm {
             id,
             device,
@@ -1539,6 +1576,7 @@ fn remove_unavailable(
     list: &mut List,
     id: u8,
     why: NotRemoved,
+    gone: bool,
     mesh: &MeshView,
     font: &FontdueRenderer<'static, Color>,
 ) {
@@ -1567,7 +1605,7 @@ fn remove_unavailable(
             "The group's time is not known yet.",
             "It comes from GPS or a member.",
         ],
-        NotRemoved::Mesh(Unremovable::Underway) => &[
+        NotRemoved::Mesh(Unremovable::Underway { .. }) => &[
             "Another removal is under way.",
             "Try again after its switch.",
         ],
@@ -1585,18 +1623,12 @@ fn remove_unavailable(
             chrome::GRAY,
         ));
     }
-    let underway =
-        why == NotRemoved::Mesh(Unremovable::Underway) && mesh.removals.current.is_some();
-    parts::button(
-        list,
-        FOOTER,
-        if underway {
-            "VIEW REQUEST"
-        } else {
-            "VIEW GROUP"
-        },
-        true,
-    );
+    match why {
+        NotRemoved::Mesh(Unremovable::Underway { .. }) => {
+            parts::button(list, FOOTER, "VIEW REQUEST", !gone);
+        }
+        _ => parts::button(list, FOOTER, "VIEW GROUP", true),
+    }
 }
 
 /// A member a removal under way will remove at its switch: still a member until then.
@@ -1872,6 +1904,37 @@ fn peer(pairing: &PairingView) -> layout::Line {
 
 fn pairing(list: &mut List, session: &Session, mesh: &MeshView, now: Micros) {
     let caption = session.caption();
+    if let Some(Refused::Removing { .. }) = session.refused(mesh) {
+        head(
+            list,
+            "PAIRING",
+            caption,
+            Some("BACK"),
+            GROUP,
+            chrome::ORANGE,
+        );
+        big(list, "REMOVING", chrome::ORANGE);
+        let gone = session.request_gone;
+        copy(
+            list,
+            &[
+                if gone {
+                    "THE REQUEST IS NO LONGER LISTED"
+                } else {
+                    "A MEMBER IS BEING REMOVED"
+                },
+                "ADD ONCE THE KEY HAS CHANGED",
+            ],
+        );
+        let ink = if gone {
+            chrome::DISABLED
+        } else {
+            chrome::WHITE
+        };
+        action(list, "VIEW REQUEST", false, ACTION, ink, None);
+        footer(list, COVER);
+        return;
+    }
     if let Some(refused) = session.refused(mesh) {
         let ending = match refused {
             Refused::InGroup => Ending {
@@ -1888,13 +1951,7 @@ fn pairing(list: &mut List, session: &Session, mesh: &MeshView, now: Micros) {
                 copy: ["NO RANDOM SOURCE FOR KEYS", "PAIRING UNAVAILABLE"],
                 action: "BACK TO GROUP",
             },
-            Refused::Removing => Ending {
-                big: "REMOVING",
-                color: chrome::ORANGE,
-                glyph: GROUP,
-                copy: ["A MEMBER IS BEING REMOVED", "ADD ONCE THE KEY HAS CHANGED"],
-                action: "BACK TO GROUP",
-            },
+            Refused::Removing { .. } => return,
         };
         return outcome(list, caption, &ending, None);
     }

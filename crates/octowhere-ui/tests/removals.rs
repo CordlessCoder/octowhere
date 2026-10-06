@@ -484,3 +484,69 @@ fn the_removal_screens_redraw_only_what_changed() {
     sim(&mut driver).removed_by(2, now);
     driver.wait(2 * SECOND);
 }
+
+/// ADD, from the panel's group screen.
+fn add(driver: &mut Driver) {
+    driver.swipe(Point::new(233, 80), Point::new(233, 420), 250_000);
+    driver.settle();
+    driver.wait(600_000);
+    driver.swipe(Point::new(380, 250), Point::new(80, 250), 300_000);
+    driver.settle();
+    driver.wait(400_000);
+    tap(driver, Point::new(233, 190));
+    tap(driver, Point::new(307, 353));
+    tap(driver, Point::new(156, 353));
+    tap(driver, Point::new(233, 353));
+}
+
+/// Refused for a removal under way, ADD offers that removal's request, and opens it whatever
+/// is under way by then: a rival that came since does not stand in for it.
+#[test]
+fn an_add_refused_for_a_removal_opens_that_removal() {
+    let mut driver = start();
+    let now = driver.now();
+    sim(&mut driver).request_removal(2, 3, SWITCH_AFTER, now);
+    driver.wait(100_000);
+    let blocking = current(&driver).unwrap().key;
+    add(&mut driver);
+    for line in ["REMOVING", "VIEW REQUEST", "BACK"] {
+        assert!(
+            group_shows(&driver, line),
+            "{line}: {:?}",
+            group_shown(&driver)
+        );
+    }
+    let now = driver.now();
+    sim(&mut driver).request_removal(3, 2, SWITCH_AFTER, now);
+    // Its toast goes first.
+    driver.wait(6 * SECOND);
+    assert_ne!(current(&driver).unwrap().key, blocking);
+    tap(&mut driver, Point::new(233, 353));
+    let id = driver.stage.events().removal(blocking).unwrap().id;
+    // The two compete, and the drawer shows both, the one asked for selected.
+    let (ids, selected) = driver.stage.events().rivals_of(id).unwrap();
+    assert_eq!(child(&driver), Some(Child::Rivals { ids, selected }));
+    assert_eq!(ids[selected], id);
+}
+
+/// A request gone by the time VIEW REQUEST is tapped is said to be, and the refusal stays.
+#[test]
+fn a_refusals_request_gone_when_tapped_is_shown_unavailable() {
+    let mut driver = start();
+    let now = driver.now();
+    sim(&mut driver).request_removal(2, 3, SWITCH_AFTER, now);
+    driver.wait(100_000);
+    add(&mut driver);
+    // The mesh stops showing it before its switch, as leaving the group would.
+    sim(&mut driver).view_mut().removals = Default::default();
+    driver.wait(100_000);
+    tap(&mut driver, Point::new(233, 353));
+    assert!(driver.stage.drawer().is_none());
+    assert!(
+        group_shows(&driver, "THE REQUEST IS NO LONGER LISTED"),
+        "{:?}",
+        group_shown(&driver)
+    );
+    tap(&mut driver, Point::new(132, 115));
+    assert!(group_shows(&driver, "GROUP"), "{:?}", group_shown(&driver));
+}

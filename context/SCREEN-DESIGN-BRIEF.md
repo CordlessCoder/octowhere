@@ -333,7 +333,11 @@ two hand-offs:
   timeout shows TIME EXPIRED and its failed store SAVE FAILED. The mesh's refusals show IN A
   GROUP and UNAVAILABLE (no random source), and, added with the mesh's removals (2026-10-03)
   and drawn on IN A GROUP's layout without a render, REMOVING in orange: A MEMBER IS BEING
-  REMOVED / ADD ONCE THE KEY HAS CHANGED, for an ADD while a removal is under way.
+  REMOVED / ADD ONCE THE KEY HAS CHANGED, for an ADD while a removal is under way. Since the
+  2026-10-05 hand-off it has BACK to the group and VIEW REQUEST for its action, which opens the
+  removal the refusal names, by its new key, as REMOVE's does: never one that came since. It is
+  checked as it is tapped; a request no longer listed leaves the refusal up with VIEW REQUEST
+  unavailable and THE REQUEST IS NO LONGER LISTED in its first line.
 - **NO RADIO** shows when START is tapped without a radio. Leaving first checks the radio
   before it erases anything.
 - **Keyboard.** SAVE returns to where the keyboard opened once the write lands, and an
@@ -513,9 +517,10 @@ open:
   REMOVE asks to remove the device at an id, and the node refuses if the id holds another device
   by then. A decline names its request by the key.
 - **REMOVE.** Opens the slide, or says why it cannot: no radio, or another removal under way,
-  with VIEW REQUEST to it. The node answers every request: started, or why not (no timebase, a
-  removal under way, the id holds another device, its key messages' sequence numbers not
-  stored, no random source). Once the slide is done, back and CANCEL do nothing until the answer
+  with VIEW REQUEST to it, the one under way when REMOVE was tapped, by its new key. The node
+  answers every request: started, or why not (no timebase, a removal under way, which it names,
+  the id holds another device, its key messages' sequence numbers not stored, no random
+  source). Once the slide is done, back and CANCEL do nothing until the answer
   comes. Started, the screen is REMOVING, which counts down.
 - **Countdown.** The switch's time on the node's timebase. Without one it reads UNAVAILABLE, and
   nothing estimates it. The rail under this device's own countdown is the time since the request

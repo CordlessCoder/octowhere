@@ -1350,7 +1350,11 @@ impl Stage {
             group::Exit::Stay => {}
             group::Exit::Panel => self.page = None,
             group::Exit::Request(key) => {
+                // Checked as it is tapped: the request it names, ended or not, or none.
                 let Some(id) = self.events.removal(key).map(|event| event.id) else {
+                    if let Some((Page::Group(flow), _)) = &mut self.page {
+                        flow.request_gone();
+                    }
                     return;
                 };
                 self.events.read(id);

@@ -945,11 +945,12 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         info!("[MESH] command {:?}", command);
         match command {
             // A device added now would get the key the group is about to leave.
-            Command::Add if self.removals.rekey.pending().is_some() => {
+            Command::Add if let Some(pending) = self.removals.rekey.pending() => {
                 warn!("[MESH] a removal is under way; adding waits for its switch");
+                let key = key_fingerprint(&pending.new.key);
                 self.shown.sessions += 1;
                 self.shown
-                    .refuse(self.shown.sessions, Role::Add, Refused::Removing);
+                    .refuse(self.shown.sessions, Role::Add, Refused::Removing { key });
             }
             Command::Add => self.pair(Role::Add, commands).await,
             Command::Join if self.group.is_some() => {
@@ -2050,9 +2051,10 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             warn!("[REKEY] no group, or no timebase to time a switch on");
             return Err(Unremovable::NoTime);
         };
-        if self.removals.rekey.pending().is_some() {
+        if let Some(pending) = self.removals.rekey.pending() {
             warn!("[REKEY] a removal is under way");
-            return Err(Unremovable::Underway);
+            let key = key_fingerprint(&pending.new.key);
+            return Err(Unremovable::Underway { key });
         }
         if id == group.own() || group.member(id).is_none() {
             return Err(Unremovable::Changed);
@@ -2072,7 +2074,13 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         };
         let Some(new) = self.removals.rekey.start(group, id, Key::new(key), round) else {
             warn!("[REKEY] cannot remove {} now", id);
-            return Err(Unremovable::Underway);
+            // Another removal may have come while the numbers were stored.
+            return Err(match self.removals.rekey.pending() {
+                Some(pending) => Unremovable::Underway {
+                    key: key_fingerprint(&pending.new.key),
+                },
+                None => Unremovable::Changed,
+            });
         };
         info!(
             "[REKEY] removing {}: generation {} from round {} (now {}), {} to tell",

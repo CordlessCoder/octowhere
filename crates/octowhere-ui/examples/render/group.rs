@@ -222,6 +222,23 @@ pub fn frames() -> Vec<(String, Stage)> {
     tap(&mut unavailable, 233, 353);
     tap(&mut unavailable, 233, 353);
     push("remove-unavailable", unavailable);
+    // ADD while a removal is under way, and that request gone when VIEW REQUEST is tapped.
+    let refused = || {
+        let mut driver = hub(Some(8));
+        let now = driver.now();
+        mesh(&mut driver).request_removal(2, 3, 480 * SECOND, now);
+        driver.wait(6 * SECOND);
+        tap(&mut driver, 307, 353);
+        tap(&mut driver, 156, 353);
+        tap(&mut driver, 233, 353);
+        driver
+    };
+    push("add-refused-removing", refused());
+    let mut gone = refused();
+    mesh(&mut gone).view_mut().removals = Default::default();
+    gone.wait(100_000);
+    tap(&mut gone, 233, 353);
+    push("add-refused-request-gone", gone);
 
     let own = || {
         let mut driver = hub(Some(8));

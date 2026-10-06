@@ -128,9 +128,13 @@ fn a_removal_answers_whether_it_started() {
     assert_eq!(answer(&sim), Some(Answer::Removing(Ok(()))));
     sim.command(0, Command::Remove(1));
     sim.run_for(1);
-    assert_eq!(
-        answer(&sim),
-        Some(Answer::Removing(Err(Unremovable::Underway)))
+    assert!(
+        matches!(
+            answer(&sim),
+            Some(Answer::Removing(Err(Unremovable::Underway { .. })))
+        ),
+        "{:?}",
+        answer(&sim)
     );
 }
 
