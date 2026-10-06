@@ -1087,10 +1087,19 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             self.unsaved.everything();
             self.removals.kept_lost();
         }
-        if let Some(group) = &mut self.group
-            && self.removals.rekey.changed(group.take_changed())
-        {
-            self.unsaved.rekey();
+        if let Some(group) = &mut self.group {
+            for id in group.take_moved().without(group.own()).iter() {
+                self.table.forget(id);
+                self.heard[usize::from(id)] = None;
+                self.shown.positions[usize::from(id)] = None;
+            }
+            let changed = group.take_changed();
+            for id in changed.iter() {
+                self.unsaved.slot(id);
+            }
+            if self.removals.rekey.changed(changed) {
+                self.unsaved.rekey();
+            }
         }
         while let Some(due) = self.unsaved.due(self.group.is_some()) {
             let write = match due {
@@ -1609,9 +1618,6 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                 ),
                 Event::Went(at) => info!("[MESH] member {} went", at),
             }
-        }
-        for id in absorbed.changed.iter() {
-            self.unsaved.slot(id);
         }
         if let Some(to) = absorbed.renumbered {
             self.clock.renumber(to);

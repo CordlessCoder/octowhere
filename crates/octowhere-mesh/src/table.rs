@@ -137,6 +137,14 @@ impl Table {
         forgotten
     }
 
+    /// Forgets what is held of `id`, whose device changed.
+    pub fn forget(&mut self, id: u8) {
+        let index = usize::from(id);
+        self.entries[index] = None;
+        self.sent[index] = None;
+        self.heard[index] = None;
+    }
+
     /// Records a packet from `id` in `round`.
     pub fn heard(&mut self, id: u8, round: i64) {
         let last = &mut self.heard[usize::from(id)];

@@ -60,7 +60,8 @@ pub struct Absorbed {
     pub news: usize,
     /// The ids its sender reports hearing.
     pub neighbours: Ids,
-    /// The ids whose slots changed, to store.
+    /// The ids whose slots the records changed, as their merges report them. The group's own
+    /// [`Group::take_changed`] has every slot that changed, which is what is stored.
     pub changed: Ids,
     /// This node's new id, when another device keeps the old one.
     pub renumbered: Option<u8>,

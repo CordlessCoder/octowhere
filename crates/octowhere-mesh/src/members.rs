@@ -422,6 +422,9 @@ pub struct Group {
     digest: Cell<Option<u32>>,
     /// The ids whose slots changed since [`Group::take_changed`] last took them.
     changed: Ids,
+    /// The ids another device came to hold, or none, since [`Group::take_moved`] last took
+    /// them. What was known of an id, such as where it was, belonged to the device before.
+    moved: Ids,
     /// This node's record moved to another id and is not sent until it is signed again.
     unsigned_own: bool,
 }
@@ -483,6 +486,7 @@ impl Group {
             sent_last: IDS - 1,
             digest: Cell::new(None),
             changed: Ids::EMPTY,
+            moved: Ids::EMPTY,
             unsigned_own: false,
         })
     }
@@ -637,6 +641,13 @@ impl Group {
     }
 
     fn set(&mut self, id: u8, slot: Option<Slot>) {
+        let holder = |slot: Option<&Slot>| match slot {
+            Some(Slot::Member(member)) => Some(member.public),
+            _ => None,
+        };
+        if holder(self.slot(id)) != holder(slot.as_ref()) {
+            self.moved.insert(id);
+        }
         if let (Some(Slot::Gone(gone)), Some(Slot::Member(_))) = (self.slot(id).copied(), slot) {
             self.keep_former(id, gone);
         }
@@ -649,6 +660,11 @@ impl Group {
     /// The ids whose slots changed since the last call.
     pub fn take_changed(&mut self) -> Ids {
         core::mem::take(&mut self.changed)
+    }
+
+    /// The ids another device came to hold, or none, since the last call.
+    pub fn take_moved(&mut self) -> Ids {
+        core::mem::take(&mut self.moved)
     }
 
     fn keep_former(&mut self, id: u8, gone: Gone) {
@@ -1448,6 +1464,20 @@ pub(crate) mod tests {
         assert_eq!(g.unsent(), Ids::of(1), "it passes the news on");
         assert_ne!(g.digest(), before);
         assert_eq!(g.merge_gone(1, left(1, 2, 200), None), Merged::Unchanged);
+    }
+
+    #[test]
+    fn an_id_moves_when_its_device_goes_or_another_takes_it() {
+        let mut g = group(0, &[(0, 1), (1, 2), (2, 3)]);
+        let mut renamed = member(3, 200);
+        renamed.name = Name::new(b"Bo").unwrap();
+        renamed.sign(2, &key(3));
+        g.merge(2, renamed, None);
+        assert_eq!(g.take_moved(), Ids::EMPTY, "a rename keeps the device");
+        g.merge_gone(1, left(1, 2, 200), None);
+        assert_eq!(g.take_moved(), Ids::of(1));
+        g.merge(1, signed(1, 4, 300), None);
+        assert_eq!(g.take_moved(), Ids::of(1), "another device at the freed id");
     }
 
     #[test]
