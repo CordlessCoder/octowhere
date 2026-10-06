@@ -205,6 +205,9 @@ cargo test -p octowhere-node --locked --features phantom
 cargo test -p octowhere-tz --locked --no-default-features
 cargo clippy -p octowhere-tz --all-targets --locked --no-default-features -- -D warnings
 cargo clippy -p ui-web --target wasm32-unknown-unknown --locked -- -D warnings
+cargo test -p sx127xlora --locked --features sync
+cargo test -p sx127xlora --locked --features sync,half_duplex
+cargo clippy -p sx127xlora --all-targets --locked --features sync -- -D warnings
 ```
 
 From `firmware/`:
@@ -217,9 +220,11 @@ cargo clippy --release --offline -- -D warnings
 
 A build of the whole workspace turns on, in each crate, every feature any member asks of it.
 So `cargo test --workspace` tests the node with the simulator's `run`, `log` and `phantom`,
-and `octowhere-tz` with its boundaries; the lines with `-p` test them without. A plain
-`cargo build` in `tools/ui-web` builds the page's module for WebAssembly, from its own
-`.cargo/config.toml`.
+and `octowhere-tz` with its boundaries; the lines with `-p` test them without. The radio
+driver's register tests (`crates/sx127x-lora/tests/driver_sync.rs`) build only with its
+blocking `sync` feature, which no member asks for, so only the last three lines check them;
+the second runs them in the FIFO layout the firmware uses. A plain `cargo build` in
+`tools/ui-web` builds the page's module for WebAssembly, from its own `.cargo/config.toml`.
 
 The firmware's clippy lints the firmware alone, because the crates it builds by path are not
 members of its workspace. The root's clippy lints those, and its nightly flags more than the

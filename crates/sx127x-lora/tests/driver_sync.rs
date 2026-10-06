@@ -8,9 +8,9 @@ use sx127xlora::{
     Sx1272,
     driver::Sx1272Lora,
     registers::{
-        DETECT_OPTIMIZE, FIFO, FIFO_RX_CURRENT_ADDR, FRF_LSB, FRF_MID, FRF_MSB, HOP_CHANNEL,
-        HOP_CHANNEL_CRC_ON_PAYLOAD_MASK, INVERT_IQ, INVERT_IQ_2, IRQ_FLAGS, IRQ_FLAGS_RX_DONE_MASK,
-        IRQ_FLAGS_RX_TIMEOUT_MASK, MODEM_CONFIG_1, MODEM_CONFIG_2, OP_MODE,
+        DETECT_OPTIMIZE, FIFO, FIFO_RX_CURRENT_ADDR, FIFO_TX_BASE_ADDR_VALUE, FRF_LSB, FRF_MID,
+        FRF_MSB, HOP_CHANNEL, HOP_CHANNEL_CRC_ON_PAYLOAD_MASK, INVERT_IQ, INVERT_IQ_2, IRQ_FLAGS,
+        IRQ_FLAGS_RX_DONE_MASK, IRQ_FLAGS_RX_TIMEOUT_MASK, MODEM_CONFIG_1, MODEM_CONFIG_2, OP_MODE,
         OP_MODE_LOW_FREQUENCY_MODE_ON_MASK, OP_MODE_MODE_MASK, PA_CONFIG, PAYLOAD_LENGTH,
         PKT_SNR_VALUE, RX_NB_BYTES, TEMP, VERSION,
     },
@@ -305,11 +305,13 @@ fn configuration_writes_sx1272_and_sx1276_modem1_fields_at_their_datasheet_posit
 
     let mut sx1276_spi = MockSpi::default();
     sx1276_spi.registers[VERSION as usize] = Sx1276::CHIP_VERSION;
-    let mut sx1276_config = Sx127xLoraConfig::default();
-    sx1276_config.bandwidth = Bandwidth::Bw125kHz;
-    sx1276_config.coding_rate = CodingRate::Cr4_6;
-    sx1276_config.header_mode = HeaderMode::Explicit;
-    sx1276_config.use_crc = true;
+    let sx1276_config = Sx127xLoraConfig {
+        bandwidth: Bandwidth::Bw125kHz,
+        coding_rate: CodingRate::Cr4_6,
+        header_mode: HeaderMode::Explicit,
+        use_crc: true,
+        ..Sx127xLoraConfig::default()
+    };
     let sx1276 =
         sx127xlora::driver::Sx1276Lora::new_with_config(sx1276_spi, sx1276_config).unwrap();
     assert_eq!(sx1276.spi.spi.registers[0x1d], 0x74);
@@ -339,7 +341,8 @@ fn tx_uses_burst_fifo_and_clears_stale_interrupts() {
     driver.tx(&[1, 2, 3, 4]).unwrap();
     let spi = driver.spi.spi;
 
-    assert_eq!(&spi.fifo[128..132], &[1, 2, 3, 4]);
+    let base = FIFO_TX_BASE_ADDR_VALUE as usize;
+    assert_eq!(&spi.fifo[base..base + 4], &[1, 2, 3, 4]);
     assert_eq!(spi.registers[PAYLOAD_LENGTH as usize], 4);
     assert_eq!(spi.registers[IRQ_FLAGS as usize], 0);
     assert_eq!(spi.registers[OP_MODE as usize] & OP_MODE_MODE_MASK, 0x3);
@@ -387,7 +390,14 @@ fn rx_packet_reads_only_the_reported_payload_length() {
 
     assert_eq!(packet.length, 3);
     assert_eq!(packet.payload(), &[0xa5, 0x5a, 0x11]);
-    assert_eq!(packet.payload.len(), 128);
+    assert_eq!(
+        packet.payload.len(),
+        if cfg!(feature = "half_duplex") {
+            255
+        } else {
+            128
+        }
+    );
     assert_eq!(driver.spi.spi.burst_reads, 1);
 }
 
@@ -433,9 +443,11 @@ fn rx_packet_reports_timeout_before_packet_readiness() {
 
 #[test]
 fn public_configuration_cannot_bypass_sf6_header_validation() {
-    let mut config = Sx127xLoraConfig::default();
-    config.header_mode = HeaderMode::Explicit;
-    config.spreading_factor = SpreadingFactor::Sf6;
+    let config = Sx127xLoraConfig {
+        header_mode: HeaderMode::Explicit,
+        spreading_factor: SpreadingFactor::Sf6,
+        ..Sx127xLoraConfig::default()
+    };
 
     let result = Sx1272Lora::new_with_config(sx1272_spi(), config);
 
