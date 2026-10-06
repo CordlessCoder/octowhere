@@ -294,6 +294,9 @@ mod startup_timing {
             esp_hal::system::reset_reason(),
             Some(esp_hal::rtc_cntl::SocResetReason::ChipPowerOn)
         );
+        let mac = esp_hal::efuse::base_mac_address();
+        let mac = mac.as_bytes();
+        defmt::info!("[STARTUP] board {=u8:02x}{=u8:02x}", mac[4], mac[5]);
         defmt::info!("[STARTUP] reset power_on={=bool}", power_on);
         let marks = MARKS.lock(|marks| marks.borrow().clone());
         for (what, how, at) in marks {
