@@ -13,3 +13,6 @@ nmea0183 = { version = "0.6.0", default-features = false }
 
 [features]
 defmt = ["dep:defmt", "heapless/defmt"]
+
+[dev-dependencies]
+futures = { version = "0.3.34", default-features = false, features = ["executor"] }

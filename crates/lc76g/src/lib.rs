@@ -21,6 +21,36 @@ const MAX_I2C_RETRIES: usize = 20;
 const PAIR_COMMAND_CAPACITY: usize = 120;
 const PAIR_MESSAGE_FIELDS_CAPACITY: usize = PAIR_COMMAND_CAPACITY - 8;
 
+/// How long [`Lc76g::wait_for_ack`] waits before each read of the receiver's output.
+const ACK_POLL_MS: u32 = 100;
+
+/// The numbers of the PAIR commands the driver sends, as [`PairAck::command`] names them.
+pub mod command {
+    pub const SET_FIX_INTERVAL: u16 = 50;
+    pub const QUERY_FIX_INTERVAL: u16 = 51;
+    pub const SET_MINIMUM_SNR: u16 = 58;
+    pub const QUERY_MINIMUM_SNR: u16 = 59;
+    pub const SET_NMEA_OUTPUT_RATE: u16 = 62;
+    pub const QUERY_NMEA_OUTPUT_RATE: u16 = 63;
+    pub const SET_GNSS_SEARCH_MODE: u16 = 66;
+    pub const QUERY_GNSS_SEARCH_MODE: u16 = 67;
+    pub const SET_STATIC_NAVIGATION_THRESHOLD: u16 = 70;
+    pub const QUERY_STATIC_NAVIGATION_THRESHOLD: u16 = 71;
+    pub const SET_ELEVATION_MASK: u16 = 72;
+    pub const QUERY_ELEVATION_MASK: u16 = 73;
+    pub const SET_AIC_MODE: u16 = 74;
+    pub const QUERY_AIC_MODE: u16 = 75;
+    pub const SET_NAVIGATION_MODE: u16 = 80;
+    pub const QUERY_NAVIGATION_MODE: u16 = 81;
+    pub const SET_DEBUG_LOG_OUTPUT: u16 = 86;
+    pub const QUERY_DEBUG_LOG_OUTPUT: u16 = 87;
+    pub const SET_SBAS: u16 = 410;
+    pub const QUERY_SBAS: u16 = 411;
+    pub const SAVE_NAVIGATION_DATA: u16 = 511;
+    pub const SET_REFERENCE_TIME: u16 = 590;
+    pub const SET_LOW_POWER_MODE: u16 = 732;
+}
+
 const ALP_ENABLE: &[u8] = b"$PAIR732,1*21\r\n";
 const ALP_DISABLE: &[u8] = b"$PAIR732,0*20\r\n";
 
@@ -1272,7 +1302,8 @@ where
         &mut self,
         interval: FixIntervalMs,
     ) -> Result<(), GnssError<I::Error>> {
-        let mut builder = PairCommandBuilder::new(50).map_err(GnssError::PairCommand)?;
+        let mut builder =
+            PairCommandBuilder::new(command::SET_FIX_INTERVAL).map_err(GnssError::PairCommand)?;
         builder
             .field_u32(interval.milliseconds() as u32)
             .map_err(GnssError::PairCommand)?;
@@ -1281,8 +1312,10 @@ where
 
     /// Requests the receiver's configured position-fix interval.
     pub async fn query_fix_interval(&mut self) -> Result<(), GnssError<I::Error>> {
-        self.send_pair_builder(PairCommandBuilder::new(51).map_err(GnssError::PairCommand)?)
-            .await
+        self.send_pair_builder(
+            PairCommandBuilder::new(command::QUERY_FIX_INTERVAL).map_err(GnssError::PairCommand)?,
+        )
+        .await
     }
 
     /// Sets the minimum signal-to-noise ratio for a satellite to be used.
@@ -1290,7 +1323,8 @@ where
         &mut self,
         threshold: MinimumSnrDb,
     ) -> Result<(), GnssError<I::Error>> {
-        let mut builder = PairCommandBuilder::new(58).map_err(GnssError::PairCommand)?;
+        let mut builder =
+            PairCommandBuilder::new(command::SET_MINIMUM_SNR).map_err(GnssError::PairCommand)?;
         builder
             .field_u32(threshold.decibels() as u32)
             .map_err(GnssError::PairCommand)?;
@@ -1299,8 +1333,10 @@ where
 
     /// Requests the receiver's configured minimum signal-to-noise ratio.
     pub async fn query_minimum_snr(&mut self) -> Result<(), GnssError<I::Error>> {
-        self.send_pair_builder(PairCommandBuilder::new(59).map_err(GnssError::PairCommand)?)
-            .await
+        self.send_pair_builder(
+            PairCommandBuilder::new(command::QUERY_MINIMUM_SNR).map_err(GnssError::PairCommand)?,
+        )
+        .await
     }
 
     /// Selects the satellite constellations used during acquisition.
@@ -1308,7 +1344,8 @@ where
         &mut self,
         mode: GnssSearchMode,
     ) -> Result<(), GnssError<I::Error>> {
-        let mut builder = PairCommandBuilder::new(66).map_err(GnssError::PairCommand)?;
+        let mut builder = PairCommandBuilder::new(command::SET_GNSS_SEARCH_MODE)
+            .map_err(GnssError::PairCommand)?;
         for constellation in [
             mode.gps(),
             mode.glonass(),
@@ -1326,8 +1363,11 @@ where
 
     /// Requests the receiver's configured constellation search mode.
     pub async fn query_gnss_search_mode(&mut self) -> Result<(), GnssError<I::Error>> {
-        self.send_pair_builder(PairCommandBuilder::new(67).map_err(GnssError::PairCommand)?)
-            .await
+        self.send_pair_builder(
+            PairCommandBuilder::new(command::QUERY_GNSS_SEARCH_MODE)
+                .map_err(GnssError::PairCommand)?,
+        )
+        .await
     }
 
     /// Sets the static-navigation speed threshold.
@@ -1335,7 +1375,8 @@ where
         &mut self,
         threshold: StaticNavigationThreshold,
     ) -> Result<(), GnssError<I::Error>> {
-        let mut builder = PairCommandBuilder::new(70).map_err(GnssError::PairCommand)?;
+        let mut builder = PairCommandBuilder::new(command::SET_STATIC_NAVIGATION_THRESHOLD)
+            .map_err(GnssError::PairCommand)?;
         builder
             .field_u32(threshold.decimetres_per_second() as u32)
             .map_err(GnssError::PairCommand)?;
@@ -1344,8 +1385,11 @@ where
 
     /// Requests the receiver's static-navigation speed threshold.
     pub async fn query_static_navigation_threshold(&mut self) -> Result<(), GnssError<I::Error>> {
-        self.send_pair_builder(PairCommandBuilder::new(71).map_err(GnssError::PairCommand)?)
-            .await
+        self.send_pair_builder(
+            PairCommandBuilder::new(command::QUERY_STATIC_NAVIGATION_THRESHOLD)
+                .map_err(GnssError::PairCommand)?,
+        )
+        .await
     }
 
     /// Sets the minimum satellite elevation used during navigation.
@@ -1353,7 +1397,8 @@ where
         &mut self,
         mask: ElevationMaskDegrees,
     ) -> Result<(), GnssError<I::Error>> {
-        let mut builder = PairCommandBuilder::new(72).map_err(GnssError::PairCommand)?;
+        let mut builder =
+            PairCommandBuilder::new(command::SET_ELEVATION_MASK).map_err(GnssError::PairCommand)?;
         builder
             .field_i32(mask.degrees() as i32)
             .map_err(GnssError::PairCommand)?;
@@ -1362,13 +1407,17 @@ where
 
     /// Requests the receiver's minimum satellite elevation.
     pub async fn query_elevation_mask(&mut self) -> Result<(), GnssError<I::Error>> {
-        self.send_pair_builder(PairCommandBuilder::new(73).map_err(GnssError::PairCommand)?)
-            .await
+        self.send_pair_builder(
+            PairCommandBuilder::new(command::QUERY_ELEVATION_MASK)
+                .map_err(GnssError::PairCommand)?,
+        )
+        .await
     }
 
     /// Enables or disables active interference cancellation.
     pub async fn set_aic_mode(&mut self, mode: AicMode) -> Result<(), GnssError<I::Error>> {
-        let mut builder = PairCommandBuilder::new(74).map_err(GnssError::PairCommand)?;
+        let mut builder =
+            PairCommandBuilder::new(command::SET_AIC_MODE).map_err(GnssError::PairCommand)?;
         builder
             .field_u32(mode.wire_value() as u32)
             .map_err(GnssError::PairCommand)?;
@@ -1377,8 +1426,10 @@ where
 
     /// Requests the receiver's active interference cancellation state.
     pub async fn query_aic_mode(&mut self) -> Result<(), GnssError<I::Error>> {
-        self.send_pair_builder(PairCommandBuilder::new(75).map_err(GnssError::PairCommand)?)
-            .await
+        self.send_pair_builder(
+            PairCommandBuilder::new(command::QUERY_AIC_MODE).map_err(GnssError::PairCommand)?,
+        )
+        .await
     }
 
     /// Gives the receiver the current UTC time, which shortens the first fix after it has lost its
@@ -1388,7 +1439,8 @@ where
         &mut self,
         time: &GnssDateTime,
     ) -> Result<(), GnssError<I::Error>> {
-        let mut builder = PairCommandBuilder::new(590).map_err(GnssError::PairCommand)?;
+        let mut builder =
+            PairCommandBuilder::new(command::SET_REFERENCE_TIME).map_err(GnssError::PairCommand)?;
         for field in [
             u32::from(time.year),
             u32::from(time.month),
@@ -1405,14 +1457,18 @@ where
     /// Saves the receiver's navigation data from its RTC RAM to its flash, so it survives a loss
     /// of power. Above 1 Hz the receiver must be stopped first; at 1 Hz and below it need not.
     pub async fn save_navigation_data(&mut self) -> Result<(), GnssError<I::Error>> {
-        self.send_pair_builder(PairCommandBuilder::new(511).map_err(GnssError::PairCommand)?)
-            .await
+        self.send_pair_builder(
+            PairCommandBuilder::new(command::SAVE_NAVIGATION_DATA)
+                .map_err(GnssError::PairCommand)?,
+        )
+        .await
     }
 
     /// Enables or disables searching for SBAS satellites, which the receiver does not support in
     /// the Fitness and Swimming navigation modes.
     pub async fn set_sbas(&mut self, enabled: bool) -> Result<(), GnssError<I::Error>> {
-        let mut builder = PairCommandBuilder::new(410).map_err(GnssError::PairCommand)?;
+        let mut builder =
+            PairCommandBuilder::new(command::SET_SBAS).map_err(GnssError::PairCommand)?;
         builder
             .field_u32(u32::from(enabled))
             .map_err(GnssError::PairCommand)?;
@@ -1421,8 +1477,10 @@ where
 
     /// Requests whether the receiver searches for SBAS satellites.
     pub async fn query_sbas(&mut self) -> Result<(), GnssError<I::Error>> {
-        self.send_pair_builder(PairCommandBuilder::new(411).map_err(GnssError::PairCommand)?)
-            .await
+        self.send_pair_builder(
+            PairCommandBuilder::new(command::QUERY_SBAS).map_err(GnssError::PairCommand)?,
+        )
+        .await
     }
 
     /// Sets the receiver's navigation model.
@@ -1430,7 +1488,8 @@ where
         &mut self,
         mode: NavigationMode,
     ) -> Result<(), GnssError<I::Error>> {
-        let mut builder = PairCommandBuilder::new(80).map_err(GnssError::PairCommand)?;
+        let mut builder = PairCommandBuilder::new(command::SET_NAVIGATION_MODE)
+            .map_err(GnssError::PairCommand)?;
         builder
             .field_u32(mode.wire_value() as u32)
             .map_err(GnssError::PairCommand)?;
@@ -1439,8 +1498,11 @@ where
 
     /// Requests the receiver's navigation model.
     pub async fn query_navigation_mode(&mut self) -> Result<(), GnssError<I::Error>> {
-        self.send_pair_builder(PairCommandBuilder::new(81).map_err(GnssError::PairCommand)?)
-            .await
+        self.send_pair_builder(
+            PairCommandBuilder::new(command::QUERY_NAVIGATION_MODE)
+                .map_err(GnssError::PairCommand)?,
+        )
+        .await
     }
 
     /// Sets the receiver's binary debug-log output mode.
@@ -1448,7 +1510,8 @@ where
         &mut self,
         output: DebugLogOutput,
     ) -> Result<(), GnssError<I::Error>> {
-        let mut builder = PairCommandBuilder::new(86).map_err(GnssError::PairCommand)?;
+        let mut builder = PairCommandBuilder::new(command::SET_DEBUG_LOG_OUTPUT)
+            .map_err(GnssError::PairCommand)?;
         builder
             .field_u32(output.wire_value() as u32)
             .map_err(GnssError::PairCommand)?;
@@ -1457,8 +1520,11 @@ where
 
     /// Requests the receiver's binary debug-log output mode.
     pub async fn query_debug_log_output(&mut self) -> Result<(), GnssError<I::Error>> {
-        self.send_pair_builder(PairCommandBuilder::new(87).map_err(GnssError::PairCommand)?)
-            .await
+        self.send_pair_builder(
+            PairCommandBuilder::new(command::QUERY_DEBUG_LOG_OUTPUT)
+                .map_err(GnssError::PairCommand)?,
+        )
+        .await
     }
 
     /// Sets the output rate for one standard NMEA sentence type.
@@ -1557,6 +1623,37 @@ where
         )
         .await?;
         Ok(&buffer[..read_len])
+    }
+
+    /// Reads the receiver's output until it gives its final answer to PAIR `command`, any
+    /// status but [`PairAckStatus::Processing`], and returns that status. Every byte read goes
+    /// through `parser`, the rest of the answer's read included, so nothing else the receiver
+    /// sends meanwhile is lost. A failed read is tried again at the next poll. It has no
+    /// deadline of its own.
+    pub async fn wait_for_ack(
+        &mut self,
+        command: u16,
+        parser: &mut NmeaParser,
+        buffer: &mut [u8],
+    ) -> PairAckStatus {
+        loop {
+            self.delay.delay_ms(ACK_POLL_MS).await;
+            let Ok(chunk) = self.read_nmea_chunk(buffer).await else {
+                continue;
+            };
+            let mut answer = None;
+            for &byte in chunk {
+                if let Ok(Some(NmeaUpdate::PairAck(ack))) = parser.push(byte)
+                    && ack.command == command
+                    && ack.status != PairAckStatus::Processing
+                {
+                    answer = answer.or(Some(ack.status));
+                }
+            }
+            if let Some(status) = answer {
+                return status;
+            }
+        }
     }
 
     pub async fn write_nmea(&mut self, data: &[u8]) -> Result<(), GnssError<I::Error>> {
@@ -1667,14 +1764,14 @@ fn pair_set_nmea_output_rate(
     sentence: NmeaSentence,
     rate: NmeaOutputRate,
 ) -> Result<PairCommand, PairCommandError> {
-    let mut builder = PairCommandBuilder::new(62)?;
+    let mut builder = PairCommandBuilder::new(command::SET_NMEA_OUTPUT_RATE)?;
     builder.field_u32(sentence.command_id() as u32)?;
     builder.field_u32(rate.0 as u32)?;
     builder.finish()
 }
 
 fn pair_set_all_nmea_output_rates() -> Result<PairCommand, PairCommandError> {
-    let mut builder = PairCommandBuilder::new(62)?;
+    let mut builder = PairCommandBuilder::new(command::SET_NMEA_OUTPUT_RATE)?;
     builder.field_i32(-1)?;
     builder.finish()
 }
@@ -1682,7 +1779,7 @@ fn pair_set_all_nmea_output_rates() -> Result<PairCommand, PairCommandError> {
 fn pair_get_nmea_output_rate(
     sentence: Option<NmeaSentence>,
 ) -> Result<PairCommand, PairCommandError> {
-    let mut builder = PairCommandBuilder::new(63)?;
+    let mut builder = PairCommandBuilder::new(command::QUERY_NMEA_OUTPUT_RATE)?;
     if let Some(sentence) = sentence {
         builder.field_u32(sentence.command_id() as u32)?;
     } else {
@@ -1701,10 +1798,165 @@ fn hex_digit_to_ascii(value: u8) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ALP_DISABLE, ALP_ENABLE, CONFIG_READ_DATA, CONFIG_READ_FREE_LENGTH,
-        CONFIG_READ_NMEA_LENGTH, GnssDateTime, NmeaParser, NmeaUpdate, PairAck, PairAckStatus,
+    extern crate std;
+
+    use std::{collections::VecDeque, format, vec::Vec};
+
+    use embedded_hal_async::{
+        delay::DelayNs,
+        i2c::{ErrorKind, ErrorType, I2c, NoAcknowledgeSource, Operation},
     };
+    use futures::executor::block_on;
+
+    use super::{
+        ALP_DISABLE, ALP_ENABLE, CONFIG_ADDRESS, CONFIG_READ_DATA, CONFIG_READ_FREE_LENGTH,
+        CONFIG_READ_NMEA_LENGTH, DATA_ADDRESS, GnssDateTime, Lc76g, MAX_I2C_RETRIES, NmeaParser,
+        NmeaUpdate, PairAck, PairAckStatus, command,
+    };
+
+    #[derive(Debug)]
+    struct Nack;
+
+    impl embedded_hal_async::i2c::Error for Nack {
+        fn kind(&self) -> ErrorKind {
+            ErrorKind::NoAcknowledge(NoAcknowledgeSource::Address)
+        }
+    }
+
+    /// The receiver's end of the I2C protocol: a write to the config address names what the
+    /// next read carries.
+    #[derive(Default)]
+    struct Receiver {
+        request: u32,
+        output: VecDeque<u8>,
+        /// What the receiver has sent by each successive read of its output's length.
+        later: VecDeque<Vec<u8>>,
+        failing_reads: usize,
+    }
+
+    impl ErrorType for Receiver {
+        type Error = Nack;
+    }
+
+    impl I2c for Receiver {
+        async fn transaction(
+            &mut self,
+            address: u8,
+            operations: &mut [Operation<'_>],
+        ) -> Result<(), Nack> {
+            for operation in operations {
+                match operation {
+                    Operation::Write(bytes) if address == CONFIG_ADDRESS => {
+                        self.request = u32::from_le_bytes(bytes[..4].try_into().unwrap());
+                    }
+                    Operation::Write(_) => {}
+                    Operation::Read(buffer) => {
+                        assert_eq!(address, DATA_ADDRESS);
+                        if self.failing_reads > 0 {
+                            self.failing_reads -= 1;
+                            return Err(Nack);
+                        }
+                        match self.request {
+                            CONFIG_READ_NMEA_LENGTH => {
+                                if let Some(sent) = self.later.pop_front() {
+                                    self.output.extend(sent);
+                                }
+                                let length = self.output.len() as u32;
+                                buffer.copy_from_slice(&length.to_le_bytes());
+                            }
+                            CONFIG_READ_DATA => {
+                                for byte in buffer.iter_mut() {
+                                    *byte = self.output.pop_front().unwrap();
+                                }
+                            }
+                            CONFIG_READ_FREE_LENGTH => {
+                                buffer.copy_from_slice(&4096u32.to_le_bytes());
+                            }
+                            request => panic!("unexpected request {request:#x}"),
+                        }
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
+
+    struct NoDelay;
+
+    impl DelayNs for NoDelay {
+        async fn delay_ns(&mut self, _ns: u32) {}
+    }
+
+    fn ack(command: u16, status: u8) -> Vec<u8> {
+        let body = format!("PAIR001,{command:03},{status}");
+        let checksum = body.bytes().fold(0, |sum, byte| sum ^ byte);
+        format!("${body}*{checksum:02X}\r\n").into_bytes()
+    }
+
+    fn wait_for_ack(receiver: Receiver, parser: &mut NmeaParser) -> PairAckStatus {
+        let mut gnss = Lc76g::new(receiver, NoDelay);
+        let mut buffer = [0; 512];
+        block_on(gnss.wait_for_ack(command::SAVE_NAVIGATION_DATA, parser, &mut buffer))
+    }
+
+    #[test]
+    fn wait_for_ack_passes_over_processing_and_other_commands() {
+        let receiver = Receiver {
+            later: VecDeque::from([
+                ack(command::SAVE_NAVIGATION_DATA, 1),
+                ack(command::SET_SBAS, 2),
+                ack(command::SAVE_NAVIGATION_DATA, 0),
+            ]),
+            ..Receiver::default()
+        };
+
+        let status = wait_for_ack(receiver, &mut NmeaParser::new());
+
+        assert_eq!(status, PairAckStatus::Accepted);
+    }
+
+    #[test]
+    fn wait_for_ack_returns_a_refusal() {
+        let receiver = Receiver {
+            later: VecDeque::from([ack(command::SAVE_NAVIGATION_DATA, 2)]),
+            ..Receiver::default()
+        };
+
+        let status = wait_for_ack(receiver, &mut NmeaParser::new());
+
+        assert_eq!(status, PairAckStatus::Failed);
+    }
+
+    #[test]
+    fn wait_for_ack_parses_the_rest_of_the_answers_read() {
+        let mut sent = ack(command::SAVE_NAVIGATION_DATA, 0);
+        sent.extend_from_slice(
+            b"$GPRMC,125504.049,A,5542.2389,N,03741.6063,E,0.06,25.82,200906,,,A*56\r\n",
+        );
+        let receiver = Receiver {
+            later: VecDeque::from([sent]),
+            ..Receiver::default()
+        };
+        let mut parser = NmeaParser::new();
+
+        let status = wait_for_ack(receiver, &mut parser);
+
+        assert_eq!(status, PairAckStatus::Accepted);
+        assert!(parser.state().utc.is_some());
+    }
+
+    #[test]
+    fn wait_for_ack_reads_again_after_a_failed_read() {
+        let receiver = Receiver {
+            later: VecDeque::from([ack(command::SAVE_NAVIGATION_DATA, 0)]),
+            failing_reads: MAX_I2C_RETRIES,
+            ..Receiver::default()
+        };
+
+        let status = wait_for_ack(receiver, &mut NmeaParser::new());
+
+        assert_eq!(status, PairAckStatus::Accepted);
+    }
 
     #[test]
     fn commands_match_quectel_protocol() {

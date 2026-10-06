@@ -53,7 +53,7 @@ use esp_hal::{
 use esp_println as _;
 use lc76g::{
     GnssDateTime, GnssError, GnssState, Lc76g, LowPowerMode, NmeaOutputRate, NmeaParser,
-    NmeaSentence, NmeaUpdate, PairAckStatus, PairCommandBuilder,
+    NmeaSentence, NmeaUpdate, PairAckStatus, command,
 };
 #[cfg(feature = "fontdue-target-bench")]
 use octowhere::fontdue;
@@ -303,8 +303,6 @@ struct GpsTime {
 const POWER_OFF_GRACE: Duration = Duration::from_secs(3);
 /// How long powering off waits for the GNSS module to save its navigation data.
 const NAVIGATION_SAVE: Duration = Duration::from_secs(2);
-/// The `PAIR` command that saves the module's navigation data, which its answer names.
-const SAVE_NAVIGATION: u16 = 511;
 /// How long powering off waits for the settings queued before it to be saved.
 const SETTINGS_SETTLE: Duration = Duration::from_secs(3);
 /// A zone choice from the settings panel, for `zone_task`, which owns the zone.
@@ -1524,38 +1522,19 @@ async fn park_gnss(
 ) -> ! {
     if fixed {
         let saved = match gnss.save_navigation_data().await {
-            Ok(()) => with_timeout(NAVIGATION_SAVE, navigation_saved(gnss, parser, nmea))
-                .await
-                .ok(),
+            Ok(()) => with_timeout(
+                NAVIGATION_SAVE,
+                gnss.wait_for_ack(command::SAVE_NAVIGATION_DATA, parser, nmea),
+            )
+            .await
+            .ok()
+            .map(|status| status == PairAckStatus::Accepted),
             Err(_) => Some(false),
         };
         info!("[GNSS] navigation data saved={}", saved);
     }
     GNSS_PARKED.signal(());
     core::future::pending().await
-}
-
-/// Reads the GNSS module until it answers the request to save its navigation data, and returns
-/// whether the save took.
-async fn navigation_saved(
-    gnss: &mut Lc76g<SharedI2cDevice, embassy_time::Delay>,
-    parser: &mut NmeaParser,
-    nmea: &mut [u8],
-) -> bool {
-    loop {
-        Timer::after(Duration::from_millis(100)).await;
-        let Ok(chunk) = gnss.read_nmea_chunk(nmea).await else {
-            continue;
-        };
-        for &byte in chunk {
-            if let Ok(Some(NmeaUpdate::PairAck(ack))) = parser.push(byte)
-                && ack.command == SAVE_NAVIGATION
-                && ack.status != PairAckStatus::Processing
-            {
-                return ack.status == PairAckStatus::Accepted;
-            }
-        }
-    }
 }
 
 /// Follows the zone under each fix, and the zone chosen in the settings panel. It stays in thread
@@ -2527,15 +2506,15 @@ async fn configure_gnss(
             error
         ),
     }
-    for (command, result) in [
-        (410, gnss.set_sbas(true).await),
-        (411, gnss.query_sbas().await),
+    for (id, result) in [
+        (command::SET_SBAS, gnss.set_sbas(true).await),
+        (command::QUERY_SBAS, gnss.query_sbas().await),
     ] {
         match result {
             Ok(()) => answered = true,
             Err(error) => warn!(
                 "[GNSS] STARTUP PAIR_SEND_RESULT command={} status=error error={}",
-                command, error
+                id, error
             ),
         }
     }
@@ -2561,14 +2540,12 @@ async fn configure_gnss(
             ),
         }
     }
-    if let Ok(command) = PairCommandBuilder::new(67).and_then(|builder| builder.finish()) {
-        match gnss.send_pair_command(&command).await {
-            Ok(()) => answered = true,
-            Err(error) => warn!(
-                "[GNSS] STARTUP PAIR_SEND_RESULT command=067 status=error error={}",
-                error
-            ),
-        }
+    match gnss.query_gnss_search_mode().await {
+        Ok(()) => answered = true,
+        Err(error) => warn!(
+            "[GNSS] STARTUP PAIR_SEND_RESULT command=067 status=error error={}",
+            error
+        ),
     }
     let mut nmea = [0u8; 512];
     match gnss.read_nmea_chunk(&mut nmea).await {
