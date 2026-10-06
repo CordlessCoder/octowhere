@@ -32,7 +32,7 @@ mod write;
 
 #[cfg(feature = "run")]
 pub use node::{
-    Command, Commands, Device, Fix, GpsTime, GroupStore, Mesh, RECEIVED_MAX, Radio, Random,
-    Received, Sent, Start, Time, blank_view, offline, publish_start,
+    BENCH_KEEP_FINGERPRINTS, Command, Commands, Device, Fix, GpsTime, GroupStore, Mesh,
+    RECEIVED_MAX, Radio, Random, Received, Sent, Start, Time, blank_view, offline, publish_start,
 };
 pub use write::{GroupWrite, KeptRow};

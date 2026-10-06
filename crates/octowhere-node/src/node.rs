@@ -304,7 +304,13 @@ struct Shown {
     /// A founding's wait, under way or ended, until another pairing starts.
     recovery: Option<RecoveryView>,
     removals: RemovalsView,
+    /// Bench: each id's public key and its fingerprint, made again only when the key changes.
+    fingerprints: [core::cell::Cell<Option<([u8; 32], [u8; 8])>>; IDS as usize],
 }
+
+/// Bench: whether the view's fingerprints are kept from one publish to the next.
+pub static BENCH_KEEP_FINGERPRINTS: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
 
 impl Shown {
     fn new(radio: bool) -> Self {
@@ -319,6 +325,23 @@ impl Shown {
             positions: [None; IDS as usize],
             recovery: None,
             removals: RemovalsView::default(),
+            fingerprints: [const { core::cell::Cell::new(None) }; IDS as usize],
+        }
+    }
+
+    /// Bench: the fingerprint of `public` at `index`, kept while the key stays.
+    fn fingerprint(&self, index: usize, public: &[u8; 32]) -> [u8; 8] {
+        if !BENCH_KEEP_FINGERPRINTS.load(core::sync::atomic::Ordering::Relaxed) {
+            return fingerprint(public);
+        }
+        let kept = &self.fingerprints[index];
+        match kept.get() {
+            Some((key, made)) if key == *public => made,
+            _ => {
+                let made = fingerprint(public);
+                kept.set(Some((*public, made)));
+                made
+            }
         }
     }
 
@@ -398,7 +421,7 @@ impl Shown {
                 name: member.name,
                 mac: member.mac,
                 // PERF: a SHA-256 for every member at every publish.
-                device: fingerprint(&member.public),
+                device: self.fingerprint(index, &member.public),
                 // A device that knew no UTC dated the record 0.
                 joined: (member.joined != 0)
                     .then(|| local_at(member.joined))

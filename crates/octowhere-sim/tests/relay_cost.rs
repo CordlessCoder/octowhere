@@ -395,6 +395,11 @@ fn run(
 #[test]
 #[ignore = "a measurement; prints and writes RELAY_COST_OUT"]
 fn flood_cost() {
+    // `RELAY_COST_KEEP_FINGERPRINTS=1` keeps the view's fingerprints between publishes.
+    octowhere_node::BENCH_KEEP_FINGERPRINTS.store(
+        std::env::var("RELAY_COST_KEEP_FINGERPRINTS").is_ok_and(|keep| keep == "1"),
+        std::sync::atomic::Ordering::Relaxed,
+    );
     let mut shapes = vec![
         full(32),
         line(12),
