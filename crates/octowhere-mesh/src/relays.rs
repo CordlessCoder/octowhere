@@ -22,8 +22,9 @@ struct Waiting {
     name: MessageId,
     /// The neighbours not yet heard passing it on.
     expected: Ids,
-    /// The local time it goes again unless they are heard.
-    until: i64,
+    /// The local time it goes again unless they are heard, or `None` once it is due, until
+    /// [`Relays::sent`] says it has gone.
+    until: Option<i64>,
     /// How many times it has gone again.
     resends: u8,
 }
@@ -99,7 +100,7 @@ impl Relays {
             let expected = relaying & !carriers;
             if let Some(waiting) = self.waiting.iter_mut().find(|held| held.name == name) {
                 waiting.expected = expected;
-                waiting.until = now + RELAY_WAIT_US;
+                waiting.until = Some(now + RELAY_WAIT_US);
                 continue;
             }
             if expected.is_empty() {
@@ -111,7 +112,7 @@ impl Relays {
             let _ = self.waiting.push(Waiting {
                 name,
                 expected,
-                until: now + RELAY_WAIT_US,
+                until: Some(now + RELAY_WAIT_US),
                 resends: 0,
             });
         }
@@ -122,14 +123,15 @@ impl Relays {
     /// it on. It waits until it has gone, as [`Relays::sent`] takes; one sent [`RESENDS`] times
     /// is given up.
     pub fn due(&mut self, now: i64) -> Option<MessageId> {
-        self.waiting
-            .retain(|waiting| waiting.until > now || waiting.resends < RESENDS);
+        self.waiting.retain(|waiting| {
+            waiting.until.is_none_or(|until| until > now) || waiting.resends < RESENDS
+        });
         let waiting = self
             .waiting
             .iter_mut()
-            .find(|waiting| waiting.until <= now)?;
+            .find(|waiting| waiting.until.is_some_and(|until| until <= now))?;
         waiting.resends += 1;
-        waiting.until = i64::MAX;
+        waiting.until = None;
         Some(waiting.name)
     }
 
@@ -143,8 +145,7 @@ impl Relays {
     pub fn next(&self) -> Option<i64> {
         self.waiting
             .iter()
-            .map(|waiting| waiting.until)
-            .filter(|&until| until < i64::MAX)
+            .filter_map(|waiting| waiting.until)
             .min()
     }
 }
