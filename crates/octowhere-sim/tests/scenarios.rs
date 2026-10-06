@@ -282,6 +282,20 @@ fn a_device_joins_through_pairing() {
     );
 }
 
+/// A device that leaves and at once joins another group, as JOIN ANOTHER GROUP does, tells its
+/// old group it left before the pairing takes its radio.
+#[test]
+fn leaving_and_joining_at_once_still_tells_the_group() {
+    let mut sim = pair(12);
+    sim.run_while_not(30 * 60, |sim| {
+        sim.count(0, "heard id=1") >= 1 && sim.count(1, "heard id=0") >= 1
+    });
+    sim.command(1, Command::Leave);
+    sim.command(1, Command::Join);
+    let told = sim.run_while_not(5 * 60, |sim| sim.count(0, "member 1 went") == 1);
+    assert!(told, "node 0 heard node 1 go");
+}
+
 /// The refresh session a node's view shows.
 fn refresh_session(sim: &Sim, node: usize) -> Option<u32> {
     sim.view(node)?.refresh.map(|refresh| refresh.session)

@@ -619,7 +619,8 @@ radio asleep. Without a fix a node has no position of its own. Commands reach th
 leave the group, rename, refresh, send text, remove a member while its id still holds the
 device named, and decline a removal, named by its new key.
 A refresh counts the members heard for three rounds; a pairing stops it. A device that leaves
-sends its gone record in two packets, 10 s apart, before it forgets the key. Every node
+sends its gone record in two packets, 10 s apart, before it forgets the key; a pairing started
+meanwhile waits for the first. Every node
 holds every message for 24 hours in a store in PSRAM, lost at a restart, and the summaries
 bring back what a neighbour lacks. A removal sends the new key to each remaining member, and
 the group switches to it at the round the key names; a node keeps the old key for any member

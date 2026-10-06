@@ -790,8 +790,10 @@ nothing.
 An id is freed when its member leaves or is removed (see "Removing a member"). A device that
 leaves sends a gone record for itself in two packets 10 s apart, from memory, and then forgets
 the key; the others replace its record with the gone record and free
-its id, with no new key (owner, 2026-10-03). A pairing started meanwhile ends that, and a
-device with no timebase has nobody to tell; the others can still remove it. A device that may
+its id, with no new key (owner, 2026-10-03). A pairing started meanwhile waits for the first
+of the two packets, within the three rounds a device tries for, and then ends the telling
+(2026-10-06; JOIN ANOTHER GROUP sends the pairing straight after the leave). A device with no
+timebase has nobody to tell; the others can still remove it. A device that may
 still hold the key is removed instead. A gone record wins a merge against the same device's
 record when it is newer, and a node that hears a record for a device it holds as gone sends the
 gone record back. A member or gone record stamped more than an hour ahead of a node's clock is

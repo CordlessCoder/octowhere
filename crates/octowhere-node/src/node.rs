@@ -922,11 +922,20 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                 match select(self.tell_leaving(), commands.receive()).await {
                     Either::First(()) => continue,
                     Either::Second(command) => {
-                        // A pairing takes the radio; the others can still remove this device.
-                        if matches!(command, Command::Add | Command::Join) {
-                            self.leaving = None;
-                        }
                         self.radio.idle_receive().await;
+                        // A pairing takes the radio, so the gone record goes out once before it,
+                        // as long as the wait to tell the others allows.
+                        if matches!(command, Command::Add | Command::Join) {
+                            while self
+                                .leaving
+                                .as_ref()
+                                .is_some_and(|leaving| leaving.left == LEAVE_REPEATS)
+                            {
+                                self.tell_leaving().await;
+                            }
+                            self.leaving = None;
+                            self.radio.idle_receive().await;
+                        }
                         command
                     }
                 }
