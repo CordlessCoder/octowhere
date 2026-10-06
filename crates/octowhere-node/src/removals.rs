@@ -75,8 +75,8 @@ pub struct Removals<A: Allocator> {
     removal_notice: Option<Box<RemovalNotice>>,
     /// The round the last header under an old key went out in.
     beacon_round: i64,
-    /// Whether every key message of this device's own removal under way is in the store.
-    keys_posted: bool,
+    /// The members this device's own removal under way has posted key messages to.
+    keys_posted: Ids,
     /// The member this device removed at the last switch, to tell, with the old key and its
     /// generation.
     notify: Option<(u8, Key, u16)>,
@@ -102,7 +102,7 @@ impl<A: Allocator> Removals<A> {
             catch_up: heapless::Vec::new(),
             removal_notice: None,
             beacon_round: i64::MIN,
-            keys_posted: false,
+            keys_posted: Ids::EMPTY,
             notify: None,
             caught_up: [(0, 0); IDS as usize],
             on_key: None,
@@ -202,7 +202,7 @@ impl<A: Allocator> Removals<A> {
         self.refill = None;
         self.catch_up.clear();
         self.removal_notice = None;
-        self.keys_posted = false;
+        self.keys_posted = Ids::EMPTY;
         self.notify = None;
         self.caught_up = [(0, 0); IDS as usize];
         self.on_key = None;
@@ -210,22 +210,26 @@ impl<A: Allocator> Removals<A> {
 
     /// This device started a removal, whose key messages are yet to be posted.
     pub fn started(&mut self) {
-        self.keys_posted = false;
+        self.keys_posted = Ids::EMPTY;
     }
 
-    /// Every key message of this device's removal under way is posted.
-    pub fn posted(&mut self) {
-        self.keys_posted = true;
+    /// The key message of this device's removal under way to `member` is posted.
+    pub fn posted(&mut self, member: u8) {
+        self.keys_posted.insert(member);
     }
 
-    /// Whether this device, at `own`, has a removal under way whose key messages are yet to be
-    /// posted.
-    pub fn keys_due(&self, own: u8) -> bool {
-        !self.keys_posted
-            && self
-                .rekey
-                .pending()
-                .is_some_and(|pending| pending.remover == own)
+    /// The members of `group` still owed a key message by this device's removal under way.
+    pub fn keys_due(&self, group: &Group) -> Ids {
+        match self.rekey.pending() {
+            Some(pending) if pending.remover == group.own() => {
+                group
+                    .ids()
+                    .without(pending.new.removed)
+                    .without(group.own())
+                    & !self.keys_posted
+            }
+            _ => Ids::EMPTY,
+        }
     }
 
     /// The group switched, to the key `group` now has, at local time `now`; `old` is the key
@@ -250,7 +254,7 @@ impl<A: Allocator> Removals<A> {
         self.caught_up = [(0, 0); IDS as usize];
         // Signed once a switch: about 35 ms on the board.
         self.carry_on_key(group, me, now);
-        self.keys_posted = false;
+        self.keys_posted = Ids::EMPTY;
     }
 
     /// The group went back to the key before the last switch, declined after it.

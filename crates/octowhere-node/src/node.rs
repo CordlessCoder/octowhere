@@ -1200,7 +1200,11 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         if self.removals.to_tell() {
             self.tell_removed(time).await;
         }
-        if self.removals.keys_due(own) {
+        if self
+            .group
+            .as_ref()
+            .is_some_and(|group| !self.removals.keys_due(group).is_empty())
+        {
             self.post_keys(time).await;
         }
         // A member this device removed again once its record is back.
@@ -2099,32 +2103,28 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
     }
 
     /// Posts the key messages of this device's removal under way, one to every member but the
-    /// one removed, at timebase time `time`. It runs again after a restart or an interruption
-    /// until every one is posted; a member that already holds the key ignores another message
-    /// with it.
+    /// one removed, at timebase time `time`. An interruption leaves the rest to post later; a
+    /// restart posts them all again, and a member that already holds the key ignores another
+    /// message with it.
     async fn post_keys(&mut self, time: i64) {
         let (Some(group), Some(pending)) = (&self.group, self.removals.rekey.pending()) else {
             return;
         };
-        if pending.remover != group.own() {
-            return;
-        }
+        let due = self.removals.keys_due(group);
         let new = pending.new.clone();
-        let remaining = group.ids().without(new.removed).without(group.own());
-        if !self.reserve(remaining.count(), time).await {
+        if due.is_empty() || !self.reserve(due.count(), time).await {
             return;
         }
         let body = new.encode();
-        for member in remaining.iter() {
-            self.post(
-                &Outgoing::new(To::Member(member), Some(new.generation), &body),
-                time,
-            )
-            .await;
+        for member in due.iter() {
+            let outgoing = Outgoing::new(To::Member(member), Some(new.generation), &body);
+            if !self.post(&outgoing, time).await {
+                return;
+            }
+            self.removals.posted(member);
             // Each key takes an X25519 the first time; let the other tasks run between.
             self.time.until(self.time.now() + 1_000).await;
         }
-        self.removals.posted();
     }
 
     /// Stores a block holding at least `count` more sequence numbers, if the one held has fewer,
