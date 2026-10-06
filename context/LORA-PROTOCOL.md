@@ -525,7 +525,7 @@ Owner, 2026-10-03, except where it says otherwise.
   the last removal to decline, so that no member can take the day away with an empty removal.
   A rival that goes back past later switches (see "Two at once") can be declined only before
   its switch: the key the node leaves is not the one the rival replaced, so neither is a state
-  to go back to. The members that switched have heard the device on the new key, so they send it no key
+  to go back to (owner, 2026-10-06). The members that switched have heard the device on the new key, so they send it no key
   message again.
 - **The new key.** The remover makes a random group key and sends it to each remaining member as
   a private message, a key message, with its generation, one past the current key's, the round
