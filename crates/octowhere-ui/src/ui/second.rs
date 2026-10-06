@@ -591,10 +591,11 @@ impl Device {
 
     fn handle(&mut self, event: &GestureEvent, _: &PeripheralState) -> Next {
         match *event {
-            GestureEvent::DragStart(drag) => {
+            GestureEvent::DragStart(drag) if !drag.is_horizontal() => {
                 self.grabbed = Some(self.scroll);
                 self.scroll = (self.scroll - drag.offset().y).clamp(0, Self::max_scroll());
             }
+            GestureEvent::DragStart(_) => self.grabbed = None,
             GestureEvent::DragMove(drag) | GestureEvent::DragEnd(drag) => {
                 if let Some(from) = self.grabbed {
                     self.scroll = (from - drag.offset().y).clamp(0, Self::max_scroll());
@@ -853,6 +854,7 @@ impl Stepper {
         from_drag: bool,
     ) -> Step {
         match *event {
+            GestureEvent::DragStart(drag) if drag.is_horizontal() => self.grabbed = None,
             GestureEvent::DragStart(drag) => {
                 let before = if from_drag { drag.offset().y } else { 0 };
                 self.grabbed = Some((self.index, before));

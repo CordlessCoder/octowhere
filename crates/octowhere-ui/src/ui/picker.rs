@@ -55,8 +55,10 @@ const SCROLL_SPEED: f32 = 40.0;
 /// The lists are shared, so that the copy the stage keeps of what it drew costs no request.
 #[derive(Clone, Debug, PartialEq)]
 enum Step {
-    /// The distinct offsets in force, ascending, in seconds.
-    Offset { offsets: Rc<[i32]> },
+    /// The distinct offsets in force at `at`, ascending, in seconds: each one any zone keeps
+    /// then, or during the year without a time. Their zones are listed for the same time, so
+    /// that every offset has some.
+    Offset { offsets: Rc<[i32]>, at: Option<i64> },
     /// The zones at `offset`, in the order they are listed, which is nearest first when the
     /// position is known.
     Zone {
@@ -306,7 +308,8 @@ impl Picker {
     /// Opens on the offset in force, or on +00:00 without one.
     #[must_use]
     pub fn new(peripherals: &PeripheralState) -> Self {
-        let offsets = offsets_at(time_of(peripherals));
+        let at = time_of(peripherals);
+        let offsets = offsets_at(at);
         let current =
             clock_screen::offset(&peripherals.clock).map_or(0, |offset| offset.utc_offset);
         let index = offsets
@@ -316,6 +319,7 @@ impl Picker {
         Self {
             step: Step::Offset {
                 offsets: offsets.into(),
+                at,
             },
             index,
             grabbed: None,
@@ -327,7 +331,7 @@ impl Picker {
 
     fn len(&self) -> usize {
         match &self.step {
-            Step::Offset { offsets } => offsets.len(),
+            Step::Offset { offsets, .. } => offsets.len(),
             Step::Zone { zones, .. } => zones.len(),
         }
     }
@@ -345,10 +349,11 @@ impl Picker {
     ) -> Next {
         match *event {
             GestureEvent::Down(_) => self.fling = None,
-            GestureEvent::DragStart(drag) => {
+            GestureEvent::DragStart(drag) if !drag.is_horizontal() => {
                 self.grabbed = Some(self.index);
                 self.index = self.stepped(self.index, drag.offset().y as f32);
             }
+            GestureEvent::DragStart(_) => self.grabbed = None,
             GestureEvent::DragMove(drag) => {
                 if let Some(from) = self.grabbed {
                     self.index = self.stepped(from, drag.offset().y as f32);
@@ -380,10 +385,10 @@ impl Picker {
                 effects.store = Some(Store::AutomaticZone);
                 Next::Panel
             }
-            Step::Offset { offsets } if BAND.contains(&point.y) => {
+            Step::Offset { offsets, at } if BAND.contains(&point.y) => {
                 let offset = offsets[self.index];
                 let position = peripherals.gnss.position;
-                let zones = zones_at(offset, unix, position);
+                let zones = zones_at(offset, *at, position);
                 let current = peripherals.clock.zone().zone;
                 self.index = zones
                     .iter()
@@ -403,6 +408,7 @@ impl Picker {
                 self.index = offsets.iter().position(|&each| each == offset).unwrap_or(0);
                 self.step = Step::Offset {
                     offsets: offsets.into(),
+                    at: unix,
                 };
                 self.fling = None;
                 Next::Stay
@@ -484,7 +490,12 @@ impl Picker {
         let travel = travel + speed * FLING_TIME_CONSTANT / 1e6 * (1.0 - decay);
         let speed = speed * decay;
         self.index = self.stepped(self.flung_from, travel);
-        let at_end = self.index == 0 || self.index + 1 == self.len();
+        // Travel down steps back toward the first row.
+        let at_end = if speed > 0.0 {
+            self.index == 0
+        } else {
+            self.index + 1 == self.len()
+        };
         self.fling = (libm::fabsf(speed) > FLING_STOP && !at_end).then_some((travel, speed, now));
         self.fling.is_some()
     }
@@ -497,7 +508,7 @@ impl Picker {
         target: &mut D,
     ) -> Result<(), D::Error> {
         match &self.step {
-            Step::Offset { offsets } => {
+            Step::Offset { offsets, .. } => {
                 self.draw_offsets(offsets, peripherals, accents, font, target)
             }
             Step::Zone { .. } => self.draw_zones(peripherals, accents, font, target),
@@ -735,6 +746,49 @@ mod tests {
         );
     }
 
+    fn drag(from: (i32, i32), to: (i32, i32), speed: f32) -> GestureEvent {
+        GestureEvent::DragEnd(crate::ui::gesture::Drag {
+            start: Point::new(from.0, from.1),
+            current: Point::new(to.0, to.1),
+            velocity: (0.0, speed),
+        })
+    }
+
+    fn dragged(picker: &mut Picker, end: GestureEvent) {
+        let GestureEvent::DragEnd(drag) = end else {
+            unreachable!()
+        };
+        let (peripherals, mut effects) = (PeripheralState::default(), Effects::default());
+        for event in [
+            GestureEvent::DragStart(drag),
+            GestureEvent::DragMove(drag),
+            end,
+        ] {
+            picker.handle(&event, &peripherals, &mut effects);
+        }
+    }
+
+    #[test]
+    fn a_flick_up_from_the_first_row_carries_on_down_the_list() {
+        let mut picker = Picker::new(&PeripheralState::default());
+        picker.index = 0;
+        dragged(&mut picker, drag((233, 300), (233, 295), -600.0));
+        assert_eq!(picker.index, 0);
+        let mut now = 0;
+        while picker.step_fling(now) {
+            now += 16_000;
+        }
+        assert!(picker.index > 0);
+    }
+
+    #[test]
+    fn a_sideways_drag_moves_no_list() {
+        let mut picker = Picker::new(&PeripheralState::default());
+        let index = picker.index;
+        dragged(&mut picker, drag((233, 300), (300, 259), 0.0));
+        assert_eq!(picker.index, index);
+    }
+
     #[test]
     fn cities_are_the_last_part_in_capitals_and_etc_is_at_sea() {
         assert_eq!(city("America/Argentina/Buenos_Aires"), "BUENOS AIRES");
@@ -789,6 +843,28 @@ mod tests {
 #[cfg(test)]
 mod untrusted {
     use super::*;
+    use crate::ui::clock::{ClockState, ZoneState};
+
+    #[test]
+    fn an_offset_listed_before_the_clock_was_trusted_keeps_its_zones() {
+        let mut picker = Picker::new(&PeripheralState::default());
+        // Kept only in the northern summer, so no zone keeps it in January.
+        let summer = offsets_at(None).iter().position(|&offset| offset == -9000);
+        picker.index = summer.unwrap();
+        let mut trusted = PeripheralState::default();
+        let january = ClockState {
+            utc: Some(RULES_ONLY[0]),
+            set_from_gnss: true,
+            stopped: false,
+        };
+        trusted.clock = trusted.clock.read(january, ZoneState::default());
+        let mut effects = Effects::default();
+        let band = Point::new(233, BAND.start + 40);
+        picker.tap(band, &trusted, &mut effects);
+        assert!(picker.len() > 0);
+        picker.tap(band, &trusted, &mut effects);
+        assert!(matches!(effects.store, Some(Store::ManualZone(_))));
+    }
 
     #[test]
     fn without_a_time_a_zone_is_found_under_its_winter_and_summer_offsets() {
