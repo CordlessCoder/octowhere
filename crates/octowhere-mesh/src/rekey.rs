@@ -460,6 +460,13 @@ impl Rekey {
         {
             return Learned::Ignored;
         }
+        if let Some(pending) = &self.pending
+            && pending.remover == group.own()
+            && pending.new.generation != new.generation
+        {
+            // This device's removal follows the key a rival beats, so it is made again after.
+            self.again.insert(pending.new.removed);
+        }
         let own_switch = new.switch.max(round.saturating_add(DECLINE_ROUNDS));
         self.pending = Some(Pending {
             new,
@@ -564,7 +571,7 @@ impl Rekey {
         }
         // This device's removal lost to a rival of its generation, before the switch or after,
         // that removes another member.
-        let undone = match self.removing {
+        let mut undone = match self.removing {
             Some((generation, id))
                 if !ours && generation == new.generation && id != new.removed =>
             {
@@ -572,6 +579,15 @@ impl Rekey {
             }
             _ => Ids::EMPTY,
         };
+        // The same after the switch, when this device has started another removal since.
+        if let Some(last) = self.last.filter(|last| {
+            rival
+                && last.generation == new.generation
+                && last.removed != new.removed
+                && self.remover_of(new.generation) == Some(group.own())
+        }) {
+            undone.insert(last.removed);
+        }
         let at = new.switch.saturating_mul(ROUND_S);
         // A rival removing the member the losing key removed leaves it gone.
         let (removed, record) = match again {
@@ -1654,6 +1670,24 @@ mod tests {
         assert!(*g.key() == Key::new([5; 32]));
         assert_eq!(g.generation(), 3);
         assert_eq!(rekey.removing(), None);
+    }
+
+    /// This device switched for its own removal and started another on that key. A rival of the
+    /// first wins: both removals are to be made again under it.
+    #[test]
+    fn a_rival_over_two_removals_of_this_device_has_both_made_again() {
+        let mut g = group(2, &[(0, 1), (1, 2), (2, 3), (3, 4), (4, 5)]);
+        let mut rekey = Rekey::default();
+        rekey.start(&g, 3, Key::new([30; 32]), 1_000).unwrap();
+        rekey.switch(&mut g).unwrap();
+        rekey.start(&g, 4, Key::new([40; 32]), 1_010).unwrap();
+        assert_eq!(
+            rekey.learned(&g, 1, new(31, 4, 1_012, 0, 1), 1_020),
+            Learned::Pending
+        );
+        rekey.switch(&mut g).unwrap();
+        assert!(*g.key() == Key::new([31; 32]));
+        assert_eq!(rekey.again(), Ids::of(3).with(4));
     }
 
     #[test]
