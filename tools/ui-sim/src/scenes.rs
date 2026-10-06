@@ -14,7 +14,7 @@ use octowhere_ui::ui::{
     group::{
         keyboard::{Mode, taps},
         sim::{self, Arrival, Sim},
-        view::{Carriage, MessagesView, Name},
+        view::{Carriage, GroupView, IDS, MemberView, MessagesView, Name, Position},
     },
     panel::Cell,
     rest::{AlwaysOn, Timeout},
@@ -160,6 +160,18 @@ pub const SCENES: &[Scene] = &[
         name: "member-face",
         about: "the member face reached from the clock, turning with the heading, and a member selected",
         run: member_face,
+        captioned: true,
+    },
+    Scene {
+        name: "crowded-sectors",
+        about: "a crowded member face: runs of members as sectors, turning with the heading, and the selection stepping through them at each member's own bearing",
+        run: crowded_sectors,
+        captioned: true,
+    },
+    Scene {
+        name: "long-message",
+        about: "a message too tall for its conversation, unread after a quick look at its end, and read once every line has shown for a second",
+        run: long_message,
         captioned: true,
     },
     Scene {
@@ -1236,5 +1248,127 @@ fn removal(driver: &mut Driver) {
     slow_tap(driver, 306, 391);
     driver.wait(ms(2_000));
     driver.swipe(Point::new(110, 372), Point::new(350, 372), ms(700));
+    driver.wait(ms(3_000));
+}
+
+/// The point `metres` from `from` at `bearing` degrees true, on a sphere.
+fn at(from: (i32, i32), bearing: f64, metres: f64) -> (i32, i32) {
+    let (phi1, lambda1) = (
+        (f64::from(from.0) * 1e-7).to_radians(),
+        (f64::from(from.1) * 1e-7).to_radians(),
+    );
+    let (d, theta) = (metres / 6_371_008.8, bearing.to_radians());
+    let phi2 = (phi1.sin() * d.cos() + phi1.cos() * d.sin() * theta.cos()).asin();
+    let lambda2 =
+        lambda1 + (theta.sin() * d.sin() * phi1.cos()).atan2(d.cos() - phi1.sin() * phi2.sin());
+    (
+        (phi2.to_degrees() * 1e7).round() as i32,
+        (lambda2.to_degrees() * 1e7).round() as i32,
+    )
+}
+
+/// The 2026-10-05 hand-off's crowded group: 31 members placed round this device, in four runs
+/// of bearings and one apart, their positions seconds to minutes old.
+fn crowded_group(now: Micros) -> GroupView {
+    const RUNS: [(f64, f64, usize, u64, u64); 4] = [
+        (35.0, 61.0, 8, 11, 1_080),
+        (118.0, 154.0, 8, 23, 420),
+        (218.0, 246.0, 8, 120, 1_080),
+        (305.0, 335.0, 6, 11, 180),
+    ];
+    let names = [
+        "Kestrel", "Cove", "Moss", "Lough", "Basecamp", "Ridge", "Harbour", "Fell",
+    ];
+    let ago = |seconds: u64| now as i64 - (seconds * 1_000_000) as i64;
+    let member = |id: usize, bearing: f64, age: u64| MemberView {
+        name: Name::new(names[id % names.len()].as_bytes()).expect("a fixture name"),
+        mac: [0x48, 0xa1, 0xb2, 0xc3, 0x8c, id as u8],
+        device: [0x9c, 0x2a, 0x7f, 0x10, 0, 0, 0, id as u8],
+        joined: Some(ago(86_400)),
+        heard: Some(ago(7 + id as u64)),
+        position: Position::At(ago(age)),
+        coordinates: Some(at(
+            (533_498_000, -62_603_000),
+            bearing,
+            120.0 + 40.0 * id as f64,
+        )),
+    };
+    let mut members = [None; IDS as usize];
+    members[0] = Some(MemberView {
+        coordinates: None,
+        position: Position::Never,
+        heard: None,
+        ..member(0, 0.0, 0)
+    });
+    let mut id = 1;
+    for (first, last, count, youngest, oldest) in RUNS {
+        for i in 0..count {
+            let share = i as f64 / (count - 1) as f64;
+            let age = youngest + ((oldest - youngest) as f64 * share) as u64;
+            members[id] = Some(member(id, (first + (last - first) * share) % 360.0, age));
+            id += 1;
+        }
+    }
+    members[id] = Some(member(id, 190.0, 300));
+    GroupView { own: 0, members }
+}
+
+fn crowded_sectors(driver: &mut Driver) {
+    driver.stage = Stage::new(PeripheralState {
+        firmware: "0.1.0",
+        timeout: Timeout::Never,
+        ..PeripheralState::default()
+    });
+    start(driver, Screen::Members);
+    let now = driver.now();
+    driver.mesh = Some(Sim::new(Some(crowded_group(now))));
+    driver.wait(ms(1_000));
+    say("31 POSITIONS. A RUN OF MEMBERS TOO CLOSE TO LABEL IS A SECTOR: ITS SPAN, COUNT AND AGES.");
+    driver.wait(ms(4_000));
+    say("THE FACE TURNS WITH THE HEADING. ONLY THE MEMBERS' BEARINGS APART DECIDE THE SECTORS.");
+    driver.motion_over(ms(8_000), |t| facing(37.0 + 330.0 * ease(t)));
+    driver.wait(ms(1_000));
+    say("A TAP IN THE MIDDLE SELECTS THE NEXT MEMBER, AT ITS OWN BEARING. ITS SECTOR TURNS LIME.");
+    for _ in 0..10 {
+        slow_tap(driver, 233, 233);
+        driver.wait(ms(1_600));
+    }
+    say("SELECTED, A MEMBER STAYS AT ITS BEARING AS THE FACE TURNS.");
+    driver.motion_over(ms(6_000), |t| facing(7.0 - 90.0 * swing(t)));
+    driver.wait(ms(2_000));
+}
+
+fn long_message(driver: &mut Driver) {
+    in_group(driver, false);
+    let now = driver.now();
+    let own = mesh(driver)
+        .view()
+        .group
+        .as_ref()
+        .map_or(0, |group| group.own);
+    say("A MESSAGE ARRIVES TOO TALL FOR ITS CONVERSATION TO SHOW WHOLE.");
+    mesh(driver).arrive(
+        Arrival {
+            from: 1,
+            to: Some(own),
+            text: "WWWWWWWWWWWW MMMMMMMMMMMM WWWWWWWWWWWW MMMMMMMMMMMM WWWWWWWWWWWW MMMMMMMMMMMM \
+                   WWWWWWWWWWWW MMMMMMMMMMMM WWWWWWWWWWWW MMMMMMMMMMMM WWWWWWWWWWWW MMMMMMMMMMMM",
+            ago: 0,
+            carriage: Carriage::Received,
+            unread: true,
+        },
+        now,
+    );
+    driver.wait(ms(1_500));
+    say("ITS CONVERSATION OPENS AT THE TOP. THE LINES IN VIEW COUNT; THOSE BELOW HAVE NOT SHOWN.");
+    slow_tap(driver, 233, 360);
+    driver.wait(ms(3_000));
+    say("A QUICK LOOK AT THE END IS NOT READING IT: IT STAYS UNREAD.");
+    driver.swipe(Point::new(233, 380), Point::new(233, 140), ms(200));
+    driver.wait(ms(400));
+    driver.swipe(Point::new(233, 140), Point::new(233, 380), ms(200));
+    driver.wait(ms(2_500));
+    say("READ DOWN TO THE END, EVERY LINE HAS SHOWN FOR A SECOND: NOW IT IS READ.");
+    driver.swipe(Point::new(233, 380), Point::new(233, 140), ms(1_500));
     driver.wait(ms(3_000));
 }
