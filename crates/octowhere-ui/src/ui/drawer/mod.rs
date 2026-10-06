@@ -8,7 +8,7 @@ pub mod parts;
 pub mod removals;
 mod rows;
 
-pub use messages::Mail;
+pub use messages::{Coverage, Mail};
 pub use rows::{TOAST, TOAST_COMPACT, age, age_due, toast};
 
 use embedded_graphics::{prelude::Point, primitives::Rectangle};
@@ -169,8 +169,9 @@ pub struct Drawer {
     draft: Option<Draft>,
     /// What REVIEW took from the draft, to send.
     reviewing: Option<Text>,
-    /// The unread messages showing whole, and since when.
-    reading: Vec<(u32, Micros), 8>,
+    /// The unread rows, and lines of rows too tall to show whole, that show whole, and since
+    /// when.
+    reading: Vec<(messages::Showing, Micros), { messages::SHOWING }>,
 }
 
 /// What the drawer's screens show.
@@ -745,25 +746,65 @@ impl Drawer {
         self.settle.is_some() || slides
     }
 
-    /// The unread message of the conversation showing whose row has shown whole for long
-    /// enough to count as read, if one has. A row only partly in view does not count.
-    pub fn read(&mut self, mail: &Mail, now: Micros) -> Option<u32> {
-        let Some(Child::Thread(thread)) = self.child else {
-            self.reading.clear();
-            return None;
+    /// The unread message of the conversation showing that has now been read, if one has: its
+    /// whole row shown for a second, or for a row too tall to show whole, every line of its body
+    /// shown whole for a second, at any time this session, which `coverage` keeps. Only while
+    /// the conversation shows in the `foreground`, with nothing over it and the screen awake; a
+    /// row or line that stops showing starts its second again.
+    pub fn read(
+        &mut self,
+        mail: &Mail,
+        coverage: &mut Coverage,
+        foreground: bool,
+        now: Micros,
+    ) -> Option<u32> {
+        let thread = match self.child {
+            Some(Child::Thread(thread)) if foreground => thread,
+            _ => {
+                self.reading.clear();
+                return None;
+            }
         };
-        let shown = messages::shown_unread(thread, self.child_scroll, mail);
-        self.reading.retain(|(id, _)| shown.contains(id));
-        for id in shown {
-            if !self.reading.iter().any(|&(held, _)| held == id) {
-                _ = self.reading.push((id, now));
+        let shown = messages::showing(thread, self.child_scroll, mail);
+        self.reading.retain(|(held, _)| shown.contains(held));
+        for showing in shown {
+            let covered = match showing {
+                messages::Showing::Line { id, bytes } => coverage.covers(id, bytes),
+                messages::Showing::Row(_) => false,
+            };
+            if !covered && !self.reading.iter().any(|&(held, _)| held == showing) {
+                // Full, it is not timed, and stays unread.
+                _ = self.reading.push((showing, now));
             }
         }
-        let at = self
-            .reading
-            .iter()
-            .position(|&(_, since)| now.saturating_sub(since) >= READ_AFTER)?;
-        Some(self.reading.remove(at).0)
+        let mut i = 0;
+        while let Some(&(showing, since)) = self.reading.get(i) {
+            if now.saturating_sub(since) < READ_AFTER {
+                i += 1;
+                continue;
+            }
+            self.reading.remove(i);
+            match showing {
+                messages::Showing::Row(id) => return Some(id),
+                messages::Showing::Line { id, bytes } => {
+                    let whole = coverage.cover(id, bytes)
+                        && mail
+                            .messages
+                            .and_then(|messages| messages.get(id))
+                            .is_some_and(|message| coverage.whole(id, message.text()));
+                    if whole {
+                        return Some(id);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Starts every unread row's and line's second again, as anything over the drawer or the
+    /// screen resting does.
+    pub fn pause_reading(&mut self) {
+        self.reading.clear();
     }
 
     /// When an unread message showing will count as read, if one is showing.

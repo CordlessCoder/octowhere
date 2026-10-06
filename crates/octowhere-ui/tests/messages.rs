@@ -464,3 +464,98 @@ fn a_draft_to_a_removed_member_keeps_its_text_and_cannot_be_sent() {
         texts(&driver)
     );
 }
+
+/// A private message from member 1 too tall for the conversation to show whole, unread, in an
+/// otherwise empty inbox, with the drawer open on its conversation at the top.
+fn tall_message() -> Driver<'static> {
+    let mut driver = start(false);
+    let now = driver.now();
+    let own = own(&driver);
+    // One wide word a line, more lines than the viewport holds.
+    let text = "WWWWWWWWWWWW ".repeat(12);
+    if let Some(mesh) = &mut driver.mesh {
+        mesh.arrive(
+            Arrival {
+                from: 1,
+                to: Some(own),
+                text: text.trim_end(),
+                ago: 0,
+                carriage: Carriage::Received,
+                unread: true,
+            },
+            now,
+        );
+    }
+    driver.wait(6 * SECOND);
+    open_messages(&mut driver);
+    tap(&mut driver, 233, 170);
+    assert_eq!(child(&driver), Some(Child::Thread(member(&driver, 1))));
+    driver
+}
+
+fn scroll_to_bottom(driver: &mut Driver) {
+    driver.swipe(Point::new(233, 380), Point::new(233, 140), 150_000);
+    driver.wait(50_000);
+}
+
+fn scroll_to_top(driver: &mut Driver) {
+    driver.swipe(Point::new(233, 140), Point::new(233, 380), 150_000);
+    driver.wait(50_000);
+}
+
+#[test]
+fn a_tall_message_is_read_only_once_every_line_has_shown_for_a_second() {
+    let mut driver = tall_message();
+    let unread = |driver: &Driver| mesh(driver).messages().unread();
+    driver.wait(3 * SECOND);
+    assert_eq!(unread(&driver), 1, "its top alone does not read it");
+    // A quick look at the bottom is not reading it.
+    scroll_to_bottom(&mut driver);
+    driver.wait(400_000);
+    scroll_to_top(&mut driver);
+    driver.wait(400_000);
+    assert_eq!(unread(&driver), 1, "a fast visit to the bottom");
+    scroll_to_bottom(&mut driver);
+    driver.wait(1_500_000);
+    assert_eq!(unread(&driver), 0, "every line has now shown for a second");
+}
+
+#[test]
+fn closing_the_drawer_keeps_the_lines_already_read() {
+    let mut driver = tall_message();
+    let unread = |driver: &Driver| mesh(driver).messages().unread();
+    driver.wait(2 * SECOND);
+    driver.cover();
+    driver.wait(SECOND);
+    open_messages(&mut driver);
+    tap(&mut driver, 233, 170);
+    scroll_to_bottom(&mut driver);
+    driver.wait(1_500_000);
+    assert_eq!(
+        unread(&driver),
+        0,
+        "the top was read before the drawer closed"
+    );
+}
+
+#[test]
+fn nothing_is_read_while_the_power_off_covers_the_conversation() {
+    let mut driver = tall_message();
+    let unread = |driver: &Driver| mesh(driver).messages().unread();
+    driver.wait(2 * SECOND);
+    scroll_to_bottom(&mut driver);
+    driver.key(octowhere_ui::ui::stage::Key::Long);
+    driver.wait(3 * SECOND);
+    assert!(
+        driver.stage.drawer().is_some(),
+        "the conversation is under it"
+    );
+    assert_eq!(unread(&driver), 1);
+    // CANCEL shows it again, and its lines' second starts again.
+    tap(&mut driver, 133, 118);
+    assert!(driver.stage.power_off().is_none());
+    driver.wait(500_000);
+    assert_eq!(unread(&driver), 1);
+    driver.wait(SECOND);
+    assert_eq!(unread(&driver), 0);
+}

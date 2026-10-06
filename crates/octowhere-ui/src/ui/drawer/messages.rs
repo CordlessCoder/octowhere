@@ -463,19 +463,128 @@ pub fn thread_height(thread: Thread, mail: &Mail) -> i32 {
         .map_or(0, |(_, top, height)| top + height)
 }
 
-/// The unread messages of `thread` whose rows show whole at `scroll`.
-pub fn shown_unread(thread: Thread, scroll: i32, mail: &Mail) -> Vec<u32, 8> {
+/// What shows of an unread message: its whole row, or one line of a message too tall for the
+/// viewport to show whole, by the bytes of its text the line holds.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Showing {
+    Row(u32),
+    Line { id: u32, bytes: (u8, u8) },
+}
+
+/// The most of a conversation's unread rows and lines that show at once.
+pub const SHOWING: usize = 24;
+
+/// What of `thread`'s unread messages shows whole at `scroll`: each row that fits the viewport
+/// and shows whole, and of each row too tall for it, each line of its body whose ink shows
+/// whole where the row's edge shrinking puts it.
+pub fn showing(thread: Thread, scroll: i32, mail: &Mail) -> Vec<Showing, SHOWING> {
     let viewport = viewport(thread, mail);
-    thread_rows(thread, mail)
-        .filter(|(message, top, height)| {
-            let top = viewport.top_left.y + top - scroll;
-            message.unread
-                && top >= viewport.top_left.y
-                && top + height <= viewport.top_left.y + viewport.size.height as i32
+    let (above, below) = (
+        viewport.top_left.y,
+        viewport.top_left.y + viewport.size.height as i32,
+    );
+    let mut shown = Vec::new();
+    for (message, top, height) in thread_rows(thread, mail).filter(|(message, ..)| message.unread) {
+        let top = above + top - scroll;
+        if !visible(viewport, top, height) {
+            continue;
+        }
+        if height <= below - above {
+            if top >= above && top + height <= below {
+                _ = shown.push(Showing::Row(message.id));
+            }
+            continue;
+        }
+        let scaled = Scaled::new(top, height);
+        for (i, line) in lines(mail, message).iter().enumerate() {
+            let ink = top + 27 + i as i32 * BODY_PITCH;
+            let (from, to) = (
+                scaled.y(ink as f32),
+                scaled.y((ink + i32::from(BODY_SIZE)) as f32),
+            );
+            if from >= above as f32 && to <= below as f32 {
+                _ = shown.push(Showing::Line {
+                    id: message.id,
+                    bytes: (line.start as u8, line.end as u8),
+                });
+            }
+        }
+    }
+    shown
+}
+
+/// The most messages too tall to show whole whose lines are read in part at once. Past it a
+/// message's lines are not recorded, so it stays unread rather than count as read on too little.
+const COVERAGE: usize = 16;
+const WORDS: usize = TEXT_MAX.div_ceil(32);
+
+/// Which bytes of each message too tall to show whole have shown on a line for long enough, by
+/// the message, for as long as the stage runs. Kept by bytes rather than lines, a rewrap cannot
+/// carry what was read to text that has not shown.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Coverage {
+    held: Vec<(u32, [u32; WORDS]), COVERAGE>,
+}
+
+impl Coverage {
+    fn bits(&self, id: u32) -> Option<&[u32; WORDS]> {
+        self.held
+            .iter()
+            .find(|(held, _)| *held == id)
+            .map(|(_, bits)| bits)
+    }
+
+    /// Whether every byte from `start` to `end` of message `id` has shown.
+    #[must_use]
+    pub fn covers(&self, id: u32, (start, end): (u8, u8)) -> bool {
+        self.bits(id).is_some_and(|bits| {
+            (usize::from(start)..usize::from(end)).all(|i| bits[i / 32] >> (i % 32) & 1 == 1)
         })
-        .map(|(message, ..)| message.id)
-        .take(8)
-        .collect()
+    }
+
+    /// Notes the bytes from `start` to `end` of message `id` as shown, or says there is no room
+    /// for another message.
+    pub fn cover(&mut self, id: u32, (start, end): (u8, u8)) -> bool {
+        let at = match self.held.iter().position(|(held, _)| *held == id) {
+            Some(at) => at,
+            None => {
+                if self.held.push((id, [0; WORDS])).is_err() {
+                    return false;
+                }
+                self.held.len() - 1
+            }
+        };
+        let bits = &mut self.held[at].1;
+        for i in usize::from(start)..usize::from(end).min(TEXT_MAX) {
+            bits[i / 32] |= 1 << (i % 32);
+        }
+        true
+    }
+
+    /// Whether every byte of `text`, message `id`'s, but its spaces has shown.
+    #[must_use]
+    pub fn whole(&self, id: u32, text: &str) -> bool {
+        self.bits(id).is_some_and(|bits| {
+            text.bytes()
+                .enumerate()
+                .all(|(i, byte)| byte == b' ' || bits[i / 32] >> (i % 32) & 1 == 1)
+        })
+    }
+
+    /// Keeps only the messages `keep` takes: those still held and unread.
+    pub fn retain(&mut self, mut keep: impl FnMut(u32) -> bool) {
+        self.held.retain(|(id, _)| keep(*id));
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.held.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.held.is_empty()
+    }
 }
 
 /// The place in `thread`'s list of the message `id`, its top, if it is there.
@@ -788,6 +897,39 @@ pub fn review(list: &mut List, thread: Thread, text: &str, scroll: i32, mail: &M
 mod tests {
     use super::*;
     use crate::chrome::FontdueRendererCtx;
+
+    #[test]
+    fn coverage_counts_bytes_so_a_rewrap_keeps_what_was_read() {
+        let mut coverage = Coverage::default();
+        let text = "Take the north path and wait";
+        assert!(!coverage.whole(7, text));
+        // Read as two lines.
+        assert!(coverage.cover(7, (0, 14)));
+        assert!(coverage.covers(7, (0, 14)));
+        assert!(!coverage.covers(7, (0, 15)));
+        assert!(!coverage.whole(7, text));
+        assert!(coverage.cover(7, (15, 28)));
+        assert!(
+            coverage.whole(7, text),
+            "the space at the break is not text"
+        );
+        // Wrapped otherwise, the same bytes count, and another message's do not.
+        assert!(coverage.covers(7, (15, 23)));
+        assert!(!coverage.covers(8, (0, 1)));
+        coverage.retain(|id| id != 7);
+        assert!(coverage.is_empty());
+    }
+
+    #[test]
+    fn coverage_full_refuses_rather_than_count_a_message_read() {
+        let mut coverage = Coverage::default();
+        for id in 0..COVERAGE as u32 {
+            assert!(coverage.cover(id, (0, 1)));
+        }
+        assert!(!coverage.cover(99, (0, 4)));
+        assert!(!coverage.whole(99, "Hi"));
+        assert!(coverage.cover(3, (1, 2)), "one held takes more");
+    }
 
     #[test]
     fn a_long_preview_is_cut_with_an_ellipsis() {

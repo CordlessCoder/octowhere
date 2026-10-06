@@ -440,8 +440,15 @@ open:
   fixtures have them. Scrolled down, a conversation keeps the message at the top in place as
   newer ones come.
 - **Read.** A message counts as read once its whole row has shown in its open conversation for
-  a second. Opening the inbox, an event or a toast reads nothing. The node keeps the read
-  state, and a restart loses it.
+  a second. One too tall for the conversation to show whole counts once every line of its body
+  has shown whole for a second, where the row's edge shrinking puts it (the 2026-10-05
+  hand-off). Lines already read stay read while the device runs, closing the drawer included;
+  they are kept by the bytes of the text they held, so a rewrap cannot carry them to text that
+  has not shown. Up to 16 such messages are held read in part, 24 bytes each; past that a
+  message's lines are not recorded and it stays unread. Reading stops, and each row's and
+  line's second starts again, while the screen dims or rests or the power-off covers the
+  drawer. Opening the inbox, an event or a toast reads nothing. The node keeps the read state,
+  and a restart loses it.
 - **Events.** One event a conversation while it has unread messages. A newer message marks it
   unread, moves it to the top and shows a toast; reading the messages reads it. Opening it opens
   the conversation. MARK ALL READ reads events only, and the management page says so: messages

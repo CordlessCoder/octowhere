@@ -442,6 +442,9 @@ pub struct Stage {
     members_spare: Option<alloc::boxed::Box<List>>,
     /// The member the face shows selected, by its device.
     member: Option<[u8; 8]>,
+    /// What of each message too tall to show whole has been read, line by line, which closing
+    /// the drawer keeps.
+    coverage: drawer::Coverage,
     /// The declination where the device last had a fix, and the true heading the member face
     /// turns by.
     declination: Option<f32>,
@@ -545,6 +548,7 @@ impl Stage {
             members_list: None,
             members_spare: None,
             member: None,
+            coverage: drawer::Coverage::default(),
             declination: None,
             true_heading: None,
             messages: None,
@@ -1002,11 +1006,13 @@ impl Stage {
         }
         if self.power_off.is_some() {
             self.step_power_off(now, touch, &mut update);
+            self.drawer.iter_mut().for_each(Drawer::pause_reading);
             return update;
         }
         let contact = touch.is_some() && self.raw_touch[0].is_some();
         let mut touch = touch;
         if self.step_rest(now, contact, &mut touch, &mut update) {
+            self.drawer.iter_mut().for_each(Drawer::pause_reading);
             return update;
         }
         self.step_fade(now, &mut update);
@@ -1053,7 +1059,15 @@ impl Stage {
                 font: &self.renderer,
             };
             drawer.step(&self.events, &mail, now);
-            if let Some(id) = drawer.read(&mail, now) {
+            if let Some(messages) = self.messages.as_deref() {
+                self.coverage
+                    .retain(|id| messages.get(id).is_some_and(|message| message.unread));
+            }
+            let foreground = self.rest == Rest::Awake
+                && self.drawer_sheet.is_open()
+                && self.power_off.is_none()
+                && self.startup.is_none();
+            if let Some(id) = drawer.read(&mail, &mut self.coverage, foreground, now) {
                 if update.mesh.is_none() {
                     update.mesh = Some(Request::Read(id));
                 }
