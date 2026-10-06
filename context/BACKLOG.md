@@ -319,11 +319,20 @@ until the feature set is complete, because profiling an incomplete firmware pric
   clearing a buffer after flushing it. Either changes the buffer hand-off in `util::Swap`, and
   partial redraws rely on a buffer keeping its own pixels, so only damaged spans may be cleared.
 - Subset PP Fraktion Mono Bold to the glyphs in use, to recover some of the 54 KB it added.
-- Bring the self-test's parts up concurrently (owner, 2026-09-28). `bring_up` joins the GNSS
-  settle with one future that probes the clock, touch, IMU and magnetometer in turn, so each
-  part's own waits (touch's 100 ms settle, the magnetometer's trim reads) add up. Give each part
-  its own future and join them. The I²C transactions still take turns on the shared bus mutex;
-  the waits between them overlap. Each part keeps its own deadline.
+- Shorten the self-test (2026-10-06). The clock, touch, IMU and magnetometer now come up
+  together beside the GNSS module's 1 s settle (owner, 2026-09-28), and end about 150 ms after
+  they start instead of 470. The self-test did not get shorter: the settle, then the GNSS
+  module's configuration, about 620 ms, then the radio's check, decide the last part about
+  1.74 s after the first frame either way (`bench/startup-timing`,
+  `docs/logs/display/startup-timing-2026-10-06/`). Two levers, neither built:
+  1. The settle dates from when every start-up reset the module; `50fe5a6` made the reset
+     conditional, and `reset_gnss` waits its own second. It now covers only a module that
+     powers up with the board, and the saved Quectel documents do not say how long that takes.
+     Counted from the timer's start instead of after the expander's reset, it would end about
+     1 s sooner. Checking that needs cold starts, which only the owner can give the boards.
+  2. GNSS could pass at its first answer, and finish its configuration off the radio's path.
+     With both, the parts on the I²C bus become the longest wait, and running them together
+     takes about 320 ms off it.
 - Shorten the GNSS time to first fix (owner, 2026-09-28). The command details are in
   `docs/datasheets/LC76G_AGNSS_Application_Note_V1.1.pdf`. The firmware already sends the RTC's
   time after a reset or power-on, resets the module only when it does not answer, and saves its

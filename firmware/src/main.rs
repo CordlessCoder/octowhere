@@ -29,7 +29,7 @@ use defmt::{debug, error, info, warn};
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_executor::Spawner;
 use embassy_futures::{
-    join::join,
+    join::{join, join5},
     select::{Either, Either4, select, select4},
 };
 use embassy_sync::{
@@ -2151,7 +2151,6 @@ async fn bring_up(spawner: Spawner, parts: Parts, zones: ZoneTracker, mesh: mesh
         error!("[TCA9554] unavailable; the GNSS and LoRa resets and the RF switch are not driven");
     }
 
-    // The parts on the I²C bus come up while the GNSS module settles out of reset.
     let mut rtc = Pcf85063aRtc::new(i2c.clone());
     let touch_rst = Output::new(parts.touch_rst, Level::High, OutputConfig::default());
     let touch_int = Input::new(parts.touch_int, InputConfig::default());
@@ -2180,86 +2179,82 @@ async fn bring_up(spawner: Spawner, parts: Parts, zones: ZoneTracker, mesh: mesh
         ph_qmi8658::I2cConfig::new(board::IMU_I2C_ADDR).with_big_endian(false),
     );
     let mut magnetometer = Bmm350::new(i2c.clone());
-    let ((), (rtc_ok, touch_ok, imu_ok, magnetometer_ok)) = join(
+    // The parts on the I²C bus come up while the GNSS module settles out of reset, each on its
+    // own so that one part's waits overlap the others'. Their transactions still take turns on
+    // the bus.
+    let ((), rtc_ok, touch_ok, imu_ok, magnetometer_ok) = join5(
         async {
             debug!("[GNSS] STARTUP settle_begin");
             Timer::after(Duration::from_secs(1)).await;
             debug!("[GNSS] STARTUP settle_complete");
         },
-        async {
-            let rtc_ok = probe(Part::Clock, CLOCK_DEADLINE, async {
-                rtc.init().await.map_err(|_| Outcome::NoReply)?;
-                match rtc.get_time().await {
-                    Ok(time) => info!(
-                        "[RTC] OK 20{:02}-{:02}-{:02} {:02}:{:02}:{:02}",
-                        time.year, time.month, time.day, time.hours, time.minutes, time.seconds
-                    ),
-                    // It read, and holds no valid time. The clock face shows that.
-                    Err(RtcError::InvalidDateTime) => warn!("[RTC] TIME_INVALID"),
-                    Err(RtcError::I2c(_)) => return Err(Outcome::NoReply),
-                }
-                Ok(())
+        probe(Part::Clock, CLOCK_DEADLINE, async {
+            rtc.init().await.map_err(|_| Outcome::NoReply)?;
+            match rtc.get_time().await {
+                Ok(time) => info!(
+                    "[RTC] OK 20{:02}-{:02}-{:02} {:02}:{:02}:{:02}",
+                    time.year, time.month, time.day, time.hours, time.minutes, time.seconds
+                ),
+                // It read, and holds no valid time. The clock face shows that.
+                Err(RtcError::InvalidDateTime) => warn!("[RTC] TIME_INVALID"),
+                Err(RtcError::I2c(_)) => return Err(Outcome::NoReply),
+            }
+            Ok(())
+        }),
+        probe(Part::Touch, TOUCH_DEADLINE, async {
+            touch.init().await.map_err(|error| match error {
+                Cst9217Error::I2CError(_) | Cst9217Error::ResetError(_) => Outcome::NoReply,
+                Cst9217Error::IDMismatch
+                | Cst9217Error::NoFirmware
+                | Cst9217Error::InvalidCheckcode => Outcome::BadReply,
             })
-            .await;
-            let touch_ok = probe(Part::Touch, TOUCH_DEADLINE, async {
-                touch.init().await.map_err(|error| match error {
-                    Cst9217Error::I2CError(_) | Cst9217Error::ResetError(_) => Outcome::NoReply,
-                    Cst9217Error::IDMismatch
-                    | Cst9217Error::NoFirmware
-                    | Cst9217Error::InvalidCheckcode => Outcome::BadReply,
-                })
-            })
-            .await;
-            let imu_ok = probe(Part::Motion, MOTION_DEADLINE, async {
-                let outcome = |error| match error {
-                    ph_qmi8658::Error::Bus | ph_qmi8658::Error::NotPresent => Outcome::NoReply,
-                    _ => Outcome::BadReply,
-                };
-                imu.init(&mut embassy_time::Delay).await.map_err(outcome)?;
-                imu.set_mode_with_delay(
-                    &mut embassy_time::Delay,
-                    ph_qmi8658::OperatingMode::AccelGyroOnly,
-                )
+        }),
+        probe(Part::Motion, MOTION_DEADLINE, async {
+            let outcome = |error| match error {
+                ph_qmi8658::Error::Bus | ph_qmi8658::Error::NotPresent => Outcome::NoReply,
+                _ => Outcome::BadReply,
+            };
+            imu.init(&mut embassy_time::Delay).await.map_err(outcome)?;
+            imu.set_mode_with_delay(
+                &mut embassy_time::Delay,
+                ph_qmi8658::OperatingMode::AccelGyroOnly,
+            )
+            .await
+            .map_err(outcome)?;
+            imu.set_sync_sample(true).await.map_err(outcome)
+        }),
+        probe(Part::Magnet, MAGNET_DEADLINE, async {
+            let outcome = |error| match error {
+                MagnetometerError::I2c(_) => Outcome::NoReply,
+                _ => Outcome::BadReply,
+            };
+            magnetometer.init().await.map_err(outcome)?;
+            magnetometer
+                .start_normal_mode()
                 .await
-                .map_err(outcome)?;
-                imu.set_sync_sample(true).await.map_err(outcome)
-            })
-            .await;
-            let magnetometer_ok = probe(Part::Magnet, MAGNET_DEADLINE, async {
-                let outcome = |error| match error {
-                    MagnetometerError::I2c(_) => Outcome::NoReply,
-                    _ => Outcome::BadReply,
-                };
-                magnetometer.init().await.map_err(outcome)?;
-                magnetometer
-                    .start_normal_mode()
-                    .await
-                    .map_err(|_| Outcome::NoReply)?;
-                Timer::after(Duration::from_millis(15)).await;
-                if !magnetometer
-                    .data_ready()
-                    .await
-                    .map_err(|_| Outcome::NoReply)?
-                {
-                    return Err(Outcome::BadReply);
-                }
-                let data = magnetometer
-                    .read_data()
-                    .await
-                    .map_err(|_| Outcome::NoReply)?;
-                let compensated = magnetometer.compensate(&data).ok_or(Outcome::BadReply)?;
-                debug!(
-                    "[BMM350] COMP x={}uT y={}uT z={}uT temp={}C",
-                    compensated.x_microtesla,
-                    compensated.y_microtesla,
-                    compensated.z_microtesla,
-                    compensated.temperature_celsius
-                );
-                Ok(())
-            })
-            .await;
-            (rtc_ok, touch_ok, imu_ok, magnetometer_ok)
-        },
+                .map_err(|_| Outcome::NoReply)?;
+            Timer::after(Duration::from_millis(15)).await;
+            if !magnetometer
+                .data_ready()
+                .await
+                .map_err(|_| Outcome::NoReply)?
+            {
+                return Err(Outcome::BadReply);
+            }
+            let data = magnetometer
+                .read_data()
+                .await
+                .map_err(|_| Outcome::NoReply)?;
+            let compensated = magnetometer.compensate(&data).ok_or(Outcome::BadReply)?;
+            debug!(
+                "[BMM350] COMP x={}uT y={}uT z={}uT temp={}C",
+                compensated.x_microtesla,
+                compensated.y_microtesla,
+                compensated.z_microtesla,
+                compensated.temperature_celsius
+            );
+            Ok(())
+        }),
     )
     .await;
 
@@ -2298,6 +2293,7 @@ async fn bring_up(spawner: Spawner, parts: Parts, zones: ZoneTracker, mesh: mesh
     );
     initial_sensor_state.gnss = nmea_parser.state();
 
+    // The radio's check comes last: its start scrolls the self-test to the radio's row.
     let mut lora = None;
     probe(Part::Radio, RADIO_DEADLINE, async {
         lora = Some(

@@ -427,6 +427,10 @@ and draws (`crates/octowhere-ui/tests/heap_requests.rs`); results in `context/BA
 `tools/runtime-screens-bench.sh` drives the 2026-10-04 hand-off's screens on a board, with
 each kind of item a list draws timed apart (`runtime-screens-bench`, summarised by
 `tools/runtime-screens-summary.py`; results in `docs/logs/display/runtime-screens-2026-10-04/`).
+And `bench/startup-timing` logs, 9 s into each boot, when boot reached each step and when each
+part's check started and ended (`startup-timing-bench`, run on the boards by
+`tools/startup-timing.sh` and summarised by `tools/startup-timing-summary.py`; results in
+`docs/logs/display/startup-timing-2026-10-06/`).
 
 ## Concurrency
 
