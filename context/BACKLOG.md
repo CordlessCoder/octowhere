@@ -404,6 +404,17 @@ until the feature set is complete, because profiling an incomplete firmware pric
   does, but no screen says GNSS has failed: the self-test's fault is the only GNSS fault the
   design has, so a running one needs a design round. Strain relief on the IPEX cable addresses
   the trigger itself.
+- Left by the fixes to the rust-review evaluations' findings (2026-10-06; the record is
+  `~/git/rust-review-workspace/FINDINGS.md`, "Outcome"):
+  - Powering off restarts the board when it is still running 3 s after the PMIC was told to cut
+    the power (owner). Not tried on a board: one whose PMIC does cut the power needs someone at
+    the power key to come back, and the boards have no battery, so whether a USB supply keeps
+    them running through a power-off is not known either.
+  - The display's flush now streams into the window `Co5300::set_window` returns. Both boards
+    ran it with no errors logged; look at a panel through a few page turns and a drag of the
+    settings panel to confirm nothing is offset.
+  - The CO5300's reset sends a second low pulse straight after the first, from the vendor's
+    driver; the datasheet asks for one. Dropping it needs a board start-up to confirm.
 
 ## Deferred, with detail elsewhere
 
