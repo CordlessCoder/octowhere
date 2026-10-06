@@ -1651,6 +1651,27 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                 self.inbox.relayed(name);
             }
         }
+        if octowhere_mesh::relays::BENCH_DESIGNATE.load(core::sync::atomic::Ordering::Relaxed) {
+            let designated = octowhere_mesh::Ids::from_bits(
+                octowhere_mesh::relays::BENCH_DESIGNATED[usize::from(header.sender)]
+                    .load(core::sync::atomic::Ordering::Relaxed),
+            );
+            for &name in absorbed.carried_names() {
+                let new = absorbed.arrivals().contains(&name);
+                if !designated.contains(own) {
+                    // Named by nobody yet: left to a sender that names it.
+                    if new {
+                        self.messages.sent(name);
+                    }
+                } else if !new
+                    && name.0 != own
+                    && !self.relays.bench_carried(own, name)
+                    && self.messages.get(name).is_some()
+                {
+                    self.messages.mark(name);
+                }
+            }
+        }
         octowhere_mesh::relays::BENCH_NAMED_SETS.answer(
             own,
             header.sender,
@@ -1804,6 +1825,12 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             },
         );
         let len = builder.seal(group.key());
+        if octowhere_mesh::relays::BENCH_DESIGNATE.load(core::sync::atomic::Ordering::Relaxed) {
+            let designated =
+                octowhere_mesh::relays::bench_designate(&self.relays, own, carried.neighbours);
+            octowhere_mesh::relays::BENCH_DESIGNATED[usize::from(own)]
+                .store(designated.bits(), core::sync::atomic::Ordering::Relaxed);
+        }
         let sent = self.radio.transmit_if_clear(&packet[..len]).await;
         let Sent::Done { started, finished } = sent else {
             self.back_off(sent, own);

@@ -11,12 +11,18 @@
 //! how many times a message goes again for a neighbour not heard passing it on, and with `a` a
 //! neighbour that holds a message a sender carries a second time answers so, or with `n` a
 //! message sent again names the neighbours still waited for and a named one that holds it
-//! answers so, either at no cost on the air. `32:3` is the firmware's. Paths are absolute, since the test runs in the crate's directory.
+//! answers so, either at no cost on the air; `d` has each sender name the neighbours that are to
+//! pass its messages on, as few as reach every node two hops away, and `dn` adds `n` to it.
+//! `32:3` is the firmware's. Paths are absolute, since the test runs in the crate's directory.
+//! `RELAY_COST_SEEDS=a..b` runs those seeds, `RELAY_COST_CHECK=scan` checks for the end of each
+//! phase by scanning every line logged, as the bench first did, and `[timing]` lines on stderr
+//! give each phase's time on the host.
 //! `RELAY_COST_SHAPES` names the shapes to run, all by default, and `RELAY_COST_KIND=removal`
 //! has node 0 remove the last node instead, until every other member holds its key message.
 
 use std::{fmt::Write as _, io::Write as _};
 
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use octowhere_node::{Command, view::Text};
 use octowhere_sim::{Config, Link, Sim, UTC0_S, grouped};
 
@@ -49,6 +55,8 @@ struct Variant {
     answer: bool,
     /// Whether a message sent again names the neighbours waited for, and only those answer.
     named: bool,
+    /// Whether each sender names the neighbours that are to pass its messages on.
+    designate: bool,
 }
 
 impl Variant {
@@ -57,9 +65,11 @@ impl Variant {
             "steps{}-again{}{}",
             self.record_steps,
             self.resends,
-            match (self.answer, self.named) {
-                (true, _) => "-answered",
-                (_, true) => "-named",
+            match (self.answer, self.named, self.designate) {
+                (true, _, _) => "-answered",
+                (_, true, true) => "-designated-named",
+                (_, false, true) => "-designated",
+                (_, true, _) => "-named",
                 _ => "",
             }
         )
@@ -71,6 +81,10 @@ impl Variant {
         octowhere_mesh::relays::BENCH_RESENDS.store(self.resends, Ordering::Relaxed);
         octowhere_mesh::relays::BENCH_ANSWER.store(self.answer, Ordering::Relaxed);
         octowhere_mesh::relays::BENCH_NAMED.store(self.named, Ordering::Relaxed);
+        octowhere_mesh::relays::BENCH_DESIGNATE.store(self.designate, Ordering::Relaxed);
+        for designated in &octowhere_mesh::relays::BENCH_DESIGNATED {
+            designated.store(0, Ordering::Relaxed);
+        }
         octowhere_mesh::relays::BENCH_ANSWERS.clear();
         octowhere_mesh::relays::BENCH_NAMED_SETS.clear();
     }
@@ -205,7 +219,20 @@ struct Run {
     airtime_ms: f64,
 }
 
-fn run(shape: &Shape, seed: u64, variant: Variant) -> Run {
+/// Shows `phase` of a run on `bar`, up to `limit` seconds of virtual time.
+fn phase(bar: &ProgressBar, phase: &str, limit: u64) {
+    bar.set_message(phase.to_owned());
+    bar.set_length(limit);
+    bar.set_position(0);
+}
+
+fn run(
+    shape: &Shape,
+    seed: u64,
+    variant: Variant,
+    bar: &ProgressBar,
+    multi: &MultiProgress,
+) -> Run {
     variant.apply();
     let mut sim = Sim::new(seed);
     sim.record(true);
@@ -221,32 +248,97 @@ fn run(shape: &Shape, seed: u64, variant: Variant) -> Run {
         sim.link(b, a, Some(link));
     }
     let nodes = shape.nodes;
-    let met = sim.run_while_not(60 * 60, |sim| {
-        (0..nodes).all(|node| {
-            (0..nodes)
-                .filter(|&other| other != node && sim.link_of(other, node).is_some())
-                .all(|other| sim.count(node, &format!("heard id={other} ")) >= 1)
+    // The old checks scan every line logged at each event; the default reads only new lines.
+    let scan = std::env::var("RELAY_COST_CHECK").is_ok_and(|check| check == "scan");
+    let clock = std::time::Instant::now();
+    phase(bar, "meeting", 60 * 60);
+    let start = sim.now_us();
+    let met = if scan {
+        sim.run_while_not(60 * 60, |sim| {
+            bar.set_position((sim.now_us() - start) / 1_000_000);
+            (0..nodes).all(|node| {
+                (0..nodes)
+                    .filter(|&other| other != node && sim.link_of(other, node).is_some())
+                    .all(|other| sim.count(node, &format!("heard id={other} ")) >= 1)
+            })
         })
-    });
+    } else {
+        let wanted: Vec<u64> = (0..nodes)
+            .map(|node| {
+                (0..nodes)
+                    .filter(|&other| other != node && sim.link_of(other, node).is_some())
+                    .fold(0, |set, other| set | 1 << other)
+            })
+            .collect();
+        let mut heard = vec![0u64; nodes];
+        let mut met = 0;
+        let mut cursor = 0;
+        sim.run_while_not(60 * 60, |sim| {
+            bar.set_position((sim.now_us() - start) / 1_000_000);
+            let (lines, total) = sim.lines_since(cursor);
+            cursor = total;
+            for line in lines {
+                let Some(rest) = line.text.strip_prefix("[MESH] heard id=") else {
+                    continue;
+                };
+                let Some(id) = rest.split(' ').next().and_then(|id| id.parse::<u32>().ok()) else {
+                    continue;
+                };
+                let before = heard[line.node] & wanted[line.node] == wanted[line.node];
+                heard[line.node] |= 1 << id;
+                if !before && heard[line.node] & wanted[line.node] == wanted[line.node] {
+                    met += 1;
+                }
+            }
+            met == nodes
+        })
+    };
     assert!(met, "{}: the nodes met", shape.name);
+    let met_at = clock.elapsed();
     // A floor and more, so that every neighbour's report holds its whole reach.
+    phase(bar, "settling", 180);
     sim.run_for(180);
+    let settled_at = clock.elapsed();
     let from = sim.now_us();
     let removal = std::env::var("RELAY_COST_KIND").is_ok_and(|kind| kind == "removal");
-    let reached = if removal {
+    let (needle, wanted) = match removal {
         // Every member but the one removed holds its key message.
+        true => (" asks to remove ", 1..nodes - 1),
+        false => ("[MSG] from 0 to all", 1..nodes),
+    };
+    if removal {
         sim.command(0, Command::Remove((nodes - 1) as u8));
-        sim.run_while_not(30 * 60, |sim| {
-            (1..nodes - 1).all(|node| sim.count(node, " asks to remove ") >= 1)
-        })
     } else {
         let text = Text::new(b"Meet at the bridge.").unwrap();
         sim.command(0, Command::Send { to: None, text });
-        sim.run_while_not(10 * 60, |sim| {
-            (1..nodes).all(|node| sim.count(node, "[MSG] from 0 to all") >= 1)
+    }
+    let limit = if removal { 30 * 60 } else { 10 * 60 };
+    phase(bar, if removal { "removal" } else { "flood" }, limit);
+    let reached = if scan {
+        sim.run_while_not(limit, |sim| {
+            bar.set_position((sim.now_us() - from) / 1_000_000);
+            wanted.clone().all(|node| sim.count(node, needle) >= 1)
+        })
+    } else {
+        let mut done = vec![false; nodes];
+        let mut count = 0;
+        let mut cursor = sim.lines_since(0).1;
+        sim.run_while_not(limit, |sim| {
+            bar.set_position((sim.now_us() - from) / 1_000_000);
+            let (lines, total) = sim.lines_since(cursor);
+            cursor = total;
+            for line in lines {
+                if wanted.contains(&line.node) && !done[line.node] && line.text.contains(needle) {
+                    done[line.node] = true;
+                    count += 1;
+                }
+            }
+            count == wanted.len()
         })
     };
     let reached_s = reached.then(|| (sim.now_us() - from) as f64 / 1e6);
+    let tail_from = clock.elapsed();
+    phase(bar, "tail", 30);
     sim.run_for(30);
     if let Ok(dir) = std::env::var("RELAY_COST_LINES") {
         let mut dump = String::new();
@@ -273,6 +365,16 @@ fn run(shape: &Shape, seed: u64, variant: Variant) -> Run {
             }
         }
     }
+    let ran_at = clock.elapsed();
+    multi.suspend(|| eprintln!(
+        "[timing] {} seed {seed}: meet {:.2} s, settle {:.2} s, {} {:.2} s, tail and counts {:.2} s",
+        shape.name,
+        met_at.as_secs_f64(),
+        (settled_at - met_at).as_secs_f64(),
+        if removal { "removal" } else { "flood" },
+        (tail_from - settled_at).as_secs_f64(),
+        (ran_at - tail_from).as_secs_f64(),
+    ));
     let sent: Vec<_> = sim
         .recorded()
         .into_iter()
@@ -326,15 +428,40 @@ fn flood_cost() {
                 record_steps,
                 resends,
                 answer: mode == Some("a"),
-                named: mode == Some("n"),
+                named: matches!(mode, Some("n" | "dn")),
+                designate: matches!(mode, Some("d" | "dn")),
             }
         })
         .collect();
+    // `RELAY_COST_SEEDS=a..b` runs those seeds, inclusive.
+    let seeds = std::env::var("RELAY_COST_SEEDS").map_or(1..=SEEDS, |seeds| {
+        let (from, to) = seeds.split_once("..").expect("a..b");
+        from.parse().unwrap()..=to.parse().unwrap()
+    });
+    let multi = MultiProgress::new();
+    let runs = multi.add(ProgressBar::new(
+        (variants.len() * shapes.len() * seeds.clone().count()) as u64,
+    ));
+    runs.set_style(
+        ProgressStyle::with_template(
+            "{elapsed_precise} [{bar:30}] {pos}/{len} runs, eta {eta} {msg}",
+        )
+        .unwrap()
+        .progress_chars("=> "),
+    );
+    let virtual_time = multi.add(ProgressBar::new(0));
+    virtual_time.set_style(
+        ProgressStyle::with_template("  {msg:>8} [{bar:30}] {pos}/{len} s of virtual time")
+            .unwrap()
+            .progress_chars("=> "),
+    );
     let mut out = String::new();
     for &variant in &variants {
         for shape in &shapes {
-            for seed in 1..=SEEDS {
-                let run = run(shape, seed, variant);
+            for seed in seeds.clone() {
+                runs.set_message(format!("{} {} seed {seed}", variant.name(), shape.name));
+                let run = run(shape, seed, variant, &virtual_time, &multi);
+                runs.inc(1);
                 let edges = shape
                     .edges
                     .iter()
@@ -353,18 +480,22 @@ fn flood_cost() {
                     run.packets,
                     run.airtime_ms,
                 );
-                println!(
-                    "{} {} seed {seed}: reached {:?} s, {} packets carried it, {} again",
-                    variant.name(),
-                    shape.name,
-                    run.reached_s,
-                    run.carrying,
-                    run.again
-                );
+                multi.suspend(|| {
+                    println!(
+                        "{} {} seed {seed}: reached {:?} s, {} packets carried it, {} again",
+                        variant.name(),
+                        shape.name,
+                        run.reached_s,
+                        run.carrying,
+                        run.again
+                    )
+                });
                 let _ = writeln!(out, "{line}");
             }
         }
     }
+    virtual_time.finish_and_clear();
+    runs.finish();
     if let Ok(path) = std::env::var("RELAY_COST_OUT") {
         std::fs::File::create(path)
             .unwrap()
