@@ -1204,11 +1204,17 @@ struct GnssTask {
     exio: SharedI2cDevice,
     /// The RTC, read for the time a reset clears; `sensor_task` owns setting it.
     rtc: Option<Pcf85063aRtc<SharedI2cDevice>>,
+    /// The module answered at boot, which only checked that it does, and still needs its
+    /// configuration. One that did not is left to the reset a stuck module gets.
+    configure: bool,
+    /// Once configured, it needs the RTC's time, which a reset or a power-on clears.
+    reference_time: bool,
 }
 
-/// Reads the GNSS module around each second's burst of NMEA, publishes its state, and times
-/// UTC from when each burst is first seen. Between bursts it leaves the bus alone. A module that
-/// stops answering, or answers with nothing, is reset and configured again.
+/// Configures the GNSS module if boot found it answering, then reads it around each second's
+/// burst of NMEA, publishes its state, and times UTC from when each burst is first seen. Between
+/// bursts it leaves the bus alone. A module that stops answering, or answers with nothing, is
+/// reset and configured again.
 #[embassy_executor::task]
 async fn gnss_task(task: GnssTask) {
     let GnssTask {
@@ -1216,7 +1222,19 @@ async fn gnss_task(task: GnssTask) {
         mut nmea_parser,
         mut exio,
         mut rtc,
+        configure,
+        reference_time,
     } = task;
+    if configure {
+        let configured = configure_gnss(&mut gnss, &mut nmea_parser).await;
+        info!("[GNSS] configured={}", configured.is_ok());
+        if configured.is_ok()
+            && reference_time
+            && let Some(rtc) = &mut rtc
+        {
+            send_reference_time(&mut gnss, rtc).await;
+        }
+    }
     let mut nmea = [0u8; 512];
     let mut seconds = SecondEstimator::new();
     // When the last burst was seen, which times the reads before a fix.
@@ -1886,6 +1904,8 @@ const RADIO_DEADLINE: Duration = Duration::from_millis(500);
 /// With a fix, how often the GNSS module copies its navigation data to its flash, so a loss of
 /// power keeps the satellites' orbits and the last position. Its RTC RAM keeps them otherwise.
 const NAVIGATION_SAVE_INTERVAL: Duration = Duration::from_secs(30 * 60);
+/// How long the GNSS module refuses commands after it powers up or leaves reset.
+const GNSS_SETTLE: Duration = Duration::from_secs(1);
 /// How long the GNSS gets to answer before it is reset, and in all, a reset and its settle
 /// included.
 const GNSS_ANSWER: Duration = Duration::from_millis(1500);
@@ -2146,7 +2166,6 @@ async fn bring_up(spawner: Spawner, parts: Parts, zones: ZoneTracker, mesh: mesh
         );
     }
     let power = answered.then_some(power);
-    let mut initial_sensor_state = SensorSnapshot::default();
     if reset_lora(i2c.clone()).await.is_err() {
         error!("[TCA9554] unavailable; the GNSS and LoRa resets and the RF switch are not driven");
     }
@@ -2179,13 +2198,15 @@ async fn bring_up(spawner: Spawner, parts: Parts, zones: ZoneTracker, mesh: mesh
         ph_qmi8658::I2cConfig::new(board::IMU_I2C_ADDR).with_big_endian(false),
     );
     let mut magnetometer = Bmm350::new(i2c.clone());
-    // The parts on the I²C bus come up while the GNSS module settles out of reset, each on its
-    // own so that one part's waits overlap the others'. Their transactions still take turns on
-    // the bus.
+    // The parts on the I²C bus come up while the GNSS module settles, each on its own so that
+    // one part's waits overlap the others'. Their transactions still take turns on the bus.
     let ((), rtc_ok, touch_ok, imu_ok, magnetometer_ok) = join5(
         async {
+            // Counted from the timer's start: the module powered up with the board, before it.
+            // A module that a restart left held in reset is released by `reset_lora`, just before
+            // this, and has `GNSS_ANSWER` to start in instead.
             debug!("[GNSS] STARTUP settle_begin");
-            Timer::after(Duration::from_secs(1)).await;
+            Timer::at(Instant::MIN + GNSS_SETTLE).await;
             debug!("[GNSS] STARTUP settle_complete");
         },
         probe(Part::Clock, CLOCK_DEADLINE, async {
@@ -2259,18 +2280,21 @@ async fn bring_up(spawner: Spawner, parts: Parts, zones: ZoneTracker, mesh: mesh
     .await;
 
     let mut gnss = Lc76g::new(i2c.clone(), embassy_time::Delay);
-    let mut nmea_parser = NmeaParser::new();
     // Resetting the module clears its time, so it is reset only when it does not answer: a module
     // left stuck by the firmware before this one needs it.
     let mut gnss_reset = false;
+    // The check passes once the module answers. `gnss_task` configures it, off the radio's path.
     let gnss_ok = probe(Part::Gnss, GNSS_DEADLINE, async {
-        let answered = with_timeout(GNSS_ANSWER, configure_gnss(&mut gnss, &mut nmea_parser)).await;
-        if matches!(answered, Ok(Ok(()))) {
+        if matches!(
+            with_timeout(GNSS_ANSWER, answer_gnss(&mut gnss)).await,
+            Ok(Ok(()))
+        ) {
             return Ok(());
         }
         warn!("[GNSS] no answer; resetting it");
         gnss_reset = true;
-        reset_gnss(&mut i2c.clone(), &mut gnss, &mut nmea_parser).await
+        restart_gnss(&mut i2c.clone()).await?;
+        answer_gnss(&mut gnss).await
     })
     .await;
     // The module starts without a time after a reset or a power-on. A reset of the chip alone,
@@ -2279,9 +2303,6 @@ async fn bring_up(spawner: Spawner, parts: Parts, zones: ZoneTracker, mesh: mesh
         esp_hal::system::reset_reason(),
         Some(esp_hal::rtc_cntl::SocResetReason::ChipPowerOn)
     );
-    if gnss_ok && rtc_ok && (gnss_reset || powered_on) {
-        send_reference_time(&mut gnss, &mut rtc).await;
-    }
     info!(
         "[BOOT] answered: power={} clock={} touch={} motion={} magnet={} gnss={}",
         power.is_some(),
@@ -2291,7 +2312,6 @@ async fn bring_up(spawner: Spawner, parts: Parts, zones: ZoneTracker, mesh: mesh
         magnetometer_ok,
         gnss_ok
     );
-    initial_sensor_state.gnss = nmea_parser.state();
 
     // The radio's check comes last: its start scrolls the self-test to the radio's row.
     let mut lora = None;
@@ -2350,14 +2370,16 @@ async fn bring_up(spawner: Spawner, parts: Parts, zones: ZoneTracker, mesh: mesh
             sensor: SensorTask {
                 power,
                 rtc: rtc_ok.then_some(rtc),
-                state: initial_sensor_state,
+                state: SensorSnapshot::default(),
                 rtc_sync_pending: true,
             },
             gnss: GnssTask {
                 gnss,
-                nmea_parser,
+                nmea_parser: NmeaParser::new(),
                 exio: i2c.clone(),
                 rtc: rtc_ok.then(|| Pcf85063aRtc::new(i2c.clone())),
+                configure: gnss_ok,
+                reference_time: gnss_reset || powered_on,
             },
             // The compass needs the IMU for its tilt. Without it, it shows NO DATA.
             motion: imu_ok.then(|| MotionTask {
@@ -2416,11 +2438,27 @@ async fn reset_gnss(
     gnss: &mut Lc76g<SharedI2cDevice, embassy_time::Delay>,
     nmea_parser: &mut NmeaParser,
 ) -> Result<(), Outcome> {
+    restart_gnss(exio).await?;
+    configure_gnss(gnss, nmea_parser).await
+}
+
+/// Resets the GNSS module and lets it start.
+async fn restart_gnss(exio: &mut SharedI2cDevice) -> Result<(), Outcome> {
     pulse_gnss_reset(exio)
         .await
         .map_err(|()| Outcome::NoReply)?;
-    Timer::after(Duration::from_secs(1)).await;
-    configure_gnss(gnss, nmea_parser).await
+    Timer::after(GNSS_SETTLE).await;
+    Ok(())
+}
+
+/// Reads how much NMEA the GNSS module holds, which shows that it answers and changes nothing.
+async fn answer_gnss(
+    gnss: &mut Lc76g<SharedI2cDevice, embassy_time::Delay>,
+) -> Result<(), Outcome> {
+    gnss.nmea_length()
+        .await
+        .map(drop)
+        .map_err(|_| Outcome::NoReply)
 }
 
 /// Sends the GNSS module the RTC's time, which it starts without after a reset or a power-on.

@@ -128,3 +128,131 @@
       GNSS       624.1 ms  (624.0..3133.8)  answered
       RADIO        7.9 ms  (7.9..121.5)  answered
     power-on resets: {'true'}
+== results/gnss-warm
+  board 1A38?: 5 boots
+    bring_up enter            906.6 ms  (906.6..906.6, n=5)
+    frame_loop first          906.8 ms  (906.8..906.8, n=5)
+    i2c powered               986.8 ms  (986.7..986.8, n=5)
+    POWER start               987.2 ms  (987.2..987.2, n=5)
+    POWER end                 989.1 ms  (989.1..989.1, n=5)
+    exio reset               1010.8 ms  (1010.8..1010.8, n=5)
+    CLOCK start              1011.1 ms  (1011.0..1011.1, n=5)
+    TOUCH start              1011.1 ms  (1011.1..1011.1, n=5)
+    MOTION start             1011.2 ms  (1011.2..1011.2, n=5)
+    MAGNET start             1011.3 ms  (1011.3..1011.3, n=5)
+    gnss-settle end          1011.3 ms  (1011.3..1011.3, n=5)
+    CLOCK end                1011.9 ms  (1011.9..1011.9, n=5)
+    TOUCH end                1122.4 ms  (1122.4..1122.4, n=5)
+    MAGNET end               1155.3 ms  (1155.3..1155.4, n=5)
+    MOTION end               1163.5 ms  (1163.5..1163.5, n=5)
+    GNSS start               1163.6 ms  (1163.6..1163.6, n=5)
+    GNSS end                 1174.4 ms  (1174.4..1174.4, n=5)
+    RADIO start              1174.6 ms  (1174.6..1174.6, n=5)
+    RADIO end                1177.4 ms  (1177.4..1177.4, n=5)
+    bring_up exit            1222.3 ms  (1222.3..1222.3, n=5)
+    GNSS-config end          1433.6 ms  (1432.1..1452.7, n=5)
+    startup over             6372.3 ms  (6366.6..6377.0, n=5)
+    checks, start to end:
+      POWER        1.9 ms  (1.9..1.9)  answered
+      CLOCK        0.8 ms  (0.8..0.8)  answered
+      TOUCH      111.3 ms  (111.3..111.3)  answered
+      MAGNET     144.1 ms  (144.1..144.1)  answered
+      MOTION     152.3 ms  (152.3..152.3)  answered
+      GNSS        10.8 ms  (10.8..10.8)  answered
+      RADIO        2.8 ms  (2.8..2.8)  answered
+    power-on resets: {'true'}
+  board 1C1C?: 5 boots
+    bring_up enter            852.4 ms  (852.4..852.4, n=5)
+    frame_loop first          852.6 ms  (852.5..852.6, n=5)
+    i2c powered               932.5 ms  (932.5..932.5, n=5)
+    POWER start               933.0 ms  (933.0..933.0, n=5)
+    POWER end                 934.8 ms  (934.8..934.8, n=5)
+    exio reset                956.6 ms  (956.6..956.6, n=5)
+    CLOCK start               956.8 ms  (956.8..956.8, n=5)
+    TOUCH start               956.9 ms  (956.9..956.9, n=5)
+    MOTION start              956.9 ms  (956.9..956.9, n=5)
+    MAGNET start              957.0 ms  (957.0..957.0, n=5)
+    CLOCK end                 957.6 ms  (957.6..957.6, n=5)
+    gnss-settle end          1000.0 ms  (1000.0..1000.0, n=5)
+    TOUCH end                1068.2 ms  (1068.2..1068.2, n=5)
+    MAGNET end               1101.0 ms  (1101.0..1101.0, n=5)
+    MOTION end               1109.2 ms  (1109.2..1109.2, n=5)
+    GNSS start               1109.3 ms  (1109.3..1109.3, n=5)
+    GNSS end                 1120.1 ms  (1120.1..1120.1, n=5)
+    RADIO start              1120.3 ms  (1120.3..1120.3, n=5)
+    RADIO end                1123.1 ms  (1123.1..1123.1, n=5)
+    bring_up exit            1168.0 ms  (1168.0..1168.0, n=5)
+    GNSS-config end          1823.2 ms  (1821.2..1865.3, n=5)
+    startup over             6318.8 ms  (6317.9..6320.7, n=5)
+    checks, start to end:
+      POWER        1.9 ms  (1.9..1.9)  answered
+      CLOCK        0.8 ms  (0.8..0.8)  answered
+      TOUCH      111.3 ms  (111.3..111.3)  answered
+      MAGNET     144.0 ms  (144.0..144.0)  answered
+      MOTION     152.3 ms  (152.3..152.3)  answered
+      GNSS        10.8 ms  (10.8..10.8)  answered
+      RADIO        2.8 ms  (2.8..2.8)  answered
+    power-on resets: {'true'}
+== results/gnss-cold
+  board 1a38: 5 boots
+    bring_up enter            909.2 ms  (908.0..909.2, n=5)
+    frame_loop first          909.4 ms  (908.2..909.4, n=5)
+    i2c powered               989.3 ms  (988.1..989.3, n=5)
+    POWER start               989.8 ms  (988.6..989.8, n=5)
+    POWER end                 991.6 ms  (990.5..991.7, n=5)
+    exio reset               1013.4 ms  (1012.2..1013.4, n=5)
+    CLOCK start              1013.6 ms  (1012.4..1013.6, n=5)
+    TOUCH start              1013.7 ms  (1012.5..1013.7, n=5)
+    MOTION start             1013.7 ms  (1012.5..1013.7, n=5)
+    MAGNET start             1013.8 ms  (1012.6..1013.8, n=5)
+    gnss-settle end          1013.9 ms  (1012.7..1013.9, n=5)
+    CLOCK end                1014.4 ms  (1013.3..1014.5, n=5)
+    TOUCH end                1125.0 ms  (1123.8..1125.0, n=5)
+    MAGNET end               1157.8 ms  (1156.6..1157.8, n=5)
+    MOTION end               1166.0 ms  (1164.8..1166.0, n=5)
+    GNSS start               1166.2 ms  (1165.0..1166.2, n=5)
+    GNSS end                 1219.9 ms  (1218.7..1220.1, n=5)
+    RADIO start              1220.1 ms  (1218.9..1220.3, n=5)
+    RADIO end                1222.4 ms  (1221.2..1222.6, n=5)
+    GNSS-config end          1910.9 ms  (1889.1..1911.3, n=5)
+    startup over             6401.5 ms  (6400.4..6410.3, n=5)
+    checks, start to end:
+      POWER        1.9 ms  (1.9..1.9)  answered
+      CLOCK        0.9 ms  (0.9..0.9)  answered
+      TOUCH      111.3 ms  (111.3..111.3)  answered
+      MAGNET     144.0 ms  (144.0..144.0)  answered
+      MOTION     152.3 ms  (152.3..152.3)  answered
+      GNSS        53.9 ms  (53.8..53.9)  answered
+      RADIO        2.3 ms  (2.3..2.3)  answered
+    power-on resets: {'true'}
+  board 1c1c: 5 boots
+    bring_up enter            852.4 ms  (852.4..853.7, n=5)
+    frame_loop first          852.6 ms  (852.6..853.9, n=5)
+    i2c powered               932.6 ms  (932.6..933.9, n=5)
+    POWER start               933.0 ms  (933.0..934.3, n=5)
+    POWER end                 934.9 ms  (934.9..936.2, n=5)
+    exio reset                956.6 ms  (956.6..958.0, n=5)
+    CLOCK start               956.8 ms  (956.8..958.1, n=5)
+    TOUCH start               956.9 ms  (956.9..958.2, n=5)
+    MOTION start              956.9 ms  (956.9..958.3, n=5)
+    MAGNET start              957.0 ms  (957.0..958.3, n=5)
+    CLOCK end                 957.7 ms  (957.7..959.0, n=5)
+    gnss-settle end          1000.0 ms  (1000.0..1000.0, n=5)
+    TOUCH end                1068.2 ms  (1068.2..1069.5, n=5)
+    MAGNET end               1101.0 ms  (1101.0..1102.4, n=5)
+    MOTION end               1109.2 ms  (1109.2..1110.6, n=5)
+    GNSS start               1109.4 ms  (1109.4..1110.7, n=5)
+    GNSS end                 1163.3 ms  (1163.3..1164.6, n=5)
+    RADIO start              1163.5 ms  (1163.5..1164.9, n=5)
+    RADIO end                1165.8 ms  (1165.7..1167.1, n=5)
+    GNSS-config end          1854.4 ms  (1854.3..1896.7, n=5)
+    startup over             6350.5 ms  (6346.6..6367.9, n=5)
+    checks, start to end:
+      POWER        1.9 ms  (1.9..1.9)  answered
+      CLOCK        0.9 ms  (0.9..0.9)  answered
+      TOUCH      111.3 ms  (111.3..111.3)  answered
+      MAGNET     144.0 ms  (144.0..144.0)  answered
+      MOTION     152.3 ms  (152.3..152.3)  answered
+      GNSS        53.9 ms  (53.9..54.0)  answered
+      RADIO        2.3 ms  (2.3..2.3)  answered
+    power-on resets: {'true'}

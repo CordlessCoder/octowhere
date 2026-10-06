@@ -429,8 +429,10 @@ each kind of item a list draws timed apart (`runtime-screens-bench`, summarised 
 `tools/runtime-screens-summary.py`; results in `docs/logs/display/runtime-screens-2026-10-04/`).
 And `bench/startup-timing` logs, 9 s into each boot, when boot reached each step and when each
 part's check started and ended (`startup-timing-bench`, run on the boards by
-`tools/startup-timing.sh` and summarised by `tools/startup-timing-summary.py`; results in
-`docs/logs/display/startup-timing-2026-10-06/`).
+`tools/startup-timing.sh` and summarised by `tools/startup-timing-summary.py`), and keeps them
+for a debugger to read without a reset (`tools/startup-timing-read.py`), which a cold start
+needs; `tools/startup-timing-cold.sh` reads each board every time it is plugged back in.
+Results in `docs/logs/display/startup-timing-2026-10-06/`.
 
 ## Concurrency
 
@@ -457,11 +459,12 @@ Core 1 owns the display SPI/DMA path.
   board off, and restarts the board if it is still running 3 s later (owner, 2026-10-06). Every
   write reaches `settings_task` through `firmware/src/saves.rs`, which keeps each setting's
   latest change until it is saved, so that none is dropped.
-- `gnss_task`, on `BUS_EXECUTOR`, owns the GNSS module. The module sends a burst of NMEA each
-  second, and the task reads it only from 100 ms before the burst is due until it has drained,
-  leaving the bus alone between. It publishes the parsed state through `GNSS_STATE` and times
-  UTC on the local timer from each fix's burst (`gnss_time`, read with `gps_utc`). When the
-  frame loop sets `POWER_OFF`, once the panel is off, it has the module save its navigation
+- `gnss_task`, on `BUS_EXECUTOR`, owns the GNSS module. `bring_up` checks only that the module
+  answers, so the task first configures it, and sends it the RTC's time after a reset or a
+  power-on. The module sends a burst of NMEA each second, and the task reads it only from
+  100 ms before the burst is due until it has drained, leaving the bus alone between. It
+  publishes the parsed state through `GNSS_STATE` and times UTC on the local timer from each
+  fix's burst (`gnss_time`, read with `gps_utc`). When the frame loop sets `POWER_OFF`, once the panel is off, it has the module save its navigation
   data, waits up to 2 s for it to say it has, and sets `GNSS_PARKED`. After 8 failed reads in a
   row, or 10 s of reads with nothing in them, it resets the module through the I/O expander, at most once a minute, configures it again and
   sends it the RTC's time. It reports through `GNSS_HEALTH` whether it is resetting the module,
