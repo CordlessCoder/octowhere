@@ -11,6 +11,8 @@ use crate::{IDS, Ids, messages::MessageId};
 pub const RELAY_WAIT_US: i64 = 10_000_000;
 /// How many times a node sends a message again for a neighbour it does not hear pass it on.
 pub const RESENDS: u8 = 3;
+/// Bench: how many times a message goes again, in place of [`RESENDS`].
+pub static BENCH_RESENDS: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(RESENDS);
 /// The messages a node waits on at once. Past that the oldest is dropped, and is left to the
 /// summaries.
 const WAITING: usize = 16;
@@ -27,6 +29,66 @@ struct Waiting {
     until: Option<i64>,
     /// How many times it has gone again.
     resends: u8,
+}
+
+/// Bench: answers to a message carried again, delivered at no cost: (to, from, message).
+pub struct BenchAnswers(core::cell::UnsafeCell<heapless::Vec<(u8, u8, MessageId), 4096>>);
+// SAFETY: the bench runs every node on one thread.
+unsafe impl Sync for BenchAnswers {}
+pub static BENCH_ANSWERS: BenchAnswers =
+    BenchAnswers(core::cell::UnsafeCell::new(heapless::Vec::new()));
+/// Bench: whether a node answers a message carried again by a sender it heard carry it before.
+pub static BENCH_ANSWER: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+/// Bench: whether a message sent again names the neighbours still waited for, and a named
+/// neighbour that holds it answers so, at no cost.
+pub static BENCH_NAMED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+/// Bench: the neighbours each message sent again named: (sender, message, named).
+pub struct BenchNamed(core::cell::UnsafeCell<heapless::Vec<(u8, MessageId, Ids), 4096>>);
+// SAFETY: the bench runs every node on one thread.
+unsafe impl Sync for BenchNamed {}
+pub static BENCH_NAMED_SETS: BenchNamed =
+    BenchNamed(core::cell::UnsafeCell::new(heapless::Vec::new()));
+
+impl BenchNamed {
+    #[allow(clippy::mut_from_ref)]
+    fn get(&self) -> &mut heapless::Vec<(u8, MessageId, Ids), 4096> {
+        // SAFETY: as above, and no reference outlives a call.
+        unsafe { &mut *self.0.get() }
+    }
+
+    pub fn clear(&self) {
+        self.get().clear();
+    }
+
+    /// Answers, for the node at id `own`, each message it held already that `sender` sent again
+    /// naming it.
+    pub fn answer(&self, own: u8, sender: u8, held: impl Iterator<Item = MessageId>) {
+        if !BENCH_NAMED.load(core::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        for name in held {
+            if self
+                .get()
+                .iter()
+                .any(|&(from, at, named)| from == sender && at == name && named.contains(own))
+            {
+                let _ = BENCH_ANSWERS.get().push((sender, own, name));
+            }
+        }
+    }
+}
+
+impl BenchAnswers {
+    #[allow(clippy::mut_from_ref)]
+    fn get(&self) -> &mut heapless::Vec<(u8, u8, MessageId), 4096> {
+        // SAFETY: as above, and no reference outlives a call.
+        unsafe { &mut *self.0.get() }
+    }
+
+    pub fn clear(&self) {
+        self.get().clear();
+    }
 }
 
 /// What a node expects its neighbours to pass on.
@@ -49,7 +111,14 @@ impl Relays {
         }
         for &name in carried {
             match self.carriers.iter_mut().find(|(held, _)| *held == name) {
-                Some((_, carriers)) => carriers.insert(sender),
+                Some((_, carriers)) => {
+                    if carriers.contains(sender)
+                        && BENCH_ANSWER.load(core::sync::atomic::Ordering::Relaxed)
+                    {
+                        let _ = BENCH_ANSWERS.get().push((sender, own, name));
+                    }
+                    carriers.insert(sender)
+                }
                 None => {
                     if self.carriers.is_full() {
                         self.carriers.pop_front();
@@ -119,12 +188,45 @@ impl Relays {
         self.waiting.retain(|waiting| !waiting.expected.is_empty());
     }
 
+    /// Bench: notes that the node at id `own` sends `name` again, naming the neighbours it still
+    /// waits for.
+    pub fn bench_named(&self, own: u8, name: MessageId) {
+        if !BENCH_NAMED.load(core::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        let Some(waiting) = self.waiting.iter().find(|waiting| waiting.name == name) else {
+            return;
+        };
+        let sets = BENCH_NAMED_SETS.get();
+        sets.retain(|&(from, at, _)| !(from == own && at == name));
+        if sets.is_full() {
+            sets.remove(0);
+        }
+        let _ = sets.push((own, name, waiting.expected));
+    }
+
+    /// Bench: takes the answers addressed to the node at id `own`.
+    pub fn bench_answered(&mut self, own: u8) {
+        let answers = BENCH_ANSWERS.get();
+        answers.retain(|&(to, from, name)| {
+            if to != own {
+                return true;
+            }
+            if let Some(waiting) = self.waiting.iter_mut().find(|waiting| waiting.name == name) {
+                waiting.expected.remove(from);
+            }
+            false
+        });
+        self.waiting.retain(|waiting| !waiting.expected.is_empty());
+    }
+
     /// The next message due to go again at local time `now`, for a neighbour not heard passing
     /// it on. It waits until it has gone, as [`Relays::sent`] takes; one sent [`RESENDS`] times
     /// is given up.
     pub fn due(&mut self, now: i64) -> Option<MessageId> {
         self.waiting.retain(|waiting| {
-            waiting.until.is_none_or(|until| until > now) || waiting.resends < RESENDS
+            waiting.until.is_none_or(|until| until > now)
+                || waiting.resends < BENCH_RESENDS.load(core::sync::atomic::Ordering::Relaxed)
         });
         let waiting = self
             .waiting
