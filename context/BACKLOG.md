@@ -222,8 +222,8 @@ until the feature set is complete, because profiling an incomplete firmware pric
   catch-ups paced rather than capped and refused for a packet far from the clock (`46d0656`).
   The protocol has each. What is left of them:
   - A replay of two recorded packets still moves a clock, within 5 minutes where the node's
-    RTC holds the time and anywhere where it does not; a replayed notice forces a three-round
-    sweep, and a replayed packet a four-round one while it is held. Jamming does more harm.
+    RTC holds the time and anywhere where it does not; a replayed packet held for a second
+    makes the node sweep for a floor and a round. Jamming does more harm.
   - A node that hears an absent member only through a relay waits for it, and keeps the old
     key, until it hears the member's signed word itself, which goes out in sweep rounds for a
     day after its switch. After that it waits for good, as it did before for any member it
@@ -242,6 +242,23 @@ until the feature set is complete, because profiling an incomplete firmware pric
   `seal`/`open` and `seal_bound`/`open_bound` could be one pair. Once, in its board run
   (`docs/logs/lora/board-checks-2026-10-05/`), the boards did not hear each other for 20
   minutes, which nothing in the logs explains; watch for it.
+- Drop what is left of the slots with the next change to the packet header (owner, 2026-10-07,
+  from the review in `docs/logs/lora/contention-review-2026-10-07/`). Each still works on
+  contention, but nothing needs it; none was measured:
+  - Sweep rounds (`LORA-PROTOCOL.md`, "Medium access"): every 13th round each node sends its
+    signed word that it is on the key for a day after a switch, and a header under the old key
+    while it waits for a member, at a time drawn in the round's first half; outside them a clock
+    refines only from a packet within 250 ms. A timer of each node's own would spread those
+    packets out instead of gathering them.
+  - The timebase's millisecond timing ("Keeping time without a fix"): the header's phase byte,
+    the 1.05 ms arrival latency, refining only from fewer hops, and the 250 ms guard with its
+    held packet. Contention needs time only to the second, for stamps, the message horizon and
+    the switch.
+  - The first sweep: a node that hears nobody waits 135 s before its first packet, so a device
+    just paired into a group of two is heard after about 2¾ minutes.
+  - Rounds: the 45 s round still paces position news, the floor, the switch and the horizon,
+    and a catch-up's 13-round gap is the sweep cadence carried over. Nothing ties those to 45 s
+    now.
 - Finish what step 3's screens leave open (`SCREEN-DESIGN-BRIEF.md`, "Group and pairing as
   built"):
   - Every group screen's legibility on the panel, which nobody has judged yet. Typing on the
