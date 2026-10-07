@@ -23,6 +23,7 @@ the review's flood files have them.
 | `floods/flood-*.jsonl` | one group message on all seventeen shapes, four seeds, the same settings |
 | `built8-rot1.jsonl`, `built8-rot6.jsonl` | the removal set of `docs/logs/lora/removal-changes-2026-10-07/` without the rotation, and capped at four |
 | `built8-rot1-x2.jsonl`, `-x4` | without the rotation, the switch two and four rounds further off |
+| `built-final8.jsonl` | the removal set on master as built at `26c7f41`, with both decisions below, on `bench/removal-changes` at `fc33f8e` |
 
 What the runs showed:
 
@@ -50,3 +51,11 @@ What the runs showed:
 - Without the rotation and with the switch four rounds further off, at most 13 members in the
   worst group switched after the group, over eight seeds, and none was cut off for more than
   135 s.
+
+The owner decided on 2026-10-07: drop the rotation (`2d83a3c`), build no last-hop repair, and
+add four rounds to the switch only when a remaining member is not the remover's neighbour
+(`26c7f41`). As built, a single message on every shape matched the benched runs without the
+rotation exactly. A removal (`built-final8.jsonl`): 32 in reach had every key message within
+15 s, the switch still 5¼ minutes off; the spread-out groups took 265 to 410 s at the median
+with the switch 8¼ minutes off, and at most 13 members in one group, over eight seeds,
+switched after the group, none cut off for more than 135 s.

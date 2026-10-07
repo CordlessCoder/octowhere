@@ -581,12 +581,13 @@ Owner, 2026-10-03, except where it says otherwise.
   since 2026-10-07 (see "Duty"). A remover that does not hear every remaining member as a
   neighbour adds four rounds more, 3 minutes, for key messages that cross several hops (owner,
   2026-10-07). In the simulator, every node
-  holding a fix, over eight seeds (`docs/logs/lora/removal-changes-2026-10-07/`), 32 in reach
-  had every key message within 17 s and a line of 12 within 82 s, and every member switched
-  with the group. In grids and scattered groups of 32 it took 7 to 10 minutes at the median,
-  and up to about a third of the members learned of the removal within three rounds of the
-  switch or after it. Each switched three rounds after learning, as a member that learns late
-  does, and was cut off from the group until then, for up to 12 minutes.
+  holding a fix, over eight seeds (`docs/logs/lora/rotation-2026-10-07/`), 32 in reach had
+  every key message within 15 s and a line of 12 within 60 s, and every member switched with
+  the group. In grids and scattered groups of 32 it took 4½ to 7 minutes at the median, and up
+  to 13 members over the eight seeds learned of the removal within three rounds of the switch
+  or after it. Each switched three rounds after learning, as a member that learns late does,
+  and was cut off from the group until then, for up to 135 s. With the shorter lead, up to
+  about a third did, cut off for up to 15 minutes.
   Until then the removed device still reads everything. The remover reserves every sequence
   number its key messages need before it starts, and a remover that restarts before they have
   gone sends them again. Adding a device is refused while a removal is under way, since it would
