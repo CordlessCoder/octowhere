@@ -446,7 +446,11 @@ key, and a removal.
   do so is the sign it heard them (owner, 2026-10-05; `octowhere-mesh`'s `relays`). After
   sending a message, a node waits 10 s to hear each such neighbour carry it, or a later message
   from its origin, or another relay reach that neighbour's neighbours. A neighbour already heard
-  carrying it is not waited for. A message not heard passed on goes again, three times at most.
+  carrying it is not waited for. A message not heard passed on goes again once (owner,
+  2026-10-07; three times before). Where two neighbours hidden from each other relay at once,
+  they collide at the sender, and its sends again went to neighbours that held the message
+  already. The summaries repair a loss a send again misses, more slowly: along a chain that
+  loses one packet in five, a removal took longer.
   Along a chain of relays a loss on one hop stops the flood there; this repairs it in seconds,
   where waiting for the loss to show took a floor.
 - **Store and forward.** Every node holds every message for the message horizon, 24 hours
