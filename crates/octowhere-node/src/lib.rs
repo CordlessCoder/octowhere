@@ -24,7 +24,7 @@ mod inbox;
 #[cfg(feature = "run")]
 mod node;
 #[cfg(feature = "run")]
-mod removals;
+pub mod removals;
 #[cfg(feature = "run")]
 mod unsaved;
 pub mod view;

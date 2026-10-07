@@ -129,6 +129,20 @@ pub struct World {
     pub recorded: RefCell<Option<Vec<Transmission>>>,
     rng: RefCell<SplitMix>,
     pub lines: Lines,
+    /// Bench: what each packet came to at each node linked to its sender.
+    pub receptions: Cell<Receptions>,
+}
+
+/// Bench: receptions by what became of them.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Receptions {
+    pub delivered: u64,
+    /// Overlapped by another packet at the receiver, not 6 dB weaker.
+    pub drowned: u64,
+    /// Lost to the link's loss.
+    pub lost: u64,
+    /// The receiver was sending, or not receiving, when the packet started.
+    pub deaf: u64,
 }
 
 impl World {
@@ -145,6 +159,7 @@ impl World {
             recorded: RefCell::default(),
             rng: RefCell::new(SplitMix::new(seed)),
             lines: Lines::default(),
+            receptions: Cell::default(),
         }
     }
 
@@ -264,10 +279,15 @@ impl World {
                 continue;
             };
             let radio = &mut receiver.radio;
+            let mut counts = self.receptions.get();
             let Mode::Receiving(since) = radio.mode else {
+                counts.deaf += 1;
+                self.receptions.set(counts);
                 continue;
             };
             if since > sent.start || radio.channel != sent.channel {
+                counts.deaf += 1;
+                self.receptions.set(counts);
                 continue;
             }
             let drowned = air.iter().any(|other| {
@@ -280,9 +300,18 @@ impl World {
                         .get(&(other.sender, to))
                         .is_some_and(|other| link.rssi < other.rssi + CAPTURE_DB)
             });
-            if drowned || self.rng.borrow_mut().unit() < link.loss {
+            if drowned {
+                counts.drowned += 1;
+                self.receptions.set(counts);
                 continue;
             }
+            if self.rng.borrow_mut().unit() < link.loss {
+                counts.lost += 1;
+                self.receptions.set(counts);
+                continue;
+            }
+            counts.delivered += 1;
+            self.receptions.set(counts);
             let mut payload = [0; RECEIVED_MAX];
             payload[..sent.bytes.len()].copy_from_slice(&sent.bytes);
             radio.received = Some((

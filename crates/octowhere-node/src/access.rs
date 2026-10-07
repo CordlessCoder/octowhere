@@ -16,6 +16,9 @@ pub static BENCH_RECORD_STEPS: core::sync::atomic::AtomicU32 =
     core::sync::atomic::AtomicU32::new(STEPS);
 /// A node that found the channel busy waits up to this many steps, past the longest packet.
 pub const BUSY_STEPS: u32 = 64;
+/// Bench: the airtimes a node rests after each transmission, in place of [`REST_TIMES`].
+pub static BENCH_REST_TIMES: core::sync::atomic::AtomicI64 =
+    core::sync::atomic::AtomicI64::new(REST_TIMES);
 /// A node's floor and its news come up to this much early, drawn at each of its packets, so that
 /// nodes that started together drift apart rather than contend at every floor.
 pub const SPREAD_US: i64 = 10_000_000;
@@ -142,7 +145,8 @@ impl Access {
     /// packet, with `spread` below [`SPREAD_US`] drawn for it, when `own` holds one. The node
     /// rests [`REST_TIMES`] airtimes after it.
     pub fn sent(&mut self, at: i64, len: usize, own: Option<i64>) {
-        self.note(at, len, own, REST_TIMES);
+        let rest = BENCH_REST_TIMES.load(core::sync::atomic::Ordering::Relaxed);
+        self.note(at, len, own, rest);
     }
 
     /// Notes the node's own packet as [`Access::sent`] does, one that carried its own key

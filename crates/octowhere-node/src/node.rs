@@ -1806,6 +1806,13 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             return;
         };
         let (round, own) = (round_at(time), group.own());
+        let floor = !(group.has_unsent()
+            || self.messages.has_unsent()
+            || self.table.has_news()
+            || self.summary.is_some()
+            || !self.requests.pending().is_empty());
+        octowhere_mesh::table::BENCH_FLOOR_PACKET
+            .store(floor, core::sync::atomic::Ordering::Relaxed);
         let mut packet = [0u8; MAX_PACKET];
         let mut builder = Sealing::new(&mut packet, &Header::new(own, timebase, time));
         let carried = compose(
