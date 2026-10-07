@@ -24,7 +24,8 @@
 //! `steps:resends`; `32:1` is the firmware's since the removal changes. Across a run:
 //! `RELAY_COST_FIX=still` gives every node a fix that stays put, refreshed each second;
 //! `RELAY_COST_ROTATION` sets `table::BENCH_ROTATION`; and `RELAY_COST_CATCH_UP=rounds` sends a
-//! catch-up under an old key again first after `rounds`, 13 in the firmware.
+//! catch-up under an old key again first after `rounds`, 13 in the firmware; and
+//! `RELAY_COST_EXTRA_ROUNDS` adds that many rounds to a removal's switch.
 
 use std::{fmt::Write as _, io::Write as _};
 
@@ -261,6 +262,11 @@ fn run(
     // `RELAY_COST_ROTATION` as `table::BENCH_ROTATION` reads it: 0, the firmware's, by default.
     octowhere_mesh::table::BENCH_ROTATION.store(
         std::env::var("RELAY_COST_ROTATION").map_or(0, |rotation| rotation.parse().unwrap()),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    // `RELAY_COST_EXTRA_ROUNDS`: rounds a remover adds to its switch, 0 by default.
+    octowhere_mesh::rekey::BENCH_EXTRA_ROUNDS.store(
+        std::env::var("RELAY_COST_EXTRA_ROUNDS").map_or(0, |extra| extra.parse().unwrap()),
         std::sync::atomic::Ordering::Relaxed,
     );
     // `RELAY_COST_CATCH_UP=rounds`: a catch-up goes again first after this many rounds.

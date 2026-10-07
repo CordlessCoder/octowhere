@@ -180,6 +180,14 @@ pub const fn switch_rounds(messages: u32) -> u32 {
 /// from the largest group needs, and a round for clocks that disagree.
 pub const SWITCH_AHEAD: u32 = switch_rounds(IDS as u32) + 1;
 
+/// Bench: rounds a remover adds to every switch, which a key message's bound allows too.
+pub static BENCH_EXTRA_ROUNDS: core::sync::atomic::AtomicU32 =
+    core::sync::atomic::AtomicU32::new(0);
+
+fn bench_extra() -> u32 {
+    BENCH_EXTRA_ROUNDS.load(core::sync::atomic::Ordering::Relaxed)
+}
+
 /// A removal learned and not yet switched to.
 #[derive(Clone, Debug)]
 pub struct Pending {
@@ -424,7 +432,7 @@ impl Rekey {
         let new = NewKey {
             key,
             generation: group.generation().wrapping_add(1),
-            switch: round + switch_rounds(remaining.count() + 1),
+            switch: round + switch_rounds(remaining.count() + 1) + bench_extra(),
             removed: id,
             fingerprint: fingerprint(&removed.public),
             follows: key_fingerprint(group.key()),
@@ -448,7 +456,7 @@ impl Rekey {
             || group.member(remover).is_none()
             || new.fingerprint == fingerprint(&group.me().public)
             || !group.names(&new.fingerprint)
-            || new.switch > round.saturating_add(SWITCH_AHEAD)
+            || new.switch > round.saturating_add(SWITCH_AHEAD + bench_extra())
             || self
                 .declined()
                 .any(|declined| *declined == fingerprint(new.key.bytes()))
