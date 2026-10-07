@@ -360,7 +360,8 @@ device sends and those under an old key:
 A packet is filled in this order until it is full or nothing is left: the sender's neighbours, its
 members digest, its messages digest while it holds a message, a request if it has one, its
 on-key record (see "Removing a member"), a summary if it has one and no message to send, up to
-three member and gone records it has not sent, the sender's own entry, messages oldest first,
+three member and gone records it has not sent, the sender's own entry, messages (see
+"Flooding"),
 entries learned since this node last sent them (newest first), and the rest of the table in
 rotation. The member records go ahead of the positions so a busy table cannot crowd them out,
 but leave room for the sender's own entry. A member record costs a full packet 12 to 14
@@ -430,7 +431,10 @@ key, and a removal.
   that long fills one packet with the sender's own entry and the records every packet carries.
 - **Flooding.** A node relays each message new to it once, as soon as the channel lets it,
   oldest first. It counts as sent once a covering packet carried it, as an entry does (the
-  cancel rule).
+  cancel rule). A message the node sends again goes behind every one its own packets never
+  carried (owner, 2026-10-07): a removal's switch is timed on each key message leaving the
+  remover once, and oldest first put the remover's sends again ahead of key messages still to
+  go, past the switch.
 - **Hearing it passed on.** A neighbour that has neighbours of its own outside the ones a
   packet's sender reports passes the packet's new messages on, by the cancel rule, so hearing it
   do so is the sign it heard them (owner, 2026-10-05; `octowhere-mesh`'s `relays`). After

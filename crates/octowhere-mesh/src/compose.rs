@@ -76,7 +76,7 @@ impl Carried {
         table.sent(self.positions());
         requests.sent(self.requests);
         for &name in self.messages() {
-            store.sent(name);
+            store.carried(name);
         }
         for id in self.records.iter() {
             group.sent(id);
