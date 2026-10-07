@@ -329,6 +329,14 @@ impl Fingerprints {
     }
 }
 
+/// Bench: whether a node follows a packet that carried messages to a neighbour expected to pass
+/// nothing on with another, a round later.
+pub static BENCH_FOLLOW_UP: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+/// Bench: whether a node sends a message again when it hears a neighbour it reached, which was
+/// to pass nothing on, with a messages digest unlike its own.
+pub static BENCH_ANSWER_MISMATCH: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
 impl Shown {
     fn new(radio: bool) -> Self {
         Self {
@@ -662,6 +670,15 @@ pub struct Mesh<R, T, G, D, S, A: Allocator> {
     access: Access,
     /// The sweep round this node last drew a time to send in, and that time on the local timer.
     sweep_at: Option<(i64, i64)>,
+    /// Bench: when the packet after one that carried messages to a neighbour expected to pass
+    /// nothing on goes, at the latest, so that one that missed them finds the digests differ.
+    follow_up_at: Option<i64>,
+    /// Bench: the follow-ups left while a neighbour expected to pass nothing on is not yet heard
+    /// holding what this node holds.
+    follow_ups_left: u8,
+    /// Bench: messages sent to neighbours expected to pass nothing on, and those not yet heard
+    /// holding what this node holds.
+    ends_sent: heapless::Vec<(octowhere_mesh::messages::MessageId, Ids), 16>,
     /// When a catch-up under an old key goes, on the local timer, drawn once within
     /// [`REPAIR_SPREAD_US`] of its being due.
     catch_up_at: Option<i64>,
@@ -743,6 +760,9 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             access: Access::default(),
             sweep_at: None,
             catch_up_at: None,
+            follow_up_at: None,
+            follow_ups_left: 0,
+            ends_sent: heapless::Vec::new(),
             timebase_shown: None,
             heard: [None; IDS as usize],
             shown: Shown::new(true),
@@ -1332,6 +1352,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             && self.removals.on_key_in_sweeps(now)
             && !self.access.sent_since(start))
         .then(|| self.sweep_at(round, start, own));
+        let sweep = [sweep, self.follow_up_at].into_iter().flatten().min();
         Holding {
             records,
             repair,
@@ -1651,6 +1672,20 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                 self.inbox.relayed(name);
             }
         }
+        if let Some(digest) = absorbed.bench_digest {
+            let ours = self.messages.digest();
+            let answer = BENCH_ANSWER_MISMATCH.load(core::sync::atomic::Ordering::Relaxed);
+            for (name, ends) in &mut self.ends_sent {
+                if !ends.contains(header.sender) {
+                    continue;
+                }
+                ends.remove(header.sender);
+                if digest != ours && answer && self.messages.get(*name).is_some() {
+                    self.messages.mark(*name);
+                }
+            }
+            self.ends_sent.retain(|(_, ends)| !ends.is_empty());
+        }
         if octowhere_mesh::relays::BENCH_DESIGNATE.load(core::sync::atomic::Ordering::Relaxed) {
             let designated = octowhere_mesh::Ids::from_bits(
                 octowhere_mesh::relays::BENCH_DESIGNATED[usize::from(header.sender)]
@@ -1852,8 +1887,25 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             true => self.access.sent_keys(started, len, spread),
             false => self.access.sent(started, len, Some(spread)),
         }
-        self.relays
+        let ends = self
+            .relays
             .sent(own, carried.neighbours, carried.messages(), started);
+        if !ends.is_empty() {
+            for &name in carried.messages() {
+                self.ends_sent.retain(|(held, _)| *held != name);
+                if self.ends_sent.is_full() {
+                    self.ends_sent.remove(0);
+                }
+                let _ = self.ends_sent.push((name, ends));
+            }
+            self.follow_ups_left = BENCH_FOLLOW_UP.load(core::sync::atomic::Ordering::Relaxed);
+        }
+        let pending = self.ends_sent.iter().any(|(_, ends)| !ends.is_empty());
+        self.follow_up_at = None;
+        if pending && self.follow_ups_left > 0 {
+            self.follow_ups_left -= 1;
+            self.follow_up_at = Some(started + octowhere_mesh::members::MISMATCH_US + 1_000_000);
+        }
         if carried.on_key {
             self.removals.carried_on_key();
         }

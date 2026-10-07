@@ -164,6 +164,9 @@ struct Run {
     ages: Vec<f64>,
     /// Samples where a node held no position of another it should.
     missing: usize,
+    /// Each pair's samples without a position, to count the pairs missing in every sample.
+    missing_pairs: std::collections::HashMap<(usize, usize), usize>,
+    samples: usize,
 }
 
 fn run(
@@ -253,6 +256,7 @@ fn run(
         if motion == Motion::None || tick % 10 != 9 {
             continue;
         }
+        out.samples += 1;
         for node in 0..nodes {
             let Some(group) = sim.view(node).and_then(|view| view.group) else {
                 continue;
@@ -261,7 +265,10 @@ fn run(
             for other in (0..nodes).filter(|&other| other != node) {
                 match group.member(other as u8).map(|member| member.position) {
                     Some(Position::At(at)) => out.ages.push((now - at) as f64 / 1e6),
-                    _ => out.missing += 1,
+                    _ => {
+                        out.missing += 1;
+                        *out.missing_pairs.entry((node, other)).or_default() += 1;
+                    }
                 }
             }
         }
@@ -381,7 +388,7 @@ fn channel_load() {
                     run.ages.sort_by(f64::total_cmp);
                     let received = run.delivered + run.drowned;
                     let line = format!(
-                        "{{\"shape\":\"{}\",\"motion\":\"{}\",\"rotation\":{rotation},\"seed\":{seed},\"minutes\":{minutes},\"packets\":{},\"airtime_s\":{:.1},\"mean_len\":{:.1},\"max_duty\":{:.4},\"busy_mean\":{:.4},\"busy_max\":{:.4},\"delivered\":{},\"drowned\":{},\"deaf\":{},\"drowned_share\":{:.4},\"age_median\":{:.1},\"age_p95\":{:.1},\"age_max\":{:.1},\"missing\":{}}}",
+                        "{{\"shape\":\"{}\",\"motion\":\"{}\",\"rotation\":{rotation},\"seed\":{seed},\"minutes\":{minutes},\"packets\":{},\"airtime_s\":{:.1},\"mean_len\":{:.1},\"max_duty\":{:.4},\"busy_mean\":{:.4},\"busy_max\":{:.4},\"delivered\":{},\"drowned\":{},\"deaf\":{},\"drowned_share\":{:.4},\"age_median\":{:.1},\"age_p95\":{:.1},\"age_max\":{:.1},\"missing\":{},\"never\":{}}}",
                         shape.name,
                         motion.name(),
                         run.packets,
@@ -398,6 +405,10 @@ fn channel_load() {
                         percentile(&run.ages, 0.95),
                         run.ages.last().copied().unwrap_or(f64::NAN),
                         run.missing,
+                        run.missing_pairs
+                            .values()
+                            .filter(|&&count| count == run.samples)
+                            .count(),
                     );
                     multi.suspend(|| println!("{line}"));
                     if let Some(out) = &mut out {

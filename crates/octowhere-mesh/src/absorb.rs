@@ -73,6 +73,8 @@ pub struct Absorbed {
     pub summary: bool,
     /// Messages it carried.
     pub carried: usize,
+    /// Bench: its messages digest, when it carried a members digest and so a full account.
+    pub bench_digest: Option<u32>,
     carried_names: [messages::MessageId; MESSAGES],
     events: [Option<Event>; RECORDS],
     arrivals: [messages::MessageId; MESSAGES],
@@ -124,6 +126,7 @@ pub fn absorb<'p>(
         rekey_changed: false,
         late_key: None,
         summary: false,
+        bench_digest: None,
         carried: 0,
         carried_names: [(0, 0); MESSAGES],
         events: [None; RECORDS],
@@ -241,6 +244,7 @@ pub fn absorb<'p>(
     // A packet with no members digest is no full account of its sender.
     if theirs.is_some() {
         summaries.answer(messages, sender, their_messages, summary, (when.at, fed.1));
+        absorbed.bench_digest = Some(their_messages);
     }
     absorbed.summary = summary.is_some();
     absorbed

@@ -207,8 +207,9 @@ impl Relays {
 
     /// Takes a packet the node at id `own` sent at local time `now`, reporting `neighbours` and
     /// carrying `carried`: each neighbour with a neighbour of its own outside them is to pass
-    /// the messages on, unless it was heard carrying them already.
-    pub fn sent(&mut self, own: u8, neighbours: Ids, carried: &[MessageId], now: i64) {
+    /// the messages on, unless it was heard carrying them already. Bench: returns the
+    /// neighbours expected to pass nothing on that a message reached, not heard carrying it.
+    pub fn sent(&mut self, own: u8, neighbours: Ids, carried: &[MessageId], now: i64) -> Ids {
         let relaying = match BENCH_DESIGNATE.load(core::sync::atomic::Ordering::Relaxed) {
             true => Ids::from_bits(
                 BENCH_DESIGNATED[usize::from(own)].load(core::sync::atomic::Ordering::Relaxed),
@@ -232,12 +233,14 @@ impl Relays {
                 }
             }
         }
+        let mut ends = Ids::EMPTY;
         for &name in carried {
             let carriers = self
                 .carriers
                 .iter()
                 .find(|(held, _)| *held == name)
                 .map_or(Ids::EMPTY, |&(_, carriers)| carriers);
+            ends = ends | (neighbours & !relaying & !carriers);
             let expected = relaying & !carriers;
             if let Some(waiting) = self.waiting.iter_mut().find(|held| held.name == name) {
                 waiting.expected = expected;
@@ -258,6 +261,7 @@ impl Relays {
             });
         }
         self.waiting.retain(|waiting| !waiting.expected.is_empty());
+        ends
     }
 
     /// Bench: notes that the node at id `own` sends `name` again, naming the neighbours it still

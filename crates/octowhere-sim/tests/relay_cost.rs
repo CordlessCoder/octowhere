@@ -25,7 +25,11 @@
 //! `RELAY_COST_FIX=still` gives every node a fix that stays put, refreshed each second;
 //! `RELAY_COST_ROTATION` sets `table::BENCH_ROTATION`; and `RELAY_COST_CATCH_UP=rounds` sends a
 //! catch-up under an old key again first after `rounds`, 13 in the firmware; and
-//! `RELAY_COST_EXTRA_ROUNDS` adds that many rounds to a removal's switch.
+//! `RELAY_COST_EXTRA_ROUNDS` adds that many rounds to a removal's switch; and
+//! `RELAY_COST_FOLLOW_UP=n` follows a packet that carried messages to a neighbour expected to
+//! pass nothing on with another a round later, up to n times until it is heard holding what
+//! the sender holds, and `RELAY_COST_ANSWER=1` sends the message again on hearing that
+//! neighbour's digest unlike the sender's.
 
 use std::{fmt::Write as _, io::Write as _};
 
@@ -262,6 +266,19 @@ fn run(
     // `RELAY_COST_ROTATION` as `table::BENCH_ROTATION` reads it: 0, the firmware's, by default.
     octowhere_mesh::table::BENCH_ROTATION.store(
         std::env::var("RELAY_COST_ROTATION").map_or(0, |rotation| rotation.parse().unwrap()),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    // `RELAY_COST_FOLLOW_UP=n`: a packet that carried messages to a neighbour expected to pass
+    // nothing on is followed by another a round later, up to n times while one is not heard
+    // holding what this node holds.
+    octowhere_node::BENCH_FOLLOW_UP.store(
+        std::env::var("RELAY_COST_FOLLOW_UP").map_or(0, |count| count.parse().unwrap()),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    // `RELAY_COST_ANSWER=1`: hearing such a neighbour's digest unlike this node's sends the
+    // message again.
+    octowhere_node::BENCH_ANSWER_MISMATCH.store(
+        std::env::var("RELAY_COST_ANSWER").is_ok_and(|on| on == "1"),
         std::sync::atomic::Ordering::Relaxed,
     );
     // `RELAY_COST_EXTRA_ROUNDS`: rounds a remover adds to its switch, 0 by default.
