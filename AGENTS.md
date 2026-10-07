@@ -453,8 +453,11 @@ summarised by `tools/channel-load.py`), and adds switches for a removal's rest,
 acknowledgements, catch-ups and send order; results in
 `docs/logs/lora/contention-review-2026-10-07/`. And `bench/removal-changes` carries both onto
 master after the removal changes, with switches defaulting to the firmware, and adds rounds to
-a removal's switch (`RELAY_COST_EXTRA_ROUNDS`, summarised by `tools/removal-cutoff.py`); results
-in `docs/logs/lora/removal-changes-2026-10-07/`.
+a removal's switch (`RELAY_COST_EXTRA_ROUNDS`, summarised by `tools/removal-cutoff.py`), a
+follow-up packet and an answer to an unlike digest for a chain's end (`RELAY_COST_FOLLOW_UP`,
+`RELAY_COST_ANSWER`), and counts positions never shown; results in
+`docs/logs/lora/removal-changes-2026-10-07/` and `docs/logs/lora/rotation-2026-10-07/`, whose
+rotation runs predate its merge of master, which dropped the rotation and its switch.
 
 ## Concurrency
 
