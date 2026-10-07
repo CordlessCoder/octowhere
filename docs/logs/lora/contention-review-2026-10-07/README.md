@@ -35,12 +35,15 @@ What the runs showed:
   full, 248 bytes. In reach that keeps the channel 10% busy standing still and 31% moving,
   against 2 and 8% with the rotation left out, and the positions each node holds are no older.
   In grids and scattered groups 10 to 18% of receptions are lost to overlaps, against 2 to 3%.
-  But there, with nodes standing still, some nodes never got some others' positions in 20
-  minutes without the rotation, in `grid4x8` and one scattered group; with it, every node got
-  every position.
+  Without the rotation, a few distant pairs in `grid4x8` and one scattered group showed each
+  other's positions later after the start, but every pair showed one within the run
+  (`docs/logs/lora/rotation-2026-10-07/`).
 - The rotation also keeps every node sending every round, which repairs a message lost on a
   chain's last hop. Without it, a message along `line12-loss20` took 213 to 269 s in three
   seeds of four, against 15 to 35 s; capped at two and four entries, 97 and 132 s at the median.
+  Four seeds overstated it: at 32 seeds, after the removal changes, it was 34 s at the median
+  with the rotation and 53 s without, with slow runs both ways
+  (`docs/logs/lora/rotation-2026-10-07/`).
 - Positions slow a single message: in `grid2x8` from 2.7 to 97 s at the median.
 - A removal in the spread-out shapes took 16 to 21 minutes at the median, and 3 of 80 runs left
   a member without its key after 30 minutes. With the five changes, no key acknowledgements,
