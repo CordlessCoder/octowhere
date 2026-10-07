@@ -181,7 +181,8 @@ initialization or peripheral mappings.
   a record. Its partition is historical.
 - [`context/LORA-PROTOCOL.md`](context/LORA-PROTOCOL.md) is the agreed design for the location
   mesh of up to 32 nodes: band and radio settings, gossip digest, GPS-anchored TDMA, packet
-  layout, messages, crypto and pairing. Steps 1 to 4 of its build order are implemented, and the mesh's side of step 6.
+  layout, messages, crypto and pairing. Steps 1 to 4 and 6 of its build order are implemented,
+  step 5 went with the slots, and step 7 closed with the cancel rule.
 - [`context/palette-reference.md`](context/palette-reference.md) records the colour values from the
   reference board and the role each one plays in `chrome.rs`.
 
@@ -441,7 +442,11 @@ part's check started and ended (`startup-timing-bench`, run on the boards by
 `tools/startup-timing.sh` and summarised by `tools/startup-timing-summary.py`), and keeps them
 for a debugger to read without a reset (`tools/startup-timing-read.py`), which a cold start
 needs; `tools/startup-timing-cold.sh` reads each board every time it is plugged back in.
-Results in `docs/logs/display/startup-timing-2026-10-06/`.
+Results in `docs/logs/display/startup-timing-2026-10-06/`. And `bench/relay-pruning` counts
+in the simulator the packets a flood and a removal take, sets them beside the fewest a flood
+could use, and tries relay changes through knobs whose defaults are the firmware's
+(`crates/octowhere-sim/tests/relay_cost.rs`, an ignored test, summarised by
+`tools/relay-*.py`); results in `docs/logs/lora/relay-pruning-2026-10-06/`.
 
 ## Concurrency
 

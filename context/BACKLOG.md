@@ -208,14 +208,6 @@ until the feature set is complete, because profiling an incomplete firmware pric
   Nothing marks when the display is up: `bench/startup-timing` has the frame loop's first frame
   at 852 to 909 ms from the timer's start, but neither core 1's start nor `[DISPLAY] OK`. Add
   those marks first, to see whether the first flush waits for the display at all.
-- Build step 7 of [`LORA-PROTOCOL.md`](LORA-PROTOCOL.md)'s "Build order", pruning relays from
-  the gossiped graph (its "Pruning, later"). Steps 1 to 4 and 6 are built, with their screens,
-  and ran on the two boards; contention replaced the slots on 2026-10-05 (owner; the protocol's
-  "Medium access"), which dropped step 5, and the slots are on the `tdma` branch. Board runs
-  not referenced elsewhere: listening and the cancel rule
-  (`docs/logs/lora/founding-and-listening-2026-10-02/`), signing
-  (`docs/logs/lora/signing-2026-10-03/`), and a member deaf through two removals caught up in
-  19 minutes (`docs/logs/lora/catch-up-2026-10-03/`).
 - Measure what the device draws once the owner's PPK2 is to hand (owner, 2026-10-04). It says
   whether continuous receive fits the budget, now that the mesh contends for the channel, and
   whether the firmware light-sleeps with the screen dark. The findings, the esp-hal wake-lock gap the owner

@@ -2,9 +2,9 @@
 
 The product is a closed group of up to 32 equivalent nodes that share positions and carry messages
 between members, including private ones. GPS supplies both position and the time reference; LoRa
-carries the traffic. This document is the agreed design. Steps 1 to 4 of the build order below
-are implemented, and the mesh's side of step 6, on contention since 2026-10-05; "Build order"
-says what comes next; [`AGENTS.md`](../AGENTS.md), "Radio", says how.
+carries the traffic. This document is the agreed design. Steps 1 to 4 and 6 of the build order
+below are implemented, on contention since 2026-10-05, which dropped step 5; step 7 closed on
+2026-10-07. [`AGENTS.md`](../AGENTS.md), "Radio", says how it is built.
 
 The first version of this design (commit `e57fe0a`) was eight nodes and positions only. The owner
 extended it on 2026-09-29 to 32 nodes, messages and private messages, moved it to band O, and kept
@@ -476,10 +476,18 @@ key, and a removal.
 - **Capacity.** Every node carries every message once, so each message costs the channel a
   packet's room for every node that relays it. A node's rest holds it under 10% of the air; the
   channel, shared by every relay in reach, is the bound. It is unmeasured.
-- **Pruning, later.** Gossiping every node's neighbour set gives every node the group's graph. A node
-  can then skip relaying a direct message when it is not on a shortest path to the destination, and
-  a group message when the sender already reaches all its neighbours. That is where routing starts
-  to pay; it builds on the neighbours record rather than adding a layer.
+- **Pruning.** A node skips relaying what a packet it heard already carried to all its
+  neighbours: that is the cancel rule (step 7, closed by the owner on 2026-10-07). In the
+  simulator a flood then costs the fewest packets possible where every node hears every other,
+  along a line, and in two clusters joined by one node. In grids and scattered groups it costs
+  four to twelve times the fewest, more than half of it in sends again: two neighbours hidden
+  from each other relay at once, their packets collide at the node they had it from, and that
+  node sends again to neighbours that already hold it. Skipping a private message off the
+  shortest path to its destination was dropped with store-and-forward: a node skipped takes the
+  message from a summary later, at more cost than the relay saved. Designated relays, each
+  sender naming the neighbours to pass its messages on, cut a flood's packets by a third to
+  three quarters with slower worst cases, and stay on `bench/relay-pruning`
+  (`docs/logs/lora/relay-pruning-2026-10-06/`).
 
 ### Private messages
 
@@ -883,11 +891,15 @@ restore after are each short with the bus free between them.
    the mesh's packets, their storage, and the screens (`SCREEN-DESIGN-BRIEF.md`, "Group and
    pairing as built").
 4. The cancel rule and neighbour-only listening. Built as listening to members and neighbours
-   with periodic sweeps (see "Listening"), the cancel rule entry by entry (below), and a changed
-   member record sent in the node's next slot.
+   with periodic sweeps, the cancel rule entry by entry (see "Medium access"), and a changed
+   member record sent in the node's next slot, and ran on the two boards
+   (`docs/logs/lora/founding-and-listening-2026-10-02/`). Contention replaced the listening.
 5. CAD with slot phase refined from arrival times. Dropped with the slots (2026-10-05).
-6. Messages, then private messages.
-7. Pruning relays from the gossiped graph.
+6. Messages, then private messages. Built with removal and signed records, and ran on the two
+   boards (`docs/logs/lora/step6-2026-10-03/`, `signing-2026-10-03/`, and a member deaf through
+   two removals catching up in 19 minutes, `catch-up-2026-10-03/`).
+7. Pruning relays from the gossiped graph. Closed (owner, 2026-10-07): the cancel rule is its
+   group half, and store-and-forward dropped its private half (see "Messages", "Pruning").
 
 What is left goes in this order (owner, 2026-10-03):
 
@@ -902,7 +914,7 @@ What is left goes in this order (owner, 2026-10-03):
   with the owner on 2026-10-03 ("Messages", "Removing a member", "Identity and storage"). The
   mesh's side is built and ran on the two boards (`docs/logs/lora/step6-2026-10-03/`).
 - Step 5, then step 7. Contention replaced the slots after step 6 (owner, 2026-10-05), which
-  leaves step 7.
+  dropped step 5, and step 7 closed on 2026-10-07.
 
 ## RTC calibration
 
