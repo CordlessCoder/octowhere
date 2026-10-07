@@ -662,6 +662,9 @@ pub struct Mesh<R, T, G, D, S, A: Allocator> {
     access: Access,
     /// The sweep round this node last drew a time to send in, and that time on the local timer.
     sweep_at: Option<(i64, i64)>,
+    /// When a catch-up under an old key goes, on the local timer, drawn once within
+    /// [`REPAIR_SPREAD_US`] of its being due.
+    catch_up_at: Option<i64>,
     timebase_shown: Option<Timebase>,
     /// When each id was last heard sending, on the local clock.
     heard: [Option<i64>; IDS as usize],
@@ -739,6 +742,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             table: Table::new(own),
             access: Access::default(),
             sweep_at: None,
+            catch_up_at: None,
             timebase_shown: None,
             heard: [None; IDS as usize],
             shown: Shown::new(true),
@@ -1402,17 +1406,26 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         }
     }
 
-    /// When a packet under an old key is due, on the local timer: at once to catch a member up,
-    /// and otherwise at this node's time in a sweep round while a member is waited for, so that
-    /// parts of the group on rival keys still hear each other.
+    /// When a packet under an old key is due, on the local timer: at a time drawn to catch a
+    /// member up, since every neighbour that heard it on the old key answers it and those hidden
+    /// from each other collide at it; and otherwise at this node's time in a sweep round while a
+    /// member is waited for, so that parts of the group on rival keys still hear each other.
     fn old_due(&mut self, round: i64, now: i64, time: i64, own: u8) -> Option<i64> {
-        if !self.removals.sends_old() || self.removals.old_packet(round).is_none() {
+        let due = self.removals.sends_old() && self.removals.old_packet(round).is_some();
+        if !(due && self.removals.catching_up()) {
+            self.catch_up_at = None;
+        }
+        if !due {
             return None;
         }
-        let at = if self.removals.catching_up() {
-            now
-        } else {
-            self.sweep_at(round, now - (time - round * ROUND_US), own)
+        let at = match self.catch_up_at {
+            Some(at) => at,
+            None if self.removals.catching_up() => {
+                let at = now + self.draw(REPAIR_SPREAD_US, own);
+                self.catch_up_at = Some(at);
+                at
+            }
+            None => self.sweep_at(round, now - (time - round * ROUND_US), own),
         };
         Some(self.access.after_quiet(at))
     }
@@ -1448,6 +1461,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         };
         self.access.sent(started, len, None);
         self.removals.sent_old(caught, lost, round);
+        self.catch_up_at = None;
         info!(
             "[REKEY] sent under generation {} round={} caught={:#010x} len={} done={}",
             generation,

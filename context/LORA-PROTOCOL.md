@@ -585,7 +585,9 @@ Owner, 2026-10-03, except where it says otherwise.
   key either but its sender's clock, where that outranks its own (see "Keeping time without a
   fix"): it still sends under the old key, which the removed device reads. A node holding the
   key message of the generation after the one a member is on sends it again, in a packet under
-  that member's key, as soon as it hears that member under it. A member
+  that member's key, at a time it draws within 5 s of hearing that member under it (owner,
+  2026-10-07): every node that heard the member answers it, and two hidden from each other
+  collided at it, after which the next try waited 13 rounds. A member
   on a key a rival won over is sent the winner's key message instead, of the same generation. The removed device can
   see that packet but cannot open the key inside. Key messages are kept for this past the
   message horizon while the old key is, but are left out of the digest after it. A member that
