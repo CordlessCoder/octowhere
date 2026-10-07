@@ -59,7 +59,7 @@ pub static BENCH_DESIGNATED: [core::sync::atomic::AtomicU32; IDS as usize] =
 pub fn bench_designate(relays: &Relays, own: u8, neighbours: Ids) -> Ids {
     let mut two = Ids::EMPTY;
     for id in neighbours.iter() {
-        two = two | beyond(&relays.reported, own, id);
+        two |= beyond(&relays.reported, own, id);
     }
     let mut left = two & !neighbours;
     let mut chosen = Ids::EMPTY;
@@ -72,7 +72,7 @@ pub fn bench_designate(relays: &Relays, own: u8, neighbours: Ids) -> Ids {
         }
     }
     for id in chosen.iter() {
-        left = left & !beyond(&relays.reported, own, id);
+        left &= !beyond(&relays.reported, own, id);
     }
     while !left.is_empty() {
         let Some(best) = neighbours
@@ -91,7 +91,7 @@ pub fn bench_designate(relays: &Relays, own: u8, neighbours: Ids) -> Ids {
             break;
         }
         chosen.insert(best);
-        left = left & !beyond(&relays.reported, own, best);
+        left &= !beyond(&relays.reported, own, best);
     }
     chosen
 }
@@ -240,7 +240,7 @@ impl Relays {
                 .iter()
                 .find(|(held, _)| *held == name)
                 .map_or(Ids::EMPTY, |&(_, carriers)| carriers);
-            ends = ends | (neighbours & !relaying & !carriers);
+            ends |= neighbours & !relaying & !carriers;
             let expected = relaying & !carriers;
             if let Some(waiting) = self.waiting.iter_mut().find(|held| held.name == name) {
                 waiting.expected = expected;
