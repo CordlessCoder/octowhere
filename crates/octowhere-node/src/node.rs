@@ -1791,7 +1791,14 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             return;
         };
         let spread = self.draw(SPREAD_US, own);
-        self.access.sent(started, len, Some(spread));
+        let own_keys = carried
+            .messages()
+            .iter()
+            .any(|&name| name.0 == own && self.messages.get(name).is_some_and(Message::is_key));
+        match own_keys {
+            true => self.access.sent_keys(started, len, spread),
+            false => self.access.sent(started, len, Some(spread)),
+        }
         self.relays
             .sent(own, carried.neighbours, carried.messages(), started);
         if carried.on_key {

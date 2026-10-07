@@ -62,8 +62,9 @@ do not confuse the two.
   Band O is 250 kHz wide, so agility cannot add a second 200 kHz. The duty-cycle option allows 10%.
   A node checks the channel before it sends; under the duty-cycle option that check is neither
   required nor forbidden.
-- **Headroom.** A node rests nine airtimes after each packet, which holds it under the 10% at
-  any moment. A packet a round, at the largest, is 0.89%; messages and records use the rest.
+- **Headroom.** A node rests nine airtimes after each packet but its own key messages, and holds
+  its airtime in any hour under 360 s. EN 300 220-2 V3.3.1 measures band O's 10% over an hour
+  (clause 4.4.3) and sets no limit on a single transmission there. A packet a round, at the largest, is 0.89%; messages and records use the rest.
 - **Fallback.** Band M, 868.0–868.6 MHz, allows 1% at 25 mW e.r.p., at 14 dBm e.r.p. The rest after
   each packet would have to be 99 airtimes there. Moving a running group to it is deferred.
 - **Today.** The driver default, 868.0 MHz at 125 kHz, straddles the boundary between bands L and M.
@@ -116,7 +117,12 @@ the channel is clear (`octowhere-node`'s `access`).
   and for this node's own transmission to start. Two nodes due at once collide only when they
   draw the same step.
 - **Duty.** After each transmission a node is silent for nine times its airtime, which keeps it
-  under band O's 10% at any moment.
+  under band O's 10% at any moment. A packet carrying the node's own key messages is the
+  exception (owner, 2026-10-07): a removal's switch waits on every key message leaving the
+  remover, and in reach the rest after each was what made a removal take minutes. The band
+  measures its 10% over an hour, so a node keeps its airtime in 5-minute slices and holds any
+  packet that would take the last 13 slices past 360 s. A removal from a group of 32 is about
+  12 s of key messages.
 - **The floor** is a little under three rounds, so that a node listening for three rounds, as
   in a first sweep, hears every node in reach.
 - **Sweep rounds** are every round of a timebase whose index is a multiple of 13, about every
@@ -560,10 +566,12 @@ Owner, 2026-10-03, except where it says otherwise.
   the group switches at, counted on its timebase, the id and SHA-256 fingerprint of the
   member removed, and the fingerprint of the key it replaces (owner, 2026-10-04). The remover
   signs each (see "Signatures") and sends one a packet. The switch is as far off as the remover
-  needs to send its key messages and the removal message, one a packet with the rest after
+  would need to send its key messages and the removal message, one a packet with the rest after
   each, about 4 s each, and four rounds more: three for relays and repair, and the round it is
   in (owner, 2026-10-05). That is about 3.75 minutes for 8 members and 5.25 for 32, against 8
-  and 27 when slots sent one a round. In the simulator, groups of 16 and 32 in reach had every
+  and 27 when slots sent one a round. The remover sends its key messages without the rest
+  since 2026-10-07 (see "Duty"); whether a spread-out group needs a longer lead waits on a
+  removal measured with that (owner, 2026-10-07). In the simulator, groups of 16 and 32 in reach had every
   key message within 45 s and 100 s, and every member switched at the switch. Along relay
   chains of 8 and 12, over ten seeds each, up to two members learned of the removal after the
   switch, and switched three rounds after learning, as a member that learns late does.
