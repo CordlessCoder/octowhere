@@ -312,6 +312,14 @@ struct Shown {
 pub static BENCH_KEEP_FINGERPRINTS: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
 
+/// Bench: how long a catch-up under an old key waits once due, drawn up to; 0 sends it at once.
+pub static BENCH_CATCH_UP_SPREAD_US: core::sync::atomic::AtomicI64 =
+    core::sync::atomic::AtomicI64::new(0);
+
+/// Bench: whether a member leaves its key messages unacknowledged.
+pub static BENCH_NO_KEY_ACKS: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
 impl Shown {
     fn new(radio: bool) -> Self {
         Self {
@@ -662,6 +670,8 @@ pub struct Mesh<R, T, G, D, S, A: Allocator> {
     access: Access,
     /// The sweep round this node last drew a time to send in, and that time on the local timer.
     sweep_at: Option<(i64, i64)>,
+    /// Bench: when a catch-up under an old key goes, once drawn.
+    catch_up_at: Option<i64>,
     timebase_shown: Option<Timebase>,
     /// When each id was last heard sending, on the local clock.
     heard: [Option<i64>; IDS as usize],
@@ -738,6 +748,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             table: Table::new(own),
             access: Access::default(),
             sweep_at: None,
+            catch_up_at: None,
             timebase_shown: None,
             heard: [None; IDS as usize],
             shown: Shown::new(true),
@@ -1411,7 +1422,16 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             return None;
         }
         let at = if self.removals.catching_up() {
-            now
+            let spread = BENCH_CATCH_UP_SPREAD_US.load(core::sync::atomic::Ordering::Relaxed);
+            match self.catch_up_at {
+                Some(at) => at,
+                None if spread > 0 => {
+                    let at = now + self.draw(spread, own);
+                    self.catch_up_at = Some(at);
+                    at
+                }
+                None => now,
+            }
         } else {
             self.sweep_at(round, now - (time - round * ROUND_US), own)
         };
@@ -1449,6 +1469,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         };
         self.access.sent(started, len, None);
         self.removals.sent_old(caught, lost, round);
+        self.catch_up_at = None;
         info!(
             "[REKEY] sent under generation {} round={} caught={:#010x} len={} done={}",
             generation,
@@ -1686,6 +1707,12 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                 continue;
             };
             if message.is_key() {
+                info!(
+                    "[BENCH] key {}/{} arrived from {}",
+                    message.origin(),
+                    message.seq(),
+                    header.sender
+                );
                 self.keep_key(&message);
             }
             if self.arrived(&message, own) == Arrival::Later {
@@ -1783,6 +1810,13 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             return;
         };
         let (round, own) = (round_at(time), group.own());
+        let floor = !(group.has_unsent()
+            || self.messages.has_unsent()
+            || self.table.has_news()
+            || self.summary.is_some()
+            || !self.requests.pending().is_empty());
+        octowhere_mesh::table::BENCH_FLOOR_PACKET
+            .store(floor, core::sync::atomic::Ordering::Relaxed);
         let mut packet = [0u8; MAX_PACKET];
         let mut builder = Sealing::new(&mut packet, &Header::new(own, timebase, time));
         let carried = compose(
@@ -1814,6 +1848,14 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             return;
         };
         let spread = self.draw(SPREAD_US, own);
+        let own_keys = carried.messages().iter().any(|&name| {
+            name.0 == own
+                && self
+                    .messages
+                    .get(name)
+                    .is_some_and(|message| message.is_key())
+        });
+        crate::access::BENCH_OWN_KEYS.store(own_keys, core::sync::atomic::Ordering::Relaxed);
         self.access.sent(started, len, Some(spread));
         self.relays
             .sent(own, carried.neighbours, carried.messages(), started);
@@ -1829,6 +1871,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             );
             let own = group.own();
             for &name in carried.messages() {
+                self.messages.bench_carried(name);
                 if name.0 == own {
                     self.inbox.sent(name);
                 }
@@ -2729,6 +2772,12 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                         Some(new) => match self.learned_key(origin, new) {
                             None | Some(Learned::Later) => return Arrival::Later,
                             Some(Learned::Ignored) => return Arrival::Done,
+                            Some(Learned::Pending)
+                                if BENCH_NO_KEY_ACKS
+                                    .load(core::sync::atomic::Ordering::Relaxed) =>
+                            {
+                                return Arrival::Done;
+                            }
                             Some(Learned::Pending) => {}
                         },
                         None => {

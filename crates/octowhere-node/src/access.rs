@@ -15,6 +15,15 @@ pub static BENCH_RECORD_STEPS: core::sync::atomic::AtomicU32 =
     core::sync::atomic::AtomicU32::new(STEPS);
 /// A node that found the channel busy waits up to this many steps, past the longest packet.
 pub const BUSY_STEPS: u32 = 64;
+/// Bench: whether a packet carrying the node's own key messages goes without the rest after it.
+pub static BENCH_REMOVER_BURST: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+/// Bench: whether the packet just sent carried the node's own key messages.
+pub static BENCH_OWN_KEYS: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+/// Bench: the airtimes a node rests after each transmission, in place of [`REST_TIMES`].
+pub static BENCH_REST_TIMES: core::sync::atomic::AtomicI64 =
+    core::sync::atomic::AtomicI64::new(REST_TIMES);
 /// A node's floor and its news come up to this much early, drawn at each of its packets, so that
 /// nodes that started together drift apart rather than contend at every floor.
 pub const SPREAD_US: i64 = 10_000_000;
@@ -91,7 +100,13 @@ impl Access {
             self.own = Some((at, spread));
             self.repair_at = None;
         }
-        self.quiet_until = at + (1 + REST_TIMES) * airtime_us(len);
+        let burst = BENCH_REMOVER_BURST.load(core::sync::atomic::Ordering::Relaxed)
+            && BENCH_OWN_KEYS.load(core::sync::atomic::Ordering::Relaxed);
+        let rest = match burst {
+            true => 0,
+            false => BENCH_REST_TIMES.load(core::sync::atomic::Ordering::Relaxed),
+        };
+        self.quiet_until = at + (1 + rest) * airtime_us(len);
     }
 
     /// Notes the channel found busy at local time `now`, with a backoff of `wait` from there.

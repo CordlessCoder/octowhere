@@ -317,6 +317,11 @@ impl Sim {
         }
     }
 
+    /// Bench: receptions so far, by what became of them.
+    pub fn receptions(&self) -> crate::world::Receptions {
+        self.world.receptions.get()
+    }
+
     /// Virtual time, in seconds.
     pub fn now_s(&self) -> f64 {
         self.world.now() as f64 / 1e6

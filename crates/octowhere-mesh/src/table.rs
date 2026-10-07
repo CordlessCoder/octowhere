@@ -6,6 +6,13 @@ use crate::{AHEAD_S, IDS, Ids};
 
 /// An id heard within this many rounds is a neighbour.
 pub const NEIGHBOUR_ROUNDS: i64 = 7;
+/// Bench: when a packet carries the rest of the table in rotation: 0 always, as the firmware
+/// does, 1 never, 2 only in a packet that holds nothing else to send, and from 3 up, at most
+/// that less two entries from it a packet.
+pub static BENCH_ROTATION: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+/// Bench: whether the packet being filled holds nothing else to send.
+pub static BENCH_FLOOR_PACKET: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
 /// An entry this much newer than the one last sent for its id is worth sending again, as is one
 /// that moved [`MOVED_M`]: about a floor, so a still node's entry stays current.
 pub const NEWER_S: u32 = 135;
@@ -216,6 +223,7 @@ impl Table {
     /// order: this node's own, those worth sending ahead of the rotation newest first, then the
     /// rest in rotation. Returns how many it picked.
     pub fn digest(&self, base: u32, out: &mut [Entry]) -> usize {
+        let room = out.len();
         let mut picked = Ids::EMPTY;
         let mut n = 0;
         let mut take = |entry: &Entry, picked: &mut Ids, n: &mut usize| {
@@ -240,9 +248,23 @@ impl Table {
                 take(entry, &mut picked, &mut n);
             }
         }
-        for step in 0..IDS {
+        let (rotate, most) = match BENCH_ROTATION.load(core::sync::atomic::Ordering::Relaxed) {
+            0 => (true, room),
+            1 => (false, 0),
+            2 => (
+                BENCH_FLOOR_PACKET.load(core::sync::atomic::Ordering::Relaxed),
+                room,
+            ),
+            cap => (true, (n + usize::from(cap - 2)).min(room)),
+        };
+        let mut limit = |entry: &Entry, picked: &mut Ids, n: &mut usize| {
+            if *n < most {
+                take(entry, picked, n);
+            }
+        };
+        for step in (0..IDS).filter(|_| rotate) {
             if let Some(entry) = self.entry((self.rotation + step) % IDS) {
-                take(entry, &mut picked, &mut n);
+                limit(entry, &mut picked, &mut n);
             }
         }
         n

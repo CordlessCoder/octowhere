@@ -24,7 +24,7 @@ mod inbox;
 #[cfg(feature = "run")]
 mod node;
 #[cfg(feature = "run")]
-mod removals;
+pub mod removals;
 #[cfg(feature = "run")]
 mod unsaved;
 pub mod view;
@@ -32,7 +32,8 @@ mod write;
 
 #[cfg(feature = "run")]
 pub use node::{
-    BENCH_KEEP_FINGERPRINTS, Command, Commands, Device, Fix, GpsTime, GroupStore, Mesh,
-    RECEIVED_MAX, Radio, Random, Received, Sent, Start, Time, blank_view, offline, publish_start,
+    BENCH_CATCH_UP_SPREAD_US, BENCH_KEEP_FINGERPRINTS, BENCH_NO_KEY_ACKS, Command, Commands,
+    Device, Fix, GpsTime, GroupStore, Mesh, RECEIVED_MAX, Radio, Random, Received, Sent, Start,
+    Time, blank_view, offline, publish_start,
 };
 pub use write::{GroupWrite, KeptRow};

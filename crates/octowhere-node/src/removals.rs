@@ -26,6 +26,10 @@ const NOTICE_SENDS: u8 = 3;
 /// declined the removal never takes it, and replays of one of its packets would otherwise spend
 /// every send before it is back (owner, 2026-10-04).
 const CATCH_UP_DOUBLINGS: u32 = 6;
+/// Bench: the rounds before a member's key message goes to it again the first time, in place of
+/// [`SWEEP_EVERY`].
+pub static BENCH_CATCH_UP_GAP: core::sync::atomic::AtomicI64 =
+    core::sync::atomic::AtomicI64::new(SWEEP_EVERY);
 /// The packets after a switch that carry this node's word that it is on the new key, beside
 /// those in sweep rounds.
 const ON_KEY_FIRST: u8 = 3;
@@ -453,8 +457,8 @@ impl<A: Allocator> Removals<A> {
             return;
         }
         let (sends, last) = self.caught_up[usize::from(sender)];
-        let due =
-            last + SWEEP_EVERY * (1 << u32::from(sends.saturating_sub(1)).min(CATCH_UP_DOUBLINGS));
+        let gap = BENCH_CATCH_UP_GAP.load(core::sync::atomic::Ordering::Relaxed);
+        let due = last + gap * (1 << u32::from(sends.saturating_sub(1)).min(CATCH_UP_DOUBLINGS));
         if sends > 0 && round < due {
             info!(
                 "[REKEY] {} is on generation {}; sent its key message {} times, again from round {}",

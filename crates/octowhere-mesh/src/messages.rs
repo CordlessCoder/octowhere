@@ -438,9 +438,15 @@ pub struct Store {
     unsent: [u32; CAPACITY / 32],
     /// The places holding a message this node has yet to take, as bits.
     unread: [u32; CAPACITY / 32],
+    /// Bench: the places holding a message a packet of this node's has carried, as bits.
+    once: [u32; CAPACITY / 32],
     /// The exclusive or of each message's hash.
     digest: u32,
 }
+
+/// Bench: whether a message this node never sent goes ahead of one it sends again.
+pub static BENCH_FIRST_SENDS_FIRST: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
 
 /// 32 bits of SHA-256 over a message's origin and sequence number.
 fn hash((origin, seq): MessageId) -> u32 {
@@ -520,6 +526,14 @@ impl Store {
         self.messages[at] = Message::zeroed();
         self.unsent[at / 32] &= !(1 << (at % 32));
         self.unread[at / 32] &= !(1 << (at % 32));
+        self.once[at / 32] &= !(1 << (at % 32));
+    }
+
+    /// Bench: marks a message held as carried by one of this node's own packets.
+    pub fn bench_carried(&mut self, name: MessageId) {
+        if let Some(at) = self.place(name) {
+            self.once[at / 32] |= 1 << (at % 32);
+        }
     }
 
     /// Drops the messages past the horizon at `now`, the timebase second a round started at,
@@ -593,12 +607,17 @@ impl Store {
     /// The oldest message to be sent that comes after `after` in sending order.
     #[must_use]
     pub fn next_unsent(&self, after: Option<&Message>) -> Option<&Message> {
-        let after = after.map(Message::order);
+        let first = BENCH_FIRST_SENDS_FIRST.load(core::sync::atomic::Ordering::Relaxed);
+        let key = |at: usize| {
+            let once = first && self.once[at / 32] & 1 << (at % 32) != 0;
+            (once, self.messages[at].order())
+        };
+        let after = after.map(|after| self.place(after.name()).map_or((false, after.order()), key));
         (0..CAPACITY)
             .filter(|&at| self.unsent[at / 32] & 1 << (at % 32) != 0)
+            .filter(|&at| after.is_none_or(|after| key(at) > after))
+            .min_by_key(|&at| key(at))
             .map(|at| &self.messages[at])
-            .filter(|held| after.is_none_or(|after| held.order() > after))
-            .min_by_key(|held| held.order())
     }
 
     /// The smallest sequence number from `origin` above `above`, with its message.

@@ -19,6 +19,15 @@
 //! give each phase's time on the host.
 //! `RELAY_COST_SHAPES` names the shapes to run, all by default, and `RELAY_COST_KIND=removal`
 //! has node 0 remove the last node instead, until every other member holds its key message.
+//!
+//! A variant may add `rN`, a rest of N airtimes after each packet in place of nine, and `k`,
+//! key messages left unacknowledged, in any order after `steps:resends`. Across a run:
+//! `RELAY_COST_FIX=still` gives every node a fix that stays put, refreshed each second;
+//! `RELAY_COST_ROTATION` sets `table::BENCH_ROTATION`; `RELAY_COST_CATCH_UP=spread_ms:rounds`
+//! spreads a catch-up under an old key over up to `spread_ms` and sends it again first after
+//! `rounds` (`0:13` is the firmware's); `RELAY_COST_FIRST=1` sends a message never sent ahead of
+//! one sent again; and `RELAY_COST_BURST=1` leaves out the rest after a packet carrying the
+//! node's own key messages.
 
 use std::{fmt::Write as _, io::Write as _};
 
@@ -28,6 +37,17 @@ use octowhere_sim::{Config, Link, Sim, UTC0_S, grouped};
 
 /// Seeds each shape runs at.
 const SEEDS: u64 = 4;
+
+/// Node `n`'s fix at UTC second `utc`, on a grid 100 m apart, with `RELAY_COST_FIX=still`.
+fn still_fix(n: usize, utc: u32) -> octowhere_node::Fix {
+    octowhere_node::Fix {
+        latitude: 515_000_000 + (n / 8) as i32 * 9_000,
+        longitude: -1_000_000 + (n % 8) as i32 * 14_000,
+        stamp: utc,
+        quality: octowhere_mesh::packet::Quality::Autonomous,
+        hdop_milli: Some(900),
+    }
+}
 
 struct Shape {
     name: String,
@@ -57,12 +77,16 @@ struct Variant {
     named: bool,
     /// Whether each sender names the neighbours that are to pass its messages on.
     designate: bool,
+    /// The airtimes a node rests after each transmission.
+    rest: i64,
+    /// Whether members leave their key messages unacknowledged.
+    no_key_acks: bool,
 }
 
 impl Variant {
     fn name(self) -> String {
         format!(
-            "steps{}-again{}{}",
+            "steps{}-again{}{}{}{}",
             self.record_steps,
             self.resends,
             match (self.answer, self.named, self.designate) {
@@ -71,7 +95,12 @@ impl Variant {
                 (_, false, true) => "-designated",
                 (_, true, _) => "-named",
                 _ => "",
-            }
+            },
+            match self.rest {
+                9 => String::new(),
+                rest => format!("-rest{rest}"),
+            },
+            if self.no_key_acks { "-noack" } else { "" },
         )
     }
 
@@ -82,6 +111,8 @@ impl Variant {
         octowhere_mesh::relays::BENCH_ANSWER.store(self.answer, Ordering::Relaxed);
         octowhere_mesh::relays::BENCH_NAMED.store(self.named, Ordering::Relaxed);
         octowhere_mesh::relays::BENCH_DESIGNATE.store(self.designate, Ordering::Relaxed);
+        octowhere_node::access::BENCH_REST_TIMES.store(self.rest, Ordering::Relaxed);
+        octowhere_node::BENCH_NO_KEY_ACKS.store(self.no_key_acks, Ordering::Relaxed);
         for designated in &octowhere_mesh::relays::BENCH_DESIGNATED {
             designated.store(0, Ordering::Relaxed);
         }
@@ -234,11 +265,56 @@ fn run(
     multi: &MultiProgress,
 ) -> Run {
     variant.apply();
+    // `RELAY_COST_ROTATION` as `table::BENCH_ROTATION` reads it: 0, the firmware's, by default.
+    octowhere_mesh::table::BENCH_ROTATION.store(
+        std::env::var("RELAY_COST_ROTATION").map_or(0, |rotation| rotation.parse().unwrap()),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    // `RELAY_COST_CATCH_UP=spread_ms:gap_rounds`: a catch-up waits up to the spread once due,
+    // and goes again first after the gap. `0:13` is the firmware's.
+    let (spread, gap) = std::env::var("RELAY_COST_CATCH_UP").map_or((0, 13), |catch_up| {
+        let (spread, gap) = catch_up.split_once(':').expect("spread_ms:gap_rounds");
+        (spread.parse::<i64>().unwrap() * 1_000, gap.parse().unwrap())
+    });
+    octowhere_node::BENCH_CATCH_UP_SPREAD_US.store(spread, std::sync::atomic::Ordering::Relaxed);
+    octowhere_node::removals::BENCH_CATCH_UP_GAP.store(gap, std::sync::atomic::Ordering::Relaxed);
+    // `RELAY_COST_BURST=1`: a packet carrying the node's own key messages has no rest after it.
+    octowhere_node::access::BENCH_REMOVER_BURST.store(
+        std::env::var("RELAY_COST_BURST").is_ok_and(|burst| burst == "1"),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    // `RELAY_COST_FIRST=1`: a message never sent goes ahead of one sent again.
+    octowhere_mesh::messages::BENCH_FIRST_SENDS_FIRST.store(
+        std::env::var("RELAY_COST_FIRST").is_ok_and(|first| first == "1"),
+        std::sync::atomic::Ordering::Relaxed,
+    );
     let mut sim = Sim::new(seed);
     sim.record(true);
-    for start in grouped(shape.nodes as u8, UTC0_S as u32 - 3_600) {
-        sim.add(start, Config::default());
+    let fixes = std::env::var("RELAY_COST_FIX").is_ok_and(|fix| fix == "still");
+    for (n, start) in grouped(shape.nodes as u8, UTC0_S as u32 - 3_600)
+        .into_iter()
+        .enumerate()
+    {
+        let config = match fixes {
+            true => Config {
+                gps: true,
+                fix: Some(still_fix(n, UTC0_S as u32)),
+                ..Config::default()
+            },
+            false => Config::default(),
+        };
+        sim.add(start, config);
     }
+    let mut next_fix = 0;
+    let mut refresh = move |sim: &Sim| {
+        if fixes && sim.now_us() >= next_fix {
+            let utc = u32::try_from(sim.utc_us() / 1_000_000).unwrap();
+            for n in 0..shape.nodes {
+                sim.set_fix(n, Some(still_fix(n, utc)), true);
+            }
+            next_fix = sim.now_us() + 1_000_000;
+        }
+    };
     let link = Link {
         loss: shape.loss,
         ..Link::default()
@@ -275,6 +351,7 @@ fn run(
         let mut cursor = 0;
         sim.run_while_not(60 * 60, |sim| {
             bar.set_position((sim.now_us() - start) / 1_000_000);
+            refresh(sim);
             let (lines, total) = sim.lines_since(cursor);
             cursor = total;
             for line in lines {
@@ -297,7 +374,10 @@ fn run(
     let met_at = clock.elapsed();
     // A floor and more, so that every neighbour's report holds its whole reach.
     phase(bar, "settling", 180);
-    sim.run_for(180);
+    for _ in 0..180 {
+        refresh(&sim);
+        sim.run_for(1);
+    }
     let settled_at = clock.elapsed();
     let from = sim.now_us();
     let removal = std::env::var("RELAY_COST_KIND").is_ok_and(|kind| kind == "removal");
@@ -325,6 +405,7 @@ fn run(
         let mut cursor = sim.lines_since(0).1;
         sim.run_while_not(limit, |sim| {
             bar.set_position((sim.now_us() - from) / 1_000_000);
+            refresh(sim);
             let (lines, total) = sim.lines_since(cursor);
             cursor = total;
             for line in lines {
@@ -428,13 +509,22 @@ fn flood_cost() {
             let mut parts = variant.split(':');
             let record_steps = parts.next().unwrap().parse().unwrap();
             let resends = parts.next().expect("steps:resends").parse().unwrap();
-            let mode = parts.next();
+            let flags: Vec<&str> = parts.collect();
+            let mode = flags
+                .iter()
+                .copied()
+                .find(|flag| ["a", "n", "d", "dn"].contains(flag));
             Variant {
                 record_steps,
                 resends,
                 answer: mode == Some("a"),
                 named: matches!(mode, Some("n" | "dn")),
                 designate: matches!(mode, Some("d" | "dn")),
+                rest: flags
+                    .iter()
+                    .find_map(|flag| flag.strip_prefix('r'))
+                    .map_or(9, |rest| rest.parse().unwrap()),
+                no_key_acks: flags.contains(&"k"),
             }
         })
         .collect();
