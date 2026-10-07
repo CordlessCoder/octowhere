@@ -39,8 +39,6 @@ pub struct Table {
     heard: [Option<i64>; SLOTS],
     /// An id was heard for the first time since the last packet.
     appeared: bool,
-    /// Where the rotation through the rest of the table resumes.
-    rotation: u8,
 }
 
 impl Table {
@@ -52,7 +50,6 @@ impl Table {
             sent: [None; SLOTS],
             heard: [None; SLOTS],
             appeared: false,
-            rotation: 0,
         }
     }
 
@@ -194,7 +191,7 @@ impl Table {
         true
     }
 
-    /// Whether an entry is worth sending ahead of the rotation.
+    /// Whether an entry is worth sending.
     fn is_fresh(&self, entry: &Entry) -> bool {
         match &self.sent[usize::from(entry.id)] {
             None => true,
@@ -213,8 +210,8 @@ impl Table {
     }
 
     /// Picks up to `out.len()` entries for a packet with base timestamp `base`, in the protocol's
-    /// order: this node's own, those worth sending ahead of the rotation newest first, then the
-    /// rest in rotation. Returns how many it picked.
+    /// order: this node's own, then those worth sending, newest first. Returns how many it
+    /// picked.
     pub fn digest(&self, base: u32, out: &mut [Entry]) -> usize {
         let mut picked = Ids::EMPTY;
         let mut n = 0;
@@ -240,11 +237,6 @@ impl Table {
                 take(entry, &mut picked, &mut n);
             }
         }
-        for step in 0..IDS {
-            if let Some(entry) = self.entry((self.rotation + step) % IDS) {
-                take(entry, &mut picked, &mut n);
-            }
-        }
         n
     }
 
@@ -252,9 +244,6 @@ impl Table {
     pub fn sent(&mut self, entries: &[Entry]) {
         for entry in entries {
             self.sent[usize::from(entry.id)] = Some(*entry);
-        }
-        if let Some(last) = entries.iter().rev().find(|entry| entry.id != self.own) {
-            self.rotation = (last.id + 1) % IDS;
         }
         self.appeared = false;
     }
@@ -366,7 +355,7 @@ mod tests {
     }
 
     #[test]
-    fn a_digest_leads_with_its_own_then_news_then_rotates() {
+    fn a_digest_holds_its_own_then_news_and_nothing_else() {
         let mut table = Table::new(2);
         table.set_own(entry(2, 5_000, DUBLIN));
         for id in [4, 6, 8] {
@@ -387,12 +376,7 @@ mod tests {
 
         table.sent(&out[..n]);
         let n = table.digest(5_000, &mut out);
-        let ids: [u8; 3] = core::array::from_fn(|i| out[i].id);
-        assert_eq!(
-            (n, ids),
-            (3, [2, 4, 6]),
-            "then the rotation, after the last id sent"
-        );
+        assert_eq!((n, out[0].id), (1, 2), "nothing new to say of the others");
     }
 
     #[test]
