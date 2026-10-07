@@ -575,10 +575,13 @@ Owner, 2026-10-03, except where it says otherwise.
   in (owner, 2026-10-05). That is about 3.75 minutes for 8 members and 5.25 for 32, against 8
   and 27 when slots sent one a round. The remover sends its key messages without the rest
   since 2026-10-07 (see "Duty"); whether a spread-out group needs a longer lead waits on a
-  removal measured with that (owner, 2026-10-07). In the simulator, groups of 16 and 32 in reach had every
-  key message within 45 s and 100 s, and every member switched at the switch. Along relay
-  chains of 8 and 12, over ten seeds each, up to two members learned of the removal after the
-  switch, and switched three rounds after learning, as a member that learns late does.
+  removal measured with that (owner, 2026-10-07; see "Open"). In the simulator, every node
+  holding a fix, over eight seeds (`docs/logs/lora/removal-changes-2026-10-07/`), 32 in reach
+  had every key message within 17 s and a line of 12 within 82 s, and every member switched
+  with the group. In grids and scattered groups of 32 it took 7 to 10 minutes at the median,
+  and up to about a third of the members learned of the removal within three rounds of the
+  switch or after it. Each switched three rounds after learning, as a member that learns late
+  does, and was cut off from the group until then, for up to 12 minutes.
   Until then the removed device still reads everything. The remover reserves every sequence
   number its key messages need before it starts, and a remover that restarts before they have
   gone sends them again. Adding a device is refused while a removal is under way, since it would
@@ -972,6 +975,12 @@ protocol does not need this.
 
 ## Open
 
+- A removal's lead in groups spread out over several hops (owner to decide, 2026-10-07). With
+  the switch 5¼ minutes off for 32, up to about a third of the members switch after the group,
+  cut off for up to 12 minutes, and 17 along a line that loses one packet in five; four rounds
+  more cut that to a tenth and 6 minutes, and eight
+  rounds to almost none, while the removed device reads everything 3 or 6 minutes longer
+  (`docs/logs/lora/removal-changes-2026-10-07/`). In reach nobody is late with any lead.
 - A replay of two recorded packets still moves a clock, within 5 minutes where the node's RTC
   holds the time and anywhere where it does not ("Replays" above). A replayed packet held for a
   second makes the node treat its clock as sweeping for a floor and a round; it does not move the
