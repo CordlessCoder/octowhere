@@ -587,7 +587,9 @@ Owner, 2026-10-03, except where it says otherwise.
   to 13 members over the eight seeds learned of the removal within three rounds of the switch
   or after it. Each switched three rounds after learning, as a member that learns late does,
   and was cut off from the group until then, for up to 135 s. With the shorter lead, up to
-  about a third did, cut off for up to 15 minutes.
+  about a third did, cut off for up to 15 minutes. Two boards ran a removal with every member
+  in reach, one with a member out of reach, and a member's catch-up
+  (`docs/logs/lora/removal-changes-boards-2026-10-07/`).
   Until then the removed device still reads everything. The remover reserves every sequence
   number its key messages need before it starts, and a remover that restarts before they have
   gone sends them again. Adding a device is refused while a removal is under way, since it would
