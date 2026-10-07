@@ -435,7 +435,7 @@ mod tests {
         members[2] = Some(member(3, NOW - 100));
         node.group = Group::new(Key::new([5; 32]), 0, members).unwrap();
         node.rekey
-            .start(&node.group, 2, Key::new([9; 32]), (NOW / 45) + 10)
+            .start(&node.group, 2, Key::new([9; 32]), (NOW / 45) + 10, Ids::ALL)
             .unwrap();
         node.rekey.switch(&mut node.group).unwrap();
         assert!(node.rekey.is_waiting_for(0, 1));

@@ -2137,7 +2137,12 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         let Some(group) = &self.group else {
             return Err(Unremovable::NoTime);
         };
-        let Some(new) = self.removals.rekey.start(group, id, Key::new(key), round) else {
+        let neighbours = self.table.neighbours(round_at(time));
+        let Some(new) = self
+            .removals
+            .rekey
+            .start(group, id, Key::new(key), round, neighbours)
+        else {
             warn!("[REKEY] cannot remove {} now", id);
             // Another removal may have come while the numbers were stored.
             return Err(match self.removals.rekey.pending() {
