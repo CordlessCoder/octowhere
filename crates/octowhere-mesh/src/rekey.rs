@@ -30,7 +30,6 @@ pub const HOP_ROUNDS: u32 = 3;
 pub const OLD_KEYS: usize = 4;
 /// The rounds a device that learns of a removal has to decline it, however late it learns.
 pub const DECLINE_ROUNDS: u32 = 3;
-/// A round's length in seconds.
 /// The declined keys remembered, so a key sent again does not ask again.
 pub const DECLINED: usize = 4;
 /// How long after its switch a removal can still be declined: the key before it is kept that

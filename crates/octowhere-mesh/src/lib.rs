@@ -27,8 +27,8 @@ pub mod table;
 pub use bytemuck::Zeroable;
 pub use ids::Ids;
 
-/// The number of ids, and of slots in a round. Ids are five bits on the air, and sets of them
-/// are [`Ids`], a `u32` underneath.
+/// The number of ids. Ids are five bits on the air, and sets of them are [`Ids`], a `u32`
+/// underneath.
 pub const IDS: u8 = 32;
 /// How far ahead of a node's clock a member or gone record, a position or a message may be
 /// stamped: one stamped later would win every merge until then, a clock's error kept for ever.

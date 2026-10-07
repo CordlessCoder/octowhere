@@ -74,7 +74,15 @@ mod tests {
     #[test]
     fn airtime_matches_the_protocol_table() {
         assert_eq!(airtime_us(255), 399_616);
-        assert_eq!(airtime_us(42) / 1000, 87);
-        assert_eq!(airtime_us(105) / 1000, 179);
+        for (len, ms) in [
+            (36, 77),
+            (48, 98),
+            (57, 108),
+            (111, 190),
+            (184, 297),
+            (248, 389),
+        ] {
+            assert_eq!((airtime_us(len) + 500) / 1000, ms, "{len} bytes");
+        }
     }
 }

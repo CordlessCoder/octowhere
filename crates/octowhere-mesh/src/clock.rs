@@ -178,8 +178,8 @@ impl Clock {
     /// adrift.
     pub fn arrival(&mut self, header: &Header, start: i64, now: i64) -> Arrival {
         let sweeping = self.is_sweeping(now);
-        let slot = header.start();
-        let offset = start - slot;
+        let named = header.start();
+        let offset = start - named;
         let late_us = self
             .clock
             .filter(|(_, timebase)| timebase.source == header.timebase.source)
@@ -210,13 +210,13 @@ impl Clock {
         if matches!(taken, Taken::Adopted | Taken::Refined)
             && let Some((mine, _)) = self.clock
             && (offset - mine).abs() > GUARD_US
-            && !self.agrees(header, offset, round_at(slot), now)
+            && !self.agrees(header, offset, round_at(named), now)
         {
             self.held = Some(Held {
                 offset,
                 source: theirs.source,
                 sender: header.sender,
-                round: round_at(slot),
+                round: round_at(named),
                 until: now + AGREE_US,
             });
             self.sweep_to(now + AGREE_US);
@@ -275,15 +275,15 @@ impl Clock {
     }
 
     /// The sweep round under way in the timebase at local time `now`, if one is. It opens a guard
-    /// early, as a slot's window does, and closes as early.
+    /// early, and closes as early.
     fn sweep_round(&self, now: i64) -> Option<i64> {
         let (time, _) = self.at(now)?;
         let round = round_at(time + GUARD_US);
         is_sweep_round(round).then_some(round)
     }
 
-    /// Whether the node listens throughout at local time `now`: in a first or lost sweep, or in
-    /// a sweep round. A sweep ends at its time, though the node ticks only once a round.
+    /// Whether the node is sweeping at local time `now`: in a first or lost sweep, or in a sweep
+    /// round.
     #[must_use]
     pub fn is_sweeping(&self, now: i64) -> bool {
         self.sweep_until.is_some_and(|until| now < until) || self.sweep_round(now).is_some()
@@ -309,7 +309,7 @@ mod tests {
 
     /// A packet's start in `round`, a second apart for each sender, where its header names it
     /// exactly.
-    fn slot_start(round: i64, id: u8) -> i64 {
+    fn packet_start(round: i64, id: u8) -> i64 {
         round * ROUND_US + i64::from(id) * SECOND + 1_953
     }
 
@@ -323,10 +323,11 @@ mod tests {
         header
     }
 
-    /// A node whose timer reads `skew` more than the timebase, and the local time of a slot.
+    /// A node whose timer reads `skew` more than the timebase hears `from`'s packet in the round
+    /// after `now`.
     fn sent(clock: &mut Clock, from: u8, source: Source, hops: u8, skew: i64, now: i64) -> Arrival {
         let round = crate::schedule::round_at(now - skew) + 1;
-        let start = slot_start(round, from);
+        let start = packet_start(round, from);
         clock.arrival(&header(from, source, hops, start), start + skew, now)
     }
 
@@ -494,7 +495,7 @@ mod tests {
     }
 
     #[test]
-    fn outside_a_sweep_only_a_packet_in_its_window_refines() {
+    fn outside_a_sweep_only_a_packet_within_the_guard_refines() {
         let mut clock = Clock::new(28, 0);
         // Round 1 of the timebase, which is no sweep round.
         let now = ROUND_US + SECOND;

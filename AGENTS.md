@@ -180,8 +180,8 @@ initialization or peripheral mappings.
 - [`context/IMPLEMENTATION.md`](context/IMPLEMENTATION.md) is a finished multi-agent brief kept as
   a record. Its partition is historical.
 - [`context/LORA-PROTOCOL.md`](context/LORA-PROTOCOL.md) is the agreed design for the location
-  mesh of up to 32 nodes: band and radio settings, gossip digest, GPS-anchored TDMA, packet
-  layout, messages, crypto and pairing. Steps 1 to 4 and 6 of its build order are implemented,
+  mesh of up to 32 nodes: band and radio settings, gossip digest, contention for the channel,
+  packet layout, messages, crypto and pairing. Steps 1 to 4 and 6 of its build order are implemented,
   step 5 went with the slots, and step 7 closed with the cancel rule.
 - [`context/palette-reference.md`](context/palette-reference.md) records the colour values from the
   reference board and the role each one plays in `chrome.rs`.
@@ -446,7 +446,12 @@ Results in `docs/logs/display/startup-timing-2026-10-06/`. And `bench/relay-prun
 in the simulator the packets a flood and a removal take, sets them beside the fewest a flood
 could use, and tries relay changes through knobs whose defaults are the firmware's
 (`crates/octowhere-sim/tests/relay_cost.rs`, an ignored test, summarised by
-`tools/relay-*.py`); results in `docs/logs/lora/relay-pruning-2026-10-06/`.
+`tools/relay-*.py`); results in `docs/logs/lora/relay-pruning-2026-10-06/`. And
+`bench/contention-review`, built on it, gives every node a fix, measures the channel's use and
+what the position table's rotation costs (`crates/octowhere-sim/tests/channel_load.rs`,
+summarised by `tools/channel-load.py`), and adds switches for a removal's rest,
+acknowledgements, catch-ups and send order; results in
+`docs/logs/lora/contention-review-2026-10-07/`.
 
 ## Concurrency
 

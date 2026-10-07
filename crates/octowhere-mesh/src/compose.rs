@@ -1,6 +1,6 @@
-//! What a node's packet carries in its slot, in order: the neighbours, the digests and the ids it
-//! asks for; then a summary of its messages, member and gone records, and messages, oldest first;
-//! and the positions last. Room is kept for the node's own position throughout, so that a busy
+//! What a node's packet carries, in order: the neighbours, the digests and the ids it asks for,
+//! and its word that it is on the group's key; then a summary of its messages while it has none
+//! to send, member and gone records, and messages, oldest first; and the positions last. Room is kept for the node's own position throughout, so that a busy
 //! packet never crowds it out.
 
 use crate::{

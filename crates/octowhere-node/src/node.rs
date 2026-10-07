@@ -68,7 +68,7 @@ const STORE_TIMEOUT_US: i64 = 10 * 1_000_000;
 const PAIR_LISTEN_US: i64 = 250_000;
 /// How long a device that founded a group, without hearing the last acknowledgement, listens
 /// for the joining device under the group's key. That device waits 30 s for done, sweeps for
-/// three rounds for a timebase, then sends at once, since it starts its own: about 3½ minutes in
+/// three rounds for a timebase, then sends at once, since it starts its own: about 2¾ minutes in
 /// all.
 const FOUNDING_WAIT_US: i64 = 10 * 60 * 1_000_000;
 /// How long after a failed write a founding's wait tries to store its group again.
@@ -684,7 +684,7 @@ pub struct Mesh<R, T, G, D, S, A: Allocator> {
     removals: Removals<A>,
     /// The numbers of the writes queued without waiting, whose results are yet to be checked.
     writes: heapless::Vec<u32, 8>,
-    /// A summary made before the slot it goes in, with the origin the next one starts from.
+    /// A summary made before the backoff, with the origin the next one starts from.
     summary: Option<Box<(heapless::Vec<u8, SUMMARY_MAX>, u8)>>,
 }
 
@@ -1191,7 +1191,8 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         self.queue_unsaved();
     }
 
-    /// Waits for the node's next slot and sends in it, listening meanwhile.
+    /// Does what is due, then listens until a packet is due and sends it after the backoff, or
+    /// returns early once what is due may have changed.
     async fn step(&mut self) {
         self.queue_unsaved();
         if let Some((generation, remover)) = self.removals.take_refill() {
@@ -2041,7 +2042,7 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
     }
 
     /// Makes the summary the next packet carries, while there is time: with a full store it
-    /// takes milliseconds, too long for the moments before a slot.
+    /// takes milliseconds, too long between the channel check and the transmission.
     fn prepare_summary(&mut self) {
         if !self.summaries.pending() || self.summary.is_some() {
             return;
