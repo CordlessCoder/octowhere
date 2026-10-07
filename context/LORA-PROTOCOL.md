@@ -145,21 +145,20 @@ heard it. The rule is only as good as the neighbour table: a node that has not y
 its neighbours cancels a relay that neighbour needed, and the message summaries bring it back
 later.
 
-Measured in the simulator with every node holding a fix, so that every packet is filled with
-positions (see "Packet"; `docs/logs/lora/contention-review-2026-10-07/`).
-`crates/octowhere-sim/tests/contention.rs` asserts looser bounds on nodes without fixes.
+Measured in the simulator with every node holding a fix
+(`docs/logs/lora/rotation-2026-10-07/`). `crates/octowhere-sim/tests/contention.rs` asserts
+looser bounds on nodes without fixes.
 
-- A group message reaches 31 other nodes in reach in 0.4 to 0.6 s over four seeds, in the
+- A group message reaches 31 other nodes in reach in 0.2 to 0.5 s over four seeds, in the
   origin's one packet: it covers everyone, so nobody relays it.
-- Along a line of twelve, each node in reach of the next only, it takes 5.2 to 5.4 s from end to
-  end, about half a second a hop.
-- 32 nodes in reach that stay put keep the channel 10% busy, and lose about 1% of receptions to
-  two nodes sending at once. Moving 44 m every 30 s, they keep it 31% busy and lose 1.5%. Without
-  fixes it was 2% busy.
-- In grids and scattered groups, where most nodes reach only a few others, 10 to 18% of
-  receptions are lost to packets that overlap, against about 2 to 3% with the rest of the table
-  left out of each packet. Two nodes that cannot hear each other both find the channel clear,
-  and the longer their packets, the more often they overlap at a node between them.
+- Along a line of twelve, each node in reach of the next only, it takes 3.4 to 4.3 s from end to
+  end, about 0.35 s a hop.
+- 32 nodes in reach that stay put keep the channel 2% busy, and lose 0.3% of receptions to two
+  nodes sending at once. Moving 44 m every 30 s, they keep it 8% busy and lose 0.9%.
+- In grids and scattered groups, where most nodes reach only a few others, 2 to 3% of
+  receptions are lost to packets that overlap. Two nodes that cannot hear each other both find
+  the channel clear, and the longer their packets, the more often they overlap at a node
+  between them.
 
 Every header names its sender's timebase and when the packet started on it (see "Keeping time
 without a fix"). Nothing else ties a packet to a time.
@@ -367,11 +366,17 @@ A packet is filled in this order until it is full or nothing is left: the sender
 members digest, its messages digest while it holds a message, a request if it has one, its
 on-key record (see "Removing a member"), a summary if it has one and no message to send, up to
 three member and gone records it has not sent, the sender's own entry, messages (see
-"Flooding"),
-entries learned since this node last sent them (newest first), and the rest of the table in
-rotation. The member records go ahead of the positions so a busy table cannot crowd them out,
-but leave room for the sender's own entry. A member record costs a full packet 12 to 14
-entries, and a gone record 11.
+"Flooding"), and the entries learned or changed since this node last sent them, newest first.
+The member records go ahead of the positions so a busy table cannot crowd them out, but leave
+room for the sender's own entry. A member record costs a full packet 12 to 14 entries, and a
+gone record 11.
+
+A packet carried the rest of the table in rotation after those until 2026-10-07, when the owner
+dropped it: with every node holding a fix, it filled every packet. In the simulator a group in
+reach then kept the channel 10% busy standing still and 31% moving, against 2 and 8% without
+it, and in grids and scattered groups 10 to 18% of receptions were lost to overlapping packets,
+against 2 to 3%. Every node still showed every other's position within each run; a few distant
+pairs in grids showed theirs later at first (`docs/logs/lora/rotation-2026-10-07/`).
 
 A member record's join time and change time are UTC seconds. The change time is the join's, or a
 later rename's or move to another id's, and the newer record of a member wins a merge. A node
@@ -406,8 +411,7 @@ Owner, 2026-10-03. It replaced a rotation of one member record in every packet
   sent, unless its digest matches the requester's. The cancel rule marks a record sent once a
   covering packet carried it, so usually one neighbour answers. Records go up to three a packet,
   ahead of the positions but leaving room for the sender's own entry; signed, about one fits.
-  A whole table of 32 is about 32 packets, each once the rest after the last allows: about 80 s,
-  and about 125 s with positions filling each packet.
+  A whole table of 32 is about 32 packets, each once the rest after the last allows: about 80 s.
 - **What it covers.** Everything the rotation did: a member added elsewhere, a member whose
   last acknowledgement the adding device lost, a rename missed out of range, and the duplicate
   id two partitions can hand out (see "Identity and storage").
@@ -498,21 +502,21 @@ key, and a removal.
   store holds the newest 256; a node holding that many takes no message older than all of them,
   so every node keeps the same ones. The sequence number is kept in flash (see "Private
   messages").
-- **Latency.** A hop takes the backoff and the airtime, about half a second in the simulator
-  with positions filling each packet (see "Medium access").
+- **Latency.** A hop takes the backoff and the airtime, about 0.35 s in the simulator (see
+  "Medium access").
 - **Capacity.** Every node carries every message once, so each message costs the channel a
   packet's room for every node that relays it. A node's rest holds it under 10% of the air; the
-  channel, shared by every relay in reach, is the bound. Positions alone keep it 10% busy in
-  reach, and 31% with every node moving (see "Medium access"). What messages add is
+  channel, shared by every relay in reach, is the bound. Positions alone keep it 2% busy in
+  reach, and 8% with every node moving (see "Medium access"). What messages add is
   unmeasured.
 - **Pruning.** A node skips relaying what a packet it heard already carried to all its
   neighbours: that is the cancel rule (step 7, closed by the owner on 2026-10-07). In the
   simulator, every node holding a fix, a flood then costs the fewest packets possible where
-  every node hears every other and along a line, and up to three and a half times the fewest
-  in two clusters joined by one node. In grids and scattered groups it costs four to fifteen
-  times the fewest, more than half of it in sends again: two neighbours hidden from each
-  other relay at once, their packets collide at the node they had it from, and that node sends
-  again to neighbours that already hold it (`docs/logs/lora/contention-review-2026-10-07/`). Skipping a private message off the
+  every node hears every other, along a line, and in two clusters joined by one node. In grids
+  and scattered groups it costs two and a half to nine times the fewest, a third to a half of
+  it in sends again: two neighbours hidden from each other relay at once, their packets
+  collide at the node they had it from, and that node sends again to neighbours that already
+  hold it (`docs/logs/lora/rotation-2026-10-07/`). Skipping a private message off the
   shortest path to its destination was dropped with store-and-forward: a node skipped takes the
   message from a summary later, at more cost than the relay saved. Designated relays, each
   sender naming the neighbours to pass its messages on, cut a flood's packets by a third to
@@ -574,16 +578,20 @@ Owner, 2026-10-03, except where it says otherwise.
   each, about 4 s each, and four rounds more: three for relays and repair, and the round it is
   in (owner, 2026-10-05). That is about 3.75 minutes for 8 members and 5.25 for 32, against 8
   and 27 when slots sent one a round. The remover sends its key messages without the rest
-  since 2026-10-07 (see "Duty"); whether a spread-out group needs a longer lead waits on a
-  removal measured with that (owner, 2026-10-07). In the simulator, groups of 16 and 32 in reach had every
-  key message within 45 s and 100 s, and every member switched at the switch. Along relay
-  chains of 8 and 12, over ten seeds each, up to two members learned of the removal after the
-  switch, and switched three rounds after learning, as a member that learns late does.
+  since 2026-10-07 (see "Duty"). A remover that does not hear every remaining member as a
+  neighbour adds four rounds more, 3 minutes, for key messages that cross several hops (owner,
+  2026-10-07). In the simulator, every node
+  holding a fix, over eight seeds (`docs/logs/lora/removal-changes-2026-10-07/`), 32 in reach
+  had every key message within 17 s and a line of 12 within 82 s, and every member switched
+  with the group. In grids and scattered groups of 32 it took 7 to 10 minutes at the median,
+  and up to about a third of the members learned of the removal within three rounds of the
+  switch or after it. Each switched three rounds after learning, as a member that learns late
+  does, and was cut off from the group until then, for up to 12 minutes.
   Until then the removed device still reads everything. The remover reserves every sequence
   number its key messages need before it starts, and a remover that restarts before they have
   gone sends them again. Adding a device is refused while a removal is under way, since it would
   get the key the group is leaving. A node ignores a key message whose switch round is further
-  off than a removal from a group of 32 needs, which would leave the removal pending for good,
+  off than a removal from a group of 32 spread over several hops needs, which would leave the removal pending for good,
   or whose member removed is neither a member nor a gone record it holds (owner, 2026-10-03).
   A node takes a key only on the key it names as replaced. It keeps one that names another
   unread, and tries it again once it has switched: a member that missed several switches takes
@@ -985,10 +993,11 @@ protocol does not need this.
   round and refusing a key that names no member stop the cheapest uses (owner, 2026-10-03).
 - A message lost on a chain's last hop is repaired only as fast as the last node hears its
   neighbour's next packet: no relay is expected of the last node, and a lone message leaves no
-  gap and no settling to show it. In the simulator, a removal crossed a chain of 12 in 40 to
-  120 s over ten seeds, against 40 s to about 9 minutes before relays were heard as
-  acknowledgements; a lone message crossed it in 4 to 90 s with every link losing a packet in
-  five.
+  gap and no settling to show it. In the simulator, every node holding a fix and every link of
+  a chain of 12 losing a packet in five, a lone message crossed it in 53 s at the median over
+  32 seeds, 301 s at p90 (`docs/logs/lora/rotation-2026-10-07/`). A sender that followed up a
+  round later, up to three times, took the p90 to 242 s and changed nothing elsewhere, so it
+  was not built (owner, 2026-10-07).
 - Contention ran on the two boards (`docs/logs/lora/contention-2026-10-05/`). Its first build
   never sent: the modem's RX on-going bit holds throughout continuous receive, and the check
   took it for a packet under way. A sender starts a few milliseconds after the time its

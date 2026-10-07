@@ -9,8 +9,8 @@
 //! ```
 //!
 //! `CHANNEL_LOAD_MOTION` lists `none`, `still` and `moving` (all by default): no fix, a fix that
-//! never moves, or one that moves about 44 m every 30 s. `CHANNEL_LOAD_ROTATION` lists `0`, `1`
-//! and `2` (`0` by default), as `table::BENCH_ROTATION` reads them. `CHANNEL_LOAD_SHAPES`,
+//! never moves, or one that moves about 44 m every 30 s. The firmware no longer rotates the table
+//! into its packets (`2d83a3c`), so `rotation` is always 0 here. `CHANNEL_LOAD_SHAPES`,
 //! `CHANNEL_LOAD_SEEDS=a..b` and `CHANNEL_LOAD_MINUTES` (20 by default) choose the rest.
 
 use std::io::Write as _;
@@ -169,15 +169,7 @@ struct Run {
     samples: usize,
 }
 
-fn run(
-    shape: &Shape,
-    seed: u64,
-    motion: Motion,
-    rotation: u8,
-    minutes: u64,
-    bar: &ProgressBar,
-) -> Run {
-    octowhere_mesh::table::BENCH_ROTATION.store(rotation, std::sync::atomic::Ordering::Relaxed);
+fn run(shape: &Shape, seed: u64, motion: Motion, minutes: u64, bar: &ProgressBar) -> Run {
     let mut sim = Sim::new(seed);
     let nodes = shape.nodes;
     for (n, start) in grouped(nodes as u8, UTC0_S as u32 - 3_600)
@@ -345,11 +337,7 @@ fn channel_load() {
             other => panic!("motion {other}"),
         })
         .collect();
-    let rotations: Vec<u8> = std::env::var("CHANNEL_LOAD_ROTATION")
-        .unwrap_or_else(|_| "0".to_owned())
-        .split(',')
-        .map(|rotation| rotation.parse().unwrap())
-        .collect();
+    let rotations: Vec<u8> = vec![0];
     let seeds = std::env::var("CHANNEL_LOAD_SEEDS").map_or(1..=2, |seeds| {
         let (from, to) = seeds.split_once("..").expect("a..b");
         from.parse().unwrap()..=to.parse().unwrap()
@@ -384,7 +372,7 @@ fn channel_load() {
                         shape.name,
                         motion.name()
                     ));
-                    let mut run = run(shape, seed, motion, rotation, minutes, &bar);
+                    let mut run = run(shape, seed, motion, minutes, &bar);
                     run.ages.sort_by(f64::total_cmp);
                     let received = run.delivered + run.drowned;
                     let line = format!(

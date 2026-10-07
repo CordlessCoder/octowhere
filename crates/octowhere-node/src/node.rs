@@ -1841,13 +1841,6 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             return;
         };
         let (round, own) = (round_at(time), group.own());
-        let floor = !(group.has_unsent()
-            || self.messages.has_unsent()
-            || self.table.has_news()
-            || self.summary.is_some()
-            || !self.requests.pending().is_empty());
-        octowhere_mesh::table::BENCH_FLOOR_PACKET
-            .store(floor, core::sync::atomic::Ordering::Relaxed);
         let mut packet = [0u8; MAX_PACKET];
         let mut builder = Sealing::new(&mut packet, &Header::new(own, timebase, time));
         let carried = compose(
@@ -2242,7 +2235,12 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
         let Some(group) = &self.group else {
             return Err(Unremovable::NoTime);
         };
-        let Some(new) = self.removals.rekey.start(group, id, Key::new(key), round) else {
+        let neighbours = self.table.neighbours(round_at(time));
+        let Some(new) = self
+            .removals
+            .rekey
+            .start(group, id, Key::new(key), round, neighbours)
+        else {
             warn!("[REKEY] cannot remove {} now", id);
             // Another removal may have come while the numbers were stored.
             return Err(match self.removals.rekey.pending() {

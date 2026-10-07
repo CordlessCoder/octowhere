@@ -451,7 +451,10 @@ could use, and tries relay changes through knobs whose defaults are the firmware
 what the position table's rotation costs (`crates/octowhere-sim/tests/channel_load.rs`,
 summarised by `tools/channel-load.py`), and adds switches for a removal's rest,
 acknowledgements, catch-ups and send order; results in
-`docs/logs/lora/contention-review-2026-10-07/`.
+`docs/logs/lora/contention-review-2026-10-07/`. And `bench/removal-changes` carries both onto
+master after the removal changes, with switches defaulting to the firmware, and adds rounds to
+a removal's switch (`RELAY_COST_EXTRA_ROUNDS`, summarised by `tools/removal-cutoff.py`); results
+in `docs/logs/lora/removal-changes-2026-10-07/`.
 
 ## Concurrency
 

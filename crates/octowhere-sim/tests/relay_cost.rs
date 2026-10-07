@@ -23,7 +23,7 @@
 //! A variant may add `rN`, a rest of N airtimes after each packet in place of nine, after
 //! `steps:resends`; `32:1` is the firmware's since the removal changes. Across a run:
 //! `RELAY_COST_FIX=still` gives every node a fix that stays put, refreshed each second;
-//! `RELAY_COST_ROTATION` sets `table::BENCH_ROTATION`; and `RELAY_COST_CATCH_UP=rounds` sends a
+//! `RELAY_COST_CATCH_UP=rounds` sends a
 //! catch-up under an old key again first after `rounds`, 13 in the firmware; and
 //! `RELAY_COST_EXTRA_ROUNDS` adds that many rounds to a removal's switch; and
 //! `RELAY_COST_FOLLOW_UP=n` follows a packet that carried messages to a neighbour expected to
@@ -263,11 +263,6 @@ fn run(
     multi: &MultiProgress,
 ) -> Run {
     variant.apply();
-    // `RELAY_COST_ROTATION` as `table::BENCH_ROTATION` reads it: 0, the firmware's, by default.
-    octowhere_mesh::table::BENCH_ROTATION.store(
-        std::env::var("RELAY_COST_ROTATION").map_or(0, |rotation| rotation.parse().unwrap()),
-        std::sync::atomic::Ordering::Relaxed,
-    );
     // `RELAY_COST_FOLLOW_UP=n`: a packet that carried messages to a neighbour expected to pass
     // nothing on is followed by another a round later, up to n times while one is not heard
     // holding what this node holds.
