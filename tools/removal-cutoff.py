@@ -16,18 +16,18 @@ ASK = re.compile(r"asks to remove \d+: generation \d+ from round (\d+) \(now (\d
 ROUND_S = 45
 
 def run_cutoff(path):
-    learned = {}
-    switch = None
+    # Each member names its own switch: the group's, or three rounds after it learned.
+    own = {}
     for line in path.read_text().splitlines():
         at, node, text = line.split(" ", 2)
         m = ASK.search(text)
-        if m and node not in learned:
-            switch = int(m.group(1))
-            learned[node] = int(m.group(2))
-    if switch is None:
+        if m and node not in own:
+            own[node] = (int(m.group(1)), int(m.group(2)))
+    if not own:
         return None
-    start = min(learned.values())
-    delays = [max(0, now + 3 - switch) for now in learned.values()]
+    switch = min(s for s, _ in own.values())
+    start = min(now for _, now in own.values())
+    delays = [s - switch for s, _ in own.values()]
     return switch - start, delays
 
 for label in sys.argv[1:]:
