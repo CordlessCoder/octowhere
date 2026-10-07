@@ -2691,21 +2691,23 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
                         self.inbox.delivered(own, origin, seq);
                         return Arrival::Done;
                     }
-                    // Only a removal shown is acknowledged: a key ignored, as one declined is,
-                    // would otherwise answer every catch-up.
-                    Some((&kind::KEY, _)) => match NewKey::decode(plain)
-                        .filter(|new| message.generation() == Some(new.generation))
-                    {
-                        Some(new) => match self.learned_key(origin, new) {
-                            None | Some(Learned::Later) => return Arrival::Later,
-                            Some(Learned::Ignored) => return Arrival::Done,
-                            Some(Learned::Pending) => {}
-                        },
-                        None => {
-                            warn!("[REKEY] a key message from {} is malformed", origin);
-                            return Arrival::Done;
-                        }
-                    },
+                    // Not acknowledged: a key message stays out of the inbox, so nothing would
+                    // read it, and a member's signed word that it is on the new key is what
+                    // ends the wait for it.
+                    Some((&kind::KEY, _)) => {
+                        return match NewKey::decode(plain)
+                            .filter(|new| message.generation() == Some(new.generation))
+                        {
+                            Some(new) => match self.learned_key(origin, new) {
+                                None | Some(Learned::Later) => Arrival::Later,
+                                Some(Learned::Ignored | Learned::Pending) => Arrival::Done,
+                            },
+                            None => {
+                                warn!("[REKEY] a key message from {} is malformed", origin);
+                                Arrival::Done
+                            }
+                        };
+                    }
                     Some((&kind::REMOVED, _)) => {
                         warn!("[REKEY] {} removed this device from the group", origin);
                         let name = self

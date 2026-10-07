@@ -474,8 +474,11 @@ key, and a removal.
   messages to send filled its packets with summaries instead, while every other node sent it
   summaries too: after almost nine minutes, 17 of 30 members held their key messages.
 - **Acknowledgement.** The destination of a private message answers with an acknowledgement,
-  itself a private message, which travels and is held the same way. Acknowledgements and
-  messages to the whole group are not acknowledged.
+  itself a private message, which travels and is held the same way. Acknowledgements, key
+  messages and messages to the whole group are not acknowledged. A key message stays out of
+  the inbox, so nothing would read its acknowledgement, and a member's signed word that it is on
+  the new key is what ends the wait for it (owner, 2026-10-07). Acknowledged, they were half of
+  a removal's messages.
 - **Storage.** Messages are held in PSRAM and lost at a restart, to begin with. A restarted
   node gets the horizon's messages back from its neighbours, but not which it had read. The
   store holds the newest 256; a node holding that many takes no message older than all of them,
