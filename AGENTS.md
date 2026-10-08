@@ -483,8 +483,8 @@ that never use the I2C bus. `BUS_EXECUTOR` runs every task that does, from the `
 software interrupt at level 1, so they preempt thread mode instead of waiting for it to yield.
 Core 1 owns the display SPI/DMA path.
 
-- `async_main`, in thread mode, loads the settings, starts core 1, then runs `bring_up` and
-  `frame_loop` together. `bring_up` brings each part up against its deadline, reports when
+- `async_main`, in thread mode, pulses the panel's reset, loads the settings, starts core 1,
+  then runs `bring_up` and `frame_loop` together. `bring_up` brings each part up against its deadline, reports when
   each check starts and how it ends to the start-up's self-test through `BOOT_REPORTS`, the
   radio's last, then spawns the tasks below with the parts that answered, the bus tasks through
   `start_bus_tasks`. A part that fails is left
@@ -547,7 +547,8 @@ Core 1 owns the display SPI/DMA path.
 - `boot_key_task`, in thread mode, owns GPIO0 and passes the BOOT key's short and long presses
   to the frame loop through `BOOT_KEY_PRESSES`. The stage takes them as `Input::boot_key` and
   does nothing with them yet.
-- `second_core` on core 1 waits for display TE with a timeout, flushes the handed-off regions
+- `second_core` on core 1 starts the panel's controller once the reset `async_main` pulsed has
+  run out. It waits for display TE with a timeout, flushes the handed-off regions
   through `drivers::Display`, sets the display level a frame carries before flushing it, and
   returns the other framebuffer. It moves the picture by the frame's pixel shift as it copies
   each row into its DMA buffers, repeating the framebuffer's edge past it, and flushes in full
