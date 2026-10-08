@@ -4,7 +4,10 @@
 """Summarises a `crowded-screens-bench` run from the board's log: for each phase, how many
 frames the frame loop made and what a step cost, how many drew and how many of those drew the
 whole panel, what a draw and the flush that sent it cost, and the internal heap at its fullest.
-Phases from 100 hold a screenshot, which halts the board, and are left out.
+Then, for the same phases, the step's cost apart for the frames that changed the panel and for
+those that changed nothing. The two differ by a lot in the drawer, so the median over all frames
+moves with how many of each a run made. Phases from 100 hold a screenshot, which halts the
+board, and are left out.
 
     uv run tools/crowded-screens-summary.py <board log>
 
@@ -91,6 +94,18 @@ def main():
               f"{len(drawn):5} {sum(f['repaint'] == FULL for f in drawn):4} "
               f"{spread([f['draw'] for f in drawn])} "
               f"{spread([f['flush'] for f in sent]):>23} {max(f['peak'] for f in own):9}")
+
+    print()
+    print(f"{'phase':19} {'changed':>7} {'step med':>8} {'p95':>6} {'max':>6} "
+          f"{'unchanged':>9} {'step med':>8} {'p95':>6} {'max':>6}")
+    for number in sorted({frame["phase"] for frame in frames}):
+        if number >= 100:
+            continue
+        own = [frame for frame in frames if frame["phase"] == number]
+        changed = [frame["step"] for frame in own if frame["pixels"] > 0]
+        unchanged = [frame["step"] for frame in own if frame["pixels"] == 0]
+        name = f"{number} {NAMES.get(number, '')}"
+        print(f"{name:19} {len(changed):7} {spread(changed)} {len(unchanged):9} {spread(unchanged)}")
 
     print(f"{len(frames)} frames, {missing} missing from the log by their numbers")
     if phases:
