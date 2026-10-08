@@ -134,6 +134,9 @@ const TONE_SPREAD: f32 = 0.6;
 const TONE_SEED: u32 = 0x746f_6e65;
 /// The glass's radius about the panel's centre. A mark shows only if it lies wholly inside.
 const GLASS: i32 = DISPLAY_SIZE.width as i32 / 2;
+/// The most grid points a scatter has across and down, and in all.
+const SPAN: usize = DISPLAY_SIZE.width as usize / PITCH as usize + 2;
+const MOST_POINTS: usize = SPAN * SPAN;
 
 impl Scatter {
     /// The identity's: the whole panel to radius 228, stopping short of the band on rows
@@ -482,12 +485,13 @@ impl Scatter {
                 .zip(&full)
                 .all(|(low, high)| low.facing == high.facing)
         );
+        assert!((self.columns() * self.rows()) as usize <= MOST_POINTS);
         let turns = turns(&full);
-        let mut found: Vec<(u8, u16)> = Vec::new();
+        let mut found = (Vec::new(), Vec::new());
         self.each_point(
             &mut found,
             |_, _| true,
-            |found, at| {
+            |(found, shows), at| {
                 let n = 2 * at.point as u32;
                 // Each field's lowest level that shows the point, 256 for none, and its mark.
                 let mut from = [(256, (false, 0)); FIELDS];
@@ -513,6 +517,14 @@ impl Scatter {
                     }
                     from[index] = (low, self.kind(field, n, chance));
                 }
+                if let Some(lowest) = from
+                    .iter()
+                    .map(|(level, _)| *level)
+                    .filter(|&level| level < 256)
+                    .min()
+                {
+                    shows.push((at.point as u16, lowest as u8));
+                }
                 // The first field that shows the point at a level wins it.
                 let mark = |level: u16| {
                     from.iter()
@@ -529,6 +541,7 @@ impl Scatter {
                 }
             },
         );
+        let (mut found, shows) = found;
         let mut starts = [0; 257];
         for &(level, _) in &found {
             starts[usize::from(level) + 1] += 1;
@@ -541,7 +554,51 @@ impl Scatter {
             scatter: self.clone(),
             starts,
             points: found.into_iter().map(|(_, point)| point).collect(),
+            shows,
         }
+    }
+
+    /// Which points' cells meet one of `areas`.
+    fn covered(&self, areas: &[Rectangle]) -> Covered {
+        let mut covered = Covered([0; MOST_POINTS.div_ceil(32)]);
+        let (columns, rows) = (self.columns(), self.rows());
+        let shift = self.gap.as_ref().map_or(0, |(_, shift)| *shift);
+        for area in areas.iter().filter(|area| !area.is_zero_sized()) {
+            let (left, top) = (area.top_left.x, area.top_left.y);
+            let (right, bottom) = (left + area.size.width as i32, top + area.size.height as i32);
+            // The columns whose cells reach into the area, and the rows that might once those
+            // below the gap move down.
+            let first = -(self.origin.x + MARK - 1 - left).div_euclid(PITCH);
+            let last = (right - 1 - self.origin.x)
+                .div_euclid(PITCH)
+                .min(columns - 1);
+            let rows = (top - MARK - shift - self.origin.y)
+                .div_euclid(PITCH)
+                .max(0)
+                ..=(bottom - self.origin.y).div_euclid(PITCH).min(rows - 1);
+            for row in rows {
+                let cell_top = self.corner(self.origin.y + row * PITCH, 0).y;
+                if cell_top < bottom && top < cell_top + MARK {
+                    for column in first.max(0)..=last {
+                        covered.set((row * columns + column) as usize);
+                    }
+                }
+            }
+        }
+        covered
+    }
+}
+
+/// Which of a scatter's grid points have cells that meet some areas, a bit each.
+struct Covered([u32; MOST_POINTS.div_ceil(32)]);
+
+impl Covered {
+    fn set(&mut self, point: usize) {
+        self.0[point / 32] |= 1 << (point % 32);
+    }
+
+    fn has(&self, point: usize) -> bool {
+        self.0[point / 32] & 1 << (point % 32) != 0
     }
 }
 
@@ -554,6 +611,9 @@ pub struct Changes {
     /// `level` and the level below it.
     starts: [u16; 257],
     points: Vec<u16>,
+    /// Each point that shows at some level, in the grid's order, and the lowest level it shows
+    /// at.
+    shows: Vec<(u16, u8)>,
 }
 
 impl Changes {
@@ -571,77 +631,113 @@ impl Changes {
         kept.try_get().expect("the changes were kept")
     }
 
-    /// Adds the cell of every mark that differs between levels `before` and `after`, both
-    /// keeping clear of `clear`, as [`Scatter::changed_between`] does. Between levels further
-    /// apart than one, it may add a mark that changed and changed back.
-    pub fn damage(&self, before: u8, after: u8, clear: &[Rectangle], changed: &mut Dirty) {
-        for cell in self.cells(before, after, clear) {
-            changed.add(cell);
-        }
+    /// Adds the cell of every mark that differs between `before` and `after`, each a level and
+    /// the areas its marks keep clear of, as [`Scatter::changed_between`] does. Between levels
+    /// further apart than one, it may add a mark that changed and changed back.
+    pub fn damage(
+        &self,
+        before: (u8, &[Rectangle]),
+        after: (u8, &[Rectangle]),
+        changed: &mut Dirty,
+    ) {
+        self.each_cell(before, after, |cell| changed.add(cell));
     }
 
-    fn cells(&self, before: u8, after: u8, clear: &[Rectangle]) -> impl Iterator<Item = Rectangle> {
+    fn each_cell(
+        &self,
+        before: (u8, &[Rectangle]),
+        after: (u8, &[Rectangle]),
+        mut cell: impl FnMut(Rectangle),
+    ) {
+        let was = self.scatter.covered(before.1);
+        let moved = before.1 != after.1;
+        let is = if moved {
+            &self.scatter.covered(after.1)
+        } else {
+            &was
+        };
+        // A mark clear of both changes where the level moves it.
         let start = |level: u8| usize::from(self.starts[usize::from(level) + 1]);
-        let points = start(before.min(after))..start(before.max(after));
-        self.points[points]
-            .iter()
-            .map(|&point| self.scatter.cell(usize::from(point)))
-            .filter(|cell| {
-                clear
-                    .iter()
-                    .all(|keep| keep.intersection(cell).is_zero_sized())
-            })
+        let levels = start(before.0.min(after.0))..start(before.0.max(after.0));
+        for point in self.points[levels].iter().map(|&point| usize::from(point)) {
+            if !was.has(point) && !is.has(point) {
+                cell(self.scatter.cell(point));
+            }
+        }
+        if !moved {
+            return;
+        }
+        // A mark kept clear on one side alone changes where the other side shows it.
+        for &(point, lowest) in &self.shows {
+            let point = usize::from(point);
+            let shown = match (was.has(point), is.has(point)) {
+                (true, false) => lowest <= after.0,
+                (false, true) => lowest <= before.0,
+                _ => false,
+            };
+            if shown {
+                cell(self.scatter.cell(point));
+            }
+        }
     }
 }
 
-/// Asserts that `changes`, from `looks`, damages what [`Scatter::changed_between`] does
-/// between every two neighbouring levels, and at least that between a few far apart, clear of
-/// `clear`.
+/// Asserts that `changes`, from `looks`, damages what [`Scatter::changed_between`] does between
+/// two levels each clear of one of `clears`: exactly at the same level and at neighbouring
+/// ones, every neighbouring pair while the clears stay the same, and at least that between a few
+/// far apart.
 #[cfg(test)]
 pub(crate) fn assert_changes_match<const N: usize>(
     changes: &Changes,
     looks: impl Fn(u8) -> [Look; N],
-    clear: &[Rectangle],
+    clears: &[&[Rectangle]],
 ) {
     let scatter = &changes.scatter;
-    let corners = |cells: &mut dyn Iterator<Item = Rectangle>| {
+    let corners = |cells: Vec<Rectangle>| {
         let mut corners: Vec<_> = cells
+            .iter()
             .map(|cell| (cell.top_left.y, cell.top_left.x))
             .collect();
         corners.sort_unstable();
         corners.dedup();
         corners
     };
-    let neighbours = (0..u8::MAX).map(|level| (level, level + 1));
-    let far = [(0, u8::MAX), (u8::MAX, 191), (37, 200), (200, 37)];
-    for (before, after) in neighbours.chain(far) {
-        let (was, is) = (looks(before), looks(after));
-        let turns = [turns(&was), turns(&is)];
-        let mut differ = Vec::new();
-        scatter.each_point(
-            &mut differ,
-            |_, _| true,
-            |differ, at| {
-                if scatter.mark(at, &was, &turns[0], clear)
-                    != scatter.mark(at, &is, &turns[1], clear)
-                {
-                    differ.push(at.cell);
+    for (index, &old) in clears.iter().enumerate() {
+        for (other, &new) in clears.iter().enumerate() {
+            let step = if index == other { 1 } else { 17 };
+            let neighbours = (0..u8::MAX).step_by(step).map(|level| (level, level + 1));
+            let same = [(0, 0), (200, 200), (u8::MAX, u8::MAX)];
+            let far = [(0, u8::MAX), (u8::MAX, 191), (37, 200), (200, 37)];
+            for (before, after) in neighbours.chain(same).chain(far) {
+                let (was, is) = (looks(before), looks(after));
+                let turns = [turns(&was), turns(&is)];
+                let mut differ = Vec::new();
+                scatter.each_point(
+                    &mut differ,
+                    |_, _| true,
+                    |differ, at| {
+                        if scatter.mark(at, &was, &turns[0], old)
+                            != scatter.mark(at, &is, &turns[1], new)
+                        {
+                            differ.push(at.cell);
+                        }
+                    },
+                );
+                let mut damaged = Vec::new();
+                changes.each_cell((before, old), (after, new), |cell| damaged.push(cell));
+                let (damaged, differ) = (corners(damaged), corners(differ));
+                let context = format!("from {before} to {after}, clears {index} to {other}");
+                if before.abs_diff(after) <= 1 {
+                    assert_eq!(damaged, differ, "{context}");
+                } else {
+                    // A mark that changes field twice between them can end as it began.
+                    let missed: Vec<_> = differ
+                        .iter()
+                        .filter(|corner| !damaged.contains(corner))
+                        .collect();
+                    assert!(missed.is_empty(), "{context}: {missed:?}");
                 }
-            },
-        );
-        let (damaged, differ) = (
-            corners(&mut changes.cells(before, after, clear)),
-            corners(&mut differ.into_iter()),
-        );
-        if before.abs_diff(after) == 1 {
-            assert_eq!(damaged, differ, "from {before} to {after}");
-        } else {
-            // A mark that changes field twice between them can end as it began.
-            let missed: Vec<_> = differ
-                .iter()
-                .filter(|corner| !damaged.contains(corner))
-                .collect();
-            assert!(missed.is_empty(), "from {before} to {after}: {missed:?}");
+            }
         }
     }
 }
@@ -1050,7 +1146,10 @@ mod tests {
 
     #[test]
     fn a_level_s_changes_are_the_marks_that_differ_where_two_fields_overlap() {
+        // A gap that moves the rows below it further than the identity's does, by more than a
+        // row.
         let toned = Scatter {
+            gap: Some((197..=237, 11)),
             tones: Some(Tones {
                 colors: &chrome::HALFTONE,
                 dense: 0.7,
@@ -1064,8 +1163,20 @@ mod tests {
             })
         };
         let changes = toned.changes(looks);
-        assert_changes_match(&changes, looks, &[]);
         let clear = [Rectangle::new(Point::new(150, 120), Size::new(90, 60))];
-        assert_changes_match(&changes, looks, &clear);
+        // Moved less than a cell and more, with an empty box and one partly off the panel.
+        let nudged = [Rectangle::new(Point::new(153, 125), Size::new(90, 60))];
+        let moved = [
+            Rectangle::new(Point::new(190, 160), Size::new(90, 60)),
+            Rectangle::new(Point::new(300, 200), Size::zero()),
+            Rectangle::new(Point::new(-20, -10), Size::new(200, 30)),
+            Rectangle::new(Point::new(120, 241), Size::new(100, 21)),
+            // One whose first row is a moved one that starts above it.
+            Rectangle::new(Point::new(150, 259), Size::new(120, 10)),
+            // Empty boxes across a row's cells and down inside a column's.
+            Rectangle::new(Point::new(150, 262), Size::new(120, 0)),
+            Rectangle::new(Point::new(175, 250), Size::new(0, 40)),
+        ];
+        assert_changes_match(&changes, looks, &[&[], &clear, &nudged, &moved]);
     }
 }

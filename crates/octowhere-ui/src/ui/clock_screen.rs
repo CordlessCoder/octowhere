@@ -1171,10 +1171,8 @@ pub fn damage(
     }
     let (old_clear, new_clear) = (old.clear(), new.clear());
     let (was, is) = (old.scatter.unwrap_or(0), new.scatter.unwrap_or(0));
-    if old_clear != new_clear {
-        scatter().changed_between((&looks(was), &old_clear), (&looks(is), &new_clear), damage);
-    } else if was != is {
-        changes().damage(was, is, &new_clear, damage);
+    if (was, &old_clear) != (is, &new_clear) {
+        changes().damage((was, &old_clear), (is, &new_clear), damage);
     }
 }
 
@@ -1378,6 +1376,12 @@ mod tests {
             &font,
         )
         .clear();
-        super::super::scatter::assert_changes_match(changes(), looks, &clear);
+        use embedded_graphics::prelude::Transform as _;
+
+        let moved: heapless::Vec<_, 8> = clear
+            .iter()
+            .map(|area| area.translate(Point::new(3, 37)))
+            .collect();
+        super::super::scatter::assert_changes_match(changes(), looks, &[&clear, &[], &moved]);
     }
 }

@@ -537,21 +537,17 @@ pub fn breathing_scatter_damage(
     after: (u8, &[Rectangle]),
     damage: &mut chrome::Dirty,
 ) {
-    if before.1 == after.1 {
-        changes().damage(before.0, after.0, after.1, damage);
-    } else {
-        SCATTER.changed_between(
-            (&breathing_looks(before.0), before.1),
-            (&breathing_looks(after.0), after.1),
-            damage,
-        );
-    }
+    changes().damage(before, after, damage);
 }
 
 /// Marks the scatter's marks that differ between `before` and `after`.
 pub fn scatter_damage(before: &Accents, after: &Accents, damage: &mut chrome::Dirty) {
     if before.scatter == u8::MAX && after.scatter == u8::MAX {
-        changes().damage(before.breath, after.breath, &PANEL_CLEAR, damage);
+        changes().damage(
+            (before.breath, &PANEL_CLEAR),
+            (after.breath, &PANEL_CLEAR),
+            damage,
+        );
     } else {
         SCATTER.changed_between(
             (&scatter_looks(before), &PANEL_CLEAR),
@@ -695,6 +691,14 @@ mod tests {
 
     #[test]
     fn the_scatter_damages_what_differs_between_two_breaths() {
-        super::super::scatter::assert_changes_match(changes(), breathing_looks, &PANEL_CLEAR);
+        // Lines of text as a list lays them out, before and after it scrolls a little.
+        let lines = |scroll: i32| -> [Rectangle; 9] {
+            core::array::from_fn(|line| {
+                let top = 60 + 41 * line as i32 - scroll;
+                Rectangle::new(Point::new(70 + 9 * line as i32, top), Size::new(320, 19))
+            })
+        };
+        let clears: [&[Rectangle]; 4] = [&PANEL_CLEAR, &lines(0), &lines(5), &lines(23)];
+        super::super::scatter::assert_changes_match(changes(), breathing_looks, &clears);
     }
 }
