@@ -379,12 +379,14 @@ until the feature set is complete, because profiling an incomplete firmware pric
   - The crowded member face's and the many-row drawer's step and draw time, measured on a board
     with `bench/crowded-screens` (`docs/logs/display/crowded-screens-2026-10-08/`). Turning,
     the crowded face redraws whole in 111 ms at the median, with a 24 ms step, against 82 to
-    99 ms with one other member. Two costs it found are open:
-    - The stage builds the member face's list every step under the drawer
-      (`Stage::build_members`), which adds 10 to 13 ms to each step at the median with 31
-      members, and about 22 KB to the heap's peak.
-    - The drawer's step grows with its rows: scrolling 34 events stepped in 17.8 ms at the
-      median over the clock face, against 6.3 ms with a few on 2026-10-04.
+    99 ms with one other member. The member face is no longer built under the open drawer
+    (`cbd6451`), which took scrolling 34 events from 29.3 ms a step at the median to 9.9 ms,
+    against 6.3 ms with a few on 2026-10-04. Open:
+    - Over the clock face the drawer's scrolling steps were slower, 17.8 ms for the events and
+      21.0 ms for the conversations, though at rest the two faces were within 2 ms. Something
+      under the drawer is done while it scrolls over the clock face; find what first.
+    - `Stage::step` still marks the member face as showing under the open drawer for fast
+      motion sampling and for a heading change keeping the screen awake (`face_shows`).
   - Stills of the new states from a board's framebuffer; the package has host renders.
     `tools/crowded-screens-bench.py --shots` on that branch reads one back after each phase.
 
