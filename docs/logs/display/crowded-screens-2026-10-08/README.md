@@ -20,12 +20,14 @@ uv run tools/crowded-screens-summary.py <log>
 The script drives the board over the USB JTAG through the phases below and gives it a fix. The
 board ran `c17cbac`, master at `60ffb36` with the bench, and for the third run `369d846`, which
 adds master's `cbd6451`: the member face is no longer built under the open drawer. The fourth
-and fifth runs added to `369d846` master's `3e21df5`, which stops the face under the open
-drawer counting as showing, so that the motion task samples slowly there and turning no
-longer keeps the screen lit. A step is the stage's step, from the frame loop's wake; a draw is
-the drawing into the framebuffer, for the steps that changed pixels; a flush is the transfer
-that followed. Each summary gives a phase's steps twice: all of them, and then apart for the
-steps that changed the panel and those that changed nothing. Times are in milliseconds, the heap in bytes.
+and fifth runs added to `369d846` master's `3e21df5`, which stops the face under the open drawer
+counting as showing, so that the motion task samples slowly there and turning no longer keeps
+the screen lit. The sixth run added to that build master's `f2c2cd5`, which steps the breathing
+scatter only when its breath changes. A step is the stage's step, from the frame loop's wake; a
+draw is the drawing into the framebuffer, for the steps that changed pixels; a flush is the
+transfer that followed. Each summary gives a phase's steps twice: all of them, and then apart
+for the steps that changed the panel and those that changed nothing, with what the phase's steps
+took together for each second it lasted. Times are in milliseconds, the heap in bytes.
 
 | File | What it is |
 | --- | --- |
@@ -34,6 +36,7 @@ steps that changed the panel and those that changed nothing. Times are in millis
 | `over-members-fixed.txt`, `over-members-fixed-phases.txt` | The first run again on `369d846` |
 | `over-members-covered.txt`, `over-members-covered-phases.txt` | The first run again with the face under the open drawer no longer counting as showing |
 | `over-clock-covered.txt`, `over-clock-covered-phases.txt` | The same build with the drawer opened over the clock face |
+| `over-members-breath.txt`, `over-members-breath-phases.txt` | The fourth run again with the breathing scatter stepped only when its breath changes |
 
 The `-phases.txt` files hold what the board reported at the start of each phase: the screen,
 the member selected, the drawer's root, and how many events, unread entries and conversations it
@@ -74,10 +77,21 @@ What the runs showed:
   the others 8.4 and 8.7. Scrolling the conversations, they took 25.7 and 26.1 ms, and 9.7 and
   10.8. Over all steps, the medians were 17.3 and 17.6 ms for the events, and 20.5 and 21.0 for
   the conversations. The clock face under the drawer adds at most about a millisecond a step.
+  With the drawer still over the member face, stepping took 396 ms of each second, against 506
+  before.
 - Most steps in the drawer change nothing. In the phase that opened the drawer and left it
   still, 26 of about 34 frames a second changed nothing, each taking about 8 ms. The drawer's
   backdrop breathes, and while anything breathes the stage counts as animating, so the frame
   loop steps at its frame pace. Each of those steps builds the drawer's list again.
+- With the breathing scatter stepped only when its breath changes, the frame loop made 20.5
+  frames a second at rest on the clock face, against 49.3, and 21.4 with the drawer still,
+  against 33.7. Stepping took 137 ms of each second on the clock face, against 182, and 311 with
+  the drawer still, against 396. Scrolling the events, it took 392 ms against 460, and reading a
+  conversation 251 against 392. What is left is the breath's own steps. At rest on the clock
+  face, a step that changed nothing took 8.2 ms at the median, and in the still drawer 10.5 ms.
+- On the member face the frame loop stepped as often as before, about 40 times a second at
+  10.5 ms a step with 31 members: 468 ms of each second at rest. The face samples motion every
+  20 ms, and the frame loop steps for each sample.
 - The drawer's draws stayed small in every run, 6 to 9 ms at the median and under 37 ms at p95
   while a list scrolled.
 - No panic in any run. Besides the GNSS module's warnings, the PMIC's key and battery reads
