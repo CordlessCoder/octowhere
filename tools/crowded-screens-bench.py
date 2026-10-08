@@ -52,6 +52,7 @@ CENTRE = ("53.3498", "-6.2603")
 #   reverse of the last swipe of `the_member_face_follows_the_compass_in_the_ring` in
 #   crates/octowhere-ui/tests/members.rs, which wraps from the member face to the clock;
 TO_MEMBERS = (80, 233, 400, 233, 250)
+TO_CLOCK = (400, 233, 80, 233, 250)
 # - a tap in the member face's middle selects the next member: `select` in
 #   crates/octowhere-ui/examples/render/members.rs, within `MIDDLE_RADIUS` of ui/members.rs;
 MIDDLE = (233, 233)
@@ -163,6 +164,12 @@ def main():
     parser.add_argument("log", help="the board's log, as its capture writes it")
     parser.add_argument("--turn", type=int, default=30, help="degrees a second the heading turns")
     parser.add_argument("--shots", type=Path, help="read the screen back after each phase")
+    parser.add_argument(
+        "--drawer-over",
+        choices=("members", "clock"),
+        default="members",
+        help="the face the drawer opens over: the member face builds its list under it every step",
+    )
     args = parser.parse_args()
     board = Board(args.elf, args.probe, args.log)
 
@@ -204,6 +211,9 @@ def main():
         turn(0)
         taps(1)
         time.sleep(8)
+        if args.drawer_over == "clock":
+            board.swipe(TO_CLOCK)
+            time.sleep(3)
 
     def drawer_open(state):
         board.swipe(OPEN_DRAWER)
@@ -242,14 +252,14 @@ def main():
         (4, "select", {"screen": "members", "drawer": "closed"}, select),
         (5, "turn-selected", {"screen": "members", "drawer": "closed"}, turning_selected),
         (6, "deselect", {"screen": "members", "drawer": "closed"}, deselect),
-        (7, "drawer-open", {"screen": "members", "drawer": "closed"}, drawer_open),
+        (7, "drawer-open", {"screen": args.drawer_over, "drawer": "closed"}, drawer_open),
         (8, "events-scroll", {"drawer": "events"}, events_scroll),
         (9, "messages-switch", {"drawer": "events"}, messages_switch),
         (10, "messages-scroll", {"drawer": "messages"}, messages_scroll),
         (11, "conversation", {"drawer": "messages"}, conversation),
         (12, "back", {"drawer": "child"}, back),
         (13, "close", {"drawer": "messages"}, close),
-        (14, "end", {"screen": "members", "drawer": "closed"}, end),
+        (14, "end", {"screen": args.drawer_over, "drawer": "closed"}, end),
     ]
 
     print("waiting for the start-up to end", flush=True)
