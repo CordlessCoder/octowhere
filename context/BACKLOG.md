@@ -199,15 +199,29 @@ until the feature set is complete, because profiling an incomplete firmware pric
   controller does not work on this board: every read comes back as zeros, on either reply line
   and at 5 MHz, which the datasheet's 100 ns read cycle needs, and the schematic leaves the
   connector's pin 19 unconnected. The crate keeps the scan line for a board that wires it.
-- Shorten the display's start-up (owner, 2026-10-06). `second_core` brings the CO5300 up in
-  `Co5300::new` (`crates/co5300/src/lib.rs`), beside core 0's `bring_up`, so it can delay only
-  the first frame the panel shows. Its fixed waits come to about 260 ms: the reset's 10 ms low
-  and a second pulse, 120 ms after the reset (`RESET_MS`), 120 ms after sleep out (`SLPOUT_MS`)
-  and 10 ms after `MADCTL`. Check each against the datasheet's minimum. The second reset pulse
-  comes from the vendor's driver, not the datasheet; drop it if a board starts without it.
-  Nothing marks when the display is up: `bench/startup-timing` has the frame loop's first frame
-  at 852 to 909 ms from the timer's start, but neither core 1's start nor `[DISPLAY] OK`. Add
-  those marks first, to see whether the first flush waits for the display at all.
+- Shorten the display's start-up further (owner, 2026-10-06). The panel now lights 790 ms from
+  the timer's start on 1A38, against 1,308, with the fade-in shown
+  (`docs/logs/display/display-startup-2026-10-08/`, which breaks the 790 ms down). What is left:
+  - The ROM and the second-stage bootloader take 462 ms before `main`. The bootloader is the
+    ESP-IDF one espflash carries. It checks the whole 1.9 MB image at every boot and logs to the
+    console; the earlier lines of its log are lost while USB reconnects, so its time was not
+    broken down. A bootloader built without the log or the check, which espflash takes with
+    `--bootloader`, is the lever. It needs an ESP-IDF build, and dropping the check drops the
+    image's integrity check: the owner's call.
+  - The controller waits 120 ms after sleep out and 10 ms after `MADCTL` (`SLPOUT_MS` in
+    `crates/co5300/src/lib.rs`). The datasheet asks for 5 ms before the next command and 60 ms
+    before display on, and gives no wait after `MADCTL`. Shortening them needs someone watching
+    the panel through a boot.
+  - The self-test's checks now run beside its frames in the thread-mode executor, and each
+    takes longer in wall time: the magnetometer's 346 ms of its 500 ms deadline, against 144
+    when the frame loop sat waiting for core 1. Every check passed, but a heavier self-test
+    frame would eat the margin. Running the checks on `BUS_EXECUTOR`, which preempts thread
+    mode, is the lever.
+  - Core 1 starts 26 ms after the panel's reset has run out, behind the reads. Reading every
+    stored key in one pass, not a lookup each, would close that.
+  - `Co5300::new` and `leave_deep_standby` still send the vendor's second reset pulse; the
+    firmware's start-up sends one 10 µs pulse, and the controller resets on it. Leaving deep
+    standby needs a pulse over 3 ms, which the first one is.
 - Measure what the device draws once the owner's PPK2 is to hand (owner, 2026-10-04). It says
   whether continuous receive fits the budget, now that the mesh contends for the channel, and
   whether the firmware light-sleeps with the screen dark. The findings, the esp-hal wake-lock gap the owner
