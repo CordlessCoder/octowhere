@@ -1406,8 +1406,11 @@ impl Stage {
     /// the step before.
     fn build_members(&mut self, now: Micros) -> Option<alloc::boxed::Box<List>> {
         let view = self.pager.view();
+        // Open, the drawer is all that draws.
+        let covered = self.drawer.is_some() && self.drawer_sheet.is_open();
         let shows = self.page.is_none()
             && !self.sheet.is_open()
+            && !covered
             && (self.screen == Screen::Members
                 || view
                     .neighbour

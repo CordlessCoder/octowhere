@@ -228,6 +228,10 @@ another: the workspace took 45 s against 160 s. It runs no doctests, so the seco
 stays on its thread. Without its `run` feature the node has no tests, which nextest counts as
 a failure unless told otherwise. nextest shows a test's output only when it fails; its
 `--no-capture` shows it as it comes, a test at a time, as `OCTOWHERE_SIM_LOG=1` needs.
+Tests build at `opt-level = 1` (owner, 2026-10-08; `[profile.test]` in the root manifest): the
+UI's damage tests redraw a whole frame for each one they check, and the workspace's tests took
+12 s unoptimised against 1.5 s, for about three times the CPU on a clean build. A debugger
+stepping through a test sees optimised code.
 
 From `firmware/`:
 
@@ -457,7 +461,15 @@ a removal's switch (`RELAY_COST_EXTRA_ROUNDS`, summarised by `tools/removal-cuto
 follow-up packet and an answer to an unlike digest for a chain's end (`RELAY_COST_FOLLOW_UP`,
 `RELAY_COST_ANSWER`), and counts positions never shown; results in
 `docs/logs/lora/removal-changes-2026-10-07/` and `docs/logs/lora/rotation-2026-10-07/`, whose
-rotation runs predate its merge of master, which dropped the rotation and its switch.
+rotation runs predate its merge of master, which dropped the rotation and its switch. And
+`bench/own-position` logs, for each packet a node sends, its own position's stamp against the
+packet's base, before and after a stand-in fix was stamped from the mesh's clock; results in
+`docs/logs/lora/own-position-2026-10-08/`. And `bench/crowded-screens` stands 31 placed members
+and a private message from each in for what the mesh publishes, turns the heading when told,
+and times each frame's step, draw and flush and the heap while
+`tools/crowded-screens-bench.py` drives the member face and the drawer
+(`crowded-screens-bench`, summarised by `tools/crowded-screens-summary.py`); results in
+`docs/logs/display/crowded-screens-2026-10-08/`.
 
 ## Concurrency
 

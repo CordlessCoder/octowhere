@@ -350,6 +350,48 @@ fn the_member_faces_damage_redraws_what_changed() {
         },
     });
     driver.wait(SECOND);
+    driver.swipe(Point::new(233, 430), Point::new(233, 120), 250_000);
+    driver.settle();
+    driver.wait(SECOND);
+    driver.motion(Motion {
+        compass: compass(Some(1470)),
+    });
+    driver.wait(SECOND);
+    driver.swipe(Point::new(233, 200), Point::new(233, 420), 250_000);
+    driver.settle();
+    driver.wait(SECOND);
+}
+
+/// The open drawer covers the face, which is not built under it, and is built at the heading it
+/// turned to meanwhile as the drawer closes.
+#[test]
+fn the_open_drawer_leaves_the_face_unbuilt_until_it_closes() {
+    let mut driver = start(|now| Some(group(&PLACED, now)));
+    driver.swipe(Point::new(233, 430), Point::new(233, 120), 250_000);
+    driver.settle();
+    driver.wait(300_000);
+    assert!(driver.stage.drawer().is_some());
+    assert_eq!(driver.stage.members_text().count(), 0);
+    driver.motion(Motion {
+        compass: compass(Some(1470)),
+    });
+    driver.wait(SECOND);
+    assert_eq!(driver.stage.members_text().count(), 0);
+    driver.swipe(Point::new(233, 200), Point::new(233, 420), 250_000);
+    driver.settle();
+    driver.wait(300_000);
+    assert!(driver.stage.drawer().is_none());
+    let declination = members::declination(
+        &sensors(driver.now(), true).gnss,
+        &sensors(driver.now(), true).clock,
+    )
+    .expect("the model holds in Dublin in 2026");
+    let heading = (147.0 + declination).round() as i32;
+    assert!(
+        shows(&driver, &format!("{heading:03}° TRUE / FORWARD")),
+        "{:?}",
+        driver.stage.members_text().collect::<Vec<_>>()
+    );
 }
 
 #[test]

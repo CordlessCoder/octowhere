@@ -6,7 +6,7 @@ description = "A node of the octowhere location mesh: what it shows the screens,
 
 [dependencies]
 defmt = { version = "1.1.1", optional = true }
-embassy-futures = "0.1.2"
+embassy-futures = { version = "0.1.2", optional = true }
 heapless = "0.9.3"
 log = { version = "0.4.34", optional = true }
 octowhere-mesh = { path = "../octowhere-mesh" }
@@ -16,6 +16,6 @@ default = []
 defmt = ["dep:defmt", "octowhere-mesh/defmt"]
 log = ["dep:log"]
 # The node itself. Needs nightly, for the allocator API.
-run = []
+run = ["dep:embassy-futures"]
 # A command that enrols a member no device stands behind, to try a removal on two boards.
 phantom = ["run"]

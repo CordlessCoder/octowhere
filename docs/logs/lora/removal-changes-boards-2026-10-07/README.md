@@ -39,5 +39,6 @@ What the run showed:
   most, so the rotation's absence does not show here.
 - 1C:1C left its own position out of two of its first five packets, with room for it. One
   packet in six did the same on 2026-10-05 (`docs/logs/lora/board-checks-2026-10-05/`), before
-  these changes; the cause is not known.
+  these changes. The stand-in fix was stamped ahead of the mesh's clock
+  (`docs/logs/lora/own-position-2026-10-08/`).
 - No panic and no warning on either board. Both were left running this build.

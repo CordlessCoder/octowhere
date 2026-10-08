@@ -104,12 +104,33 @@ pub fn differing_as_shown(stage: &Stage, a: &FB, b: &FB) -> usize {
 }
 
 pub fn differing_within(a: &FB, b: &FB, radius: f32) -> usize {
-    (0..466 * 466)
-        .map(|index| Point::new(index % 466, index / 466))
-        .filter(|&point| {
-            let (x, y) = (point.x as f32 + 0.5 - 233.0, point.y as f32 + 0.5 - 233.0);
-            x * x + y * y <= radius * radius
+    let inside = |point: Point| {
+        let (x, y) = (point.x as f32 + 0.5 - 233.0, point.y as f32 + 0.5 - 233.0);
+        x * x + y * y <= radius * radius
+    };
+    // Pixel by pixel, unoptimised, this was most of every damage test's time, so each row's bytes
+    // are compared first: whole, then from its first pixel inside to its last, which holds every
+    // pixel inside.
+    let row = 466 * 2;
+    a.buffer()
+        .chunks_exact(row)
+        .zip(b.buffer().chunks_exact(row))
+        .enumerate()
+        .filter(|(_, (a_row, b_row))| a_row != b_row)
+        .map(|(y, (a_row, b_row))| {
+            let point = |x| Point::new(x, y as i32);
+            let Some(first) = (0..466).find(|&x| inside(point(x))) else {
+                return 0;
+            };
+            let end = (0..466).rfind(|&x| inside(point(x))).unwrap() + 1;
+            let span = first as usize * 2..end as usize * 2;
+            if a_row[span.clone()] == b_row[span] {
+                return 0;
+            }
+            (first..end)
+                .map(point)
+                .filter(|&point| inside(point) && a.pixel(point) != b.pixel(point))
+                .count()
         })
-        .filter(|&point| a.pixel(point) != b.pixel(point))
-        .count()
+        .sum()
 }

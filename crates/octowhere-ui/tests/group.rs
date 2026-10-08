@@ -1,6 +1,8 @@
 //! The group screens driven through the stage with a simulated mesh: what they ask of the mesh,
 //! when, and that redrawing only their damage leaves what a full redraw would.
 
+mod common;
+
 use std::{cell::RefCell, rc::Rc};
 
 use embedded_graphics::prelude::Point;
@@ -399,14 +401,7 @@ impl Buffers {
         }
         let mut whole = FB::boxed();
         stage.draw(&mut *whole);
-        let differing = (0..466 * 466)
-            .map(|index| Point::new(index % 466, index / 466))
-            .filter(|&point| {
-                let (x, y) = (point.x as f32 + 0.5 - 233.0, point.y as f32 + 0.5 - 233.0);
-                x * x + y * y <= 236.0 * 236.0
-            })
-            .filter(|&point| fb.pixel(point) != whole.pixel(point))
-            .count();
+        let differing = common::differing_within(fb, &whole, 236.0);
         if differing > 0 {
             self.wrong.push((self.steps, differing));
         }
