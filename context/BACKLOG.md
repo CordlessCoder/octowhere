@@ -385,11 +385,18 @@ until the feature set is complete, because profiling an incomplete firmware pric
     count as showing there (`3e21df5`), so the motion task samples slowly under the drawer.
     The drawer then steps the same over the member face and the clock face. Open:
     - The breathing scatter steps the stage only when its breath changes (`f2c2cd5`), and the
-      charging gauge only while the clock face shows (`1e55502`). Each step at a change of the
-      breath still takes about 8 ms at rest on the clock face and 10.5 in the still drawer,
-      though most change no pixel: stepping only when a mark appears or goes would leave about
-      five a second on the clock face. While charging, the gauge steps the clock face every
-      panel frame; the boards have no battery, so that was not measured.
+      charging gauge only while the clock face shows (`1e55502`). The scatter's damage comes
+      from the levels at which its marks change (`39e72d1`), the clock face is laid out again
+      only when more than its breath changes (`aa09532`), and a list keeps the boxes its scatter
+      keeps clear of (`e38e9c3`). A breath step that changes nothing takes 2.1 ms at rest on the
+      clock face and 4.1 in the still drawer, against 8.3 and 9.8, and stepping takes 53 and
+      101 ms of each second. A mark changes at 21 of the 64 breath levels on the clock face and
+      at 45 in the drawer, so stepping only at those would leave about 4 breath steps a second
+      on the clock face and 9 in the drawer, of about 13. While the drawer's list moves, the
+      texts its scatter keeps clear of move with it, and the damage compares every mark: a
+      scrolling step that changed the panel took 26 to 28 ms at p95. While charging, the gauge
+      steps the clock face every panel frame; the boards have no battery, so that was not
+      measured.
     - The member face samples motion every 20 ms and the frame loop steps for each sample, about
       40 times a second. The face is kept while nothing it shows moved (`e81ec08`), so a step at
       rest takes 1.2 ms with 31 members, 122 ms of each second, against 468 when it was built

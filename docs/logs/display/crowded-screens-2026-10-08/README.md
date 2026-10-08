@@ -24,12 +24,17 @@ and fifth runs added to `369d846` master's `3e21df5`, which stops the face under
 counting as showing, so that the motion task samples slowly there and turning no longer keeps
 the screen lit. The sixth run added to that build master's `f2c2cd5`, which steps the breathing
 scatter only when its breath changes, and the seventh master's `e81ec08`, which keeps the member
-face from one step to the next while what it is built from stays the same. A step is the stage's
-step, from the frame loop's wake; a draw is the drawing into the framebuffer, for the steps that
-changed pixels; a flush is the transfer that followed. Each summary gives a phase's steps twice:
-all of them, and then apart for the steps that changed the panel and those that changed nothing,
-with what the phase's steps took together for each second it lasted. Times are in milliseconds,
-the heap in bytes.
+face from one step to the next while what it is built from stays the same. The eighth added
+`39e72d1`, which finds the scatter's damage between two breaths from the levels at which each of
+its marks changes, instead of comparing every mark at both. The ninth added `aa09532`, which
+lays the clock face out again only when more than its breath changes, and the tenth `e38e9c3`,
+which keeps the boxes a list's scatter keeps clear of once worked out, and shares them with the
+list built after it while the two hold the same items. A step is the stage's step, from the
+frame loop's wake; a draw is the drawing into the framebuffer, for the steps that changed
+pixels; a flush is the transfer that followed. Each summary gives a phase's steps twice: all of
+them, and then apart for the steps that changed the panel and those that changed nothing, with
+what the phase's steps took together for each second it lasted. Times are in milliseconds, the
+heap in bytes.
 
 | File | What it is |
 | --- | --- |
@@ -40,6 +45,9 @@ the heap in bytes.
 | `over-clock-covered.txt`, `over-clock-covered-phases.txt` | The same build with the drawer opened over the clock face |
 | `over-members-breath.txt`, `over-members-breath-phases.txt` | The fourth run again with the breathing scatter stepped only when its breath changes |
 | `over-members-kept.txt`, `over-members-kept-phases.txt` | The sixth run again with the member face kept while nothing it shows moved |
+| `over-members-levels.txt`, `over-members-levels-phases.txt` | The seventh run again with the scatter's damage found from where its marks change |
+| `over-members-parts.txt`, `over-members-parts-phases.txt` | The eighth run again with the clock face laid out again only when more than its breath changes |
+| `over-members-shared.txt`, `over-members-shared-phases.txt` | The ninth run again with a list's clear boxes kept and shared |
 
 The `-phases.txt` files hold what the board reported at the start of each phase: the screen,
 the member selected, the drawer's root, and how many events, unread entries and conversations it
@@ -101,6 +109,27 @@ What the runs showed:
   against 468, 140 with a member selected, against 455, and 141 after it was let go, against
   479. Turning, the face is built each degree as before. Keeping what the face was built from
   raised the heap's peak there by 3,160 bytes, to 119,280.
+- With the scatter's damage found from the levels at which its marks change, a step at rest on
+  the clock face that changed nothing took 3.3 ms at the median, against 8.3, and in the still
+  drawer 7.6 ms, against 9.8. Stepping took 70 ms of each second at rest on the clock face,
+  against 136, and 168 with the drawer still, against 287. Reading a conversation it took 143
+  against 294, and scrolling the events 284 against 391. Scrolling, a step that changed the panel
+  still took 28.8 ms at p95, against 29.2. While the list moves, the texts the scatter keeps clear
+  of move with it, and the damage then compares every mark at both breaths. Each scatter's levels
+  raised the heap's peak by 1,024 bytes, to 94,520 on the clock face and 142,928 in the drawer.
+- With the clock face laid out again only when more than its breath changed, a step at rest on
+  the clock face that changed nothing took 2.1 ms at the median, against 3.3, and stepping took
+  51 ms of each second, against 70. The drawer's phases stayed within 14 ms a second of the
+  eighth run. The log lost the lines of 19 frames, in two bursts while the lists scrolled.
+- On the host, 83% of a step in the still drawer went into laying out every text of the list
+  drawn and of the list built, to find the boxes the scatter keeps clear of. With those boxes
+  kept, and shared by a list built again with the same items, a step in the still drawer that
+  changed nothing took 4.1 ms at the median, against 7.6. Stepping took 101 ms of each second
+  with the drawer still, against 173, 210 scrolling the events, against 280, 214 scrolling the
+  conversations, against 291, and 106 reading a conversation, against 141. The heap's peak rose
+  by 544 bytes in the still drawer, to 143,472, and by at most 32 bytes on the faces. Closing the
+  drawer, it was 145,584 bytes, against 133,664 in the two runs before and 141,904 in the
+  seventh.
 - The drawer's draws stayed small in every run, 6 to 9 ms at the median and under 37 ms at p95
   while a list scrolled.
 - No panic in any run. Besides the GNSS module's warnings, the PMIC's key and battery reads
