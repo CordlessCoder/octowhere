@@ -716,8 +716,7 @@ impl Parts {
                     libm::ceilf(12.0 * unit(accents.rail)).min(12.0) as u8,
                 )
             }),
-            scatter: (mode != Mode::NoData)
-                .then(|| level(in_quad(accents.scatter) * unit(accents.breath))),
+            scatter: (mode != Mode::NoData).then(|| scatter_level(&accents)),
         }
     }
 
@@ -1042,28 +1041,47 @@ fn digit_damage(
     }
 }
 
+/// The scatter's level: its bloom eased in, times its breath.
+fn scatter_level(accents: &Accents) -> u8 {
+    level(in_quad(accents.scatter) * unit(accents.breath))
+}
+
 /// What the clock face draws from: the clock, the supply and the accents.
 pub type Face = (ClockView, Option<Battery>, Accents);
 
 /// The parts for `face`, from the last two worked out if it is one of them: a step works out the
-/// face before and after for its damage, and the draw after it the same face again.
+/// face before and after for its damage, and the draw after it the same face again. One that
+/// differs from `face` only in its breath lends its parts but the scatter's level, which is all
+/// the breath moves, so a breath at rest lays no text out.
 fn parts(face: &Face, font: &FontdueRenderer<'static, Color>) -> Parts {
     use embassy_sync::blocking_mutex::{Mutex, raw::CriticalSectionRawMutex};
     static RECENT: Mutex<
         CriticalSectionRawMutex,
         core::cell::RefCell<heapless::Deque<(Face, Parts), 2>>,
     > = Mutex::new(core::cell::RefCell::new(heapless::Deque::new()));
+    let breathed = |seen: &Face| {
+        let accents = Accents {
+            breath: face.2.breath,
+            ..seen.2
+        };
+        (seen.0, seen.1, accents) == *face
+    };
     let found = RECENT.lock(|recent| {
-        recent
-            .borrow()
-            .iter()
-            .find(|(seen, _)| seen == face)
-            .map(|(_, parts)| parts.clone())
+        let recent = recent.borrow();
+        let found = recent.iter().find(|(seen, _)| seen == face);
+        found
+            .or_else(|| recent.iter().find(|(seen, _)| breathed(seen)))
+            .map(|(seen, parts)| (seen == face, parts.clone()))
     });
-    if let Some(parts) = found {
-        return parts;
-    }
-    let parts = Parts::of(&face.0, face.1, face.2, font);
+    let parts = match found {
+        Some((true, parts)) => return parts,
+        Some((false, mut parts)) => {
+            parts.scatter = parts.scatter.map(|_| scatter_level(&face.2));
+            debug_assert_eq!(parts, Parts::of(&face.0, face.1, face.2, font));
+            parts
+        }
+        None => Parts::of(&face.0, face.1, face.2, font),
+    };
     RECENT.lock(|recent| {
         let mut recent = recent.borrow_mut();
         if recent.is_full() {
