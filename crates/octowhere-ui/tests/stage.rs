@@ -563,7 +563,7 @@ fn the_resting_scatter_breathes_only_while_awake_and_redraws_only_its_marks() {
     let mut driver = Driver::on(Screen::Clock);
     driver.step(sensors(clock_at(12, 7, 42), dublin));
     driver.wait(1_000_000);
-    assert!(driver.stage.is_animating() && !driver.stage.is_changing());
+    assert!(!driver.stage.is_changing());
     let mut breaths = std::collections::BTreeSet::new();
     for _ in 0..300 {
         driver.step(Input::default());
@@ -572,6 +572,98 @@ fn the_resting_scatter_breathes_only_while_awake_and_redraws_only_its_marks() {
         assert!(!changed.is_full(), "a breath redrew the whole face");
     }
     assert!(breaths.len() > 10, "{breaths:?}");
+}
+
+/// Steps the stage for `duration` with nothing arriving, waiting between steps as the frame
+/// loop does, and returns how many steps it took. `seen` sees the stage after each.
+fn paced(driver: &mut Driver, duration: Micros, mut seen: impl FnMut(&Stage)) -> usize {
+    let mut now = driver.now();
+    let end = now + duration;
+    let mut steps = 0;
+    while now < end {
+        let wait = if driver.stage.is_changing() {
+            script::FRAME
+        } else if driver.stage.is_animating() {
+            16_800
+        } else {
+            250_000
+        };
+        let due = driver
+            .stage
+            .next_change()
+            .map_or(wait, |due| due.saturating_sub(now));
+        now += wait.min(due).max(1);
+        driver.stage.step(Input {
+            now,
+            ..Input::default()
+        });
+        seen(&driver.stage);
+        steps += 1;
+    }
+    steps
+}
+
+#[test]
+fn the_resting_scatter_steps_at_each_change_of_its_breath() {
+    let resting = || {
+        let mut driver = Driver::on(Screen::Clock);
+        driver.step(sensors(
+            clock_at(12, 7, 42),
+            zone("Europe/Dublin", ZoneMode::Automatic),
+        ));
+        driver.wait(1_000_000);
+        driver
+    };
+    let mut clock = resting();
+    let mut panel = resting();
+    pull_down(&mut panel);
+    panel.wait(500_000);
+    let mut drawer = resting();
+    drawer.swipe(Point::new(233, 430), Point::new(233, 120), 250_000);
+    drawer.settle();
+    drawer.wait(500_000);
+    assert!(drawer.stage.drawer().is_some());
+    breathes_paced("clock", &mut clock, |stage| {
+        Some(stage.clock_accents().breath)
+    });
+    breathes_paced("panel", &mut panel, |stage| {
+        Some(stage.panel_accents().breath)
+    });
+    breathes_paced("drawer", &mut drawer, |_| None);
+}
+
+/// Steps `driver` through a breath, in and out, as the frame loop paces it, and checks that it
+/// stepped at each change of the breath's level, `breath` where the screen tells it, and little
+/// more often: there are 128 changes.
+fn breathes_paced(name: &str, driver: &mut Driver, breath: fn(&Stage) -> Option<u8>) {
+    assert!(!driver.stage.is_animating(), "{name}");
+    let mut last = breath(&driver.stage);
+    let steps = paced(driver, 10_000_000, |stage| {
+        let now = breath(stage);
+        if let (Some(last), Some(now)) = (last, now) {
+            assert!(last.abs_diff(now) <= 1, "{name}: {last} to {now}");
+        }
+        last = now;
+    });
+    assert!((128..200).contains(&steps), "{name}: {steps}");
+}
+
+#[test]
+fn the_charging_gauge_steps_the_stage_only_while_the_clock_face_shows() {
+    let mut driver = driver_on(Screen::Clock);
+    driver.wait(1_000_000);
+    assert!(driver.stage.is_animating());
+    pull_down(&mut driver);
+    driver.wait(500_000);
+    assert!(!driver.stage.is_animating(), "under the panel");
+
+    let mut driver = driver_on(Screen::Clock);
+    driver.wait(1_000_000);
+    driver.swipe(Point::new(233, 430), Point::new(233, 120), 250_000);
+    driver.settle();
+    driver.wait(500_000);
+    assert!(driver.stage.drawer().is_some());
+    assert!(!driver.stage.is_animating(), "under the drawer");
 }
 
 /// Readings that walk the clock through ticks, rollovers and every state.
@@ -1788,6 +1880,7 @@ fn demonstration_damage_redraws_what_changed() {
 }
 
 use octowhere_ui::ui::rest::{self, AlwaysOn, Rest, Timeout};
+use octowhere_ui::ui::scatter;
 
 /// Settled on `screen` with the clock running, resting after `timeout`.
 fn resting_on(screen: Screen, timeout: Timeout, always_on: bool) -> Driver<'static> {
@@ -2202,7 +2295,11 @@ fn never_keeps_the_screen_lit() {
     let mut driver = resting_on(Screen::Clock, Timeout::Never, true);
     driver.wait(600_000_000);
     assert_eq!(driver.stage.rest(), Rest::Awake);
-    assert_eq!(driver.stage.next_change(), None);
+    // Only the scatter's breath is due.
+    assert_eq!(
+        driver.stage.next_change(),
+        Some(scatter::next_breath(driver.now()))
+    );
 }
 
 /// Redrawing only what each step marked leaves the buffers as a full redraw would, through the

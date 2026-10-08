@@ -88,6 +88,33 @@ pub fn breath(now: u64) -> u8 {
     libm::roundf((1.0 - fall) * 255.0) as u8
 }
 
+/// When [`breath`] next returns something other than it does at `now`, both in µs.
+#[must_use]
+pub fn next_breath(now: u64) -> u64 {
+    let level = f32::from(breath(now));
+    let into = now % BREATH_PERIOD;
+    let turn = into as f32 / BREATH_PERIOD as f32;
+    // The turn into the period's first half, where the breath falls, at which it is `value`
+    // before rounding. It rises back through the same values over the second half.
+    let falling_at = |value: f32| {
+        let fall = 1.0 - value / 255.0;
+        libm::acosf((1.0 - 2.0 * fall / BREATH_DEPTH).clamp(-1.0, 1.0)) / core::f32::consts::TAU
+    };
+    let lowest = (1.0 - BREATH_DEPTH) * 255.0;
+    let next = if turn < 0.5 && level - 0.5 > lowest {
+        falling_at(level - 0.5)
+    } else if level + 0.5 < 255.0 {
+        1.0 - falling_at(level + 0.5)
+    } else {
+        1.0 + falling_at(level - 0.5)
+    };
+    // In `f32` the turn comes out a few µs either side of the change.
+    let after = libm::ceilf(next * BREATH_PERIOD as f32) as u64 + BREATH_MARGIN;
+    (now - into + after).max(now + 1)
+}
+
+const BREATH_MARGIN: u64 = 16;
+
 /// The grid's pitch, and the side of the hollow mark: 6 × 6 with a 2 × 2 hole. The solid mark
 /// is 4 × 4, inset 1 px.
 pub const PITCH: i32 = 8;
@@ -552,6 +579,20 @@ fn inverse_sqrt(x: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_next_breath_comes_just_after_the_breath_changes() {
+        for now in (0..2 * BREATH_PERIOD).step_by(997) {
+            let due = next_breath(now);
+            assert!(due > now);
+            assert_ne!(breath(due), breath(now), "{now}");
+            assert_eq!(
+                breath(due.saturating_sub(32).max(now)),
+                breath(now),
+                "{now}"
+            );
+        }
+    }
 
     #[test]
     fn the_generator_spreads_over_the_unit_interval() {

@@ -775,8 +775,8 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
 const IMU_AXES: AxisMap = AxisMap([(1, 1.0), (0, 1.0), (2, -1.0)]);
 const MAG_AXES: AxisMap = AxisMap([(0, -1.0), (1, -1.0), (2, 1.0)]);
 const MOTION_PERIOD: Duration = Duration::from_millis(250);
-/// The panel's frame, from TE's period. The charging gauge and the drawer's breathing backdrop
-/// change no faster, so the frame loop steps them once a frame rather than as fast as it can.
+/// The panel's frame, from TE's period. The charging gauge changes no faster, so the frame loop
+/// steps it once a frame rather than as fast as it can.
 const PANEL_FRAME: Duration = Duration::from_micros(16_800);
 /// Faster than the frame loop redraws, so every frame has a fresh sample.
 const COMPASS_PERIOD: Duration = Duration::from_millis(20);

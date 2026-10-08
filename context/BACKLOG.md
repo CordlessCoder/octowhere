@@ -384,12 +384,15 @@ until the feature set is complete, because profiling an incomplete firmware pric
     where it changed the panel, and from 20.5 to 8.5 ms where it did not. Nor does the face
     count as showing there (`3e21df5`), so the motion task samples slowly under the drawer.
     The drawer then steps the same over the member face and the clock face. Open:
-    - In the drawer, most steps change nothing, and each builds the list again, about 8 ms with
-      31 conversations. The breathing backdrop keeps the stage animating, so the frame loop
-      steps at its frame pace: still, 26 of about 34 steps a second changed nothing. The clock
-      face at rest steps about 50 times a second too, 1.6 ms each, for its breathing scatter and,
-      while charging, its gauge. Giving the breath's next change through `Stage::next_change`
-      instead would let the frame loop wait for it.
+    - The breathing scatter steps the stage only when its breath changes (`f2c2cd5`), and the
+      charging gauge only while the clock face shows (`1e55502`). Each step at a change of the
+      breath still takes about 8 ms at rest on the clock face and 10.5 in the still drawer,
+      though most change no pixel: stepping only when a mark appears or goes would leave about
+      five a second on the clock face. While charging, the gauge steps the clock face every
+      panel frame; the boards have no battery, so that was not measured.
+    - The member face samples motion every 20 ms and the frame loop steps for each sample,
+      about 40 times a second at 10.5 ms a step with 31 members: 468 ms of each second at rest.
+      Building it again only when what it shows has moved is the lever.
   - Stills of the new states from a board's framebuffer; the package has host renders.
     `tools/crowded-screens-bench.py --shots` on that branch reads one back after each phase.
 
