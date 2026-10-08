@@ -2,6 +2,7 @@
 //! boxes and the status glyph. A screen builds its list from its state and the mesh each step;
 //! the stage draws the list, and damages only what differs from the list drawn before.
 
+use alloc::rc::Rc;
 use core::fmt::Write as _;
 
 use embedded_graphics::{
@@ -241,7 +242,22 @@ pub struct List {
     backdrop: Backdrop,
     /// When the screen next changes on its own: a countdown or an age reaching its next value.
     due: Option<Micros>,
+    clears: Clears,
 }
+
+/// The boxes a list's breathing scatter keeps clear of, once worked out with the first font
+/// asked, since that lays out every text. A list built again with the same items shares them.
+/// Two lists compare equal whatever each holds.
+#[derive(Clone, Debug, Default)]
+struct Clears(core::cell::OnceCell<Rc<[Rectangle]>>);
+
+impl PartialEq for Clears {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for Clears {}
 
 impl List {
     #[must_use]
@@ -254,6 +270,7 @@ impl List {
         self.clip = None;
         self.due = None;
         self.backdrop = Backdrop::Panel;
+        self.clears = Clears::default();
     }
 
     pub fn set_backdrop(&mut self, backdrop: Backdrop) {
@@ -261,13 +278,15 @@ impl List {
     }
 
     /// The boxes the breathing scatter keeps clear of: every text's ink, grown by 2 px.
-    fn clears(&self, font: &FontdueRenderer<'static, Color>) -> Vec<Rectangle, CLEARS> {
-        self.items
-            .iter()
-            .filter(|item| matches!(item.shape, Shape::Text(_)))
-            .map(|item| bounds(item, font).offset(INK_CLEAR as i32))
-            .take(CLEARS)
-            .collect()
+    fn clears(&self, font: &FontdueRenderer<'static, Color>) -> &[Rectangle] {
+        self.clears.0.get_or_init(|| {
+            self.items
+                .iter()
+                .filter(|item| matches!(item.shape, Shape::Text(_)))
+                .map(|item| bounds(item, font).offset(INK_CLEAR as i32))
+                .take(CLEARS)
+                .collect()
+        })
     }
 
     #[must_use]
@@ -291,6 +310,7 @@ impl List {
     }
 
     pub fn push(&mut self, shape: Shape) {
+        self.clears = Clears::default();
         let pushed = self.items.push(Item {
             shape,
             clip: self.clip,
@@ -361,6 +381,7 @@ impl List {
         if dx == 0 {
             return;
         }
+        self.clears = Clears::default();
         let quarter = (dx * 4) as i16;
         for item in self.items.iter_mut().skip(start) {
             item.clip = item.clip.map(|clip| clip.translate(Point::new(dx, 0)));
@@ -387,7 +408,7 @@ impl List {
         match self.backdrop {
             Backdrop::Panel => panel::draw_scatter(&panel::Accents::FULL, target)?,
             Backdrop::Breathing(breath) => {
-                panel::draw_breathing_scatter(breath, &self.clears(font), target)?;
+                panel::draw_breathing_scatter(breath, self.clears(font), target)?;
             }
             Backdrop::Grid(turn) => members::draw_grid(turn, target)?,
             Backdrop::None => {}
@@ -413,16 +434,23 @@ impl List {
         font: &FontdueRenderer<'static, Color>,
         damage: &mut Dirty,
     ) {
+        let same = self.items == before.items;
+        if same && let Some(clears) = before.clears.0.get() {
+            _ = self.clears.0.set(Rc::clone(clears));
+        }
         match (before.backdrop, self.backdrop) {
             (Backdrop::Panel, Backdrop::Panel) | (Backdrop::None, Backdrop::None) => {}
             (Backdrop::Grid(was), Backdrop::Grid(is)) if was == is => {}
             (Backdrop::Breathing(was), Backdrop::Breathing(is)) => {
                 let (old, new) = (before.clears(font), self.clears(font));
-                if (was, &old) != (is, &new) {
-                    panel::breathing_scatter_damage((was, &old), (is, &new), damage);
+                if (was, old) != (is, new) {
+                    panel::breathing_scatter_damage((was, old), (is, new), damage);
                 }
             }
             _ => damage.make_full(),
+        }
+        if same {
+            return;
         }
         for item in &before.items {
             if !self.items.contains(item) {
@@ -562,4 +590,77 @@ pub const fn rect(x0: i32, y0: i32, x1: i32, y1: i32) -> Rectangle {
         Point::new(x0, y0),
         Size::new((x1 - x0) as u32, (y1 - y0) as u32),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn font() -> FontdueRenderer<'static, Color> {
+        FontdueRenderer::new(
+            chrome::FontdueRendererCtx::new_rc(),
+            20,
+            chrome::WHITE,
+            chrome::FONTS,
+        )
+    }
+
+    fn texts(list: &mut List, tops: &[i32]) {
+        for &top in tops {
+            list.left("KESTREL", 100, top, Face::Mono, 22, chrome::WHITE);
+        }
+    }
+
+    fn built(tops: &[i32]) -> List {
+        let mut list = List::new();
+        list.set_backdrop(Backdrop::Breathing(200));
+        texts(&mut list, tops);
+        list
+    }
+
+    #[test]
+    fn a_list_keeps_clear_of_the_texts_it_holds_now() {
+        let font = font();
+        let fresh = |tops: &[i32]| built(tops).clears(&font).to_vec();
+
+        let mut list = built(&[100]);
+        let first = list.clears(&font).to_vec();
+        list.clear();
+        assert!(list.clears(&font).is_empty());
+        list.set_backdrop(Backdrop::Breathing(200));
+        texts(&mut list, &[300]);
+        assert_ne!(list.clears(&font), first);
+        assert_eq!(list.clears(&font), fresh(&[300]));
+
+        texts(&mut list, &[200]);
+        assert_eq!(list.clears(&font), fresh(&[300, 200]));
+
+        let mut shifted = built(&[300, 200]);
+        shifted.shift_from(0, 40);
+        list.shift_from(0, 40);
+        assert_eq!(list.clears(&font), shifted.clears(&font));
+    }
+
+    #[test]
+    fn a_list_takes_the_boxes_of_the_one_before_only_when_their_items_match() {
+        let font = font();
+        let before = built(&[100]);
+        before.clears(&font);
+        let moved = built(&[300]);
+        moved.damage(&before, &font, &mut Dirty::new());
+        assert_eq!(moved.clears(&font), built(&[300]).clears(&font));
+
+        let same = built(&[100]);
+        let mut damage = Dirty::new();
+        same.damage(&before, &font, &mut damage);
+        assert!(damage.is_empty());
+        assert_eq!(same.clears(&font), before.clears(&font));
+
+        // Without a breathing backdrop the damage lays nothing out, so only the one before
+        // can have filled them.
+        let mut still = built(&[100]);
+        still.set_backdrop(Backdrop::None);
+        still.damage(&before, &font, &mut Dirty::new());
+        assert_eq!(still.clears.0.get(), before.clears.0.get());
+    }
 }
