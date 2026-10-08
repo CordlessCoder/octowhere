@@ -107,7 +107,9 @@ struct SecondCore<A: Allocator + 'static = alloc::alloc::Global> {
     gpio12: peripherals::GPIO12<'static>,
     gpio13: peripherals::GPIO13<'static>,
     gpio38: peripherals::GPIO38<'static>,
-    gpio39: peripherals::GPIO39<'static>,
+    panel_reset: Output<'static>,
+    /// When core 0 released the panel's reset.
+    panel_reset_at: Instant,
     dma_ch0: peripherals::DMA_CH2<'static>,
     spi2: peripherals::SPI2<'static>,
     swap: SwapThread<'static, SwapState<A>>,
@@ -418,6 +420,8 @@ const BOOT_KEY_SETTLE: Duration = Duration::from_millis(20);
 /// Set by the frame loop once the panel is off after the power-off confirmation, for
 /// `gnss_task` to park the GNSS module.
 static POWER_OFF: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+/// Set by core 1 once the panel has started, for the frame loop's first step.
+static DISPLAY_UP: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 /// Set by `gnss_task` once the GNSS module is parked, for `sensor_task` to power the board off.
 static GNSS_PARKED: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 /// The receiver's state after each burst of NMEA, from `gnss_task` for `sensor_task`.
@@ -673,7 +677,7 @@ fn log_raw_nmea(data: &[u8], line: &mut [u8; 256], line_len: &mut usize) {
 }
 
 macro_rules! start_display_core {
-    ($peripherals:ident, $framebuffer_thread:ident) => {
+    ($peripherals:ident, $framebuffer_thread:ident, $panel_reset:ident, $panel_reset_at:ident) => {
         let swap: &'static mut Swap<SwapState<_>> = SWAP.init_with(|| {
             Swap::new(
                 SwapState {
@@ -707,7 +711,7 @@ macro_rules! start_display_core {
             $peripherals.FROM_CPU_INTR1,
             // SAFETY: This static mut value must not be accessed ever again, anywhere
             unsafe { &mut CORE1_STACK },
-            || {
+            move || {
                 let executor = CORE1_EXECUTOR.init_with(esp_rtos::embassy::Executor::new);
                 let io = SecondCore {
                     gpio4: $peripherals.GPIO4,
@@ -717,7 +721,8 @@ macro_rules! start_display_core {
                     gpio12: $peripherals.GPIO12,
                     gpio13: $peripherals.GPIO13,
                     gpio38: $peripherals.GPIO38,
-                    gpio39: $peripherals.GPIO39,
+                    panel_reset: $panel_reset,
+                    panel_reset_at: $panel_reset_at,
                     dma_ch0: $peripherals.DMA_CH2,
                     spi2: $peripherals.SPI2,
                     swap: second_core_swap,
@@ -757,7 +762,8 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
         gpio12,
         gpio13,
         gpio38,
-        gpio39,
+        panel_reset,
+        panel_reset_at,
         dma_ch0,
         spi2,
         mut swap,
@@ -778,7 +784,6 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
     dma_tx.set_burst_config(dma_burst).unwrap();
     dma_tx_swap.set_burst_config(dma_burst).unwrap();
 
-    let reset = Output::new(gpio39, Level::Low, OutputConfig::default());
     let te = Input::new(gpio13, InputConfig::default());
     let cs = Output::new(gpio12, Level::High, OutputConfig::default());
 
@@ -800,11 +805,13 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
         dma_tx_swap,
         cs,
     );
+    Timer::at(panel_reset_at + Duration::from_millis(co5300::RESET_MS.into())).await;
     let mut display: Display<'_, chrome::Color> =
-        Display::new(bus, reset, te, embassy_time::Delay, board::DISPLAY)
+        Display::after_reset(bus, panel_reset, te, embassy_time::Delay, board::DISPLAY)
             .await
             .expect("display init failed");
     info!("[DISPLAY] OK");
+    DISPLAY_UP.signal(());
     #[cfg(feature = "startup-timing-bench")]
     startup_timing::mark("display", "up");
     // The first two frames core 1 takes: the buffer it starts with, never drawn, then the
@@ -819,6 +826,11 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
     let mut sent_shift = Point::zero();
     loop {
         settings::hold_display_core_if_asked();
+        // The buffer core 1 starts with holds nothing until the frame loop draws it.
+        if !swap.get().drawn {
+            swap.swap().await;
+            continue;
+        }
         let state = swap.get();
         let SwapState {
             fb,
@@ -2182,6 +2194,13 @@ async fn async_main(spawner: Spawner) {
         esp_hal::init(esp_hal::Config::default().with_cpu_clock(esp_hal::clock::CpuClock::_240MHz));
     #[cfg(feature = "startup-timing-bench")]
     startup_timing::mark("esp_hal", "init");
+    // The panel's reset runs out while the settings load, before core 1 starts the controller.
+    let mut panel_reset = Output::new(peripherals.GPIO39, Level::Low, OutputConfig::default());
+    esp_hal::delay::Delay::new().delay_micros(co5300::RESET_PULSE_US);
+    panel_reset.set_high();
+    let panel_reset_at = Instant::now();
+    #[cfg(feature = "startup-timing-bench")]
+    startup_timing::mark("panel", "reset");
 
     let psram_config = esp_hal::psram::PsramConfig {
         mode: esp_hal::psram::PsramMode::OctalSpi,
@@ -2233,12 +2252,6 @@ async fn async_main(spawner: Spawner) {
         startup_timing::mark("mesh-store", "read");
         startup_timing::summarise(&mesh_saved);
     }
-    let mesh_start = mesh_start(mesh_saved);
-    #[cfg(feature = "startup-timing-bench")]
-    startup_timing::mark("identity", "made");
-    mesh::publish_start(&mesh_start);
-    #[cfg(feature = "startup-timing-bench")]
-    startup_timing::mark("mesh-store", "loaded");
     info!(
         "[SETTINGS] zone mode={} manual={} automatic={} brightness={} timeout={} always_on={}",
         saved.zone_mode,
@@ -2261,9 +2274,14 @@ async fn async_main(spawner: Spawner) {
     // The panel comes up first, so the self-test shows while the parts come up behind it.
     #[cfg(feature = "startup-timing-bench")]
     startup_timing::mark("core1", "starting");
-    start_display_core!(peripherals, fb_st);
+    start_display_core!(peripherals, fb_st, panel_reset, panel_reset_at);
     #[cfg(feature = "startup-timing-bench")]
     startup_timing::mark("core1", "started");
+    // Making the identity's keys takes a while, and needs no flash.
+    let mesh_start = mesh_start(mesh_saved);
+    mesh::publish_start(&mesh_start);
+    #[cfg(feature = "startup-timing-bench")]
+    startup_timing::mark("identity", "made");
 
     let mut stage = Stage::starting(PeripheralState {
         brightness: saved.brightness.unwrap_or(DEFAULT_BRIGHTNESS),
@@ -2916,6 +2934,9 @@ async fn frame_loop(
     let mut timing_starting = true;
     #[cfg(feature = "startup-timing-bench")]
     let mut timing_first_swap = true;
+    // The start-up's sequence runs from the stage's first step, so that step waits for a panel
+    // that can show it.
+    DISPLAY_UP.wait().await;
     loop {
         let start = Instant::now();
         #[cfg(feature = "startup-timing-bench")]

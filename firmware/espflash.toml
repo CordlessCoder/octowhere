@@ -1,0 +1,4 @@
+# The ROM and the bootloader read the image at this clock. The firmware sets its own flash clock
+# when it starts the PSRAM, whatever the image says.
+[flash]
+frequency = "80MHz"

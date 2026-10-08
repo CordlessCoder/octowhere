@@ -135,6 +135,41 @@ async fn write_member(
     Ok(())
 }
 
+/// Reads the value at `key(id)` for every id, in one pass rather than a read each, and gives
+/// `take` each id found with its value after the version byte. `buffer` must hold the longest
+/// value, or the pass stops there.
+async fn read_each<const N: usize>(
+    transaction: &ekv::ReadTransaction<'_, Partition, NoopRawMutex>,
+    key: fn(u8) -> [u8; N],
+    what: &str,
+    buffer: &mut [u8],
+    mut take: impl FnMut(u8, &[u8]),
+) {
+    let (first, last) = (key(0), key(IDS - 1));
+    let Ok(mut cursor) = transaction.read_range(&first[..]..=&last[..]).await else {
+        warn!("[SETTINGS] {=str} unreadable", what);
+        return;
+    };
+    let mut found = [0; ekv::config::MAX_KEY_SIZE];
+    loop {
+        let (key_len, value_len) = match cursor.next(&mut found, buffer).await {
+            Ok(Some(lengths)) => lengths,
+            Ok(None) => return,
+            Err(_) => {
+                warn!("[SETTINGS] {=str} unreadable", what);
+                return;
+            }
+        };
+        let Some(id) = (0..IDS).find(|&id| key(id)[..] == found[..key_len]) else {
+            continue;
+        };
+        match buffer[..value_len].split_first() {
+            Some((&MESH_VERSION, value)) => take(id, value),
+            _ => warn!("[SETTINGS] {=str} {} has another layout", what, id),
+        }
+    }
+}
+
 /// Reads a slot's stored value, after its version byte.
 fn read_slot(id: u8, value: &[u8]) -> Option<Slot> {
     let (at, slot) = Slot::decode(value)?;
@@ -375,16 +410,21 @@ impl Store {
             let mut slots = [None; IDS as usize];
             let mut stored_members = 0;
             if group.is_some() {
-                for id in 0..IDS {
-                    let Some(record) = value(&member_key(id)).await else {
-                        continue;
-                    };
-                    stored_members |= 1 << id;
-                    match read_slot(id, &record) {
-                        Some(slot) => slots[usize::from(id)] = Some(slot),
-                        None => warn!("[SETTINGS] member {} unreadable", id),
-                    }
-                }
+                let mut record = [0; 1 + RECORD_MAX_LEN];
+                read_each(
+                    &transaction,
+                    member_key,
+                    "member",
+                    &mut record,
+                    |id, record| {
+                        stored_members |= 1 << id;
+                        match read_slot(id, record) {
+                            Some(slot) => slots[usize::from(id)] = Some(slot),
+                            None => warn!("[SETTINGS] member {} unreadable", id),
+                        }
+                    },
+                )
+                .await;
             }
             #[cfg(feature = "startup-timing-bench")]
             stamp(1);
@@ -417,19 +457,10 @@ impl Store {
             let mut kept: [Option<Box<KeptRow>>; IDS as usize] = Default::default();
             if group.is_some() {
                 let mut row = alloc::vec![0; 1 + KEPT_ROW_MAX];
-                for id in 0..IDS {
-                    match transaction.read(&kept_key(id), &mut row).await {
-                        Ok(length) => match row[..length].split_first() {
-                            Some((&MESH_VERSION, rest)) => {
-                                kept[usize::from(id)] =
-                                    KeptRow::from_slice(rest).ok().map(Box::new);
-                            }
-                            _ => warn!("[SETTINGS] kept {} has another layout", id),
-                        },
-                        Err(ReadError::KeyNotFound) => {}
-                        Err(_) => warn!("[SETTINGS] kept {} unreadable", id),
-                    }
-                }
+                read_each(&transaction, kept_key, "kept", &mut row, |id, row| {
+                    kept[usize::from(id)] = KeptRow::from_slice(row).ok().map(Box::new);
+                })
+                .await;
             }
             #[cfg(feature = "startup-timing-bench")]
             stamp(4);

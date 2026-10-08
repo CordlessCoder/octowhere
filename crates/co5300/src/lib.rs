@@ -114,7 +114,10 @@ const CMD_PAGE: u8 = 0xFE;
 
 const MADCTL_RGB: u8 = 0x00;
 
-const RESET_MS: u32 = 120;
+/// The shortest low pulse on the reset line that resets the controller, in µs.
+pub const RESET_PULSE_US: u32 = 10;
+/// How long after a reset the controller first takes sleep out, in ms.
+pub const RESET_MS: u32 = 120;
 const SLPOUT_MS: u32 = 120;
 const SLPIN_MS: u32 = 120;
 const DISPLAY_MS: u32 = 20;
@@ -212,14 +215,37 @@ impl<B: Bus, RST: OutputPin, TE: Wait, D: DelayNs, C: ColorMode> Co5300<B, RST, 
         Ok(display)
     }
 
-    /// The datasheet asks for one low pulse over 10 µs. The second, and the edge between them,
-    /// come from the vendor's driver this one was first translated from.
+    /// Starts a controller its caller has reset, as [`new`](Self::new) does after its own
+    /// reset: the reset line held low for at least [`RESET_PULSE_US`], and released at least
+    /// [`RESET_MS`] before this call.
+    pub async fn after_reset(
+        bus: B,
+        reset: RST,
+        te: TE,
+        delay: D,
+        config: Config,
+    ) -> Result<Self, B::Error> {
+        let mut display = Self {
+            bus,
+            reset,
+            te,
+            delay,
+            config,
+            color: PhantomData,
+        };
+        display.start().await?;
+        Ok(display)
+    }
+
+    /// The datasheet asks for one low pulse over 10 µs, or over 3 ms to leave deep standby. The
+    /// second, and the edge between them, come from the vendor's driver this one was first
+    /// translated from.
     async fn hardware_reset(&mut self) -> Result<(), RST::Error> {
         self.reset.set_low()?;
         self.delay.delay_ms(10).await;
         self.reset.set_high()?;
         self.reset.set_low()?;
-        self.delay.delay_us(10).await;
+        self.delay.delay_us(RESET_PULSE_US).await;
         self.reset.set_high()?;
         self.delay.delay_ms(RESET_MS).await;
         Ok(())

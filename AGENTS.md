@@ -265,6 +265,11 @@ its text, and the serial stream needs the ELF to read. `espflash monitor --non-i
 is `info`, which leaves out the periodic sensor samples and the GNSS start-up trace; build with
 `DEFMT_LOG=debug` for them.
 
+[`firmware/espflash.toml`](firmware/espflash.toml) has espflash mark the image for an 80 MHz
+flash clock, which the ROM and the bootloader read it at; the firmware sets its own clock when
+it starts the PSRAM. espflash reads it from the directory it runs in. QIO does not boot: the ROM
+cannot read the bootloader in it.
+
 Every release build emits one `linker_messages` warning about a LOAD segment with RWX permissions.
 It is expected for this target and is not a regression.
 
@@ -478,13 +483,14 @@ that never use the I2C bus. `BUS_EXECUTOR` runs every task that does, from the `
 software interrupt at level 1, so they preempt thread mode instead of waiting for it to yield.
 Core 1 owns the display SPI/DMA path.
 
-- `async_main`, in thread mode, loads the settings, starts core 1, then runs `bring_up` and
-  `frame_loop` together. `bring_up` brings each part up against its deadline, reports when
+- `async_main`, in thread mode, pulses the panel's reset, loads the settings, starts core 1,
+  then runs `bring_up` and `frame_loop` together. `bring_up` brings each part up against its deadline, reports when
   each check starts and how it ends to the start-up's self-test through `BOOT_REPORTS`, the
   radio's last, then spawns the tasks below with the parts that answered, the bus tasks through
   `start_bus_tasks`. A part that fails is left
   out, and its owner runs without it; there is no motion task without the IMU. `frame_loop`
-  owns drawing. It takes touch reads from `TOUCH_READS`, asking for one through `TOUCH_POLL`
+  owns drawing. The start-up's sequence runs from its first step, which waits for core 1 to
+  start the panel (`DISPLAY_UP`). It takes touch reads from `TOUCH_READS`, asking for one through `TOUCH_POLL`
   while a contact is held, and the latest sensor values from `SENSOR_STATE` and
   `MOTION_STATE`, draws into its current framebuffer, records `dirty` and the display level to
   set, and hands the state to core 1.
@@ -542,7 +548,9 @@ Core 1 owns the display SPI/DMA path.
 - `boot_key_task`, in thread mode, owns GPIO0 and passes the BOOT key's short and long presses
   to the frame loop through `BOOT_KEY_PRESSES`. The stage takes them as `Input::boot_key` and
   does nothing with them yet.
-- `second_core` on core 1 waits for display TE with a timeout, flushes the handed-off regions
+- `second_core` on core 1 starts the panel's controller once the reset `async_main` pulsed has
+  run out, and swaps away the buffer it starts with until the frame loop has drawn it. It waits
+  for display TE with a timeout, flushes the handed-off regions
   through `drivers::Display`, sets the display level a frame carries before flushing it, and
   returns the other framebuffer. It moves the picture by the frame's pixel shift as it copies
   each row into its DMA buffers, repeating the framebuffer's edge past it, and flushes in full
