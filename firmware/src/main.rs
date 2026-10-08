@@ -1168,7 +1168,9 @@ async fn sensor_task(task: SensorTask) {
                         latest.set(Some(mesh::Fix {
                             latitude: position.0,
                             longitude: position.1,
-                            stamp: utc as u32,
+                            // The mesh's second, not the RTC's, which the offset left up to a
+                            // second ahead: a packet leaves out a position stamped after it.
+                            stamp: (now.as_micros() as i64 - offset).div_euclid(1_000_000) as u32,
                             quality: octowhere_mesh::packet::Quality::Autonomous,
                             hdop_milli: Some(fix_inject::HDOP_MILLI),
                         }))
