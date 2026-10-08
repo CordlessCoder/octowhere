@@ -342,8 +342,9 @@ mod startup_timing {
         let mac = mac.as_bytes();
         defmt::info!("[STARTUP] board {=u8:02x}{=u8:02x}", mac[4], mac[5]);
         defmt::info!("[STARTUP] reset power_on={=bool}", power_on);
-        let [generation, members, kept, stored] =
-            MESH_SUMMARY.each_ref().map(|word| word.load(Ordering::Relaxed));
+        let [generation, members, kept, stored] = MESH_SUMMARY
+            .each_ref()
+            .map(|word| word.load(Ordering::Relaxed));
         defmt::info!(
             "[STARTUP] mesh generation={=u32} members={=u32:#x} kept={=u32:#x} stored={=u32:#x}",
             generation,

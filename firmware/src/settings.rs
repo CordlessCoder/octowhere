@@ -378,7 +378,9 @@ impl Store {
         #[cfg(feature = "startup-timing-bench")]
         let stamp = |at: usize| {
             LOAD_MARKS[at].store(
-                esp_hal::time::Instant::now().duration_since_epoch().as_micros() as u32,
+                esp_hal::time::Instant::now()
+                    .duration_since_epoch()
+                    .as_micros() as u32,
                 core::sync::atomic::Ordering::Relaxed,
             )
         };
