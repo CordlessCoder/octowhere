@@ -31,11 +31,13 @@ lays the clock face out again only when more than its breath changes, and the te
 which keeps the boxes a list's scatter keeps clear of once worked out, and shares them with the
 list built after it while the two hold the same items. The eleventh added `929400a`, which finds
 the scatter's damage where its clear boxes move from the points they cover, and `a7d8081`, which
-keeps every item's bounds in a breathing list. A step is the stage's step, from the frame loop's
-wake; a draw is the drawing into the framebuffer, for the steps that changed pixels; a flush is
-the transfer that followed. Each summary gives a phase's steps twice: all of them, and then
-apart for the steps that changed the panel and those that changed nothing, with what the phase's
-steps took together for each second it lasted. Times are in milliseconds, the heap in bytes.
+keeps every item's bounds in a breathing list. The twelfth added `6614789`, with which the frame
+loop steps for a motion sample only when the stage asks for it. A step is the stage's step, from
+the frame loop's wake; a draw is the drawing into the framebuffer, for the steps that changed
+pixels; a flush is the transfer that followed. Each summary gives a phase's steps twice: all of
+them, and then apart for the steps that changed the panel and those that changed nothing, with
+what the phase's steps took together for each second it lasted. Times are in milliseconds, the
+heap in bytes.
 
 | File | What it is |
 | --- | --- |
@@ -50,6 +52,7 @@ steps took together for each second it lasted. Times are in milliseconds, the he
 | `over-members-parts.txt`, `over-members-parts-phases.txt` | The eighth run again with the clock face laid out again only when more than its breath changes |
 | `over-members-shared.txt`, `over-members-shared-phases.txt` | The ninth run again with a list's clear boxes kept and shared |
 | `over-members-scrolled.txt`, `over-members-scrolled-phases.txt` | The tenth run again with the scatter's damage found where its clear boxes move, and every item's bounds kept |
+| `over-members-motion.txt`, `over-members-motion-phases.txt` | The eleventh run again with a step for a motion sample only when the stage asks for it |
 
 The `-phases.txt` files hold what the board reported at the start of each phase: the screen,
 the member selected, the drawer's root, and how many events, unread entries and conversations it
@@ -141,6 +144,15 @@ What the runs showed:
   second scrolling the events, against 22.4. On the host the two changes took a scrolling step
   from 115 µs to 27. Keeping the points that can show and the items' bounds raised the heap's
   peak by 1,040 bytes on the clock face, and by up to 4,656 while a list scrolled, to 124,568.
+- With the frame loop stepping for a motion sample only when the stage asks for it, which on
+  the member face is when the held heading moves or a turn counts as use, it stepped 6.5 times a
+  second on the face at rest, against 39. Stepping took 76 ms of each second there, against
+  129, 101 with a member selected, against 142, and 83 after it was let go, against 130. On the
+  clock face, which takes a sample every 250 ms, it took 50 against 54, and with the drawer
+  still, 95 against 108. Across the run the frame loop stepped 4,203 times, against 6,657. The
+  steps left on the face are the dear ones: one that changed nothing took 14.3 ms at the
+  median, about what building the face costs, where the cheap steps for each sample had made
+  the median 1.3.
 - The drawer's draws stayed small in every run, 6 to 9 ms at the median and under 37 ms at p95
   while a list scrolled.
 - No panic in any run. Besides the GNSS module's warnings, the PMIC's key and battery reads
