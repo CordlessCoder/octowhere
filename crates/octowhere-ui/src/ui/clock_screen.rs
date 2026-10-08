@@ -18,7 +18,7 @@ use super::{
     clock::{ClockState, ClockView, DateTime, ZoneMode, ZoneState},
     icon::{self, Glyph, Tile},
     reveal::{Reveal, draw_revealed, revealed_bounds},
-    scatter::{Field, Law, Look, Scatter, Tones},
+    scatter::{Changes, Field, Law, Look, Scatter, Tones},
     screens::Battery,
     text,
 };
@@ -752,6 +752,13 @@ fn scatter() -> Scatter {
     }
 }
 
+/// Where the scatter's marks change with its level.
+fn changes() -> &'static Changes {
+    static KEPT: embassy_sync::once_lock::OnceLock<Changes> =
+        embassy_sync::once_lock::OnceLock::new();
+    Changes::kept(&KEPT, &scatter(), looks)
+}
+
 fn looks(bloom: u8) -> [Look; 2] {
     let k = f32::from(bloom) / 255.0;
     [
@@ -1145,12 +1152,11 @@ pub fn damage(
         damage.add(RAIL);
     }
     let (old_clear, new_clear) = (old.clear(), new.clear());
-    if (old.scatter, &old_clear) != (new.scatter, &new_clear) {
-        scatter().changed_between(
-            (&looks(old.scatter.unwrap_or(0)), &old_clear),
-            (&looks(new.scatter.unwrap_or(0)), &new_clear),
-            damage,
-        );
+    let (was, is) = (old.scatter.unwrap_or(0), new.scatter.unwrap_or(0));
+    if old_clear != new_clear {
+        scatter().changed_between((&looks(was), &old_clear), (&looks(is), &new_clear), damage);
+    } else if was != is {
+        changes().damage(was, is, &new_clear, damage);
     }
 }
 
@@ -1337,5 +1343,23 @@ mod tests {
         let trusted = view(false, true, "Europe/Dublin");
         let moved = read(trusted, true, true, "Asia/Kolkata");
         assert!(values(&moved).is_empty());
+    }
+
+    #[test]
+    fn the_scatter_damages_what_differs_between_two_levels() {
+        let font = FontdueRenderer::new(
+            chrome::FontdueRendererCtx::new_rc(),
+            20,
+            chrome::WHITE,
+            chrome::FONTS,
+        );
+        let clear = Parts::of(
+            &view(false, true, "Europe/Dublin"),
+            None,
+            Accents::FULL,
+            &font,
+        )
+        .clear();
+        super::super::scatter::assert_changes_match(changes(), looks, &clear);
     }
 }
