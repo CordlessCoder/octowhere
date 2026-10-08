@@ -6,7 +6,8 @@ frames the frame loop made and what a step cost, how many drew and how many of t
 whole panel, what a draw and the flush that sent it cost, and the internal heap at its fullest.
 Then, for the same phases, the step's cost apart for the frames that changed the panel and for
 those that changed nothing. The two differ by a lot in the drawer, so the median over all frames
-moves with how many of each a run made. Phases from 100 hold a screenshot, which halts the
+moves with how many of each a run made. Last, what the phase's steps took together for each
+second it lasted, which counts both how often the frame loop stepped and what each cost. Phases from 100 hold a screenshot, which halts the
 board, and are left out.
 
     uv run tools/crowded-screens-summary.py <board log>
@@ -97,7 +98,7 @@ def main():
 
     print()
     print(f"{'phase':19} {'changed':>7} {'step med':>8} {'p95':>6} {'max':>6} "
-          f"{'unchanged':>9} {'step med':>8} {'p95':>6} {'max':>6}")
+          f"{'unchanged':>9} {'step med':>8} {'p95':>6} {'max':>6} {'steps ms/s':>10}")
     for number in sorted({frame["phase"] for frame in frames}):
         if number >= 100:
             continue
@@ -105,7 +106,13 @@ def main():
         changed = [frame["step"] for frame in own if frame["pixels"] > 0]
         unchanged = [frame["step"] for frame in own if frame["pixels"] == 0]
         name = f"{number} {NAMES.get(number, '')}"
-        print(f"{name:19} {len(changed):7} {spread(changed)} {len(unchanged):9} {spread(unchanged)}")
+        later = [at for phase, at in phases if at > started.get(number, float("inf"))]
+        busy = (
+            f"{sum(changed + unchanged) / 1000 / (min(later) - started[number]):10.0f}"
+            if number in started and later else "         -"
+        )
+        print(f"{name:19} {len(changed):7} {spread(changed)} {len(unchanged):9} {spread(unchanged)} "
+              f"{busy}")
 
     print(f"{len(frames)} frames, {missing} missing from the log by their numbers")
     if phases:
