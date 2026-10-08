@@ -1,0 +1,411 @@
+== before
+  board 1a38: 5 boots
+    main enter                593.1 ms  (593.1..593.1, n=5)
+    esp_hal init              597.9 ms  (597.9..597.9, n=5)
+    psram ready               604.7 ms  (604.7..604.7, n=5)
+    settings loaded           647.2 ms  (647.2..647.2, n=5)
+    trng on                   647.3 ms  (647.3..647.4, n=5)
+    load-group read           648.1 ms  (648.1..648.2, n=5)
+    load-members read         796.9 ms  (796.9..796.9, n=5)
+    load-restored read        797.0 ms  (797.0..797.0, n=5)
+    load-rest read            810.8 ms  (810.8..810.8, n=5)
+    load-kept read            921.6 ms  (921.6..921.6, n=5)
+    mesh-store read           921.6 ms  (921.6..921.6, n=5)
+    identity made             944.9 ms  (944.9..944.9, n=5)
+    mesh-store loaded         946.1 ms  (946.1..946.1, n=5)
+    core1 starting            946.5 ms  (946.5..946.5, n=5)
+    core1 started             963.9 ms  (963.9..963.9, n=5)
+    core1 enter               964.1 ms  (964.1..964.1, n=5)
+    bring_up enter            967.6 ms  (967.6..967.6, n=5)
+    frame_loop first          967.8 ms  (967.8..967.8, n=5)
+    frame_loop drawn          986.9 ms  (986.9..987.0, n=5)
+    i2c powered              1047.8 ms  (1047.8..1047.8, n=5)
+    POWER start              1048.2 ms  (1048.2..1048.2, n=5)
+    POWER end                1050.1 ms  (1050.0..1050.1, n=5)
+    exio reset               1071.8 ms  (1071.8..1071.8, n=5)
+    CLOCK start              1072.0 ms  (1072.0..1072.0, n=5)
+    TOUCH start              1072.1 ms  (1072.1..1072.1, n=5)
+    MOTION start             1072.1 ms  (1072.1..1072.1, n=5)
+    MAGNET start             1072.2 ms  (1072.2..1072.2, n=5)
+    gnss-settle end          1072.3 ms  (1072.3..1072.3, n=5)
+    CLOCK end                1072.8 ms  (1072.8..1072.8, n=5)
+    TOUCH end                1183.4 ms  (1183.4..1183.4, n=5)
+    MAGNET end               1216.3 ms  (1216.3..1216.3, n=5)
+    MOTION end               1224.3 ms  (1224.3..1224.4, n=5)
+    GNSS start               1224.5 ms  (1224.5..1224.5, n=5)
+    display up               1226.9 ms  (1226.9..1226.9, n=5)
+    flush0 start             1227.0 ms  (1227.0..1227.0, n=5)
+    GNSS end                 1235.3 ms  (1235.3..1235.3, n=5)
+    RADIO start              1235.5 ms  (1235.5..1235.5, n=5)
+    RADIO end                1238.3 ms  (1238.2..1238.3, n=5)
+    flush0 end               1240.2 ms  (1240.2..1240.2, n=5)
+    flush1 start             1240.3 ms  (1240.3..1240.3, n=5)
+    bring_up exit            1283.2 ms  (1283.2..1283.2, n=5)
+    frame_loop handed        1283.4 ms  (1283.4..1283.4, n=5)
+    flush1 end               1295.6 ms  (1295.6..1295.6, n=5)
+    panel lit                1307.8 ms  (1307.8..1307.8, n=5)
+    GNSS-config end          1936.7 ms  (1926.1..1947.9, n=5)
+    startup over             6432.6 ms  (6428.6..6435.3, n=5)
+    checks, start to end:
+      POWER        1.8 ms  (1.8..1.8)  answered
+      CLOCK        0.9 ms  (0.9..0.9)  answered
+      TOUCH      111.3 ms  (111.3..111.3)  answered
+      MAGNET     144.1 ms  (144.1..144.1)  answered
+      MOTION     152.2 ms  (152.2..152.2)  answered
+      GNSS        10.9 ms  (10.8..10.9)  answered
+      RADIO        2.7 ms  (2.7..2.7)  answered
+      flush0      13.3 ms  (13.2..13.3)  end
+      flush1      55.2 ms  (55.2..55.3)  end
+    power-on resets: {'true'}
+  board 1c1c: 5 boots
+    main enter                593.1 ms  (590.8..593.2, n=5)
+    esp_hal init              597.9 ms  (595.5..597.9, n=5)
+    psram ready               604.7 ms  (602.4..604.7, n=5)
+    settings loaded           641.4 ms  (639.0..641.4, n=5)
+    trng on                   641.5 ms  (639.1..641.5, n=5)
+    load-group read           642.1 ms  (639.8..642.2, n=5)
+    load-members read         784.2 ms  (781.9..784.2, n=5)
+    load-restored read        784.3 ms  (781.9..784.3, n=5)
+    load-rest read            796.6 ms  (794.3..796.7, n=5)
+    load-kept read            855.8 ms  (853.4..855.8, n=5)
+    mesh-store read           855.8 ms  (853.5..855.9, n=5)
+    identity made             879.1 ms  (876.8..879.1, n=5)
+    mesh-store loaded         880.3 ms  (878.0..880.4, n=5)
+    core1 starting            880.6 ms  (878.3..880.7, n=5)
+    core1 started             898.1 ms  (895.8..898.1, n=5)
+    core1 enter               898.3 ms  (896.0..898.4, n=5)
+    bring_up enter            901.8 ms  (899.5..901.8, n=5)
+    frame_loop first          902.0 ms  (899.7..902.0, n=5)
+    frame_loop drawn          921.1 ms  (918.8..921.2, n=5)
+    i2c powered               981.9 ms  (979.6..982.0, n=5)
+    POWER start               982.4 ms  (980.1..982.5, n=5)
+    POWER end                 984.2 ms  (981.9..984.3, n=5)
+    exio reset               1006.0 ms  (1003.7..1006.0, n=5)
+    CLOCK start              1006.1 ms  (1003.8..1006.2, n=5)
+    TOUCH start              1006.2 ms  (1003.9..1006.3, n=5)
+    MOTION start             1006.3 ms  (1004.0..1006.4, n=5)
+    MAGNET start             1006.4 ms  (1004.1..1006.5, n=5)
+    gnss-settle end          1006.5 ms  (1004.2..1006.5, n=5)
+    CLOCK end                1007.0 ms  (1004.7..1007.1, n=5)
+    TOUCH end                1117.6 ms  (1115.2..1117.6, n=5)
+    MAGNET end               1150.5 ms  (1148.2..1150.5, n=5)
+    MOTION end               1158.5 ms  (1156.2..1158.6, n=5)
+    GNSS start               1158.7 ms  (1156.3..1158.7, n=5)
+    display up               1161.1 ms  (1158.8..1161.2, n=5)
+    flush0 start             1161.1 ms  (1158.8..1161.2, n=5)
+    GNSS end                 1169.5 ms  (1167.2..1169.6, n=5)
+    RADIO start              1169.7 ms  (1167.4..1169.8, n=5)
+    RADIO end                1172.4 ms  (1170.1..1172.5, n=5)
+    flush0 end               1174.4 ms  (1172.0..1174.5, n=5)
+    flush1 start             1174.5 ms  (1172.1..1174.6, n=5)
+    bring_up exit            1217.3 ms  (1215.0..1217.4, n=5)
+    frame_loop handed        1217.5 ms  (1215.2..1217.6, n=5)
+    flush1 end               1229.7 ms  (1227.4..1229.8, n=5)
+    panel lit                1242.0 ms  (1239.7..1242.0, n=5)
+    GNSS-config end          1869.4 ms  (1861.4..1871.8, n=5)
+    startup over             6363.7 ms  (6361.5..6374.5, n=5)
+    checks, start to end:
+      POWER        1.8 ms  (1.8..1.8)  answered
+      CLOCK        0.9 ms  (0.9..0.9)  answered
+      TOUCH      111.3 ms  (111.3..111.3)  answered
+      MAGNET     144.1 ms  (144.1..144.1)  answered
+      MOTION     152.2 ms  (152.2..152.2)  answered
+      GNSS        10.9 ms  (10.9..10.9)  answered
+      RADIO        2.7 ms  (2.7..2.7)  answered
+      flush0      13.2 ms  (13.2..13.3)  end
+      flush1      55.2 ms  (55.2..55.3)  end
+    power-on resets: {'true'}
+== after
+  board 1a38: 5 boots
+    main enter                462.3 ms  (461.4..462.3, n=5)
+    esp_hal init              466.1 ms  (465.3..466.1, n=5)
+    panel reset               466.3 ms  (465.4..466.3, n=5)
+    psram ready               473.0 ms  (472.1..473.0, n=5)
+    settings loaded           515.4 ms  (514.6..515.4, n=5)
+    trng on                   515.6 ms  (514.7..515.6, n=5)
+    load-group read           516.4 ms  (515.5..516.4, n=5)
+    load-members read         570.8 ms  (570.0..570.8, n=5)
+    load-restored read        570.9 ms  (570.1..570.9, n=5)
+    load-rest read            584.7 ms  (583.9..584.7, n=5)
+    load-kept read            594.0 ms  (593.2..594.0, n=5)
+    mesh-store read           594.0 ms  (593.2..594.0, n=5)
+    core1 starting            594.4 ms  (593.6..594.4, n=5)
+    core1 started             611.8 ms  (611.0..611.8, n=5)
+    core1 enter               612.1 ms  (611.3..612.1, n=5)
+    identity made             637.6 ms  (636.7..637.6, n=5)
+    bring_up enter            640.2 ms  (639.3..640.2, n=5)
+    i2c powered               720.3 ms  (719.5..720.3, n=5)
+    POWER start               720.7 ms  (719.9..720.7, n=5)
+    POWER end                 722.6 ms  (721.7..722.6, n=5)
+    exio reset                744.3 ms  (743.5..744.3, n=5)
+    CLOCK start               744.5 ms  (743.7..744.5, n=5)
+    TOUCH start               744.6 ms  (743.8..744.6, n=5)
+    MOTION start              744.7 ms  (743.9..744.7, n=5)
+    MAGNET start              744.8 ms  (744.0..744.8, n=5)
+    display up                744.9 ms  (744.1..744.9, n=5)
+    frame_loop first          745.0 ms  (744.2..745.0, n=5)
+    frame_loop drawn          763.9 ms  (763.1..764.0, n=5)
+    frame_loop handed         764.1 ms  (763.3..764.1, n=5)
+    flush0 start              764.2 ms  (763.4..764.3, n=5)
+    flush0 end                779.6 ms  (778.8..779.6, n=5)
+    flush1 start              788.1 ms  (787.3..788.1, n=5)
+    panel lit                 789.9 ms  (789.1..790.0, n=5)
+    flush1 end                792.1 ms  (791.3..792.2, n=5)
+    CLOCK end                 805.9 ms  (805.1..806.1, n=5)
+    TOUCH end                 872.6 ms  (872.1..872.8, n=5)
+    MOTION end                962.7 ms  (962.1..963.0, n=5)
+    gnss-settle end          1001.2 ms  (1000.6..1001.4, n=5)
+    MAGNET end               1090.6 ms  (1090.0..1090.9, n=5)
+    GNSS start               1090.8 ms  (1090.2..1091.1, n=5)
+    GNSS end                 1116.0 ms  (1115.5..1116.4, n=5)
+    RADIO start              1116.2 ms  (1115.7..1116.6, n=5)
+    RADIO end                1231.4 ms  (1230.8..1231.7, n=5)
+    bring_up exit            1277.2 ms  (1276.8..1277.7, n=5)
+    GNSS-config end          1936.6 ms  (1928.4..1937.2, n=5)
+    startup over             6254.5 ms  (6253.8..6256.3, n=5)
+    checks, start to end:
+      POWER        1.8 ms  (1.8..1.8)  answered
+      flush0      15.4 ms  (15.4..15.4)  end
+      flush1       4.1 ms  (4.0..4.1)  end
+      CLOCK       61.4 ms  (61.4..61.6)  answered
+      TOUCH      128.2 ms  (128.0..128.4)  answered
+      MOTION     218.3 ms  (218.0..218.4)  answered
+      MAGNET     346.1 ms  (345.8..346.1)  answered
+      GNSS        25.2 ms  (25.2..25.3)  answered
+      RADIO      115.1 ms  (115.1..115.2)  answered
+    power-on resets: {'true'}
+  board 1c1c: 5 boots
+    main enter                461.4 ms  (461.4..462.3, n=5)
+    esp_hal init              465.3 ms  (465.2..466.1, n=5)
+    panel reset               465.4 ms  (465.4..466.3, n=5)
+    psram ready               472.1 ms  (472.1..473.0, n=5)
+    settings loaded           508.7 ms  (508.7..509.6, n=5)
+    trng on                   508.8 ms  (508.8..509.7, n=5)
+    load-group read           509.5 ms  (509.5..510.3, n=5)
+    load-members read         548.2 ms  (548.1..549.0, n=5)
+    load-restored read        548.3 ms  (548.2..549.1, n=5)
+    load-rest read            560.7 ms  (560.6..561.5, n=5)
+    load-kept read            585.3 ms  (585.2..586.1, n=5)
+    mesh-store read           585.3 ms  (585.3..586.2, n=5)
+    core1 starting            585.7 ms  (585.6..586.5, n=5)
+    core1 started             603.1 ms  (603.0..603.9, n=5)
+    core1 enter               603.3 ms  (603.3..604.2, n=5)
+    identity made             628.8 ms  (628.8..629.7, n=5)
+    bring_up enter            631.4 ms  (631.4..632.3, n=5)
+    i2c powered               711.6 ms  (711.5..712.4, n=5)
+    POWER start               712.0 ms  (711.9..712.8, n=5)
+    POWER end                 713.8 ms  (713.8..714.7, n=5)
+    exio reset                735.6 ms  (735.5..736.4, n=5)
+    CLOCK start               735.8 ms  (735.7..736.6, n=5)
+    TOUCH start               735.9 ms  (735.8..736.7, n=5)
+    MOTION start              735.9 ms  (735.9..736.8, n=5)
+    MAGNET start              736.1 ms  (736.0..736.9, n=5)
+    display up                736.2 ms  (736.1..737.0, n=5)
+    frame_loop first          736.3 ms  (736.2..737.1, n=5)
+    frame_loop drawn          755.2 ms  (755.2..756.0, n=5)
+    frame_loop handed         755.3 ms  (755.3..756.2, n=5)
+    flush0 start              755.5 ms  (755.5..756.3, n=5)
+    flush0 end                770.9 ms  (770.8..771.7, n=5)
+    flush1 start              779.4 ms  (779.3..780.2, n=5)
+    panel lit                 781.3 ms  (781.3..782.2, n=5)
+    flush1 end                783.5 ms  (783.5..784.5, n=5)
+    CLOCK end                 797.1 ms  (797.0..798.0, n=5)
+    TOUCH end                 864.3 ms  (864.2..865.0, n=5)
+    MOTION end                954.1 ms  (948.7..954.4, n=5)
+    gnss-settle end          1001.5 ms  (1000.1..1002.3, n=5)
+    MAGNET end               1082.0 ms  (1079.3..1082.3, n=5)
+    GNSS start               1082.2 ms  (1079.5..1082.5, n=5)
+    GNSS end                 1107.7 ms  (1105.0..2314.0, n=5)
+    RADIO start              1107.9 ms  (1105.2..2314.2, n=5)
+    RADIO end                1238.8 ms  (1223.1..2328.9, n=5)
+    bring_up exit            1286.2 ms  (1269.1..2371.4, n=5)
+    GNSS-config end          1945.5 ms  (1917.4..3026.9, n=5)
+    startup over             6263.3 ms  (6246.0..7357.1, n=5)
+    checks, start to end:
+      POWER        1.8 ms  (1.8..1.8)  answered
+      flush0      15.4 ms  (15.4..15.4)  end
+      flush1       4.2 ms  (4.1..4.4)  end
+      CLOCK       61.3 ms  (61.3..61.4)  answered
+      TOUCH      128.4 ms  (128.3..128.4)  answered
+      MOTION     218.2 ms  (212.7..218.5)  answered
+      MAGNET     346.0 ms  (343.2..346.3)  answered
+      GNSS        25.5 ms  (25.2..1231.8)  answered
+      RADIO      115.1 ms  (14.7..133.9)  answered
+    power-on resets: {'true'}
+== steps/flash-80mhz
+  board 1a38: 3 boots
+    esp_hal init              463.9 ms  (463.9..463.9, n=3)
+    psram ready               470.7 ms  (470.7..470.7, n=3)
+    settings loaded           513.2 ms  (513.2..513.2, n=3)
+    trng on                   513.3 ms  (513.3..513.3, n=3)
+    load-group read           514.1 ms  (514.1..514.1, n=3)
+    load-members read         662.9 ms  (662.9..662.9, n=3)
+    load-restored read        663.0 ms  (663.0..663.0, n=3)
+    load-rest read            676.8 ms  (676.8..676.8, n=3)
+    load-kept read            787.6 ms  (787.6..787.6, n=3)
+    mesh-store read           787.6 ms  (787.6..787.6, n=3)
+    identity made             810.9 ms  (810.9..810.9, n=3)
+    mesh-store loaded         812.1 ms  (812.1..812.1, n=3)
+    core1 starting            812.4 ms  (812.4..812.4, n=3)
+    core1 started             829.9 ms  (829.9..829.9, n=3)
+    core1 enter               830.1 ms  (830.1..830.1, n=3)
+    bring_up enter            833.6 ms  (833.6..833.6, n=3)
+    frame_loop first          833.8 ms  (833.8..833.8, n=3)
+    frame_loop drawn          853.0 ms  (853.0..853.0, n=3)
+    i2c powered               913.7 ms  (913.7..913.7, n=3)
+    POWER start               914.2 ms  (914.2..914.2, n=3)
+    POWER end                 916.0 ms  (916.0..916.0, n=3)
+    exio reset                937.7 ms  (937.7..937.7, n=3)
+    CLOCK start               937.9 ms  (937.9..937.9, n=3)
+    TOUCH start               938.0 ms  (938.0..938.0, n=3)
+    MOTION start              938.0 ms  (938.0..938.0, n=3)
+    MAGNET start              938.1 ms  (938.1..938.1, n=3)
+    CLOCK end                 938.8 ms  (938.8..938.8, n=3)
+    gnss-settle end          1000.0 ms  (1000.0..1000.0, n=3)
+    TOUCH end                1049.3 ms  (1049.3..1049.3, n=3)
+    MAGNET end               1082.2 ms  (1082.2..1082.2, n=3)
+    MOTION end               1090.3 ms  (1090.2..1090.3, n=3)
+    GNSS start               1090.4 ms  (1090.4..1090.4, n=3)
+    display up               1092.8 ms  (1092.8..1092.8, n=3)
+    flush0 start             1092.8 ms  (1092.8..1092.8, n=3)
+    GNSS end                 1101.1 ms  (1101.1..1101.1, n=3)
+    RADIO start              1101.3 ms  (1101.3..1101.3, n=3)
+    RADIO end                1104.1 ms  (1104.1..1104.1, n=3)
+    flush0 end               1106.0 ms  (1106.0..1106.1, n=3)
+    flush1 start             1106.2 ms  (1106.2..1106.2, n=3)
+    bring_up exit            1149.0 ms  (1149.0..1149.0, n=3)
+    frame_loop handed        1149.2 ms  (1149.2..1149.2, n=3)
+    flush1 end               1161.3 ms  (1161.3..1161.3, n=3)
+    panel lit                1173.7 ms  (1173.7..1173.7, n=3)
+    GNSS-config end          1812.4 ms  (1801.7..1813.6, n=3)
+    startup over             6301.4 ms  (6294.6..6303.6, n=3)
+    main enter               7360.6 ms  (7360.6..7360.6, n=3)
+    checks, start to end:
+      POWER        1.8 ms  (1.8..1.9)  answered
+      CLOCK        0.9 ms  (0.9..0.9)  answered
+      TOUCH      111.3 ms  (111.3..111.3)  answered
+      MAGNET     144.1 ms  (144.1..144.1)  answered
+      MOTION     152.2 ms  (152.2..152.2)  answered
+      GNSS        10.8 ms  (10.8..10.8)  answered
+      RADIO        2.7 ms  (2.7..2.7)  answered
+      flush0      13.2 ms  (13.2..13.2)  end
+      flush1      55.2 ms  (55.2..55.2)  end
+    power-on resets: {'true'}
+== steps/one-pass
+  board 1a38: 3 boots
+    esp_hal init              465.7 ms  (464.9..465.7, n=3)
+    psram ready               472.5 ms  (471.7..472.5, n=3)
+    settings loaded           515.1 ms  (514.2..515.1, n=3)
+    trng on                   515.2 ms  (514.3..515.2, n=3)
+    load-group read           516.0 ms  (515.2..516.0, n=3)
+    load-members read         570.4 ms  (569.6..570.4, n=3)
+    load-restored read        570.5 ms  (569.7..570.5, n=3)
+    load-rest read            584.3 ms  (583.5..584.3, n=3)
+    load-kept read            593.6 ms  (592.8..593.6, n=3)
+    mesh-store read           593.6 ms  (592.8..593.6, n=3)
+    identity made             616.9 ms  (616.1..616.9, n=3)
+    mesh-store loaded         618.1 ms  (617.3..618.1, n=3)
+    core1 starting            618.5 ms  (617.7..618.5, n=3)
+    core1 started             635.9 ms  (635.1..635.9, n=3)
+    core1 enter               636.1 ms  (635.3..636.1, n=3)
+    bring_up enter            639.6 ms  (638.8..639.6, n=3)
+    frame_loop first          639.8 ms  (639.0..639.8, n=3)
+    frame_loop drawn          659.0 ms  (658.2..659.0, n=3)
+    i2c powered               719.7 ms  (718.9..719.7, n=3)
+    POWER start               720.2 ms  (719.4..720.2, n=3)
+    POWER end                 722.1 ms  (721.2..722.1, n=3)
+    exio reset                743.8 ms  (742.9..743.8, n=3)
+    CLOCK start               743.9 ms  (743.1..744.0, n=3)
+    TOUCH start               744.0 ms  (743.2..744.0, n=3)
+    MOTION start              744.1 ms  (743.2..744.1, n=3)
+    MAGNET start              744.2 ms  (743.3..744.2, n=3)
+    CLOCK end                 744.8 ms  (744.0..744.8, n=3)
+    TOUCH end                 855.4 ms  (854.5..855.4, n=3)
+    MAGNET end                888.4 ms  (887.5..888.4, n=3)
+    MOTION end                896.3 ms  (895.5..896.3, n=3)
+    display up                898.8 ms  (898.0..898.8, n=3)
+    flush0 start              898.8 ms  (898.0..898.8, n=3)
+    flush0 end                910.6 ms  (909.8..910.6, n=3)
+    flush1 start              910.7 ms  (909.9..910.7, n=3)
+    frame_loop handed         910.8 ms  (910.0..910.8, n=3)
+    flush1 end                939.2 ms  (938.5..939.2, n=3)
+    panel lit                 939.5 ms  (938.7..939.5, n=3)
+    gnss-settle end          1007.2 ms  (1006.5..1007.3, n=3)
+    GNSS start               1007.4 ms  (1006.7..1007.4, n=3)
+    GNSS end                 1027.5 ms  (1026.8..2271.5, n=3)
+    RADIO start              1027.9 ms  (1027.2..2271.8, n=3)
+    RADIO end                1031.1 ms  (1030.4..2285.5, n=3)
+    bring_up exit            1076.1 ms  (1075.4..2329.2, n=3)
+    GNSS-config end          1719.5 ms  (1719.3..2985.4, n=3)
+    startup over             6112.4 ms  (6112.2..7306.0, n=3)
+    main enter               7389.8 ms  (7376.4..7389.8, n=3)
+    checks, start to end:
+      POWER        1.9 ms  (1.9..1.9)  answered
+      CLOCK        0.8 ms  (0.8..0.8)  answered
+      TOUCH      111.3 ms  (111.3..111.3)  answered
+      MAGNET     144.2 ms  (144.2..144.2)  answered
+      MOTION     152.2 ms  (152.2..152.2)  answered
+      flush0      11.8 ms  (11.8..11.8)  end
+      flush1      28.5 ms  (28.5..28.6)  end
+      GNSS        20.1 ms  (20.1..1264.1)  answered
+      RADIO        3.2 ms  (3.2..13.8)  answered
+    power-on resets: {'true'}
+== steps/early-reset
+  board 1a38: 3 boots
+    esp_hal init              465.6 ms  (465.5..466.0, n=3)
+    panel reset               465.7 ms  (465.6..466.1, n=3)
+    psram ready               472.4 ms  (472.3..472.8, n=3)
+    settings loaded           514.9 ms  (514.8..515.3, n=3)
+    trng on                   515.0 ms  (514.9..515.4, n=3)
+    load-group read           515.8 ms  (515.7..516.2, n=3)
+    load-members read         570.2 ms  (570.1..570.6, n=3)
+    load-restored read        570.4 ms  (570.3..570.8, n=3)
+    load-rest read            584.2 ms  (584.1..584.6, n=3)
+    load-kept read            593.5 ms  (593.4..593.9, n=3)
+    mesh-store read           593.5 ms  (593.4..593.9, n=3)
+    core1 starting            593.9 ms  (593.8..594.3, n=3)
+    core1 started             611.3 ms  (611.2..611.7, n=3)
+    core1 enter               611.6 ms  (611.5..612.0, n=3)
+    identity made             637.1 ms  (637.0..637.5, n=3)
+    bring_up enter            639.6 ms  (639.5..640.0, n=3)
+    frame_loop first          639.9 ms  (639.8..640.3, n=3)
+    frame_loop drawn          658.9 ms  (658.8..659.3, n=3)
+    i2c powered               719.9 ms  (719.8..720.3, n=3)
+    POWER start               720.3 ms  (720.2..720.7, n=3)
+    POWER end                 722.1 ms  (722.0..722.5, n=3)
+    exio reset                743.9 ms  (743.8..744.3, n=3)
+    CLOCK start               744.1 ms  (744.0..744.5, n=3)
+    TOUCH start               744.2 ms  (744.1..744.6, n=3)
+    MOTION start              744.3 ms  (744.2..744.7, n=3)
+    display up                744.4 ms  (744.3..744.8, n=3)
+    MAGNET start              744.4 ms  (744.3..744.8, n=3)
+    flush0 start              744.4 ms  (744.3..744.8, n=3)
+    CLOCK end                 745.6 ms  (745.5..746.0, n=3)
+    flush0 end                756.8 ms  (756.7..757.2, n=3)
+    flush1 start              756.9 ms  (756.8..757.3, n=3)
+    frame_loop handed         757.0 ms  (756.9..757.4, n=3)
+    flush1 end                785.3 ms  (785.2..785.7, n=3)
+    panel lit                 785.5 ms  (785.4..785.9, n=3)
+    TOUCH end                 869.1 ms  (867.7..869.1, n=3)
+    MOTION end                897.5 ms  (897.4..897.9, n=3)
+    MAGNET end                970.2 ms  (969.9..970.6, n=3)
+    gnss-settle end          1003.2 ms  (1002.9..1003.6, n=3)
+    GNSS start               1003.3 ms  (1003.0..1003.7, n=3)
+    GNSS end                 1019.9 ms  (1019.6..1020.3, n=3)
+    RADIO start              1020.1 ms  (1019.8..1020.5, n=3)
+    RADIO end                1022.3 ms  (1021.9..1022.6, n=3)
+    bring_up exit            1066.9 ms  (1066.6..1067.3, n=3)
+    GNSS-config end          1728.9 ms  (1721.1..1729.7, n=3)
+    startup over             6096.9 ms  (6095.8..6098.9, n=3)
+    main enter               7388.4 ms  (7386.7..7394.8, n=3)
+    checks, start to end:
+      POWER        1.8 ms  (1.8..1.8)  answered
+      CLOCK        1.5 ms  (1.5..1.5)  answered
+      flush0      12.4 ms  (12.4..12.4)  end
+      flush1      28.4 ms  (28.4..28.4)  end
+      TOUCH      124.5 ms  (123.6..124.9)  answered
+      MOTION     153.2 ms  (153.2..153.2)  answered
+      MAGNET     225.8 ms  (225.6..225.8)  answered
+      GNSS        16.6 ms  (16.5..16.6)  answered
+      RADIO        2.1 ms  (2.1..2.1)  answered
+    power-on resets: {'true'}

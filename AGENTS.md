@@ -451,7 +451,10 @@ part's check started and ended (`startup-timing-bench`, run on the boards by
 `tools/startup-timing.sh` and summarised by `tools/startup-timing-summary.py`), and keeps them
 for a debugger to read without a reset (`tools/startup-timing-read.py`), which a cold start
 needs; `tools/startup-timing-cold.sh` reads each board every time it is plugged back in.
-Results in `docs/logs/display/startup-timing-2026-10-06/`. And `bench/relay-pruning` counts
+Results in `docs/logs/display/startup-timing-2026-10-06/`. It also marks when `main` starts, when
+the settings and the mesh's state have been read, when core 1 starts the panel's controller and
+flushes its first frames, and when the panel first lights; `startup-te-check` checks that the
+panel's reset turned TE off. Results in `docs/logs/display/display-startup-2026-10-08/`. And `bench/relay-pruning` counts
 in the simulator the packets a flood and a removal take, sets them beside the fewest a flood
 could use, and tries relay changes through knobs whose defaults are the firmware's
 (`crates/octowhere-sim/tests/relay_cost.rs`, an ignored test, summarised by
