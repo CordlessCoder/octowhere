@@ -343,9 +343,11 @@ pub struct Stage {
     /// asks for, and never ends while charging.
     gauge_moving: bool,
     charge: Charge,
-    /// The resting screens' scatter breath, held while the screen is not awake, and whether a
-    /// resting screen shows it, which needs steps that nothing else asks for.
+    /// The resting screens' scatter breath, held while the screen is not awake, when it next
+    /// changes, and whether a resting screen shows it, which needs a step at each change that
+    /// nothing else asks for.
     breath: u8,
+    breath_due: Micros,
     breathing: bool,
     drawn: Option<Drawn>,
     /// A group screen's list from before the last, which the next step fills again. A list is
@@ -495,6 +497,7 @@ impl Stage {
             gauge_moving: false,
             charge: Charge::default(),
             breath: u8::MAX,
+            breath_due: 0,
             breathing: false,
             drawn: None,
             spare_list: None,
@@ -693,6 +696,7 @@ impl Stage {
         let overlay = self.overlay.as_ref().and_then(|(list, _)| list.due());
         let members = self.members_list.as_ref().and_then(|list| list.due());
         [
+            self.breathing.then_some(self.breath_due),
             self.startup_due,
             rest,
             power_off,
@@ -897,7 +901,7 @@ impl Stage {
     /// input.
     #[must_use]
     pub fn is_animating(&self) -> bool {
-        self.is_changing() || self.gauge_moving || self.breathing
+        self.is_changing() || self.gauge_moving
     }
 
     /// As [`is_animating`](Self::is_animating), but for the charging gauge, which never stops
@@ -943,6 +947,7 @@ impl Stage {
         self.breathing = false;
         if self.rest == Rest::Awake {
             self.breath = scatter::breath(now);
+            self.breath_due = scatter::next_breath(now);
         }
         let mut update = Update::default();
         // Set where a change needs the whole panel redrawn. The settled screens work out their
