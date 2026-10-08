@@ -27,6 +27,12 @@ pub mod gnss_time;
 #[path = "../../firmware/src/settings_queue.rs"]
 pub mod settings_queue;
 
+#[path = "../../firmware/src/crowded_bench/fixture.rs"]
+pub mod crowded_fixture;
+
+#[cfg(test)]
+mod crowded_screens;
+
 #[cfg(test)]
 mod settings_writes;
 

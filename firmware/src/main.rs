@@ -93,6 +93,8 @@ use tca9554::Tca9554;
 use esp_alloc as _;
 use esp_backtrace as _;
 
+#[cfg(feature = "crowded-screens-bench")]
+mod crowded_bench;
 mod mesh;
 mod saves;
 #[cfg(feature = "touch-inject")]
@@ -738,6 +740,11 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
                     .expect("display region flush failed");
             }
         };
+        #[cfg(feature = "crowded-screens-bench")]
+        {
+            timings.bench.regions = regions;
+            timings.bench.pixels = pixels;
+        }
 
         if display_on.take() == Some(false) && display.display_off().await.is_err() {
             warn!("[DISPLAY] display off failed");
@@ -1847,6 +1854,8 @@ struct Timings {
     swap_draw: Duration,
     swap_spi: Duration,
     frametime: Duration,
+    #[cfg(feature = "crowded-screens-bench")]
+    bench: crowded_bench::Frame,
 }
 
 /// Marks the one-pixel border of `region`.
@@ -2045,6 +2054,12 @@ async fn async_main(spawner: Spawner) {
     // The panel comes up first, so the self-test shows while the parts come up behind it.
     start_display_core!(peripherals, fb_st);
 
+    // The bench's phases run longer than a screen timeout, with nobody to wake the screen.
+    #[cfg(feature = "crowded-screens-bench")]
+    let saved = settings::Saved {
+        timeout: Some(octowhere::ui::rest::Timeout::Never),
+        ..saved
+    };
     let mut stage = Stage::starting(PeripheralState {
         brightness: saved.brightness.unwrap_or(DEFAULT_BRIGHTNESS),
         timeout: saved.timeout.unwrap_or_default(),
@@ -2675,7 +2690,11 @@ async fn frame_loop(
     let mut messages_seen = 0;
     #[cfg(feature = "touch-inject")]
     let mut injector = touch_inject::Injector::default();
+    #[cfg(feature = "crowded-screens-bench")]
+    let mut bench = crowded_bench::Bench::new();
     loop {
+        #[cfg(feature = "crowded-screens-bench")]
+        bench.phase(&stage);
         let start = Instant::now();
         {
             let state = fb_st.get();
@@ -2713,6 +2732,10 @@ async fn frame_loop(
             if injector.is_stroking() {
                 wait_timeout = wait_timeout.min(TOUCH_REPOLL);
             }
+            #[cfg(feature = "crowded-screens-bench")]
+            {
+                wait_timeout = bench.pace(wait_timeout);
+            }
             let (touch_read, sensor_state, motion_state, boot, key, boot_key) = match select4(
                 take_touch_read(),
                 select4(
@@ -2742,10 +2765,14 @@ async fn frame_loop(
                 }
                 Either4::Third(state) => (None, None, Some(state), None, None, None),
             };
+            #[cfg(feature = "crowded-screens-bench")]
+            let woke = Instant::now();
             // A change that came with another wake is taken here too.
+            #[cfg(not(feature = "crowded-screens-bench"))]
             if let Some(seen) = stage.update_mesh(|view| mesh::view_since(mesh_seen, view)) {
                 mesh_seen = seen;
             }
+            #[cfg(not(feature = "crowded-screens-bench"))]
             stage.update_messages(
                 |messages| match mesh::messages_since(messages_seen, messages) {
                     Some(seen) => {
@@ -2755,6 +2782,22 @@ async fn frame_loop(
                     None => false,
                 },
             );
+            #[cfg(feature = "crowded-screens-bench")]
+            if let Some(seen) = stage.update_mesh(|view| {
+                let seen = mesh::view_since(mesh_seen, view);
+                bench.crowd(view, seen.is_some());
+                seen
+            }) {
+                mesh_seen = seen;
+            }
+            #[cfg(feature = "crowded-screens-bench")]
+            stage.update_messages(|messages| {
+                let copied = mesh::messages_since(messages_seen, messages);
+                if let Some(seen) = copied {
+                    messages_seen = seen;
+                }
+                bench.mail(messages, copied.is_some())
+            });
             match touch_read {
                 Some(Ok(_)) => last_touch_poll = Instant::now(),
                 Some(Err(())) => warn!("[TOUCH] read failed"),
@@ -2791,6 +2834,8 @@ async fn frame_loop(
                 let (injected, pressed) = injector.next();
                 (touch.or(injected), key.or(pressed))
             };
+            #[cfg(feature = "crowded-screens-bench")]
+            let motion_state = bench.motion(motion_state);
             let update = stage.step(StageInput {
                 now: Instant::now().as_micros(),
                 touch,
@@ -2820,6 +2865,8 @@ async fn frame_loop(
                 key,
                 boot_key,
             });
+            #[cfg(feature = "crowded-screens-bench")]
+            bench.read(update.mesh);
             let wake_gestures = stage.watches_for_wake();
             if wake_gestures != asked_wake_gestures {
                 TOUCH_WAKE_GESTURES.signal(wake_gestures);
@@ -2872,6 +2919,10 @@ async fn frame_loop(
                 power_off_after = Some(2);
             }
             COMPASS_ACTIVE.store(update.samples_fast, Ordering::Relaxed);
+            #[cfg(feature = "crowded-screens-bench")]
+            let (stepped, heap_stepped) = (Instant::now(), esp_alloc::HEAP.used());
+            #[cfg(feature = "crowded-screens-bench")]
+            let drawing = Instant::now();
             let changed = stage.changed();
             (*repaint).clone_from(&previous_changed);
             repaint.extend(changed);
@@ -2885,6 +2936,24 @@ async fn frame_loop(
                 stage.draw(fb);
             } else if !repaint.is_empty() {
                 stage.draw(&mut chrome::Clip::new(fb, &repaint));
+            }
+            #[cfg(feature = "crowded-screens-bench")]
+            {
+                let draw = drawing.elapsed();
+                let heap = esp_alloc::HEAP.used();
+                let repainted = if repaint.is_full() {
+                    board::LCD_WIDTH as u32 * board::LCD_HEIGHT as u32
+                } else {
+                    repaint.pixels()
+                };
+                bench.record(
+                    &mut timings.bench,
+                    stepped - woke,
+                    draw,
+                    repainted,
+                    heap,
+                    heap.max(heap_stepped),
+                );
             }
             // The panel already shows the step before, so only this step's pixels change on it.
             dirty.clone_from(changed);
@@ -2916,6 +2985,17 @@ async fn frame_loop(
         let start = Instant::now();
         fb_st.swap().await;
         prev_swap_draw = start.elapsed();
+        #[cfg(feature = "crowded-screens-bench")]
+        {
+            let timings = &mut fb_st.get().timings;
+            bench.log(
+                &mut timings.bench,
+                timings.frametime,
+                timings.vsync_wait,
+                timings.spi_time,
+                prev_swap_draw,
+            );
+        }
         if let Some((write, swaps)) = pending_write.take() {
             if swaps > 1 {
                 pending_write = Some((write, swaps - 1));

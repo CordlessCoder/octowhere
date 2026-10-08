@@ -10,6 +10,7 @@ heapless = "0.9.3"
 octowhere-ui = { path = "../crates/octowhere-ui" }
 
 [dev-dependencies]
+embedded-graphics = "0.8.2"
 embedded-hal = "1.0"
 embedded-hal-async = "1.0"
 futures = { version = "0.3.32", default-features = false, features = ["async-await", "executor"] }
