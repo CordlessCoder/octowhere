@@ -1836,6 +1836,14 @@ impl<R: Radio, T: Time, G: Random, D: Device, S: GroupStore, A: Allocator + Clon
             carried.summary,
             finished
         );
+        if let Some(entry) = self.table.entry(own) {
+            info!(
+                "[BENCH] own stamp={} base={} carried={}",
+                entry.stamp,
+                second_at(time),
+                carried.positions().iter().any(|carried| carried.id == own)
+            );
+        }
     }
 
     /// Runs a pairing in `role` on the pairing channel until it ends, then returns to the mesh's
