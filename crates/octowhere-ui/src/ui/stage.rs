@@ -18,7 +18,7 @@ use super::{
     group::{
         self, Flow,
         layout::{Backdrop, List},
-        view::{MeshView, MessagesView, Request},
+        view::{GroupView, MeshView, MessagesView, Request},
     },
     identity,
     members::{self, Tap},
@@ -300,6 +300,15 @@ impl Grid {
     }
 }
 
+/// What the member face is built from besides the time, which its list's due time covers.
+#[derive(PartialEq)]
+struct MembersFrom {
+    group: Option<GroupView>,
+    gnss: Gnss,
+    heading: Option<u16>,
+    selected: Option<[u8; 8]>,
+}
+
 /// What the settled screen showed after a step, for the next step's damage. The screens settle
 /// under exclusive conditions, so at most one has a snapshot.
 /// An empty list on the heap, built outside the step so its frame never holds one.
@@ -442,6 +451,10 @@ pub struct Stage {
     /// next.
     members_list: Option<alloc::boxed::Box<List>>,
     members_spare: Option<alloc::boxed::Box<List>>,
+    /// What `members_list` was built from, kilobytes for the group, and whether the last step
+    /// kept it rather than building it again.
+    members_from: Option<alloc::boxed::Box<MembersFrom>>,
+    members_kept: bool,
     /// The member the face shows selected, by its device.
     member: Option<[u8; 8]>,
     /// What of each message too tall to show whole has been read, line by line, which closing
@@ -550,6 +563,8 @@ impl Stage {
             overlay_spare: None,
             members_list: None,
             members_spare: None,
+            members_from: None,
+            members_kept: false,
             member: None,
             coverage: drawer::Coverage::default(),
             declination: None,
@@ -1197,6 +1212,7 @@ impl Stage {
         if self.members_list.is_none() {
             // Lists are kilobytes; a hidden face keeps none.
             self.members_spare = None;
+            self.members_from = None;
         }
         self.track_overlay(now);
 
@@ -1433,12 +1449,61 @@ impl Stage {
             self.true_heading,
             members::true_heading(&self.peripherals.compass, self.declination),
         );
+        self.members_kept = false;
         if !shows {
             return self.members_list.take();
         }
+        if self.members_unchanged(now) {
+            self.members_kept = true;
+            #[cfg(debug_assertions)]
+            self.check_kept_members(now);
+            return None;
+        }
         let mut list = self.members_spare.take().unwrap_or_else(new_list);
         self.member = members::build(&self.members_context(now), &self.renderer, &mut list);
+        // The member the build chose draws the same face as the one it was asked for.
+        match &mut self.members_from {
+            Some(from) => {
+                from.group = self.mesh.group;
+                from.gnss = self.peripherals.gnss;
+                from.heading = self.true_heading;
+                from.selected = self.member;
+            }
+            None => {
+                self.members_from = Some(alloc::boxed::Box::new(MembersFrom {
+                    group: self.mesh.group,
+                    gnss: self.peripherals.gnss,
+                    heading: self.true_heading,
+                    selected: self.member,
+                }));
+            }
+        }
         self.members_list.replace(list)
+    }
+
+    /// Whether the member face would be built as it was last time: from the same group, fix,
+    /// heading and selection, before any age it shows moves on.
+    fn members_unchanged(&self, now: Micros) -> bool {
+        let (Some(list), Some(from)) = (&self.members_list, &self.members_from) else {
+            return false;
+        };
+        list.due().is_none_or(|due| now < due)
+            && from.group == self.mesh.group
+            && from.gnss == self.peripherals.gnss
+            && from.heading == self.true_heading
+            && from.selected == self.member
+    }
+
+    /// Builds the member face it kept again, and checks it came out the same.
+    #[cfg(debug_assertions)]
+    fn check_kept_members(&mut self, now: Micros) {
+        let mut list = self.members_spare.take().unwrap_or_else(new_list);
+        let member = members::build(&self.members_context(now), &self.renderer, &mut list);
+        debug_assert!(
+            self.members_list.as_deref() == Some(&*list) && member == self.member,
+            "the member face changed while what it is built from did not"
+        );
+        self.members_spare = Some(list);
     }
 
     fn members_context(&self, now: Micros) -> members::Context<'_> {
@@ -2098,6 +2163,7 @@ impl Stage {
                     (Some(before), Some(after)) => {
                         after.damage(before, &self.renderer, &mut self.changed);
                     }
+                    (None, Some(_)) if self.members_kept => {}
                     _ => self.changed.make_full(),
                 }
             }
@@ -2121,7 +2187,9 @@ impl Stage {
         }
         self.drawn = drawn;
         self.drawer_spare = drawer_before;
-        self.members_spare = members_before;
+        if members_before.is_some() {
+            self.members_spare = members_before;
+        }
     }
 
     /// The open panel's damage: the grid while it scrolls, a cell whose reading changed, or

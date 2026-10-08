@@ -390,9 +390,11 @@ until the feature set is complete, because profiling an incomplete firmware pric
       though most change no pixel: stepping only when a mark appears or goes would leave about
       five a second on the clock face. While charging, the gauge steps the clock face every
       panel frame; the boards have no battery, so that was not measured.
-    - The member face samples motion every 20 ms and the frame loop steps for each sample,
-      about 40 times a second at 10.5 ms a step with 31 members: 468 ms of each second at rest.
-      Building it again only when what it shows has moved is the lever.
+    - The member face samples motion every 20 ms and the frame loop steps for each sample, about
+      40 times a second. The face is kept while nothing it shows moved (`e81ec08`), so a step at
+      rest takes 1.2 ms with 31 members, 122 ms of each second, against 468 when it was built
+      every step. Waking the frame loop only for a sample that turns the held heading is what is
+      left.
   - Stills of the new states from a board's framebuffer; the package has host renders.
     `tools/crowded-screens-bench.py --shots` on that branch reads one back after each phase.
 

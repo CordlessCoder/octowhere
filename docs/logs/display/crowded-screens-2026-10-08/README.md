@@ -23,11 +23,13 @@ adds master's `cbd6451`: the member face is no longer built under the open drawe
 and fifth runs added to `369d846` master's `3e21df5`, which stops the face under the open drawer
 counting as showing, so that the motion task samples slowly there and turning no longer keeps
 the screen lit. The sixth run added to that build master's `f2c2cd5`, which steps the breathing
-scatter only when its breath changes. A step is the stage's step, from the frame loop's wake; a
-draw is the drawing into the framebuffer, for the steps that changed pixels; a flush is the
-transfer that followed. Each summary gives a phase's steps twice: all of them, and then apart
-for the steps that changed the panel and those that changed nothing, with what the phase's steps
-took together for each second it lasted. Times are in milliseconds, the heap in bytes.
+scatter only when its breath changes, and the seventh master's `e81ec08`, which keeps the member
+face from one step to the next while what it is built from stays the same. A step is the stage's
+step, from the frame loop's wake; a draw is the drawing into the framebuffer, for the steps that
+changed pixels; a flush is the transfer that followed. Each summary gives a phase's steps twice:
+all of them, and then apart for the steps that changed the panel and those that changed nothing,
+with what the phase's steps took together for each second it lasted. Times are in milliseconds,
+the heap in bytes.
 
 | File | What it is |
 | --- | --- |
@@ -37,6 +39,7 @@ took together for each second it lasted. Times are in milliseconds, the heap in 
 | `over-members-covered.txt`, `over-members-covered-phases.txt` | The first run again with the face under the open drawer no longer counting as showing |
 | `over-clock-covered.txt`, `over-clock-covered-phases.txt` | The same build with the drawer opened over the clock face |
 | `over-members-breath.txt`, `over-members-breath-phases.txt` | The fourth run again with the breathing scatter stepped only when its breath changes |
+| `over-members-kept.txt`, `over-members-kept-phases.txt` | The sixth run again with the member face kept while nothing it shows moved |
 
 The `-phases.txt` files hold what the board reported at the start of each phase: the screen,
 the member selected, the drawer's root, and how many events, unread entries and conversations it
@@ -92,6 +95,12 @@ What the runs showed:
 - On the member face the frame loop stepped as often as before, about 40 times a second at
   10.5 ms a step with 31 members: 468 ms of each second at rest. The face samples motion every
   20 ms, and the frame loop steps for each sample.
+- With the member face kept while its group, fix, heading and selection stay the same and none
+  of its ages moves on, a step that changed nothing took 1.2 ms at the median on the face,
+  against 10.5. The frame loop stepped as often, but stepping took 122 ms of each second at rest,
+  against 468, 140 with a member selected, against 455, and 141 after it was let go, against
+  479. Turning, the face is built each degree as before. Keeping what the face was built from
+  raised the heap's peak there by 3,160 bytes, to 119,280.
 - The drawer's draws stayed small in every run, 6 to 9 ms at the median and under 37 ms at p95
   while a list scrolled.
 - No panic in any run. Besides the GNSS module's warnings, the PMIC's key and battery reads
