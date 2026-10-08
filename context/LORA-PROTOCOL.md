@@ -615,7 +615,10 @@ Owner, 2026-10-03, except where it says otherwise.
   see that packet but cannot open the key inside. Key messages are kept for this past the
   message horizon while the old key is, but are left out of the digest after it. A member that
   missed the switch goes on sending under the old key, and nodes on the new key hear it within
-  its floor. A node sends a member its key
+  its floor. The remover's own packets there, its removal notice and catch-ups, are not taken
+  for that, since it made the new key (owner, 2026-10-08). Another member's are, though it may
+  be on the new key and sending a header for a member it waits for: one on a rival key sends
+  the same packets, and needs the winner's key message. A node sends a member its key
   message this way again only after a gap of sweep rounds that doubles with each send, up to
   64 sweep rounds, about ten hours, and never stops while it keeps the old key (owner,
   2026-10-04): one that declined never takes it, and is not acknowledged, so that it would
