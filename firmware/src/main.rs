@@ -27,9 +27,9 @@ use core::{
 };
 use defmt::{debug, error, info, warn};
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
-use embassy_executor::Spawner;
+use embassy_executor::{SendSpawner, Spawner};
 use embassy_futures::{
-    join::{join, join5},
+    join::join5,
     select::{Either, Either4, select, select4},
 };
 use embassy_sync::{
@@ -1630,48 +1630,21 @@ async fn touch_task(mut touch: TouchDriver) {
     }
 }
 
-/// Moves a value to another executor on core 0. esp-hal's async drivers are not `Send`, since
-/// each binds its interrupt to the core that made it, but a move between executors on the same
-/// core keeps that binding.
-struct OnCore0<T>(T);
-
-// SAFETY: an `OnCore0` is only sent to `BUS_EXECUTOR`, which runs on core 0, where every
-// value it carries was made.
-unsafe impl<T> Send for OnCore0<T> {}
-
-/// The tasks that use the I2C bus, for `BUS_EXECUTOR`.
-struct BusTasks {
-    sensor: SensorTask,
-    gnss: GnssTask,
-    motion: Option<MotionTask>,
-    touch: Option<TouchDriver>,
-    radio: Option<RadioTask>,
+/// What `bring_up` takes to `BUS_EXECUTOR`.
+struct BringUp {
+    parts: Parts,
+    mesh: mesh::Start,
+    /// Spawns onto the thread-mode executor.
+    threads: SendSpawner,
 }
 
-/// Spawns the bus tasks from inside `BUS_EXECUTOR`, whose own spawner takes tasks that are not
+/// Spawns `bring_up` from inside `BUS_EXECUTOR`, whose own spawner takes tasks that are not
 /// `Send`.
 #[embassy_executor::task]
-async fn start_bus_tasks(tasks: OnCore0<BusTasks>) {
+async fn start_bring_up(bring_up_with: BringUp) {
     // SAFETY: this runs as an embassy task, polled with the executor's own context.
     let spawner = unsafe { Spawner::for_current_executor() }.await;
-    let OnCore0(BusTasks {
-        sensor,
-        gnss,
-        motion,
-        touch,
-        radio,
-    }) = tasks;
-    spawner.spawn(sensor_task(sensor).unwrap());
-    spawner.spawn(gnss_task(gnss).unwrap());
-    if let Some(motion) = motion {
-        spawner.spawn(motion_task(motion).unwrap());
-    }
-    if let Some(touch) = touch {
-        spawner.spawn(touch_task(touch).unwrap());
-    }
-    if let Some(radio) = radio {
-        spawner.spawn(radio_task(radio).unwrap());
-    }
+    spawner.spawn(bring_up(bring_up_with).unwrap());
 }
 
 struct RadioTask {
@@ -1911,9 +1884,7 @@ const CLOCK_DEADLINE: Duration = Duration::from_millis(200);
 const TOUCH_DEADLINE: Duration = Duration::from_millis(600);
 const MOTION_DEADLINE: Duration = Duration::from_millis(500);
 const MAGNET_DEADLINE: Duration = Duration::from_millis(500);
-/// Reading the radio's version and configuring it takes about 2 ms over its own SPI bus, but it
-/// shares thread mode with the frame loop, whose self-test frames take up to about 30 ms each
-/// while the list scrolls to the radio's row: on the boards the check took 7 to 138 ms.
+/// Reading the radio's version and configuring it takes about 2 ms over its own SPI bus.
 const RADIO_DEADLINE: Duration = Duration::from_millis(500);
 /// With a fix, how often the GNSS module copies its navigation data to its flash, so a loss of
 /// power keeps the satellites' orbits and the last position. Its RTC RAM keeps them otherwise.
@@ -1980,7 +1951,6 @@ struct Parts {
     touch_rst: peripherals::GPIO40<'static>,
     touch_int: peripherals::GPIO11<'static>,
     imu_int2: peripherals::GPIO21<'static>,
-    bus_interrupt: peripherals::FROM_CPU_INTR2<'static>,
 }
 
 #[embassy_executor::task]
@@ -2089,7 +2059,6 @@ async fn async_main(spawner: Spawner) {
         touch_rst: peripherals.GPIO40,
         touch_int: peripherals.GPIO11,
         imu_int2: peripherals.GPIO21,
-        bus_interrupt: peripherals.FROM_CPU_INTR2,
     };
     let zones = ZoneTracker {
         mode: saved.zone_mode,
@@ -2097,11 +2066,24 @@ async fn async_main(spawner: Spawner) {
         automatic: saved.automatic_zone,
         looked_up_at: None,
     };
-    join(
-        bring_up(spawner, parts, zones, mesh_start),
-        frame_loop(stage, fb_st),
-    )
-    .await;
+    ZONE_STATE.lock(|state| state.set(zones.state()));
+    spawner.spawn(zone_task(zones).unwrap());
+    // The self-test's checks run there too, above thread mode, so that its frames do not hold
+    // them up.
+    let bus = BUS_EXECUTOR
+        .init(esp_rtos::embassy::InterruptExecutor::new(
+            peripherals.FROM_CPU_INTR2,
+        ))
+        .start(esp_hal::interrupt::Priority::Priority1);
+    bus.spawn(
+        start_bring_up(BringUp {
+            parts,
+            mesh: mesh_start,
+            threads: spawner.make_send(),
+        })
+        .unwrap(),
+    );
+    frame_loop(stage, fb_st).await;
 }
 
 /// The mesh's identity and group as stored, making the identity on first boot.
@@ -2139,12 +2121,15 @@ fn mesh_start(saved: settings::MeshSaved) -> mesh::Start {
 /// Brings up every part behind the self-test, each against its deadline, then starts the tasks
 /// that own them and hands the touch controller to the frame loop. A part that fails is left
 /// out, and its owner runs without it.
-async fn bring_up(spawner: Spawner, parts: Parts, zones: ZoneTracker, mesh: mesh::Start) {
-    let bus = BUS_EXECUTOR
-        .init(esp_rtos::embassy::InterruptExecutor::new(
-            parts.bus_interrupt,
-        ))
-        .start(esp_hal::interrupt::Priority::Priority1);
+#[embassy_executor::task]
+async fn bring_up(bring_up_with: BringUp) {
+    let BringUp {
+        parts,
+        mesh,
+        threads,
+    } = bring_up_with;
+    // SAFETY: this runs as an embassy task, polled with the executor's own context.
+    let bus = unsafe { Spawner::for_current_executor() }.await;
 
     // The I²C pull-ups share VCC3V3 with the secondary board.
     Timer::after(Duration::from_millis(board::I2C_POWER_SETTLE_MS)).await;
@@ -2363,7 +2348,7 @@ async fn bring_up(spawner: Spawner, parts: Parts, zones: ZoneTracker, mesh: mesh
             mesh,
         }),
         None => {
-            spawner.spawn(mesh::offline(mesh).unwrap());
+            threads.spawn(mesh::offline(mesh).unwrap());
             None
         }
     };
@@ -2383,37 +2368,44 @@ async fn bring_up(spawner: Spawner, parts: Parts, zones: ZoneTracker, mesh: mesh
         );
     }
 
-    ZONE_STATE.lock(|state| state.set(zones.state()));
-    spawner.spawn(zone_task(zones).unwrap());
-    // From here on the bus belongs to `BUS_EXECUTOR`'s tasks.
     bus.spawn(
-        start_bus_tasks(OnCore0(BusTasks {
-            sensor: SensorTask {
-                power,
-                rtc: rtc_ok.then_some(rtc),
-                state: SensorSnapshot::default(),
-                rtc_sync_pending: true,
-            },
-            gnss: GnssTask {
-                gnss,
-                nmea_parser: NmeaParser::new(),
-                exio: i2c.clone(),
-                rtc: rtc_ok.then(|| Pcf85063aRtc::new(i2c.clone())),
-                configure: gnss_ok,
-                reference_time: gnss_reset || powered_on,
-            },
-            // The compass needs the IMU for its tilt. Without it, it shows NO DATA.
-            motion: imu_ok.then(|| MotionTask {
+        sensor_task(SensorTask {
+            power,
+            rtc: rtc_ok.then_some(rtc),
+            state: SensorSnapshot::default(),
+            rtc_sync_pending: true,
+        })
+        .unwrap(),
+    );
+    bus.spawn(
+        gnss_task(GnssTask {
+            gnss,
+            nmea_parser: NmeaParser::new(),
+            exio: i2c.clone(),
+            rtc: rtc_ok.then(|| Pcf85063aRtc::new(i2c.clone())),
+            configure: gnss_ok,
+            reference_time: gnss_reset || powered_on,
+        })
+        .unwrap(),
+    );
+    // The compass needs the IMU for its tilt. Without it, it shows NO DATA.
+    if imu_ok {
+        bus.spawn(
+            motion_task(MotionTask {
                 magnetometer: magnetometer_ok.then_some(magnetometer),
                 imu,
                 accel_lsb_per_g: ph_qmi8658::accel_lsb_per_g(accel_range),
                 gyro_lsb_per_dps: ph_qmi8658::gyro_lsb_per_dps(gyro_range),
-            }),
-            touch: touch_ok.then_some(touch),
-            radio,
-        }))
-        .unwrap(),
-    );
+            })
+            .unwrap(),
+        );
+    }
+    if touch_ok {
+        bus.spawn(touch_task(touch).unwrap());
+    }
+    if let Some(radio) = radio {
+        bus.spawn(radio_task(radio).unwrap());
+    }
     info!(
         "[MEM] internal_used={} psram_used={}",
         esp_alloc::HEAP.used(),

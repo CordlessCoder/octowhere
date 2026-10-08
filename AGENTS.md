@@ -487,11 +487,12 @@ software interrupt at level 1, so they preempt thread mode instead of waiting fo
 Core 1 owns the display SPI/DMA path.
 
 - `async_main`, in thread mode, pulses the panel's reset, loads the settings, starts core 1,
-  then runs `bring_up` and `frame_loop` together. `bring_up` brings each part up against its deadline, reports when
-  each check starts and how it ends to the start-up's self-test through `BOOT_REPORTS`, the
-  radio's last, then spawns the tasks below with the parts that answered, the bus tasks through
-  `start_bus_tasks`. A part that fails is left
-  out, and its owner runs without it; there is no motion task without the IMU. `frame_loop`
+  spawns `bring_up` on `BUS_EXECUTOR`, then runs `frame_loop`. `bring_up` brings each part up
+  against its deadline, above thread mode so that the self-test's frames do not hold its checks
+  up. It reports when each check starts and how it ends to the start-up's self-test through
+  `BOOT_REPORTS`, the radio's last, then spawns the tasks below with the parts that answered. A
+  part that fails is left out, and its owner runs without it; there is no motion task without
+  the IMU. `frame_loop`
   owns drawing. The start-up's sequence runs from its first step, which waits for core 1 to
   start the panel (`DISPLAY_UP`). It takes touch reads from `TOUCH_READS`, asking for one through `TOUCH_POLL`
   while a contact is held, and the latest sensor values from `SENSOR_STATE` and
@@ -574,9 +575,9 @@ that touches flash at run time goes through the same pair. Loading at boot happe
 starts.
 
 The I2C bus is an `embassy_sync` `Mutex<CriticalSectionRawMutex, _>`, shared through
-`I2cDevice` clones. After `bring_up` spawns the bus tasks, nothing in thread mode may use it. The
-mutex keeps one waiter's waker, and registering a second wakes the first, so two waiters on
-`BUS_EXECUTOR` wake each other in turn at interrupt level. A thread-mode holder then never runs
+`I2cDevice` clones. Nothing in thread mode may use it. The mutex keeps one waiter's waker, and
+registering a second wakes the first, so two waiters on `BUS_EXECUTOR` wake each other in turn
+at interrupt level. A thread-mode holder then never runs
 to release the bus, and core 0 stops; it did, within seconds, with only the GNSS and radio tasks
 there. The bus went async on core 0, which binds its interrupt there. A transaction holds the
 bus for its length, and a 512-byte GNSS read takes about 12 ms at 400 kHz. The lock has no
@@ -589,8 +590,8 @@ its normal and low-power scan modes.
 Every lock esp-hal and esp-rtos take raises the interrupt level to 5, so `BUS_EXECUTOR` never runs
 inside one. esp-hal saves the FPU registers across interrupts (`float-save-restore`), so the bus
 tasks may use floats. esp-hal's async drivers are not `Send`, since each binds its interrupt to
-the core that made it, so `start_bus_tasks` takes them in `OnCore0`, which asserts they stay on
-core 0.
+the core that made it, so `bring_up` makes them on `BUS_EXECUTOR` and spawns the bus tasks with
+its own spawner, which `start_bring_up` gives it.
 
 The two cores exchange two PSRAM framebuffers through `util::Swap`, which is lock-free and carries
 `unsafe impl Send/Sync`. A started `SwapThreadFuture` must be allowed to complete; dropping it
