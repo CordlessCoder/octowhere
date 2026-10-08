@@ -23,7 +23,8 @@ host-tests/src/crowded_screens.rs steps the same gestures through the stage on t
 checks each phase reaches what it is named for.
 
 The member face places its members only with a fix and the RTC's time, and turns only with a
-true heading, which needs both: the line for phase 4 should end `TRUE / FORWARD`.
+true heading, which needs both: the line for phase 4 should end `TRUE / FORWARD`. A board whose
+RTC has no time takes one from `uv run tools/rtc-inject.py now --elf <elf> --probe <probe>` first.
 
 With `--shots DIR` it reads the screen back after each phase into DIR, in a phase of its own
 numbered 100 more, since a read halts the board for about 11 s.

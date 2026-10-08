@@ -71,7 +71,7 @@ pair-inject = ["octowhere-node/phantom"]
 touch-inject = []
 # Logs each frame's step, draw, flush and heap on a crowded member face and drawer, with a group
 # and messages made up in place of the mesh's; see `tools/crowded-screens-bench.py`.
-crowded-screens-bench = ["timing-log", "touch-inject", "fix-inject"]
+crowded-screens-bench = ["timing-log", "touch-inject", "fix-inject", "rtc-inject"]
 
 [patch.crates-io]
 tca9554 = { git = "https://github.com/CordlessCoder/tca9554-rs", rev = "d7b01d5" }
