@@ -392,11 +392,11 @@ until the feature set is complete, because profiling an incomplete firmware pric
       clock face and 4.1 in the still drawer, against 8.3 and 9.8, and stepping takes 53 and
       101 ms of each second. A mark changes at 21 of the 64 breath levels on the clock face and
       at 45 in the drawer, so stepping only at those would leave about 4 breath steps a second
-      on the clock face and 9 in the drawer, of about 13. While the drawer's list moves, the
-      texts its scatter keeps clear of move with it, and the damage compares every mark: a
-      scrolling step that changed the panel took 26 to 28 ms at p95. While charging, the gauge
-      steps the clock face every panel frame; the boards have no battery, so that was not
-      measured.
+      on the clock face and 9 in the drawer, of about 13. While the drawer's list moves, its
+      scatter's damage comes from the points its moved clear boxes cover, and the list keeps
+      every item's bounds (`929400a`, `a7d8081`): a scrolling step that changed the panel takes
+      about 12 ms at p95, against 26 to 28. While charging, the gauge steps the clock face every
+      panel frame; the boards have no battery, so that was not measured.
     - The member face samples motion every 20 ms and the frame loop steps for each sample, about
       40 times a second. The face is kept while nothing it shows moved (`e81ec08`), so a step at
       rest takes 1.2 ms with 31 members, 122 ms of each second, against 468 when it was built
