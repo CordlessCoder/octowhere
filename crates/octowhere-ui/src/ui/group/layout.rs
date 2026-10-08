@@ -242,22 +242,26 @@ pub struct List {
     backdrop: Backdrop,
     /// When the screen next changes on its own: a countdown or an age reaching its next value.
     due: Option<Micros>,
-    clears: Clears,
+    laid: Laid,
 }
 
-/// The boxes a list's breathing scatter keeps clear of, once worked out with the first font
-/// asked, since that lays out every text. A list built again with the same items shares them.
-/// Two lists compare equal whatever each holds.
+/// What a list's items cover, once worked out with the first font asked, since that lays out
+/// every text: each item's bounds, and the boxes its breathing scatter keeps clear of. Only a
+/// breathing list works them out. A list built again with the same items shares them. Two lists
+/// compare equal whatever each holds.
 #[derive(Clone, Debug, Default)]
-struct Clears(core::cell::OnceCell<Rc<[Rectangle]>>);
+struct Laid {
+    bounds: core::cell::OnceCell<Rc<[Rectangle]>>,
+    clears: core::cell::OnceCell<Rc<[Rectangle]>>,
+}
 
-impl PartialEq for Clears {
+impl PartialEq for Laid {
     fn eq(&self, _: &Self) -> bool {
         true
     }
 }
 
-impl Eq for Clears {}
+impl Eq for Laid {}
 
 impl List {
     #[must_use]
@@ -270,7 +274,7 @@ impl List {
         self.clip = None;
         self.due = None;
         self.backdrop = Backdrop::Panel;
-        self.clears = Clears::default();
+        self.laid = Laid::default();
     }
 
     pub fn set_backdrop(&mut self, backdrop: Backdrop) {
@@ -279,14 +283,32 @@ impl List {
 
     /// The boxes the breathing scatter keeps clear of: every text's ink, grown by 2 px.
     fn clears(&self, font: &FontdueRenderer<'static, Color>) -> &[Rectangle] {
-        self.clears.0.get_or_init(|| {
+        self.laid.clears.get_or_init(|| {
+            let bounds = self
+                .laid
+                .bounds
+                .get_or_init(|| self.items.iter().map(|item| bounds(item, font)).collect());
             self.items
                 .iter()
-                .filter(|item| matches!(item.shape, Shape::Text(_)))
-                .map(|item| bounds(item, font).offset(INK_CLEAR as i32))
+                .zip(bounds.iter())
+                .filter(|(item, _)| matches!(item.shape, Shape::Text(_)))
+                .map(|(_, bounds)| bounds.offset(INK_CLEAR as i32))
                 .take(CLEARS)
                 .collect()
         })
+    }
+
+    /// The bounds of `item`, the `index`th, from those kept once the list has worked them out.
+    fn bounds_of(
+        &self,
+        index: usize,
+        item: &Item,
+        font: &FontdueRenderer<'static, Color>,
+    ) -> Rectangle {
+        self.laid
+            .bounds
+            .get()
+            .map_or_else(|| bounds(item, font), |bounds| bounds[index])
     }
 
     #[must_use]
@@ -310,7 +332,7 @@ impl List {
     }
 
     pub fn push(&mut self, shape: Shape) {
-        self.clears = Clears::default();
+        self.laid = Laid::default();
         let pushed = self.items.push(Item {
             shape,
             clip: self.clip,
@@ -381,7 +403,7 @@ impl List {
         if dx == 0 {
             return;
         }
-        self.clears = Clears::default();
+        self.laid = Laid::default();
         let quarter = (dx * 4) as i16;
         for item in self.items.iter_mut().skip(start) {
             item.clip = item.clip.map(|clip| clip.translate(Point::new(dx, 0)));
@@ -435,8 +457,13 @@ impl List {
         damage: &mut Dirty,
     ) {
         let same = self.items == before.items;
-        if same && let Some(clears) = before.clears.0.get() {
-            _ = self.clears.0.set(Rc::clone(clears));
+        if same {
+            if let Some(bounds) = before.laid.bounds.get() {
+                _ = self.laid.bounds.set(Rc::clone(bounds));
+            }
+            if let Some(clears) = before.laid.clears.get() {
+                _ = self.laid.clears.set(Rc::clone(clears));
+            }
         }
         match (before.backdrop, self.backdrop) {
             (Backdrop::Panel, Backdrop::Panel) | (Backdrop::None, Backdrop::None) => {}
@@ -452,14 +479,14 @@ impl List {
         if same {
             return;
         }
-        for item in &before.items {
+        for (index, item) in before.items.iter().enumerate() {
             if !self.items.contains(item) {
-                damage.add(bounds(item, font));
+                damage.add(before.bounds_of(index, item, font));
             }
         }
-        for item in &self.items {
+        for (index, item) in self.items.iter().enumerate() {
             if !before.items.contains(item) {
-                damage.add(bounds(item, font));
+                damage.add(self.bounds_of(index, item, font));
             }
         }
     }
@@ -642,6 +669,23 @@ mod tests {
     }
 
     #[test]
+    fn a_breathing_list_keeps_each_item_s_bounds() {
+        let font = font();
+        let mut list = built(&[100, 200]);
+        list.fill(
+            Rectangle::new(Point::new(40, 150), Size::new(30, 8)),
+            chrome::WHITE,
+        );
+        texts(&mut list, &[300]);
+        list.clears(&font);
+        let each: std::vec::Vec<_> = list.items.iter().map(|item| bounds(item, &font)).collect();
+        assert_eq!(
+            list.laid.bounds.get().map(|bounds| bounds.to_vec()),
+            Some(each)
+        );
+    }
+
+    #[test]
     fn a_list_takes_the_boxes_of_the_one_before_only_when_their_items_match() {
         let font = font();
         let before = built(&[100]);
@@ -661,6 +705,7 @@ mod tests {
         let mut still = built(&[100]);
         still.set_backdrop(Backdrop::None);
         still.damage(&before, &font, &mut Dirty::new());
-        assert_eq!(still.clears.0.get(), before.clears.0.get());
+        assert_eq!(still.laid.clears.get(), before.laid.clears.get());
+        assert_eq!(still.laid.bounds.get(), before.laid.bounds.get());
     }
 }
