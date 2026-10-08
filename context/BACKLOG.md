@@ -376,11 +376,17 @@ until the feature set is complete, because profiling an incomplete firmware pric
     ran it with no errors logged; look at a panel through a few page turns and a drag of the
     settings panel to confirm nothing is offset.
 - Left by the 2026-10-05 hand-off (`design/DECISIONS.md` 34), which asks for both:
-  - The crowded member face's step and draw time on a board, and the drawer's with more than 16
-    rows. Two boards can place one member at most, so it needs a `bench/` branch that stands 31
-    synthetic positions in, timed as `bench/runtime-screens` timed the faces. Sorting a crowded
-    ring into sectors measures every label's ink, about 60 measurements a step at 31 members.
+  - The crowded member face's and the many-row drawer's step and draw time, measured on a board
+    with `bench/crowded-screens` (`docs/logs/display/crowded-screens-2026-10-08/`). Turning,
+    the crowded face redraws whole in 111 ms at the median, with a 24 ms step, against 82 to
+    99 ms with one other member. Two costs it found are open:
+    - The stage builds the member face's list every step under the drawer
+      (`Stage::build_members`), which adds 10 to 13 ms to each step at the median with 31
+      members, and about 22 KB to the heap's peak.
+    - The drawer's step grows with its rows: scrolling 34 events stepped in 17.8 ms at the
+      median over the clock face, against 6.3 ms with a few on 2026-10-04.
   - Stills of the new states from a board's framebuffer; the package has host renders.
+    `tools/crowded-screens-bench.py --shots` on that branch reads one back after each phase.
 
 ## Deferred, with detail elsewhere
 

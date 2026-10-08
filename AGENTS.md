@@ -464,7 +464,12 @@ follow-up packet and an answer to an unlike digest for a chain's end (`RELAY_COS
 rotation runs predate its merge of master, which dropped the rotation and its switch. And
 `bench/own-position` logs, for each packet a node sends, its own position's stamp against the
 packet's base, before and after a stand-in fix was stamped from the mesh's clock; results in
-`docs/logs/lora/own-position-2026-10-08/`.
+`docs/logs/lora/own-position-2026-10-08/`. And `bench/crowded-screens` stands 31 placed members
+and a private message from each in for what the mesh publishes, turns the heading when told,
+and times each frame's step, draw and flush and the heap while
+`tools/crowded-screens-bench.py` drives the member face and the drawer
+(`crowded-screens-bench`, summarised by `tools/crowded-screens-summary.py`); results in
+`docs/logs/display/crowded-screens-2026-10-08/`.
 
 ## Concurrency
 
