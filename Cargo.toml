@@ -4,6 +4,11 @@
 resolver = "3"
 members = ["crates/*", "host-tests", "tools/ui-sim", "tools/ui-web"]
 
+# The UI's damage tests redraw whole frames to compare against, which unoptimised took most of
+# the tests' time.
+[profile.test]
+opt-level = 1
+
 # The web simulator's module, which `tools/ui-web/build.sh` builds.
 [profile.web]
 inherits = "release"

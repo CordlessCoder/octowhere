@@ -228,6 +228,10 @@ another: the workspace took 45 s against 160 s. It runs no doctests, so the seco
 stays on its thread. Without its `run` feature the node has no tests, which nextest counts as
 a failure unless told otherwise. nextest shows a test's output only when it fails; its
 `--no-capture` shows it as it comes, a test at a time, as `OCTOWHERE_SIM_LOG=1` needs.
+Tests build at `opt-level = 1` (owner, 2026-10-08; `[profile.test]` in the root manifest): the
+UI's damage tests redraw a whole frame for each one they check, and the workspace's tests took
+12 s unoptimised against 1.5 s, for about three times the CPU on a clean build. A debugger
+stepping through a test sees optimised code.
 
 From `firmware/`:
 
