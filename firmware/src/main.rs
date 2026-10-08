@@ -263,6 +263,19 @@ mod startup_timing {
         let at = esp_hal::time::Instant::now()
             .duration_since_epoch()
             .as_micros();
+        mark_at(what, how, at);
+    }
+
+    /// Marks `main`'s start. Until `esp_hal::init` sets up its scale, esp-hal's clock gives the
+    /// timer's ticks, 16 to the µs.
+    pub fn mark_main() {
+        let ticks = esp_hal::time::Instant::now()
+            .duration_since_epoch()
+            .as_micros();
+        mark_at("main", "enter", ticks / 16);
+    }
+
+    fn mark_at(what: &'static str, how: &'static str, at: u64) {
         MARKS.lock(|marks| {
             let _ = marks.borrow_mut().push((what, how, at));
         });
@@ -720,7 +733,7 @@ macro_rules! start_display_core {
 #[esp_hal::main]
 fn main() -> ! {
     #[cfg(feature = "startup-timing-bench")]
-    startup_timing::mark("main", "enter");
+    startup_timing::mark_main();
     let mut executor = esp_rtos::embassy::Executor::new();
     let executor: &'static mut esp_rtos::embassy::Executor =
         unsafe { core::mem::transmute(&mut executor) };
