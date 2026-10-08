@@ -438,6 +438,8 @@ pub struct Store {
     unsent: [u32; CAPACITY / 32],
     /// The places holding a message this node has yet to take, as bits.
     unread: [u32; CAPACITY / 32],
+    /// The places holding a message a packet of this node's own carried, as bits.
+    went: [u32; CAPACITY / 32],
     /// The exclusive or of each message's hash.
     digest: u32,
 }
@@ -520,6 +522,7 @@ impl Store {
         self.messages[at] = Message::zeroed();
         self.unsent[at / 32] &= !(1 << (at % 32));
         self.unread[at / 32] &= !(1 << (at % 32));
+        self.went[at / 32] &= !(1 << (at % 32));
     }
 
     /// Drops the messages past the horizon at `now`, the timebase second a round started at,
@@ -577,11 +580,20 @@ impl Store {
         }
     }
 
-    /// Counts a message as sent: a packet carried it, or one that reached this node's
-    /// neighbours did.
+    /// Counts a message as sent: a packet that reached this node's neighbours carried it.
     pub fn sent(&mut self, name: MessageId) {
         if let Some(at) = self.place(name) {
             self.unsent[at / 32] &= !(1 << (at % 32));
+        }
+    }
+
+    /// Counts a message as sent by a packet of this node's own, after which it goes again only
+    /// behind those this node never sent. A removal's switch is timed on each key message
+    /// leaving the remover once.
+    pub fn carried(&mut self, name: MessageId) {
+        if let Some(at) = self.place(name) {
+            self.unsent[at / 32] &= !(1 << (at % 32));
+            self.went[at / 32] |= 1 << (at % 32);
         }
     }
 
@@ -590,15 +602,27 @@ impl Store {
         self.unsent.iter().any(|&word| word != 0)
     }
 
-    /// The oldest message to be sent that comes after `after` in sending order.
+    /// The message to be sent that comes after `after` in sending order: those this node never
+    /// sent before those it sends again, each oldest first.
     #[must_use]
     pub fn next_unsent(&self, after: Option<&Message>) -> Option<&Message> {
-        let after = after.map(Message::order);
+        let after = after.map(|after| {
+            self.place(after.name())
+                .map_or((false, after.order()), |at| self.send_order(at))
+        });
         (0..CAPACITY)
             .filter(|&at| self.unsent[at / 32] & 1 << (at % 32) != 0)
-            .map(|at| &self.messages[at])
-            .filter(|held| after.is_none_or(|after| held.order() > after))
-            .min_by_key(|held| held.order())
+            .map(|at| (self.send_order(at), at))
+            .filter(|&(order, _)| after.is_none_or(|after| order > after))
+            .min_by_key(|&(order, _)| order)
+            .map(|(_, at)| &self.messages[at])
+    }
+
+    fn send_order(&self, at: usize) -> (bool, (u32, u8, u32)) {
+        (
+            self.went[at / 32] & 1 << (at % 32) != 0,
+            self.messages[at].order(),
+        )
     }
 
     /// The smallest sequence number from `origin` above `above`, with its message.
@@ -1059,6 +1083,25 @@ mod tests {
         assert!(!s.has_unsent());
         s.mark((1, 2));
         assert_eq!(s.next_unsent(None).unwrap().name(), (1, 2));
+    }
+
+    #[test]
+    fn a_message_sent_again_waits_behind_those_never_sent() {
+        let mut s = store();
+        s.insert(text(1, 1, 0, NOW), NOW);
+        s.carried((1, 1));
+        s.insert(text(1, 2, 1, NOW + 5), NOW);
+        s.mark((1, 1));
+        let first = *s.next_unsent(None).unwrap();
+        assert_eq!(first.name(), (1, 2));
+        assert_eq!(s.next_unsent(Some(&first)).unwrap().name(), (1, 1));
+        s.sent((1, 2));
+        s.mark((1, 2));
+        assert_eq!(
+            s.next_unsent(None).unwrap().name(),
+            (1, 2),
+            "a neighbour's packet that carried it is not this node's"
+        );
     }
 
     /// Fills `a` with `held` from origin 4, numbered and chained as `chain` gives them, and has

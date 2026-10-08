@@ -1,0 +1,69 @@
+2.428707 [INFO ] [MESH] id=1 name=Roger Roger members=2 mac=[44, 1b, f6, 86, 1c, 1c]
+2.469146 [INFO ] [MESH] tuned=true
+2.470354 [INFO ] [MESH] id=1 members=2 generation=17 removal pending=false declinable until=Some(39806926) old keys=0
+17.353707 [INFO ] [RTC] injected 2026-10-07 18:20:24 as RTC
+36.738243 [INFO ] [MESH] heard id=0 timebase=Boot(1) hops=1 taken=Adopted late_us=None len=105 rssi=-18 snr=7 entries=0 new=0 neighbours=0x00000002 messages=0/0 summary=false
+36.738732 [INFO ] [MESH] timebase GPS hops=0
+36.738799 [INFO ] [REKEY] a day since the switch; the key before it is dropped
+37.037741 [INFO ] [MESH] sent round=39808827 len=117 entries=1 records=0x00000000 asked=0x00000000 neighbours=0x00000000 messages=0 summary=false done=true
+80.189384 [INFO ] [MESH] sent round=39808828 len=105 entries=0 records=0x00000000 asked=0x00000000 neighbours=0x00000000 messages=0 summary=false done=true
+81.760007 [INFO ] [MESH] heard id=0 timebase=Gps hops=1 taken=Ignored late_us=Some(5241) len=105 rssi=-18 snr=7 entries=0 new=0 neighbours=0x00000002 messages=0/0 summary=false
+122.449705 [INFO ] [MESH] sent round=39808829 len=105 entries=0 records=0x00000000 asked=0x00000000 neighbours=0x00000001 messages=0 summary=false done=true
+202.351975 [INFO ] [MESH] heard id=0 timebase=Gps hops=1 taken=Ignored late_us=Some(4634) len=36 rssi=-18 snr=6 entries=0 new=0 neighbours=0x00000002 messages=0/0 summary=false
+244.303020 [INFO ] [MESH] sent round=39808832 len=48 entries=1 records=0x00000000 asked=0x00000000 neighbours=0x00000001 messages=0 summary=false done=true
+323.413878 [INFO ] [MESH] heard id=0 timebase=Gps hops=1 taken=Ignored late_us=Some(4042) len=36 rssi=-18 snr=7 entries=0 new=0 neighbours=0x00000002 messages=0/0 summary=false
+328.135119 [INFO ] [MESH] sent round=39808834 len=117 entries=1 records=0x00000000 asked=0x00000000 neighbours=0x00000001 messages=0 summary=false done=true
+331.815094 [INFO ] [MESH] heard id=0 timebase=Gps hops=1 taken=Ignored late_us=Some(5659) len=105 rssi=-18 snr=6 entries=0 new=0 neighbours=0x00000002 messages=0/0 summary=false
+357.540216 [INFO ] [MESH] member 2 is Phantom now
+357.540617 [INFO ] [MESH] heard id=0 timebase=Gps hops=1 taken=Ignored late_us=Some(8477) len=225 rssi=-18 snr=7 entries=0 new=0 neighbours=0x00000002 messages=0/0 summary=false
+372.720008 [INFO ] [REKEY] 0 asks to remove 2: generation 18 from round 39808840 (now 39808835) unless declined
+372.720730 [INFO ] [MESH] heard id=0 timebase=Gps hops=1 taken=Ignored late_us=Some(8711) len=196 rssi=-19 snr=6 entries=0 new=0 neighbours=0x00000002 messages=1/1 summary=false
+454.971822 [INFO ] [MESH] sent round=39808836 len=54 entries=1 records=0x00000000 asked=0x00000000 neighbours=0x00000001 messages=0 summary=false done=true
+500.466519 [INFO ] [MESH] heard id=0 timebase=Gps hops=1 taken=Ignored late_us=Some(6463) len=42 rssi=-22 snr=6 entries=0 new=0 neighbours=0x00000002 messages=0/0 summary=false
+577.265228 [INFO ] [MESH] sent round=39808839 len=42 entries=0 records=0x00000000 asked=0x00000000 neighbours=0x00000001 messages=0 summary=false done=true
+593.364117 [INFO ] [REKEY] switched to generation 18: 0 removed Some(2)
+593.364180 [INFO ] [REKEY] it can be declined until round 39810760
+593.763069 [INFO ] [REKEY] every member is on the new key; the old one is dropped
+593.763953 [INFO ] [MESH] heard id=0 timebase=Gps hops=1 taken=Ignored late_us=Some(8853) len=111 rssi=-22 snr=6 entries=0 new=0 neighbours=0x00000002 messages=0/0 summary=false
+598.168060 [INFO ] [MESH] not ours len=57 rssi=-21
+617.360563 [INFO ] [MESH] sent round=39808840 len=123 entries=1 records=0x00000000 asked=0x00000000 neighbours=0x00000001 messages=0 summary=false done=true
+638.159787 [INFO ] [MESH] heard id=0 timebase=Gps hops=1 taken=Ignored late_us=Some(11969) len=111 rssi=-22 snr=7 entries=0 new=0 neighbours=0x00000002 messages=0/0 summary=false
+656.259766 [INFO ] [MESH] member 2 is Phantom now
+656.260167 [INFO ] [MESH] heard id=0 timebase=Gps hops=1 taken=Ignored late_us=Some(10146) len=231 rssi=-22 snr=6 entries=0 new=0 neighbours=0x00000002 messages=0/0 summary=false
+659.243211 [INFO ] [MESH] sent round=39808841 len=123 entries=1 records=0x00000000 asked=0x00000000 neighbours=0x00000001 messages=0 summary=false done=true
+660.057884 [INFO ] [MESH] member 3 is Phantom now
+660.058288 [INFO ] [MESH] heard id=0 timebase=Gps hops=1 taken=Ignored late_us=Some(5528) len=162 rssi=-18 snr=6 entries=0 new=0 neighbours=0x00000002 messages=0/0 summary=false
+670.272003 [INFO ] [REKEY] 0 asks to remove 2: generation 19 from round 39808850 (now 39808841) unless declined
+670.272566 [INFO ] [MESH] heard id=0 timebase=Gps hops=1 taken=Ignored late_us=Some(5733) len=196 rssi=-21 snr=6 entries=0 new=0 neighbours=0x00000002 messages=1/1 summary=false
+670.810207 [INFO ] [MESH] heard id=0 timebase=Gps hops=1 taken=Ignored late_us=Some(5482) len=196 rssi=-21 snr=6 entries=0 new=0 neighbours=0x00000002 messages=1/1 summary=false
+673.944467 [INFO ] [MESH] sent round=39808841 len=147 entries=1 records=0x00000000 asked=0x00000000 neighbours=0x00000001 messages=0 summary=true done=true
+797.016336 [INFO ] [MESH] heard id=0 timebase=Gps hops=1 taken=Ignored late_us=Some(5379) len=42 rssi=-21 snr=7 entries=0 new=0 neighbours=0x00000002 messages=0/0 summary=false
+801.850336 [INFO ] [MESH] sent round=39808844 len=54 entries=1 records=0x00000000 asked=0x00000000 neighbours=0x00000001 messages=0 summary=false done=true
+921.107627 [INFO ] [MESH] heard id=0 timebase=Gps hops=1 taken=Ignored late_us=Some(5780) len=111 rssi=-21 snr=6 entries=0 new=0 neighbours=0x00000002 messages=0/0 summary=false
+928.860874 [INFO ] [MESH] sent round=39808847 len=123 entries=1 records=0x00000000 asked=0x00000000 neighbours=0x00000001 messages=0 summary=false done=true
+1043.364124 [INFO ] [REKEY] switched to generation 19: 0 removed Some(2)
+1043.364186 [INFO ] [REKEY] it can be declined until round 39810770
+1043.705403 [INFO ] [MESH] sent round=39808850 len=123 entries=1 records=0x00000000 asked=0x00000000 neighbours=0x00000001 messages=0 summary=false done=true
+1047.959154 [INFO ] [REKEY] 0 is on generation 18; no key message is held for it
+1081.834979 [INFO ] [MESH] sent round=39808850 len=123 entries=1 records=0x00000000 asked=0x00000000 neighbours=0x00000001 messages=0 summary=false done=true
+1083.734955 [INFO ] [MESH] heard id=0 timebase=Gps hops=1 taken=Ignored late_us=Some(4571) len=111 rssi=-22 snr=7 entries=0 new=0 neighbours=0x00000002 messages=0/0 summary=false
+1108.911600 [INFO ] [MESH] deaf for 255s
+1109.599595 [INFO ] [RADIO] deaf to len=111
+1109.600123 [INFO ] [REKEY] the key messages for 3 stored=true
+1111.624787 [INFO ] [RADIO] deaf to len=196
+1121.529627 [INFO ] [MESH] sent round=39808851 len=111 entries=0 records=0x00000000 asked=0x00000000 neighbours=0x00000001 messages=0 summary=false done=true
+1193.866697 [INFO ] [MESH] deaf for 127s
+1240.551708 [INFO ] [RADIO] deaf to len=42
+1242.872130 [INFO ] [MESH] sent round=39808854 len=54 entries=1 records=0x00000000 asked=0x00000000 neighbours=0x00000001 messages=0 summary=false done=true
+1245.046620 [INFO ] [RADIO] deaf to len=74
+1313.646560 [INFO ] [RADIO] deaf to len=111
+1318.176681 [INFO ] [RADIO] deaf to len=57
+1357.528605 [INFO ] [MESH] not ours len=111 rssi=-18
+1364.543517 [INFO ] [MESH] sent round=39808857 len=54 entries=1 records=0x00000000 asked=0x00000000 neighbours=0x00000000 messages=0 summary=false done=true
+1369.602410 [INFO ] [REKEY] 0 asks to remove 3: generation 20 from round 39808860 (now 39808857) unless declined
+1369.602965 [INFO ] [MESH] heard id=0 timebase=Gps hops=1 taken=Ignored late_us=Some(2539) len=178 rssi=-19 snr=6 entries=0 new=0 neighbours=0x00000000 messages=1/1 summary=false
+1373.935090 [INFO ] [MESH] sent round=39808857 len=86 entries=1 records=0x00000000 asked=0x00000000 neighbours=0x00000001 messages=0 summary=true done=true
+1400.490474 [INFO ] [REKEY] heard 0 on the key to switch to
+1493.364127 [INFO ] [REKEY] switched to generation 20: 0 removed Some(3)
+1493.364193 [INFO ] [REKEY] it can be declined until round 39810780
+1493.781042 [INFO ] [MESH] sent round=39808860 len=123 entries=1 records=0x00000000 asked=0x00000000 neighbours=0x00000001 messages=0 summary=false done=true

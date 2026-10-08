@@ -199,14 +199,15 @@ until the feature set is complete, because profiling an incomplete firmware pric
   controller does not work on this board: every read comes back as zeros, on either reply line
   and at 5 MHz, which the datasheet's 100 ns read cycle needs, and the schematic leaves the
   connector's pin 19 unconnected. The crate keeps the scan line for a board that wires it.
-- Build step 7 of [`LORA-PROTOCOL.md`](LORA-PROTOCOL.md)'s "Build order", pruning relays from
-  the gossiped graph (its "Pruning, later"). Steps 1 to 4 and 6 are built, with their screens,
-  and ran on the two boards; contention replaced the slots on 2026-10-05 (owner; the protocol's
-  "Medium access"), which dropped step 5, and the slots are on the `tdma` branch. Board runs
-  not referenced elsewhere: listening and the cancel rule
-  (`docs/logs/lora/founding-and-listening-2026-10-02/`), signing
-  (`docs/logs/lora/signing-2026-10-03/`), and a member deaf through two removals caught up in
-  19 minutes (`docs/logs/lora/catch-up-2026-10-03/`).
+- Shorten the display's start-up (owner, 2026-10-06). `second_core` brings the CO5300 up in
+  `Co5300::new` (`crates/co5300/src/lib.rs`), beside core 0's `bring_up`, so it can delay only
+  the first frame the panel shows. Its fixed waits come to about 260 ms: the reset's 10 ms low
+  and a second pulse, 120 ms after the reset (`RESET_MS`), 120 ms after sleep out (`SLPOUT_MS`)
+  and 10 ms after `MADCTL`. Check each against the datasheet's minimum. The second reset pulse
+  comes from the vendor's driver, not the datasheet; drop it if a board starts without it.
+  Nothing marks when the display is up: `bench/startup-timing` has the frame loop's first frame
+  at 852 to 909 ms from the timer's start, but neither core 1's start nor `[DISPLAY] OK`. Add
+  those marks first, to see whether the first flush waits for the display at all.
 - Measure what the device draws once the owner's PPK2 is to hand (owner, 2026-10-04). It says
   whether continuous receive fits the budget, now that the mesh contends for the channel, and
   whether the firmware light-sleeps with the screen dark. The findings, the esp-hal wake-lock gap the owner
@@ -221,8 +222,8 @@ until the feature set is complete, because profiling an incomplete firmware pric
   catch-ups paced rather than capped and refused for a packet far from the clock (`46d0656`).
   The protocol has each. What is left of them:
   - A replay of two recorded packets still moves a clock, within 5 minutes where the node's
-    RTC holds the time and anywhere where it does not; a replayed notice forces a three-round
-    sweep, and a replayed packet a four-round one while it is held. Jamming does more harm.
+    RTC holds the time and anywhere where it does not; a replayed packet held for a second
+    makes the node sweep for a floor and a round. Jamming does more harm.
   - A node that hears an absent member only through a relay waits for it, and keeps the old
     key, until it hears the member's signed word itself, which goes out in sweep rounds for a
     day after its switch. After that it waits for good, as it did before for any member it
@@ -241,6 +242,23 @@ until the feature set is complete, because profiling an incomplete firmware pric
   `seal`/`open` and `seal_bound`/`open_bound` could be one pair. Once, in its board run
   (`docs/logs/lora/board-checks-2026-10-05/`), the boards did not hear each other for 20
   minutes, which nothing in the logs explains; watch for it.
+- Drop what is left of the slots with the next change to the packet header (owner, 2026-10-07,
+  from the review in `docs/logs/lora/contention-review-2026-10-07/`). Each still works on
+  contention, but nothing needs it; none was measured:
+  - Sweep rounds (`LORA-PROTOCOL.md`, "Medium access"): every 13th round each node sends its
+    signed word that it is on the key for a day after a switch, and a header under the old key
+    while it waits for a member, at a time drawn in the round's first half; outside them a clock
+    refines only from a packet within 250 ms. A timer of each node's own would spread those
+    packets out instead of gathering them.
+  - The timebase's millisecond timing ("Keeping time without a fix"): the header's phase byte,
+    the 1.05 ms arrival latency, refining only from fewer hops, and the 250 ms guard with its
+    held packet. Contention needs time only to the second, for stamps, the message horizon and
+    the switch.
+  - The first sweep: a node that hears nobody waits 135 s before its first packet, so a device
+    just paired into a group of two is heard after about 2¾ minutes.
+  - Rounds: the 45 s round still paces position news, the floor, the switch and the horizon,
+    and a catch-up's 13-round gap is the sweep cadence carried over. Nothing ties those to 45 s
+    now.
 - Finish what step 3's screens leave open (`SCREEN-DESIGN-BRIEF.md`, "Group and pairing as
   built"):
   - Every group screen's legibility on the panel, which nobody has judged yet. Typing on the
@@ -357,14 +375,38 @@ until the feature set is complete, because profiling an incomplete firmware pric
   - The display's flush now streams into the window `Co5300::set_window` returns. Both boards
     ran it with no errors logged; look at a panel through a few page turns and a drag of the
     settings panel to confirm nothing is offset.
-  - The CO5300's reset sends a second low pulse straight after the first, from the vendor's
-    driver; the datasheet asks for one. Dropping it needs a board start-up to confirm.
 - Left by the 2026-10-05 hand-off (`design/DECISIONS.md` 34), which asks for both:
-  - The crowded member face's step and draw time on a board, and the drawer's with more than 16
-    rows. Two boards can place one member at most, so it needs a `bench/` branch that stands 31
-    synthetic positions in, timed as `bench/runtime-screens` timed the faces. Sorting a crowded
-    ring into sectors measures every label's ink, about 60 measurements a step at 31 members.
+  - The crowded member face's and the many-row drawer's step and draw time, measured on a board
+    with `bench/crowded-screens` (`docs/logs/display/crowded-screens-2026-10-08/`). Turning,
+    the crowded face redraws whole in 111 ms at the median, with a 24 ms step, against 82 to
+    99 ms with one other member. The member face is no longer built under the open drawer
+    (`cbd6451`), which took a step scrolling the events from 36.3 to 24.5 ms at the median
+    where it changed the panel, and from 20.5 to 8.5 ms where it did not. Nor does the face
+    count as showing there (`3e21df5`), so the motion task samples slowly under the drawer.
+    The drawer then steps the same over the member face and the clock face. Open:
+    - The breathing scatter steps the stage only when its breath changes (`f2c2cd5`), and the
+      charging gauge only while the clock face shows (`1e55502`). The scatter's damage comes
+      from the levels at which its marks change (`39e72d1`), the clock face is laid out again
+      only when more than its breath changes (`aa09532`), and a list keeps the boxes its scatter
+      keeps clear of (`e38e9c3`). A breath step that changes nothing takes 2.1 ms at rest on the
+      clock face and 4.1 in the still drawer, against 8.3 and 9.8, and stepping takes 53 and
+      101 ms of each second. A mark changes at 21 of the 64 breath levels on the clock face and
+      at 45 in the drawer, so stepping only at those would leave about 4 breath steps a second
+      on the clock face and 9 in the drawer, of about 13. While the drawer's list moves, its
+      scatter's damage comes from the points its moved clear boxes cover, and the list keeps
+      every item's bounds (`929400a`, `a7d8081`): a scrolling step that changed the panel takes
+      about 12 ms at p95, against 26 to 28. While charging, the gauge steps the clock face every
+      panel frame; the boards have no battery, so that was not measured.
+    - The member face samples motion every 20 ms, and the face is kept while nothing it shows
+      moved (`e81ec08`). The frame loop steps for a sample only when the stage asks for it
+      (`6614789`), so at rest it steps 6.5 times a second, against about 40, for 76 ms of each
+      second, against 129 with each sample stepped and 468 with the face built every step.
+      Most steps left build the face again, at about 14 ms. What makes those builds is not yet
+      measured: an age ticking, the mesh's view, or the sensor task's snapshot, whose whole
+      GNSS state the face's cache compares, including when the receiver last answered. A wake
+      source in the bench's frame line would tell them apart.
   - Stills of the new states from a board's framebuffer; the package has host renders.
+    `tools/crowded-screens-bench.py --shots` on that branch reads one back after each phase.
 
 ## Deferred, with detail elsewhere
 

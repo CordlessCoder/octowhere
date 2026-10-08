@@ -10,7 +10,9 @@ use crate::{IDS, Ids, messages::MessageId};
 /// the neighbour's rest after its own last packet, at the largest, and its backoff.
 pub const RELAY_WAIT_US: i64 = 10_000_000;
 /// How many times a node sends a message again for a neighbour it does not hear pass it on.
-pub const RESENDS: u8 = 3;
+/// Where neighbours hidden from each other relay at once and collide at the sender, every send
+/// again went to neighbours that already held the message; the summaries repair the rest.
+pub const RESENDS: u8 = 1;
 /// The messages a node waits on at once. Past that the oldest is dropped, and is left to the
 /// summaries.
 const WAITING: usize = 16;

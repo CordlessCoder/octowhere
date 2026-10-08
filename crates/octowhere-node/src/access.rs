@@ -2,6 +2,7 @@
 //! when its own packet is due. Once due, a packet waits a random backoff of whole [`STEP_US`]
 //! and goes if the channel is clear then, or backs off again.
 
+use octowhere_mesh::packet::MAX_PACKET;
 use octowhere_mesh::schedule::{FLOOR_US, REST_TIMES, ROUND_US, airtime_us};
 
 /// One step of a backoff: long enough for a node to detect another's preamble and for its own
@@ -19,6 +20,14 @@ pub const SPREAD_US: i64 = 10_000_000;
 /// drawn once. Nodes that cannot hear each other often answer one packet together, and the
 /// backoff keeps a node apart only from those it hears.
 pub const REPAIR_SPREAD_US: i64 = 5_000_000;
+/// The airtime band O allows a node in an hour: its 10% duty cycle, which EN 300 220-2 V3.3.1
+/// (clause 4.4.3) measures over an hour there.
+pub const HOUR_AIRTIME_US: i64 = 360_000_000;
+/// The ledger sums a node's airtime in slices this long.
+const SLICE_US: i64 = 300_000_000;
+/// The slices the ledger keeps: a time's own and the twelve before it, which hold the hour
+/// before it and up to a slice more.
+const SLICES: i64 = 13;
 
 /// What a node holds to send, which says when its own packet is due.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -43,6 +52,49 @@ pub struct Access {
     quiet_until: i64,
     /// When the repair it holds is due, once drawn.
     repair_at: Option<i64>,
+    ledger: Ledger,
+}
+
+/// The airtime a node sent in each of the last [`SLICES`] slices of its local timer.
+#[derive(Clone, Copy, Debug, Default)]
+struct Ledger {
+    /// Slice `k`'s airtime at `k % SLICES`.
+    sums: [i64; SLICES as usize],
+    /// The newest slice written.
+    newest: i64,
+}
+
+impl Ledger {
+    fn at(slice: i64) -> usize {
+        slice.rem_euclid(SLICES) as usize
+    }
+
+    fn add(&mut self, at: i64, airtime: i64) {
+        let slice = at.div_euclid(SLICE_US);
+        for stale in (self.newest + 1).max(slice - SLICES + 1)..=slice {
+            self.sums[Self::at(stale)] = 0;
+        }
+        self.newest = self.newest.max(slice);
+        self.sums[Self::at(slice)] += airtime;
+    }
+
+    /// The earliest local time from `now` at which `airtime` more keeps every hour's airtime
+    /// within [`HOUR_AIRTIME_US`].
+    fn allows(&self, now: i64, airtime: i64) -> i64 {
+        let slice = now.div_euclid(SLICE_US).max(self.newest);
+        let mut oldest = (slice - SLICES + 1).max(self.newest - SLICES + 1);
+        let mut held: i64 = (oldest..=self.newest).map(|k| self.sums[Self::at(k)]).sum();
+        let first = oldest;
+        while held + airtime > HOUR_AIRTIME_US && oldest <= self.newest {
+            held -= self.sums[Self::at(oldest)];
+            oldest += 1;
+        }
+        match oldest == first {
+            true => now,
+            // Slice `oldest - 1` leaves the ledger's hour once a slice is `SLICES` past it.
+            false => now.max((oldest - 1 + SLICES) * SLICE_US),
+        }
+    }
 }
 
 impl Access {
@@ -75,20 +127,35 @@ impl Access {
         self.after_quiet(due)
     }
 
-    /// When a transmission due at local time `at` may go.
+    /// When a transmission due at local time `at` may go: after the rest, and once the hour
+    /// has room for the longest packet.
     #[must_use]
     pub fn after_quiet(&self, at: i64) -> i64 {
-        at.max(self.quiet_until)
+        let at = at.max(self.quiet_until);
+        self.ledger.allows(at, airtime_us(MAX_PACKET))
     }
 
     /// Notes a transmission of `len` bytes that started at local time `at`: the node's own
-    /// packet, with `spread` below [`SPREAD_US`] drawn for it, when `own` holds one.
+    /// packet, with `spread` below [`SPREAD_US`] drawn for it, when `own` holds one. The node
+    /// rests [`REST_TIMES`] airtimes after it.
     pub fn sent(&mut self, at: i64, len: usize, own: Option<i64>) {
+        self.note(at, len, own, REST_TIMES);
+    }
+
+    /// Notes the node's own packet as [`Access::sent`] does, one that carried its own key
+    /// messages, after which it does not rest: the switch waits on every key message leaving
+    /// the remover, and [`HOUR_AIRTIME_US`] bounds the airtime it spends.
+    pub fn sent_keys(&mut self, at: i64, len: usize, spread: i64) {
+        self.note(at, len, Some(spread), 0);
+    }
+
+    fn note(&mut self, at: i64, len: usize, own: Option<i64>, rest: i64) {
         if let Some(spread) = own {
             self.own = Some((at, spread));
             self.repair_at = None;
         }
-        self.quiet_until = at + (1 + REST_TIMES) * airtime_us(len);
+        self.quiet_until = at + (1 + rest) * airtime_us(len);
+        self.ledger.add(at, airtime_us(len));
     }
 
     /// Notes the channel found busy at local time `now`, with a backoff of `wait` from there.
@@ -198,5 +265,38 @@ mod tests {
         );
         access.busy(quiet, 30_000);
         assert_eq!(access.after_quiet(NOW), quiet + 30_000);
+    }
+
+    #[test]
+    fn a_node_does_not_rest_after_its_own_key_messages() {
+        let mut access = Access::default();
+        access.sent_keys(NOW, 255, 0);
+        let records = Holding {
+            records: true,
+            ..Holding::default()
+        };
+        assert_eq!(
+            access.own_due(records, NOW + 1, || 0),
+            NOW + airtime_us(255)
+        );
+    }
+
+    #[test]
+    fn the_hour_holds_a_node_to_its_airtime() {
+        let mut access = Access::default();
+        let longest = airtime_us(MAX_PACKET);
+        let mut at = NOW;
+        while access.after_quiet(at) == at {
+            access.sent_keys(at, MAX_PACKET, 0);
+            at += longest;
+        }
+        let sent = (at - NOW) / longest;
+        assert_eq!(sent, HOUR_AIRTIME_US / longest, "packets in the hour");
+        let open = access.after_quiet(at);
+        assert!(open >= NOW + 3_600_000_000, "not before an hour has passed");
+        assert!(
+            open <= (NOW / SLICE_US + 1) * SLICE_US + 3_600_000_000,
+            "nor more than a slice after"
+        );
     }
 }

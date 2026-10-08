@@ -1,0 +1,14 @@
+phase 1 clock: screen=clock own=Some(0) member=None drawer=closed events=31 unread=31 conversations=31 heading=-
+phase 2 members: screen=clock own=Some(0) member=None drawer=closed events=31 unread=31 conversations=31 heading=-
+phase 3 turn: screen=members own=Some(0) member=Some(2) drawer=closed events=31 unread=31 conversations=31 heading=NORTH UP / NO HEADING
+phase 4 select: screen=members own=Some(0) member=Some(2) drawer=closed events=32 unread=32 conversations=31 heading=183° TRUE / FORWARD
+phase 5 turn-selected: screen=members own=Some(0) member=Some(1) drawer=closed events=33 unread=33 conversations=31 heading=NORTH UP / NO HEADING
+phase 6 deselect: screen=members own=Some(0) member=Some(1) drawer=closed events=33 unread=33 conversations=31 heading=072° TRUE / FORWARD
+phase 7 drawer-open: screen=members own=Some(0) member=Some(2) drawer=closed events=34 unread=34 conversations=31 heading=NORTH UP / NO HEADING
+phase 8 events-scroll: screen=members own=Some(0) member=Some(2) drawer=events events=34 unread=34 conversations=31 heading=-
+phase 9 messages-switch: screen=members own=Some(0) member=Some(2) drawer=events events=34 unread=34 conversations=31 heading=-
+phase 10 messages-scroll: screen=members own=Some(0) member=Some(2) drawer=messages events=34 unread=34 conversations=31 heading=-
+phase 11 conversation: screen=members own=Some(0) member=Some(2) drawer=messages events=34 unread=34 conversations=31 heading=-
+phase 12 back: screen=members own=Some(0) member=Some(2) drawer=child events=34 unread=33 conversations=31 heading=-
+phase 13 close: screen=members own=Some(0) member=Some(2) drawer=messages events=34 unread=33 conversations=31 heading=-
+phase 14 end: screen=members own=Some(0) member=Some(2) drawer=closed events=34 unread=33 conversations=31 heading=NORTH UP / NO HEADING

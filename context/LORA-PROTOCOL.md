@@ -2,9 +2,9 @@
 
 The product is a closed group of up to 32 equivalent nodes that share positions and carry messages
 between members, including private ones. GPS supplies both position and the time reference; LoRa
-carries the traffic. This document is the agreed design. Steps 1 to 4 of the build order below
-are implemented, and the mesh's side of step 6, on contention since 2026-10-05; "Build order"
-says what comes next; [`AGENTS.md`](../AGENTS.md), "Radio", says how.
+carries the traffic. This document is the agreed design. Steps 1 to 4 and 6 of the build order
+below are implemented, on contention since 2026-10-05, which dropped step 5; step 7 closed on
+2026-10-07. [`AGENTS.md`](../AGENTS.md), "Radio", says how it is built.
 
 The first version of this design (commit `e57fe0a`) was eight nodes and positions only. The owner
 extended it on 2026-09-29 to 32 nodes, messages and private messages, moved it to band O, and kept
@@ -62,8 +62,9 @@ do not confuse the two.
   Band O is 250 kHz wide, so agility cannot add a second 200 kHz. The duty-cycle option allows 10%.
   A node checks the channel before it sends; under the duty-cycle option that check is neither
   required nor forbidden.
-- **Headroom.** A node rests nine airtimes after each packet, which holds it under the 10% at
-  any moment. A packet a round, at the largest, is 0.89%; messages and records use the rest.
+- **Headroom.** A node rests nine airtimes after each packet but its own key messages, and holds
+  its airtime in any hour under 360 s. EN 300 220-2 V3.3.1 measures band O's 10% over an hour
+  (clause 4.4.3) and sets no limit on a single transmission there. A packet a round, at the largest, is 0.89%; messages and records use the rest.
 - **Fallback.** Band M, 868.0–868.6 MHz, allows 1% at 25 mW e.r.p., at 14 dBm e.r.p. The rest after
   each packet would have to be 99 airtimes there. Moving a running group to it is deferred.
 - **Today.** The driver default, 868.0 MHz at 125 kHz, straddles the boundary between bands L and M.
@@ -95,8 +96,8 @@ and the notices are on the `tdma` branch, at `146fd7a`, with this document as it
 A node in a group keeps its receiver on throughout and sends when it has something to say and
 the channel is clear (`octowhere-node`'s `access`).
 
-- **When a packet is due.** At once when the node holds records: a message, or a member, gone
-  or key record, not yet sent (owner, 2026-10-05). At a time drawn up to 5 s ahead when it holds
+- **When a packet is due.** At once when the node holds records: a message, key messages
+  among them, or a member or gone record, not yet sent (owner, 2026-10-05). At a time drawn up to 5 s ahead when it holds
   a request or a summary, which ask for what it lacks: nodes that cannot hear each other often
   answer one packet together, and the backoff below keeps a node apart only from those it
   hears. Two such nodes, both answering a packet from a node between them, collided in the
@@ -116,14 +117,20 @@ the channel is clear (`octowhere-node`'s `access`).
   and for this node's own transmission to start. Two nodes due at once collide only when they
   draw the same step.
 - **Duty.** After each transmission a node is silent for nine times its airtime, which keeps it
-  under band O's 10% at any moment.
+  under band O's 10% at any moment. A packet carrying the node's own key messages is the
+  exception (owner, 2026-10-07): a removal's switch waits on every key message leaving the
+  remover, and in reach the rest after each was what made a removal take minutes. The band
+  measures its 10% over an hour, so a node keeps its airtime in 5-minute slices and holds any
+  packet that would take the last 13 slices past 360 s. A removal from a group of 32 is about
+  12 s of key messages.
 - **The floor** is a little under three rounds, so that a node listening for three rounds, as
   in a first sweep, hears every node in reach.
 - **Sweep rounds** are every round of a timebase whose index is a multiple of 13, about every
   10 minutes. Every node listens throughout anyway; what is left of them is a cadence for a
-  removal (see "Removing a member"). In one, a node sends its word that it is on the group's key
-  for a day after a switch, and a header under the old key while it waits for a member, each at
-  a time it draws in the round's first half.
+  removal (see "Removing a member"), and a clock that refines from a packet more than 250 ms off
+  only in one (see "Replays"). In one, a node sends its word that it is on the group's key for a
+  day after a switch, and a header under the old key while it waits for a member, each at a time
+  it draws in the round's first half.
 
 A pending transmission is cancelled when an arriving packet already carries everything it would
 have said and that packet's sender reports every neighbour this node has (the neighbours record,
@@ -138,15 +145,20 @@ heard it. The rule is only as good as the neighbour table: a node that has not y
 its neighbours cancels a relay that neighbour needed, and the message summaries bring it back
 later.
 
-Measured in the simulator, at four seeds (`crates/octowhere-sim/tests/contention.rs` asserts
-looser bounds):
+Measured in the simulator with every node holding a fix
+(`docs/logs/lora/rotation-2026-10-07/`). `crates/octowhere-sim/tests/contention.rs` asserts
+looser bounds on nodes without fixes.
 
-- A group message reaches 31 other nodes in reach in 0.2 to 1.1 s, in the origin's one packet:
-  it covers everyone, so nobody relays it. The slowest found the channel busy as it was due.
-- Along a line of twelve, each node in reach of the next only, it takes 3.0 to 4.0 s from end to
-  end, about 0.3 s a hop.
-- 32 idle nodes in reach keep the channel 2% busy, and lose up to 1.1% of receptions to two nodes
-  sending at once.
+- A group message reaches 31 other nodes in reach in 0.2 to 0.5 s over four seeds, in the
+  origin's one packet: it covers everyone, so nobody relays it.
+- Along a line of twelve, each node in reach of the next only, it takes 3.4 to 4.3 s from end to
+  end, about 0.35 s a hop.
+- 32 nodes in reach that stay put keep the channel 2% busy, and lose 0.3% of receptions to two
+  nodes sending at once. Moving 44 m every 30 s, they keep it 8% busy and lose 0.9%.
+- In grids and scattered groups, where most nodes reach only a few others, 2 to 3% of
+  receptions are lost to packets that overlap. Two nodes that cannot hear each other both find
+  the channel clear, and the longer their packets, the more often they overlap at a node
+  between them.
 
 Every header names its sender's timebase and when the packet started on it (see "Keeping time
 without a fix"). Nothing else ties a packet to a time.
@@ -234,7 +246,8 @@ node, those whose RTCs held the time too, refused records stamped in 2026 as an 
   messages' stamps; the RTC is GNSS's alone to set (owner, 2026-10-04). Without one it stamps
   its records 0, which lose every merge. Groups started this way merge to the lowest root as
   soon as they hear each other. A node that gets a fix moves to GPS time, and the nodes timing
-  from it follow within two of its packets.
+  from it follow at its next packet when their clocks are within 250 ms of it, and otherwise
+  once a second packet agrees, another sender's or its own in a later round.
 - **Refreshing** is retired (owner, 2026-10-05; `design/DECISIONS.md` 33 and 34). Every node
   listens throughout, so every member in reach is heard within a floor without one.
 - **Ageing.** A node's own GPS time counts as GPS while a fix has refined it within 30 minutes.
@@ -246,8 +259,9 @@ clock if it outranks its own: without that it stayed on its boot clock, where th
 stored never came.
 
 A node's clock is UTC only as well as its root's RTC was. Its own entries need a fix, so they are
-always stamped in GPS time; it relays another's entry only when the entry's stamp fits the 12-bit
-window below its base timestamp.
+always stamped in GPS time; it sends an entry, its own too, only when the entry's stamp fits the
+12-bit window below its base timestamp. A fix stamped after the second the packet starts in is
+left out of it, so a fix must never be stamped ahead of the node's clock.
 
 ### Listening
 
@@ -319,8 +333,8 @@ header still is one.
 | neighbours | 32-bit set of the ids the sender heard in its recent rounds |
 | members digest | 32 bits of a hash of the sender's member table (see "Member records on request") |
 | request | 32-bit set of the ids whose member records the sender asks for |
-| member | id, X25519 public key, join time, change time, hardware address, then a name of 1 to 16 printable ASCII characters; 47 to 63 bytes |
-| gone | id, X25519 public key and change time of a member that left or was removed; 37 bytes |
+| member | id, Ed25519 public key, join time, change time, hardware address, signature, then a name of 1 to 16 printable ASCII characters; 112 to 127 bytes |
+| gone | id, Ed25519 public key, change time and signature of a member that left; 101 bytes |
 | on key | id, generation and the member's signature that it is on that generation's key; 67 bytes |
 | message | see "Messages" |
 | messages digest | 32 bits of a hash of the messages the sender holds (see "Messages") |
@@ -337,7 +351,8 @@ Position entry, 73 bits:
 | fix quality | 2 | |
 | hdop | 3 | log scale |
 
-With the neighbours and members digest records, which every packet carries:
+With the neighbours and members digest records, which every packet carries but those a leaving
+device sends and those under an old key:
 
 | Entries | Packet | Airtime |
 | --- | --- | --- |
@@ -349,16 +364,24 @@ With the neighbours and members digest records, which every packet carries:
 | 23 | 248 B | 389 ms |
 
 A packet is filled in this order until it is full or nothing is left: the sender's neighbours, its
-members digest, its messages digest while it holds a message, a request and a summary if it has
-them, up to three member and gone records it has not sent, the sender's own entry, messages
-oldest first, entries learned since this node last sent them (newest first), and the rest of
-the table in rotation. The member records go ahead of the
-positions so a busy table cannot crowd them out, but leave room for the sender's own entry; each
-costs a full packet about seven entries.
+members digest, its messages digest while it holds a message, a request if it has one, its
+on-key record (see "Removing a member"), a summary if it has one and no message to send, up to
+three member and gone records it has not sent, the sender's own entry, messages (see
+"Flooding"), and the entries learned or changed since this node last sent them, newest first.
+The member records go ahead of the positions so a busy table cannot crowd them out, but leave
+room for the sender's own entry. A member record costs a full packet 12 to 14 entries, and a
+gone record 11.
+
+A packet carried the rest of the table in rotation after those until 2026-10-07, when the owner
+dropped it: with every node holding a fix, it filled every packet. In the simulator a group in
+reach then kept the channel 10% busy standing still and 31% moving, against 2 and 8% without
+it, and in grids and scattered groups 10 to 18% of receptions were lost to overlapping packets,
+against 2 to 3%. Every node still showed every other's position within each run; a few distant
+pairs in grids showed theirs later at first (`docs/logs/lora/rotation-2026-10-07/`).
 
 A member record's join time and change time are UTC seconds. The change time is the join's, or a
-later rename's, and the newer record of a member wins a merge. A node never takes a record about
-itself, matched by key or hardware address.
+later rename's or move to another id's, and the newer record of a member wins a merge. A node
+never takes a record about itself, matched by public key.
 
 Sizing fields to their true ranges is the compression. Entropy coding gains nothing on top: the
 residual bits are close to uniform and the packets are far too short for a dictionary method. Delta
@@ -389,8 +412,7 @@ Owner, 2026-10-03. It replaced a rotation of one member record in every packet
   sent, unless its digest matches the requester's. The cancel rule marks a record sent once a
   covering packet carried it, so usually one neighbour answers. Records go up to three a packet,
   ahead of the positions but leaving room for the sender's own entry; signed, about one fits.
-  A whole table of 32 is about 32 packets, each once the rest after the last allows, about a
-  minute and a half.
+  A whole table of 32 is about 32 packets, each once the rest after the last allows: about 80 s.
 - **What it covers.** Everything the rotation did: a member added elsewhere, a member whose
   last acknowledgement the adding device lost, a rename missed out of range, and the duplicate
   id two partitions can hand out (see "Identity and storage").
@@ -420,13 +442,20 @@ key, and a removal.
   that long fills one packet with the sender's own entry and the records every packet carries.
 - **Flooding.** A node relays each message new to it once, as soon as the channel lets it,
   oldest first. It counts as sent once a covering packet carried it, as an entry does (the
-  cancel rule).
+  cancel rule). A message the node sends again goes behind every one its own packets never
+  carried (owner, 2026-10-07): a removal's switch is timed on each key message leaving the
+  remover once, and oldest first put the remover's sends again ahead of key messages still to
+  go, past the switch.
 - **Hearing it passed on.** A neighbour that has neighbours of its own outside the ones a
   packet's sender reports passes the packet's new messages on, by the cancel rule, so hearing it
   do so is the sign it heard them (owner, 2026-10-05; `octowhere-mesh`'s `relays`). After
   sending a message, a node waits 10 s to hear each such neighbour carry it, or a later message
   from its origin, or another relay reach that neighbour's neighbours. A neighbour already heard
-  carrying it is not waited for. A message not heard passed on goes again, three times at most.
+  carrying it is not waited for. A message not heard passed on goes again once (owner,
+  2026-10-07; three times before). Where two neighbours hidden from each other relay at once,
+  they collide at the sender, and its sends again went to neighbours that held the message
+  already. The summaries repair a loss a send again misses, more slowly: along a chain that
+  loses one packet in five, a removal took longer.
   Along a chain of relays a loss on one hop stops the flood there; this repairs it in seconds,
   where waiting for the loss to show took a floor.
 - **Store and forward.** Every node holds every message for the message horizon, 24 hours
@@ -464,22 +493,36 @@ key, and a removal.
   messages to send filled its packets with summaries instead, while every other node sent it
   summaries too: after almost nine minutes, 17 of 30 members held their key messages.
 - **Acknowledgement.** The destination of a private message answers with an acknowledgement,
-  itself a private message, which travels and is held the same way. Acknowledgements and
-  messages to the whole group are not acknowledged.
+  itself a private message, which travels and is held the same way. Acknowledgements, key
+  messages and messages to the whole group are not acknowledged. A key message stays out of
+  the inbox, so nothing would read its acknowledgement, and a member's signed word that it is on
+  the new key is what ends the wait for it (owner, 2026-10-07). Acknowledged, they were half of
+  a removal's messages.
 - **Storage.** Messages are held in PSRAM and lost at a restart, to begin with. A restarted
   node gets the horizon's messages back from its neighbours, but not which it had read. The
   store holds the newest 256; a node holding that many takes no message older than all of them,
   so every node keeps the same ones. The sequence number is kept in flash (see "Private
   messages").
-- **Latency.** A hop takes the backoff and the airtime, about 0.3 s in the simulator (see
+- **Latency.** A hop takes the backoff and the airtime, about 0.35 s in the simulator (see
   "Medium access").
 - **Capacity.** Every node carries every message once, so each message costs the channel a
   packet's room for every node that relays it. A node's rest holds it under 10% of the air; the
-  channel, shared by every relay in reach, is the bound. It is unmeasured.
-- **Pruning, later.** Gossiping every node's neighbour set gives every node the group's graph. A node
-  can then skip relaying a direct message when it is not on a shortest path to the destination, and
-  a group message when the sender already reaches all its neighbours. That is where routing starts
-  to pay; it builds on the neighbours record rather than adding a layer.
+  channel, shared by every relay in reach, is the bound. Positions alone keep it 2% busy in
+  reach, and 8% with every node moving (see "Medium access"). What messages add is
+  unmeasured.
+- **Pruning.** A node skips relaying what a packet it heard already carried to all its
+  neighbours: that is the cancel rule (step 7, closed by the owner on 2026-10-07). In the
+  simulator, every node holding a fix, a flood then costs the fewest packets possible where
+  every node hears every other, along a line, and in two clusters joined by one node. In grids
+  and scattered groups it costs two and a half to nine times the fewest, a third to a half of
+  it in sends again: two neighbours hidden from each other relay at once, their packets
+  collide at the node they had it from, and that node sends again to neighbours that already
+  hold it (`docs/logs/lora/rotation-2026-10-07/`). Skipping a private message off the
+  shortest path to its destination was dropped with store-and-forward: a node skipped takes the
+  message from a summary later, at more cost than the relay saved. Designated relays, each
+  sender naming the neighbours to pass its messages on, cut a flood's packets by a third to
+  three quarters with slower worst cases, and stay on `bench/relay-pruning`
+  (`docs/logs/lora/relay-pruning-2026-10-06/`).
 
 ### Private messages
 
@@ -532,18 +575,27 @@ Owner, 2026-10-03, except where it says otherwise.
   the group switches at, counted on its timebase, the id and SHA-256 fingerprint of the
   member removed, and the fingerprint of the key it replaces (owner, 2026-10-04). The remover
   signs each (see "Signatures") and sends one a packet. The switch is as far off as the remover
-  needs to send its key messages and the removal message, one a packet with the rest after
+  would need to send its key messages and the removal message, one a packet with the rest after
   each, about 4 s each, and four rounds more: three for relays and repair, and the round it is
   in (owner, 2026-10-05). That is about 3.75 minutes for 8 members and 5.25 for 32, against 8
-  and 27 when slots sent one a round. In the simulator, groups of 16 and 32 in reach had every
-  key message within 45 s and 100 s, and every member switched at the switch. Along relay
-  chains of 8 and 12, over ten seeds each, up to two members learned of the removal after the
-  switch, and switched three rounds after learning, as a member that learns late does.
+  and 27 when slots sent one a round. The remover sends its key messages without the rest
+  since 2026-10-07 (see "Duty"). A remover that does not hear every remaining member as a
+  neighbour adds four rounds more, 3 minutes, for key messages that cross several hops (owner,
+  2026-10-07). In the simulator, every node
+  holding a fix, over eight seeds (`docs/logs/lora/rotation-2026-10-07/`), 32 in reach had
+  every key message within 15 s and a line of 12 within 60 s, and every member switched with
+  the group. In grids and scattered groups of 32 it took 4½ to 7 minutes at the median, and up
+  to 13 members over the eight seeds learned of the removal within three rounds of the switch
+  or after it. Each switched three rounds after learning, as a member that learns late does,
+  and was cut off from the group until then, for up to 135 s. With the shorter lead, up to
+  about a third did, cut off for up to 15 minutes. Two boards ran a removal with every member
+  in reach, one with a member out of reach, and a member's catch-up
+  (`docs/logs/lora/removal-changes-boards-2026-10-07/`).
   Until then the removed device still reads everything. The remover reserves every sequence
   number its key messages need before it starts, and a remover that restarts before they have
   gone sends them again. Adding a device is refused while a removal is under way, since it would
   get the key the group is leaving. A node ignores a key message whose switch round is further
-  off than a removal from a group of 32 needs, which would leave the removal pending for good,
+  off than a removal from a group of 32 spread over several hops needs, which would leave the removal pending for good,
   or whose member removed is neither a member nor a gone record it holds (owner, 2026-10-03).
   A node takes a key only on the key it names as replaced. It keeps one that names another
   unread, and tries it again once it has switched: a member that missed several switches takes
@@ -557,12 +609,17 @@ Owner, 2026-10-03, except where it says otherwise.
   key either but its sender's clock, where that outranks its own (see "Keeping time without a
   fix"): it still sends under the old key, which the removed device reads. A node holding the
   key message of the generation after the one a member is on sends it again, in a packet under
-  that member's key, as soon as it hears that member under it. A member
+  that member's key, at a time it draws within 5 s of hearing that member under it (owner,
+  2026-10-07): every node that heard the member answers it, and two hidden from each other
+  collided at it, after which the next try waited 13 rounds. A member
   on a key a rival won over is sent the winner's key message instead, of the same generation. The removed device can
   see that packet but cannot open the key inside. Key messages are kept for this past the
   message horizon while the old key is, but are left out of the digest after it. A member that
   missed the switch goes on sending under the old key, and nodes on the new key hear it within
-  its floor. A node sends a member its key
+  its floor. The remover's own packets there, its removal notice and catch-ups, are not taken
+  for that, since it made the new key (owner, 2026-10-08). Another member's are, though it may
+  be on the new key and sending a header for a member it waits for: one on a rival key sends
+  the same packets, and needs the winner's key message. A node sends a member its key
   message this way again only after a gap of sweep rounds that doubles with each send, up to
   64 sweep rounds, about ten hours, and never stops while it keeps the old key (owner,
   2026-10-04): one that declined never takes it, and is not acknowledged, so that it would
@@ -647,7 +704,8 @@ wins every merge permanently, and a node with a bad clock causes that by acciden
 attacker. So:
 
 - Reject entries and messages more than an hour ahead of local time. A node on a clock started
-  from a boot skips the check, since its clock is not UTC. The RTC's oscillator-stop flag
+  from a boot skips the check for entries and records, since its clock is not UTC; it judges
+  messages, which carry its timebase's seconds, by its clock as any node does. The RTC's oscillator-stop flag
   (`oscillator_stopped()` in
   [`crates/octowhere-peripherals/src/rtc.rs`](../crates/octowhere-peripherals/src/rtc.rs)) is
   what makes the firmware report no RTC time, and so start such a clock.
@@ -669,7 +727,7 @@ Revocation is a group rekey.
 Decided by the owner on 2026-10-03, after a review showed that any key holder could replace a
 member's public key with its own. The review's case: such a key holder is then sent that
 member's private messages, and is the one sealed that member's key message when a removal
-comes. Being built.
+comes. Built, and run on the two boards (`docs/logs/lora/signing-2026-10-03/`).
 
 - **One key.** A device's identity is an Ed25519 key pair, from a 32-byte seed it stores. Its
   X25519 key for pairwise keys and pairing is derived from it, as libsodium does: the secret
@@ -684,8 +742,8 @@ comes. Being built.
   against the record's public key before the record changes anything. A device is the same
   device only by its public key, so a record replaces a held one only if the held key signed
   it, and a MAC proves nothing. A device signs its record again whenever it changes: a rename,
-  or moving to another id. A record is about 127 bytes, so a packet carries one instead of
-  three, and a full table resync takes about three times as many rounds.
+  or moving to another id. A record is up to 127 bytes, so a packet carries one instead of
+  three, and a full table resync takes about three times as many packets.
 - **Pairing.** The joining device's record is the first one made of it, so the joining device
   signs it: the welcome gives it its id and the time the adding device dates the record, it
   builds the same record the adding device built, and it returns the signature with its last
@@ -708,7 +766,8 @@ comes. Being built.
   generation after the one it is on, past the message horizon, while it keeps the old key. A
   member heard under an old key is sent the key message for the generation after it, under that
   key, so it takes one generation at a time, and is shown and can decline each removal in turn.
-  The kept messages are in RAM only (owner).
+  The kept messages go to flash once the round after the switch has passed (see "What is kept
+  across a restart").
 
 ### Pairing
 
@@ -775,7 +834,8 @@ transcript. A key whose shared secret is not contributory ends the pairing.
   Without those, a device paired in at such an id could take the earlier member's older record
   for a rival and move to another id. They came with version 3 of the frames (2026-10-06), and
   a device refuses frames of another version, so both devices of a pairing need it. Each part waits for its acknowledgement and is resent a second later without it; 30 s
-  without progress loses contact. A full group of 32 is ten parts.
+  without progress loses contact. A full group of 32 is 17 to 19 parts, and up to 22 with eight
+  gone records.
 - **Commit order.** The joining device stores the group before it acknowledges the last part. The
   adding device stores the new member on that acknowledgement, then sends done, and stays 5 s to
   answer a repeated acknowledgement. A joining device that stored but never hears done says so:
@@ -787,8 +847,8 @@ transcript. A key whose shared secret is not contributory ends the pairing.
   does when its own write of the group failed after it sent done. A packet
   under that key shows the joining device stored the group, and the founding device then stores
   it, and takes it up only once the write lands. A failed write is tried again every 10 s while
-  the wait lasts. The joining device is heard within about 3½ minutes: it waits 30 s for
-  done, sweeps for three rounds, then starts its own timebase and sends at once. Starting
+  the wait lasts. The joining device is heard within about 2¾ minutes: it waits 30 s for
+  done, sweeps for 135 s, then starts its own timebase and sends at once. Starting
   another pairing or leaving ends the wait.
 - **Capacity.** A full group refuses to add before it searches, a returning device included (design
   hand-off). Below 32, a returning device keeps its id.
@@ -828,9 +888,11 @@ device rather than issuing a second id.
 Group key, id, member table and the sequence-number block persist in a flash partition, not the
 SD card, which is removable. They are in the settings' ekv database (`firmware/src/settings.rs`): the group
 key and this device's id under one key, each member's record under its own, and this device's
-X25519 secret and name apart from the group, each value behind a one-byte version. A device keeps
+Ed25519 seed and name apart from the group, each value behind a one-byte version. A device keeps
 its name and key pair when it leaves a group, and CLEAR SETTINGS keeps all of it (owner,
-2026-10-02). A member that changes is stored with the whole group in one transaction. The
+2026-10-02). A member that changes is stored alone. The whole group goes in one transaction
+when the key changes, when this device moves to another id, and when a pairing adds a member.
+The
 sequence-number block is stored with the identity, and a pending removal and the old keys with
 the group.
 
@@ -848,7 +910,7 @@ anyone with code execution.
 
 The cheaper route when this is revisited: esp-hal exposes the HMAC peripheral in upstream mode,
 computing HMAC-SHA256 with a key burned into an eFuse block that software never reads. Derive a
-storage key through it and encrypt the blob, and `sequential-storage` stores opaque bytes. Equal
+storage key through it and encrypt the values, and ekv stores opaque bytes. Equal
 protection against reading a desoldered flash chip, one eFuse burn, no workflow change.
 
 Worth being clear about what any of this buys. A stolen node displays the map on its own screen, so
@@ -883,13 +945,18 @@ restore after are each short with the bus free between them.
    the mesh's packets, their storage, and the screens (`SCREEN-DESIGN-BRIEF.md`, "Group and
    pairing as built").
 4. The cancel rule and neighbour-only listening. Built as listening to members and neighbours
-   with periodic sweeps (see "Listening"), the cancel rule entry by entry (below), and a changed
-   member record sent in the node's next slot.
+   with periodic sweeps, the cancel rule entry by entry (see "Medium access"), and a changed
+   member record sent in the node's next slot, and ran on the two boards
+   (`docs/logs/lora/founding-and-listening-2026-10-02/`). Contention replaced the listening and
+   the slots; the cancel rule stays.
 5. CAD with slot phase refined from arrival times. Dropped with the slots (2026-10-05).
-6. Messages, then private messages.
-7. Pruning relays from the gossiped graph.
+6. Messages, then private messages. Built with removal and signed records, and ran on the two
+   boards (`docs/logs/lora/step6-2026-10-03/`, `signing-2026-10-03/`, and a member deaf through
+   two removals catching up in 19 minutes, `catch-up-2026-10-03/`).
+7. Pruning relays from the gossiped graph. Closed (owner, 2026-10-07): the cancel rule is its
+   group half, and store-and-forward dropped its private half (see "Messages", "Pruning").
 
-What is left goes in this order (owner, 2026-10-03):
+After step 4 the work went in this order (owner, 2026-10-03), all of it now done:
 
 - Shuffled slots and member records on request (see "Medium access" and "Packet"), together
   and first. Both change what goes on the air, which is cheapest while there are two boards.
@@ -902,7 +969,7 @@ What is left goes in this order (owner, 2026-10-03):
   with the owner on 2026-10-03 ("Messages", "Removing a member", "Identity and storage"). The
   mesh's side is built and ran on the two boards (`docs/logs/lora/step6-2026-10-03/`).
 - Step 5, then step 7. Contention replaced the slots after step 6 (owner, 2026-10-05), which
-  leaves step 7.
+  dropped step 5, and step 7 closed on 2026-10-07.
 
 ## RTC calibration
 
@@ -933,10 +1000,11 @@ protocol does not need this.
   round and refusing a key that names no member stop the cheapest uses (owner, 2026-10-03).
 - A message lost on a chain's last hop is repaired only as fast as the last node hears its
   neighbour's next packet: no relay is expected of the last node, and a lone message leaves no
-  gap and no settling to show it. In the simulator, a removal crossed a chain of 12 in 40 to
-  120 s over ten seeds, against 40 s to about 9 minutes before relays were heard as
-  acknowledgements; a lone message crossed it in 4 to 90 s with every link losing a packet in
-  five.
+  gap and no settling to show it. In the simulator, every node holding a fix and every link of
+  a chain of 12 losing a packet in five, a lone message crossed it in 53 s at the median over
+  32 seeds, 301 s at p90 (`docs/logs/lora/rotation-2026-10-07/`). A sender that followed up a
+  round later, up to three times, took the p90 to 242 s and changed nothing elsewhere, so it
+  was not built (owner, 2026-10-07).
 - Contention ran on the two boards (`docs/logs/lora/contention-2026-10-05/`). Its first build
   never sent: the modem's RX on-going bit holds throughout continuous receive, and the check
   took it for a packet under way. A sender starts a few milliseconds after the time its
@@ -951,8 +1019,8 @@ protocol does not need this.
 ## Deferred
 
 - Tuning for range, the spreading factor, once the protocol carries everything (owner,
-  2026-10-03). Range has not been measured. At SF8 a 255-byte packet takes about 707 ms, which
-  doubles the channel each packet holds and the rest after it.
+  2026-10-03). Range has not been measured. At SF8 a 255-byte packet takes about 707 ms against
+  400 at SF7, which takes 1.77 times the channel each packet holds and the rest after it.
 - Moving a running group to the fallback band.
 - Messages longer than one packet.
 - Flash encryption, as above.

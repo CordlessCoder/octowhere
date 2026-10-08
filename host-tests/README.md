@@ -3,9 +3,13 @@
 Run the production synchronization and GNSS tests with:
 
 ```text
-cargo test -p octowhere-host-tests
+cargo nextest run -p octowhere-host-tests
+cargo test -p octowhere-host-tests --doc
 cargo clippy -p octowhere-host-tests --all-targets -- -D warnings
 ```
+
+The second line runs the doctest that nextest does not: a compile-fail check that a `Swap`
+half whose value is not `Send` stays on its thread.
 
 `examples/replay_calibration.rs` replays a recorded serial log through the compass calibration;
 its header has the command.

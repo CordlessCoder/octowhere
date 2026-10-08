@@ -448,6 +448,16 @@ impl<A: Allocator> Removals<A> {
             }
             return;
         }
+        // The remover made the key after this one, so under this one it only catches others up.
+        // Any other member could be on a rival key, which its packets here look the same as.
+        if self.rekey.remover_of(generation.wrapping_add(1)) == Some(sender) {
+            info!(
+                "[REKEY] heard {}, the remover of generation {}, under the key before",
+                sender,
+                generation.wrapping_add(1)
+            );
+            return;
+        }
         if !self.rekey.is_waiting_for(generation, sender) {
             info!("[REKEY] heard {} on generation {}", sender, generation);
             return;

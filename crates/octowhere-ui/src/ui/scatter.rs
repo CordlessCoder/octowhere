@@ -5,6 +5,8 @@
 
 use alloc::{vec, vec::Vec};
 
+use embassy_sync::once_lock::OnceLock;
+
 use embedded_graphics::{
     prelude::{Point, Size},
     primitives::Rectangle,
@@ -88,6 +90,33 @@ pub fn breath(now: u64) -> u8 {
     libm::roundf((1.0 - fall) * 255.0) as u8
 }
 
+/// When [`breath`] next returns something other than it does at `now`, both in µs.
+#[must_use]
+pub fn next_breath(now: u64) -> u64 {
+    let level = f32::from(breath(now));
+    let into = now % BREATH_PERIOD;
+    let turn = into as f32 / BREATH_PERIOD as f32;
+    // The turn into the period's first half, where the breath falls, at which it is `value`
+    // before rounding. It rises back through the same values over the second half.
+    let falling_at = |value: f32| {
+        let fall = 1.0 - value / 255.0;
+        libm::acosf((1.0 - 2.0 * fall / BREATH_DEPTH).clamp(-1.0, 1.0)) / core::f32::consts::TAU
+    };
+    let lowest = (1.0 - BREATH_DEPTH) * 255.0;
+    let next = if turn < 0.5 && level - 0.5 > lowest {
+        falling_at(level - 0.5)
+    } else if level + 0.5 < 255.0 {
+        1.0 - falling_at(level + 0.5)
+    } else {
+        1.0 + falling_at(level - 0.5)
+    };
+    // In `f32` the turn comes out a few µs either side of the change.
+    let after = libm::ceilf(next * BREATH_PERIOD as f32) as u64 + BREATH_MARGIN;
+    (now - into + after).max(now + 1)
+}
+
+const BREATH_MARGIN: u64 = 16;
+
 /// The grid's pitch, and the side of the hollow mark: 6 × 6 with a 2 × 2 hole. The solid mark
 /// is 4 × 4, inset 1 px.
 pub const PITCH: i32 = 8;
@@ -105,6 +134,9 @@ const TONE_SPREAD: f32 = 0.6;
 const TONE_SEED: u32 = 0x746f_6e65;
 /// The glass's radius about the panel's centre. A mark shows only if it lies wholly inside.
 const GLASS: i32 = DISPLAY_SIZE.width as i32 / 2;
+/// The most grid points a scatter has across and down, and in all.
+const SPAN: usize = DISPLAY_SIZE.width as usize / PITCH as usize + 2;
+const MOST_POINTS: usize = SPAN * SPAN;
 
 impl Scatter {
     /// The identity's: the whole panel to radius 228, stopping short of the band on rows
@@ -222,11 +254,9 @@ impl Scatter {
                 differ | (before.layer(layer)[word] ^ after.layer(layer)[word])
             });
             while differ != 0 {
-                let point = word as i32 * 32 + differ.trailing_zeros() as i32;
+                let point = word * 32 + differ.trailing_zeros() as usize;
                 differ &= differ - 1;
-                let (row, column) = (point / self.columns(), point % self.columns());
-                let corner = self.corner(self.origin.y + row * PITCH, column);
-                changed.add(Rectangle::new(corner, Size::new_equal(MARK as u32)));
+                changed.add(self.cell(point));
             }
         }
     }
@@ -258,6 +288,15 @@ impl Scatter {
         Point::new(
             self.origin.x + column * PITCH,
             if below { y + shift } else { y },
+        )
+    }
+
+    /// The cell of the mark at grid point `point`.
+    fn cell(&self, point: usize) -> Rectangle {
+        let (row, column) = (point as i32 / self.columns(), point as i32 % self.columns());
+        Rectangle::new(
+            self.corner(self.origin.y + row * PITCH, column),
+            Size::new_equal(MARK as u32),
         )
     }
 
@@ -407,54 +446,9 @@ impl Scatter {
         debug_assert_eq!(looks.len(), self.fields.len());
         let n = 2 * at.point as u32;
         let fields = self.fields.iter().zip(looks).zip(turns).zip(at.spans);
-        for (((field, look), &(sin, cos)), span) in fields {
-            if !span.is_some_and(|(first, last)| (first..=last).contains(&at.column)) {
+        for (((field, look), &turn), span) in fields {
+            let Some(chance) = chance(at, field, turn, *span) else {
                 continue;
-            }
-            let dx = (at.center.x - field.center.x) as f32;
-            let dy = (at.center.y - field.center.y) as f32;
-            let squared = dx * dx + dy * dy;
-            if squared > field.radius * field.radius {
-                continue;
-            }
-            let chance = match field.law {
-                Law::Radial => {
-                    let (r, toward) = if squared > 0.0 {
-                        let inverse = inverse_sqrt(squared);
-                        (squared * inverse, (dx * cos + dy * sin) * inverse)
-                    } else {
-                        (0.0, 0.0)
-                    };
-                    let radial = 0.45 + 0.55 * ((r - 40.0) * (1.0 / 180.0)).clamp(0.0, 1.0);
-                    radial * (0.45 + 0.55 * toward)
-                }
-                Law::Lobes {
-                    lobes,
-                    quiet,
-                    peak,
-                    reach,
-                } => {
-                    let corner = at.cell.top_left;
-                    let squared = lobes
-                        .iter()
-                        .map(|lobe| {
-                            let end = lobe.top_left + lobe.size - Point::new(1, 1);
-                            let dx = (lobe.top_left.x - corner.x).max(corner.x - end.x).max(0);
-                            let dy = (lobe.top_left.y - corner.y).max(corner.y - end.y).max(0);
-                            (dx * dx + dy * dy) as f32
-                        })
-                        .fold(f32::MAX, f32::min);
-                    if squared >= reach * reach {
-                        quiet
-                    } else {
-                        let near = if squared > 0.0 {
-                            1.0 - squared * inverse_sqrt(squared) / reach
-                        } else {
-                            1.0
-                        };
-                        quiet + (peak - quiet) * near * near * (3.0 - 2.0 * near)
-                    }
-                }
             };
             if number(field.seed, n) >= chance * look.density {
                 continue;
@@ -466,13 +460,345 @@ impl Scatter {
             {
                 return None;
             }
-            // A generator of its own, so the tones leave the pattern alone.
-            let spread = number(field.seed ^ TONE_SEED, n) - 0.5;
-            let hollow = number(field.seed, n + 1) < HOLLOW;
-            return Some((hollow, self.tone(chance, spread)));
+            return Some(self.kind(field, n, chance));
         }
         None
     }
+
+    /// Whether `field`'s mark at the point whose first number is `n` is hollow, and its tone,
+    /// where its chance is `chance`.
+    fn kind(&self, field: &Field, n: u32, chance: f32) -> (bool, u8) {
+        // A generator of its own, so the tones leave the pattern alone.
+        let spread = number(field.seed ^ TONE_SEED, n) - 0.5;
+        let hollow = number(field.seed, n + 1) < HOLLOW;
+        (hollow, self.tone(chance, spread))
+    }
+
+    /// Where each mark changes as `looks` sets the fields' looks from a level, 0 to 255. The
+    /// facings must not change with the level, nor the densities fall as it rises.
+    #[must_use]
+    pub fn changes<const N: usize>(&self, looks: impl Fn(u8) -> [Look; N]) -> Changes {
+        let full = looks(u8::MAX);
+        debug_assert!(
+            looks(0)
+                .iter()
+                .zip(&full)
+                .all(|(low, high)| low.facing == high.facing)
+        );
+        assert!((self.columns() * self.rows()) as usize <= MOST_POINTS);
+        let turns = turns(&full);
+        let mut found = (Vec::new(), Vec::new());
+        self.each_point(
+            &mut found,
+            |_, _| true,
+            |(found, shows), at| {
+                let n = 2 * at.point as u32;
+                // Each field's lowest level that shows the point, 256 for none, and its mark.
+                let mut from = [(256, (false, 0)); FIELDS];
+                let fields = self.fields.iter().zip(&turns).zip(at.spans);
+                for (index, ((field, &turn), span)) in fields.enumerate() {
+                    let Some(chance) = chance(at, field, turn, *span) else {
+                        continue;
+                    };
+                    let drawn = number(field.seed, n);
+                    let shows = |level: u16| drawn < chance * looks(level as u8)[index].density;
+                    // Most points show at no level.
+                    if !shows(255) {
+                        continue;
+                    }
+                    let (mut low, mut high) = (0, 255);
+                    while low < high {
+                        let middle = (low + high) / 2;
+                        if shows(middle) {
+                            high = middle;
+                        } else {
+                            low = middle + 1;
+                        }
+                    }
+                    from[index] = (low, self.kind(field, n, chance));
+                }
+                if let Some(lowest) = from
+                    .iter()
+                    .map(|(level, _)| *level)
+                    .filter(|&level| level < 256)
+                    .min()
+                {
+                    shows.push((at.point as u16, lowest as u8));
+                }
+                // The first field that shows the point at a level wins it.
+                let mark = |level: u16| {
+                    from.iter()
+                        .find(|(lowest, _)| *lowest <= level)
+                        .map(|(_, kind)| *kind)
+                };
+                for (index, &(level, _)) in from.iter().enumerate() {
+                    if (1..256).contains(&level)
+                        && !from[..index].iter().any(|(other, _)| *other == level)
+                        && mark(level) != mark(level - 1)
+                    {
+                        found.push((level as u8, at.point as u16));
+                    }
+                }
+            },
+        );
+        let (mut found, shows) = found;
+        let mut starts = [0; 257];
+        for &(level, _) in &found {
+            starts[usize::from(level) + 1] += 1;
+        }
+        for level in 0..256 {
+            starts[level + 1] += starts[level];
+        }
+        found.sort_unstable_by_key(|&(level, _)| level);
+        Changes {
+            scatter: self.clone(),
+            starts,
+            points: found.into_iter().map(|(_, point)| point).collect(),
+            shows,
+        }
+    }
+
+    /// Which points' cells meet one of `areas`.
+    fn covered(&self, areas: &[Rectangle]) -> Covered {
+        let mut covered = Covered([0; MOST_POINTS.div_ceil(32)]);
+        let (columns, rows) = (self.columns(), self.rows());
+        let shift = self.gap.as_ref().map_or(0, |(_, shift)| *shift);
+        for area in areas.iter().filter(|area| !area.is_zero_sized()) {
+            let (left, top) = (area.top_left.x, area.top_left.y);
+            let (right, bottom) = (left + area.size.width as i32, top + area.size.height as i32);
+            // The columns whose cells reach into the area, and the rows that might once those
+            // below the gap move down.
+            let first = -(self.origin.x + MARK - 1 - left).div_euclid(PITCH);
+            let last = (right - 1 - self.origin.x)
+                .div_euclid(PITCH)
+                .min(columns - 1);
+            let rows = (top - MARK - shift - self.origin.y)
+                .div_euclid(PITCH)
+                .max(0)
+                ..=(bottom - self.origin.y).div_euclid(PITCH).min(rows - 1);
+            for row in rows {
+                let cell_top = self.corner(self.origin.y + row * PITCH, 0).y;
+                if cell_top < bottom && top < cell_top + MARK {
+                    for column in first.max(0)..=last {
+                        covered.set((row * columns + column) as usize);
+                    }
+                }
+            }
+        }
+        covered
+    }
+}
+
+/// Which of a scatter's grid points have cells that meet some areas, a bit each.
+struct Covered([u32; MOST_POINTS.div_ceil(32)]);
+
+impl Covered {
+    fn set(&mut self, point: usize) {
+        self.0[point / 32] |= 1 << (point % 32);
+    }
+
+    fn has(&self, point: usize) -> bool {
+        self.0[point / 32] & 1 << (point % 32) != 0
+    }
+}
+
+/// Where a scatter's marks change as one level sets its fields' looks, from
+/// [`Scatter::changes`], so that the damage between two levels takes no pass over the grid.
+#[derive(Debug)]
+pub struct Changes {
+    scatter: Scatter,
+    /// `points[starts[level]..starts[level + 1]]` are the points whose marks differ between
+    /// `level` and the level below it.
+    starts: [u16; 257],
+    points: Vec<u16>,
+    /// Each point that shows at some level, in the grid's order, and the lowest level it shows
+    /// at.
+    shows: Vec<(u16, u8)>,
+}
+
+impl Changes {
+    /// The changes in `kept`, built from `scatter` and `looks` the first time. They are built
+    /// before the lock is taken: [`OnceLock::get_or_init`] masks interrupts for as long as its
+    /// build takes.
+    pub fn kept<const N: usize>(
+        kept: &'static OnceLock<Self>,
+        scatter: &Scatter,
+        looks: impl Fn(u8) -> [Look; N],
+    ) -> &'static Self {
+        if kept.try_get().is_none() {
+            _ = kept.init(scatter.changes(looks));
+        }
+        kept.try_get().expect("the changes were kept")
+    }
+
+    /// Adds the cell of every mark that differs between `before` and `after`, each a level and
+    /// the areas its marks keep clear of, as [`Scatter::changed_between`] does. Between levels
+    /// further apart than one, it may add a mark that changed and changed back.
+    pub fn damage(
+        &self,
+        before: (u8, &[Rectangle]),
+        after: (u8, &[Rectangle]),
+        changed: &mut Dirty,
+    ) {
+        self.each_cell(before, after, |cell| changed.add(cell));
+    }
+
+    fn each_cell(
+        &self,
+        before: (u8, &[Rectangle]),
+        after: (u8, &[Rectangle]),
+        mut cell: impl FnMut(Rectangle),
+    ) {
+        let was = self.scatter.covered(before.1);
+        let moved = before.1 != after.1;
+        let is = if moved {
+            &self.scatter.covered(after.1)
+        } else {
+            &was
+        };
+        // A mark clear of both changes where the level moves it.
+        let start = |level: u8| usize::from(self.starts[usize::from(level) + 1]);
+        let levels = start(before.0.min(after.0))..start(before.0.max(after.0));
+        for point in self.points[levels].iter().map(|&point| usize::from(point)) {
+            if !was.has(point) && !is.has(point) {
+                cell(self.scatter.cell(point));
+            }
+        }
+        if !moved {
+            return;
+        }
+        // A mark kept clear on one side alone changes where the other side shows it.
+        for &(point, lowest) in &self.shows {
+            let point = usize::from(point);
+            let shown = match (was.has(point), is.has(point)) {
+                (true, false) => lowest <= after.0,
+                (false, true) => lowest <= before.0,
+                _ => false,
+            };
+            if shown {
+                cell(self.scatter.cell(point));
+            }
+        }
+    }
+}
+
+/// Asserts that `changes`, from `looks`, damages what [`Scatter::changed_between`] does between
+/// two levels each clear of one of `clears`: exactly at the same level and at neighbouring
+/// ones, every neighbouring pair while the clears stay the same, and at least that between a few
+/// far apart.
+#[cfg(test)]
+pub(crate) fn assert_changes_match<const N: usize>(
+    changes: &Changes,
+    looks: impl Fn(u8) -> [Look; N],
+    clears: &[&[Rectangle]],
+) {
+    let scatter = &changes.scatter;
+    let corners = |cells: Vec<Rectangle>| {
+        let mut corners: Vec<_> = cells
+            .iter()
+            .map(|cell| (cell.top_left.y, cell.top_left.x))
+            .collect();
+        corners.sort_unstable();
+        corners.dedup();
+        corners
+    };
+    for (index, &old) in clears.iter().enumerate() {
+        for (other, &new) in clears.iter().enumerate() {
+            let step = if index == other { 1 } else { 17 };
+            let neighbours = (0..u8::MAX).step_by(step).map(|level| (level, level + 1));
+            let same = [(0, 0), (200, 200), (u8::MAX, u8::MAX)];
+            let far = [(0, u8::MAX), (u8::MAX, 191), (37, 200), (200, 37)];
+            for (before, after) in neighbours.chain(same).chain(far) {
+                let (was, is) = (looks(before), looks(after));
+                let turns = [turns(&was), turns(&is)];
+                let mut differ = Vec::new();
+                scatter.each_point(
+                    &mut differ,
+                    |_, _| true,
+                    |differ, at| {
+                        if scatter.mark(at, &was, &turns[0], old)
+                            != scatter.mark(at, &is, &turns[1], new)
+                        {
+                            differ.push(at.cell);
+                        }
+                    },
+                );
+                let mut damaged = Vec::new();
+                changes.each_cell((before, old), (after, new), |cell| damaged.push(cell));
+                let (damaged, differ) = (corners(damaged), corners(differ));
+                let context = format!("from {before} to {after}, clears {index} to {other}");
+                if before.abs_diff(after) <= 1 {
+                    assert_eq!(damaged, differ, "{context}");
+                } else {
+                    // A mark that changes field twice between them can end as it began.
+                    let missed: Vec<_> = differ
+                        .iter()
+                        .filter(|corner| !damaged.contains(corner))
+                        .collect();
+                    assert!(missed.is_empty(), "{context}: {missed:?}");
+                }
+            }
+        }
+    }
+}
+
+/// `field`'s chance of showing the point at `at` before a look scales it, if its circle holds
+/// the point. `turn` is the sine and cosine of the field's facing, and `span` its columns on the
+/// point's row.
+fn chance(
+    at: &At<'_>,
+    field: &Field,
+    (sin, cos): (f32, f32),
+    span: Option<(i32, i32)>,
+) -> Option<f32> {
+    if !span.is_some_and(|(first, last)| (first..=last).contains(&at.column)) {
+        return None;
+    }
+    let dx = (at.center.x - field.center.x) as f32;
+    let dy = (at.center.y - field.center.y) as f32;
+    let squared = dx * dx + dy * dy;
+    if squared > field.radius * field.radius {
+        return None;
+    }
+    Some(match field.law {
+        Law::Radial => {
+            let (r, toward) = if squared > 0.0 {
+                let inverse = inverse_sqrt(squared);
+                (squared * inverse, (dx * cos + dy * sin) * inverse)
+            } else {
+                (0.0, 0.0)
+            };
+            let radial = 0.45 + 0.55 * ((r - 40.0) * (1.0 / 180.0)).clamp(0.0, 1.0);
+            radial * (0.45 + 0.55 * toward)
+        }
+        Law::Lobes {
+            lobes,
+            quiet,
+            peak,
+            reach,
+        } => {
+            let corner = at.cell.top_left;
+            let squared = lobes
+                .iter()
+                .map(|lobe| {
+                    let end = lobe.top_left + lobe.size - Point::new(1, 1);
+                    let dx = (lobe.top_left.x - corner.x).max(corner.x - end.x).max(0);
+                    let dy = (lobe.top_left.y - corner.y).max(corner.y - end.y).max(0);
+                    (dx * dx + dy * dy) as f32
+                })
+                .fold(f32::MAX, f32::min);
+            if squared >= reach * reach {
+                quiet
+            } else {
+                let near = if squared > 0.0 {
+                    1.0 - squared * inverse_sqrt(squared) / reach
+                } else {
+                    1.0
+                };
+                quiet + (peak - quiet) * near * near * (3.0 - 2.0 * near)
+            }
+        }
+    })
 }
 
 /// A grid point [`Scatter::each_point`] visits: its index, column, the centre of its unshifted
@@ -552,6 +878,20 @@ fn inverse_sqrt(x: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_next_breath_comes_just_after_the_breath_changes() {
+        for now in (0..2 * BREATH_PERIOD).step_by(997) {
+            let due = next_breath(now);
+            assert!(due > now);
+            assert_ne!(breath(due), breath(now), "{now}");
+            assert_eq!(
+                breath(due.saturating_sub(32).max(now)),
+                breath(now),
+                "{now}"
+            );
+        }
+    }
 
     #[test]
     fn the_generator_spreads_over_the_unit_interval() {
@@ -802,5 +1142,41 @@ mod tests {
             (changed.bounding_box(), changed.pixels()),
             (expected.bounding_box(), expected.pixels())
         );
+    }
+
+    #[test]
+    fn a_level_s_changes_are_the_marks_that_differ_where_two_fields_overlap() {
+        // A gap that moves the rows below it further than the identity's does, by more than a
+        // row.
+        let toned = Scatter {
+            gap: Some((197..=237, 11)),
+            tones: Some(Tones {
+                colors: &chrome::HALFTONE,
+                dense: 0.7,
+            }),
+            ..TWO
+        };
+        let looks = |level: u8| {
+            LOOKS.map(|look| Look {
+                density: look.density * f32::from(level) / 255.0,
+                ..look
+            })
+        };
+        let changes = toned.changes(looks);
+        let clear = [Rectangle::new(Point::new(150, 120), Size::new(90, 60))];
+        // Moved less than a cell and more, with an empty box and one partly off the panel.
+        let nudged = [Rectangle::new(Point::new(153, 125), Size::new(90, 60))];
+        let moved = [
+            Rectangle::new(Point::new(190, 160), Size::new(90, 60)),
+            Rectangle::new(Point::new(300, 200), Size::zero()),
+            Rectangle::new(Point::new(-20, -10), Size::new(200, 30)),
+            Rectangle::new(Point::new(120, 241), Size::new(100, 21)),
+            // One whose first row is a moved one that starts above it.
+            Rectangle::new(Point::new(150, 259), Size::new(120, 10)),
+            // Empty boxes across a row's cells and down inside a column's.
+            Rectangle::new(Point::new(150, 262), Size::new(120, 0)),
+            Rectangle::new(Point::new(175, 250), Size::new(0, 40)),
+        ];
+        assert_changes_match(&changes, looks, &[&[], &clear, &nudged, &moved]);
     }
 }

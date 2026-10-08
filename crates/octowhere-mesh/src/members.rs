@@ -99,8 +99,8 @@ pub struct Member {
     pub public: [u8; PUBLIC_LEN],
     /// UTC seconds it joined, or rejoined after losing its keys.
     pub joined: u32,
-    /// UTC seconds its record last changed: its joining or a later rename. The newer record of a
-    /// member wins a merge.
+    /// UTC seconds its record last changed: its joining, a later rename or a move to another id.
+    /// The newer record of a member wins a merge.
     pub changed: u32,
     pub mac: [u8; MAC_LEN],
     pub name: Name,

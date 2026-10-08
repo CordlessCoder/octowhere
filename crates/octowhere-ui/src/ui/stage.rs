@@ -18,7 +18,7 @@ use super::{
     group::{
         self, Flow,
         layout::{Backdrop, List},
-        view::{MeshView, MessagesView, Request},
+        view::{GroupView, MeshView, MessagesView, Request},
     },
     identity,
     members::{self, Tap},
@@ -300,6 +300,15 @@ impl Grid {
     }
 }
 
+/// What the member face is built from besides the time, which its list's due time covers.
+#[derive(PartialEq)]
+struct MembersFrom {
+    group: Option<GroupView>,
+    gnss: Gnss,
+    heading: Option<u16>,
+    selected: Option<[u8; 8]>,
+}
+
 /// What the settled screen showed after a step, for the next step's damage. The screens settle
 /// under exclusive conditions, so at most one has a snapshot.
 /// An empty list on the heap, built outside the step so its frame never holds one.
@@ -343,9 +352,11 @@ pub struct Stage {
     /// asks for, and never ends while charging.
     gauge_moving: bool,
     charge: Charge,
-    /// The resting screens' scatter breath, held while the screen is not awake, and whether a
-    /// resting screen shows it, which needs steps that nothing else asks for.
+    /// The resting screens' scatter breath, held while the screen is not awake, when it next
+    /// changes, and whether a resting screen shows it, which needs a step at each change that
+    /// nothing else asks for.
     breath: u8,
+    breath_due: Micros,
     breathing: bool,
     drawn: Option<Drawn>,
     /// A group screen's list from before the last, which the next step fills again. A list is
@@ -440,6 +451,10 @@ pub struct Stage {
     /// next.
     members_list: Option<alloc::boxed::Box<List>>,
     members_spare: Option<alloc::boxed::Box<List>>,
+    /// What `members_list` was built from, kilobytes for the group, and whether the last step
+    /// kept it rather than building it again.
+    members_from: Option<alloc::boxed::Box<MembersFrom>>,
+    members_kept: bool,
     /// The member the face shows selected, by its device.
     member: Option<[u8; 8]>,
     /// What of each message too tall to show whole has been read, line by line, which closing
@@ -495,6 +510,7 @@ impl Stage {
             gauge_moving: false,
             charge: Charge::default(),
             breath: u8::MAX,
+            breath_due: 0,
             breathing: false,
             drawn: None,
             spare_list: None,
@@ -547,6 +563,8 @@ impl Stage {
             overlay_spare: None,
             members_list: None,
             members_spare: None,
+            members_from: None,
+            members_kept: false,
             member: None,
             coverage: drawer::Coverage::default(),
             declination: None,
@@ -693,6 +711,7 @@ impl Stage {
         let overlay = self.overlay.as_ref().and_then(|(list, _)| list.due());
         let members = self.members_list.as_ref().and_then(|list| list.due());
         [
+            self.breathing.then_some(self.breath_due),
             self.startup_due,
             rest,
             power_off,
@@ -839,6 +858,17 @@ impl Stage {
         self.pager.view().offset.abs().max(self.sheet.offset())
     }
 
+    /// Whether the drawer is open and at rest, when it is all that draws.
+    fn drawer_covers(&self) -> bool {
+        self.drawer.is_some() && self.drawer_sheet.is_open()
+    }
+
+    /// Whether the faces show: nothing the panel opened, nor the panel or the drawer open over
+    /// them.
+    fn faces_show(&self) -> bool {
+        self.page.is_none() && !self.sheet.is_open() && !self.drawer_covers()
+    }
+
     /// The pixels the last [`step`](Self::step) changed.
     #[must_use]
     pub fn changed(&self) -> &Dirty {
@@ -888,11 +918,50 @@ impl Stage {
         self.raw_touch[0].is_some() || self.gesture.in_contact()
     }
 
+    /// Whether a step with `motion` would show or restart anything: any change of it while the
+    /// compass, the panel or a page shows, and otherwise only one that moves the member face's
+    /// held heading, or turns the heading far enough to count as use. The frame loop keeps a
+    /// sample this turns down for the next step, whatever wakes it.
+    #[must_use]
+    pub fn needs_motion(&self, motion: &Motion) -> bool {
+        let compass = &motion.compass;
+        if *compass == self.peripherals.compass {
+            return false;
+        }
+        let neighbour = self
+            .pager
+            .view()
+            .neighbour
+            .map(|(page, _)| Screen::ALL[page]);
+        if self.screen == Screen::Compass
+            || neighbour == Some(Screen::Compass)
+            || self.page.is_some()
+            || !self.sheet.is_closed()
+        {
+            return true;
+        }
+        let held = members::hold(
+            self.true_heading,
+            members::true_heading(compass, self.declination),
+        );
+        // As `heading_moved` takes it, where a first heading sets the anchor.
+        let turned = self.screen == Screen::Members
+            && self.faces_show()
+            && match (self.heading_anchor, compass.heading_decidegrees) {
+                (Some(anchor), Some(heading)) => {
+                    rest::heading_apart(anchor, heading) > rest::HEADING_RESTART
+                }
+                (None, Some(_)) => true,
+                _ => false,
+            };
+        held != self.true_heading || turned
+    }
+
     /// A page slide or a fade is under way, so the next step should come without waiting for
     /// input.
     #[must_use]
     pub fn is_animating(&self) -> bool {
-        self.is_changing() || self.gauge_moving || self.breathing
+        self.is_changing() || self.gauge_moving
     }
 
     /// As [`is_animating`](Self::is_animating), but for the charging gauge, which never stops
@@ -938,6 +1007,7 @@ impl Stage {
         self.breathing = false;
         if self.rest == Rest::Awake {
             self.breath = scatter::breath(now);
+            self.breath_due = scatter::next_breath(now);
         }
         let mut update = Update::default();
         // Set where a change needs the whole panel redrawn. The settled screens work out their
@@ -1122,7 +1192,7 @@ impl Stage {
 
         let view = self.pager.view();
         self.screen = Screen::ALL[view.page];
-        let face_shows = self.page.is_none() && !self.sheet.is_open();
+        let face_shows = self.faces_show();
         let samples_fast = |screen: Screen| matches!(screen, Screen::Compass | Screen::Members);
         update.samples_fast = face_shows
             && (samples_fast(self.screen)
@@ -1181,6 +1251,7 @@ impl Stage {
         if self.members_list.is_none() {
             // Lists are kilobytes; a hidden face keeps none.
             self.members_spare = None;
+            self.members_from = None;
         }
         self.track_overlay(now);
 
@@ -1408,6 +1479,7 @@ impl Stage {
         let view = self.pager.view();
         let shows = self.page.is_none()
             && !self.sheet.is_open()
+            && !self.drawer_covers()
             && (self.screen == Screen::Members
                 || view
                     .neighbour
@@ -1416,12 +1488,61 @@ impl Stage {
             self.true_heading,
             members::true_heading(&self.peripherals.compass, self.declination),
         );
+        self.members_kept = false;
         if !shows {
             return self.members_list.take();
         }
+        if self.members_unchanged(now) {
+            self.members_kept = true;
+            #[cfg(debug_assertions)]
+            self.check_kept_members(now);
+            return None;
+        }
         let mut list = self.members_spare.take().unwrap_or_else(new_list);
         self.member = members::build(&self.members_context(now), &self.renderer, &mut list);
+        // The member the build chose draws the same face as the one it was asked for.
+        match &mut self.members_from {
+            Some(from) => {
+                from.group = self.mesh.group;
+                from.gnss = self.peripherals.gnss;
+                from.heading = self.true_heading;
+                from.selected = self.member;
+            }
+            None => {
+                self.members_from = Some(alloc::boxed::Box::new(MembersFrom {
+                    group: self.mesh.group,
+                    gnss: self.peripherals.gnss,
+                    heading: self.true_heading,
+                    selected: self.member,
+                }));
+            }
+        }
         self.members_list.replace(list)
+    }
+
+    /// Whether the member face would be built as it was last time: from the same group, fix,
+    /// heading and selection, before any age it shows moves on.
+    fn members_unchanged(&self, now: Micros) -> bool {
+        let (Some(list), Some(from)) = (&self.members_list, &self.members_from) else {
+            return false;
+        };
+        list.due().is_none_or(|due| now < due)
+            && from.group == self.mesh.group
+            && from.gnss == self.peripherals.gnss
+            && from.heading == self.true_heading
+            && from.selected == self.member
+    }
+
+    /// Builds the member face it kept again, and checks it came out the same.
+    #[cfg(debug_assertions)]
+    fn check_kept_members(&mut self, now: Micros) {
+        let mut list = self.members_spare.take().unwrap_or_else(new_list);
+        let member = members::build(&self.members_context(now), &self.renderer, &mut list);
+        debug_assert!(
+            self.members_list.as_deref() == Some(&*list) && member == self.member,
+            "the member face changed while what it is built from did not"
+        );
+        self.members_spare = Some(list);
     }
 
     fn members_context(&self, now: Micros) -> members::Context<'_> {
@@ -1453,9 +1574,7 @@ impl Stage {
     /// Works out what lies over the screen this step, the toast and the unread arc, and damages
     /// where that changed.
     fn track_overlay(&mut self, now: Micros) {
-        let covered = self.startup.is_some()
-            || self.power_off.is_some()
-            || (self.drawer_sheet.is_open() && self.drawer.is_some());
+        let covered = self.startup.is_some() || self.power_off.is_some() || self.drawer_covers();
         let (before, arc_before) = match self.overlay.take() {
             Some((list, arc)) => (Some(list), arc),
             None => (None, false),
@@ -2083,6 +2202,7 @@ impl Stage {
                     (Some(before), Some(after)) => {
                         after.damage(before, &self.renderer, &mut self.changed);
                     }
+                    (None, Some(_)) if self.members_kept => {}
                     _ => self.changed.make_full(),
                 }
             }
@@ -2106,7 +2226,9 @@ impl Stage {
         }
         self.drawn = drawn;
         self.drawer_spare = drawer_before;
-        self.members_spare = members_before;
+        if members_before.is_some() {
+            self.members_spare = members_before;
+        }
     }
 
     /// The open panel's damage: the grid while it scrolls, a cell whose reading changed, or
@@ -2693,7 +2815,7 @@ impl Stage {
                 ..Accents::FULL
             };
         self.breathing |= self.rest == Rest::Awake;
-        self.gauge_moving |= lit && self.charge.is_moving(now);
+        self.gauge_moving |= lit && self.faces_show() && self.charge.is_moving(now);
         let p = swipe_progress(offset);
         let exit = Accents {
             icon_rows: rows_leaving(p, 0.3, 0.5),
@@ -2735,8 +2857,7 @@ impl Stage {
                 .expect("drawing the power-off confirmation failed");
             return;
         }
-        if self.drawer.is_some()
-            && self.drawer_sheet.is_open()
+        if self.drawer_covers()
             && let Some(list) = &self.drawer_list
         {
             screens::clear(target).expect("clearing the panel failed");

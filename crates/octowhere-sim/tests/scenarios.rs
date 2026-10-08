@@ -187,6 +187,37 @@ fn a_member_back_by_pairing_is_not_waited_for_on_the_old_key() {
     );
 }
 
+/// After a switch the remover sends the member removed its notice under the old key, which
+/// node 1 still holds for a member out of reach. Node 1 does not take that packet for the
+/// remover having missed the switch, as one board did in
+/// `docs/logs/lora/removal-changes-boards-2026-10-07/`.
+#[test]
+fn the_removers_notice_under_the_old_key_is_not_taken_for_a_missed_switch() {
+    let mut sim = pair(13);
+    sim.run_while_not(30 * 60, |sim| {
+        sim.count(0, "heard id=1") >= 1 && sim.count(1, "heard id=0") >= 1
+    });
+    sim.command(0, Command::Phantom);
+    sim.command(0, Command::Phantom);
+    let learned = sim.run_while_not(30 * 60, |sim| sim.count(1, "is Phantom now") == 2);
+    assert!(learned, "the phantoms reached node 1");
+    sim.command(0, Command::Remove(2));
+    let noticed = sim.run_while_not(60 * 60, |sim| {
+        sim.count(0, "sent under generation 0 round=") >= 1
+            && sim.count(1, "switched to generation 1") == 1
+    });
+    assert!(noticed, "node 0 sent its notice after both switched");
+    sim.run_for(5 * 60);
+    assert!(
+        sim.count(
+            1,
+            "heard 0, the remover of generation 1, under the key before"
+        ) >= 1
+    );
+    assert_eq!(sim.count(1, "0 is on generation 0"), 0);
+    assert_eq!(sim.count(1, "heard 0 on generation 0"), 0);
+}
+
 /// A member that declines a removal after its switch goes back to the old key, stays there
 /// however often the remover's key comes, and keeps that across a restart. It forgets the
 /// records that changed since, the removed member's gone record among them, until a device

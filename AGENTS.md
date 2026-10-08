@@ -180,8 +180,9 @@ initialization or peripheral mappings.
 - [`context/IMPLEMENTATION.md`](context/IMPLEMENTATION.md) is a finished multi-agent brief kept as
   a record. Its partition is historical.
 - [`context/LORA-PROTOCOL.md`](context/LORA-PROTOCOL.md) is the agreed design for the location
-  mesh of up to 32 nodes: band and radio settings, gossip digest, GPS-anchored TDMA, packet
-  layout, messages, crypto and pairing. Steps 1 to 4 of its build order are implemented, and the mesh's side of step 6.
+  mesh of up to 32 nodes: band and radio settings, gossip digest, contention for the channel,
+  packet layout, messages, crypto and pairing. Steps 1 to 4 and 6 of its build order are implemented,
+  step 5 went with the slots, and step 7 closed with the cancel rule.
 - [`context/palette-reference.md`](context/palette-reference.md) records the colour values from the
   reference board and the role each one plays in `chrome.rs`.
 
@@ -206,18 +207,31 @@ From the root:
 
 ```text
 cargo fmt --all --check
-cargo test --workspace --locked
+cargo nextest run --workspace --locked
+cargo test --workspace --doc --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo test -p octowhere-node --locked
+cargo nextest run -p octowhere-node --locked --no-tests=pass
 cargo clippy -p octowhere-node --all-targets --locked -- -D warnings
-cargo test -p octowhere-node --locked --features phantom
-cargo test -p octowhere-tz --locked --no-default-features
+cargo nextest run -p octowhere-node --locked --features phantom
+cargo nextest run -p octowhere-tz --locked --no-default-features
 cargo clippy -p octowhere-tz --all-targets --locked --no-default-features -- -D warnings
 cargo clippy -p ui-web --target wasm32-unknown-unknown --locked -- -D warnings
-cargo test -p sx127xlora --locked --features sync
-cargo test -p sx127xlora --locked --features sync,half_duplex
+cargo nextest run -p sx127xlora --locked --features sync
+cargo nextest run -p sx127xlora --locked --features sync,half_duplex
 cargo clippy -p sx127xlora --all-targets --locked --features sync -- -D warnings
 ```
+
+Tests run under cargo-nextest (owner, 2026-10-06; `cargo install cargo-nextest --locked`),
+which runs every test of every binary at once, where `cargo test` runs the binaries one after
+another: the workspace took 45 s against 160 s. It runs no doctests, so the second line does:
+`host-tests` holds a compile-fail check that a `util::Swap` half whose value is not `Send`
+stays on its thread. Without its `run` feature the node has no tests, which nextest counts as
+a failure unless told otherwise. nextest shows a test's output only when it fails; its
+`--no-capture` shows it as it comes, a test at a time, as `OCTOWHERE_SIM_LOG=1` needs.
+Tests build at `opt-level = 1` (owner, 2026-10-08; `[profile.test]` in the root manifest): the
+UI's damage tests redraw a whole frame for each one they check, and the workspace's tests took
+12 s unoptimised against 1.5 s, for about three times the CPU on a clean build. A debugger
+stepping through a test sees optimised code.
 
 From `firmware/`:
 
@@ -228,7 +242,7 @@ cargo clippy --release --offline -- -D warnings
 ```
 
 A build of the whole workspace turns on, in each crate, every feature any member asks of it.
-So `cargo test --workspace` tests the node with the simulator's `run`, `log` and `phantom`,
+So the workspace's tests run the node with the simulator's `run`, `log` and `phantom`,
 and `octowhere-tz` with its boundaries; the lines with `-p` test them without. The radio
 driver's register tests (`crates/sx127x-lora/tests/driver_sync.rs`) build only with its
 blocking `sync` feature, which no member asks for, so only the last three lines check them;
@@ -432,7 +446,30 @@ part's check started and ended (`startup-timing-bench`, run on the boards by
 `tools/startup-timing.sh` and summarised by `tools/startup-timing-summary.py`), and keeps them
 for a debugger to read without a reset (`tools/startup-timing-read.py`), which a cold start
 needs; `tools/startup-timing-cold.sh` reads each board every time it is plugged back in.
-Results in `docs/logs/display/startup-timing-2026-10-06/`.
+Results in `docs/logs/display/startup-timing-2026-10-06/`. And `bench/relay-pruning` counts
+in the simulator the packets a flood and a removal take, sets them beside the fewest a flood
+could use, and tries relay changes through knobs whose defaults are the firmware's
+(`crates/octowhere-sim/tests/relay_cost.rs`, an ignored test, summarised by
+`tools/relay-*.py`); results in `docs/logs/lora/relay-pruning-2026-10-06/`. And
+`bench/contention-review`, built on it, gives every node a fix, measures the channel's use and
+what the position table's rotation costs (`crates/octowhere-sim/tests/channel_load.rs`,
+summarised by `tools/channel-load.py`), and adds switches for a removal's rest,
+acknowledgements, catch-ups and send order; results in
+`docs/logs/lora/contention-review-2026-10-07/`. And `bench/removal-changes` carries both onto
+master after the removal changes, with switches defaulting to the firmware, and adds rounds to
+a removal's switch (`RELAY_COST_EXTRA_ROUNDS`, summarised by `tools/removal-cutoff.py`), a
+follow-up packet and an answer to an unlike digest for a chain's end (`RELAY_COST_FOLLOW_UP`,
+`RELAY_COST_ANSWER`), and counts positions never shown; results in
+`docs/logs/lora/removal-changes-2026-10-07/` and `docs/logs/lora/rotation-2026-10-07/`, whose
+rotation runs predate its merge of master, which dropped the rotation and its switch. And
+`bench/own-position` logs, for each packet a node sends, its own position's stamp against the
+packet's base, before and after a stand-in fix was stamped from the mesh's clock; results in
+`docs/logs/lora/own-position-2026-10-08/`. And `bench/crowded-screens` stands 31 placed members
+and a private message from each in for what the mesh publishes, turns the heading when told,
+and times each frame's step, draw and flush and the heap while
+`tools/crowded-screens-bench.py` drives the member face and the drawer
+(`crowded-screens-bench`, summarised by `tools/crowded-screens-summary.py`); results in
+`docs/logs/display/crowded-screens-2026-10-08/`.
 
 ## Concurrency
 
@@ -473,7 +510,8 @@ Core 1 owns the display SPI/DMA path.
 - `motion_task`, on `BUS_EXECUTOR`, owns the IMU and magnetometer, the compass calibration and
   the sensor fusion. It samples every 250 ms, or every 20 ms while the frame loop sets
   `COMPASS_ACTIVE` while the compass or the member face shows, and publishes a
-  `MotionSnapshot` through `MOTION_STATE`.
+  `MotionSnapshot` through `MOTION_STATE`. The frame loop steps for a sample only when the
+  stage asks for it (`Stage::needs_motion`), and hands it any other with its next step.
 - `touch_task`, on `BUS_EXECUTOR`, owns the touch controller. It reads it on each falling edge
   of the controller's INT, every 10 ms while a finger is down, or when the frame loop asks, and
   queues each read in `TOUCH_READS` without waiting for it to be taken. A newer contact replaces

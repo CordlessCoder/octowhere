@@ -12,7 +12,7 @@ use super::{
     clock_screen,
     icon::{self, Glyph, Tile},
     reveal::{Reveal, draw_revealed},
-    scatter::{Field, Law, Look, Scatter, Tones},
+    scatter::{Changes, Field, Law, Look, Scatter, Tones},
     screens::PeripheralState,
     text::{self, style},
 };
@@ -516,32 +516,45 @@ pub fn draw_breathing_scatter<D: CoverageTarget<Color = Color>>(
     SCATTER.draw_clear_of(&scatter_looks(&accents), clear, target)
 }
 
+/// The scatter's looks at its full bloom and `breath`.
+fn breathing_looks(breath: u8) -> [Look; 1] {
+    scatter_looks(&Accents {
+        breath,
+        ..Accents::FULL
+    })
+}
+
+/// Where the scatter's marks change with its breath at full bloom.
+fn changes() -> &'static Changes {
+    static KEPT: embassy_sync::once_lock::OnceLock<Changes> =
+        embassy_sync::once_lock::OnceLock::new();
+    Changes::kept(&KEPT, &SCATTER, breathing_looks)
+}
+
 /// Marks the breathing scatter's marks that differ between two breaths and clearings.
 pub fn breathing_scatter_damage(
     before: (u8, &[Rectangle]),
     after: (u8, &[Rectangle]),
     damage: &mut chrome::Dirty,
 ) {
-    let looks = |breath| {
-        scatter_looks(&Accents {
-            breath,
-            ..Accents::FULL
-        })
-    };
-    SCATTER.changed_between(
-        (&looks(before.0), before.1),
-        (&looks(after.0), after.1),
-        damage,
-    );
+    changes().damage(before, after, damage);
 }
 
 /// Marks the scatter's marks that differ between `before` and `after`.
 pub fn scatter_damage(before: &Accents, after: &Accents, damage: &mut chrome::Dirty) {
-    SCATTER.changed_between(
-        (&scatter_looks(before), &PANEL_CLEAR),
-        (&scatter_looks(after), &PANEL_CLEAR),
-        damage,
-    );
+    if before.scatter == u8::MAX && after.scatter == u8::MAX {
+        changes().damage(
+            (before.breath, &PANEL_CLEAR),
+            (after.breath, &PANEL_CLEAR),
+            damage,
+        );
+    } else {
+        SCATTER.changed_between(
+            (&scatter_looks(before), &PANEL_CLEAR),
+            (&scatter_looks(after), &PANEL_CLEAR),
+            damage,
+        );
+    }
 }
 
 pub fn draw<D: CoverageTarget<Color = Color>>(
@@ -674,5 +687,18 @@ mod tests {
     #[test]
     fn a_level_shows_as_a_rounded_percentage() {
         assert_eq!([120, 26, 255, 128].map(percent), [47, 10, 100, 50]);
+    }
+
+    #[test]
+    fn the_scatter_damages_what_differs_between_two_breaths() {
+        // Lines of text as a list lays them out, before and after it scrolls a little.
+        let lines = |scroll: i32| -> [Rectangle; 9] {
+            core::array::from_fn(|line| {
+                let top = 60 + 41 * line as i32 - scroll;
+                Rectangle::new(Point::new(70 + 9 * line as i32, top), Size::new(320, 19))
+            })
+        };
+        let clears: [&[Rectangle]; 4] = [&PANEL_CLEAR, &lines(0), &lines(5), &lines(23)];
+        super::super::scatter::assert_changes_match(changes(), breathing_looks, &clears);
     }
 }

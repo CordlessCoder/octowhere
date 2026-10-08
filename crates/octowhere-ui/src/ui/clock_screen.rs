@@ -18,7 +18,7 @@ use super::{
     clock::{ClockState, ClockView, DateTime, ZoneMode, ZoneState},
     icon::{self, Glyph, Tile},
     reveal::{Reveal, draw_revealed, revealed_bounds},
-    scatter::{Field, Law, Look, Scatter, Tones},
+    scatter::{Changes, Field, Law, Look, Scatter, Tones},
     screens::Battery,
     text,
 };
@@ -716,8 +716,7 @@ impl Parts {
                     libm::ceilf(12.0 * unit(accents.rail)).min(12.0) as u8,
                 )
             }),
-            scatter: (mode != Mode::NoData)
-                .then(|| level(in_quad(accents.scatter) * unit(accents.breath))),
+            scatter: (mode != Mode::NoData).then(|| scatter_level(&accents)),
         }
     }
 
@@ -750,6 +749,13 @@ fn scatter() -> Scatter {
         }),
         fields: &[UPPER, LOWER],
     }
+}
+
+/// Where the scatter's marks change with its level.
+fn changes() -> &'static Changes {
+    static KEPT: embassy_sync::once_lock::OnceLock<Changes> =
+        embassy_sync::once_lock::OnceLock::new();
+    Changes::kept(&KEPT, &scatter(), looks)
 }
 
 fn looks(bloom: u8) -> [Look; 2] {
@@ -1035,28 +1041,47 @@ fn digit_damage(
     }
 }
 
+/// The scatter's level: its bloom eased in, times its breath.
+fn scatter_level(accents: &Accents) -> u8 {
+    level(in_quad(accents.scatter) * unit(accents.breath))
+}
+
 /// What the clock face draws from: the clock, the supply and the accents.
 pub type Face = (ClockView, Option<Battery>, Accents);
 
 /// The parts for `face`, from the last two worked out if it is one of them: a step works out the
-/// face before and after for its damage, and the draw after it the same face again.
+/// face before and after for its damage, and the draw after it the same face again. One that
+/// differs from `face` only in its breath lends its parts but the scatter's level, which is all
+/// the breath moves, so a breath at rest lays no text out.
 fn parts(face: &Face, font: &FontdueRenderer<'static, Color>) -> Parts {
     use embassy_sync::blocking_mutex::{Mutex, raw::CriticalSectionRawMutex};
     static RECENT: Mutex<
         CriticalSectionRawMutex,
         core::cell::RefCell<heapless::Deque<(Face, Parts), 2>>,
     > = Mutex::new(core::cell::RefCell::new(heapless::Deque::new()));
+    let breathed = |seen: &Face| {
+        let accents = Accents {
+            breath: face.2.breath,
+            ..seen.2
+        };
+        (seen.0, seen.1, accents) == *face
+    };
     let found = RECENT.lock(|recent| {
-        recent
-            .borrow()
-            .iter()
-            .find(|(seen, _)| seen == face)
-            .map(|(_, parts)| parts.clone())
+        let recent = recent.borrow();
+        let found = recent.iter().find(|(seen, _)| seen == face);
+        found
+            .or_else(|| recent.iter().find(|(seen, _)| breathed(seen)))
+            .map(|(seen, parts)| (seen == face, parts.clone()))
     });
-    if let Some(parts) = found {
-        return parts;
-    }
-    let parts = Parts::of(&face.0, face.1, face.2, font);
+    let parts = match found {
+        Some((true, parts)) => return parts,
+        Some((false, mut parts)) => {
+            parts.scatter = parts.scatter.map(|_| scatter_level(&face.2));
+            debug_assert_eq!(parts, Parts::of(&face.0, face.1, face.2, font));
+            parts
+        }
+        None => Parts::of(&face.0, face.1, face.2, font),
+    };
     RECENT.lock(|recent| {
         let mut recent = recent.borrow_mut();
         if recent.is_full() {
@@ -1145,12 +1170,9 @@ pub fn damage(
         damage.add(RAIL);
     }
     let (old_clear, new_clear) = (old.clear(), new.clear());
-    if (old.scatter, &old_clear) != (new.scatter, &new_clear) {
-        scatter().changed_between(
-            (&looks(old.scatter.unwrap_or(0)), &old_clear),
-            (&looks(new.scatter.unwrap_or(0)), &new_clear),
-            damage,
-        );
+    let (was, is) = (old.scatter.unwrap_or(0), new.scatter.unwrap_or(0));
+    if (was, &old_clear) != (is, &new_clear) {
+        changes().damage((was, &old_clear), (is, &new_clear), damage);
     }
 }
 
@@ -1337,5 +1359,29 @@ mod tests {
         let trusted = view(false, true, "Europe/Dublin");
         let moved = read(trusted, true, true, "Asia/Kolkata");
         assert!(values(&moved).is_empty());
+    }
+
+    #[test]
+    fn the_scatter_damages_what_differs_between_two_levels() {
+        let font = FontdueRenderer::new(
+            chrome::FontdueRendererCtx::new_rc(),
+            20,
+            chrome::WHITE,
+            chrome::FONTS,
+        );
+        let clear = Parts::of(
+            &view(false, true, "Europe/Dublin"),
+            None,
+            Accents::FULL,
+            &font,
+        )
+        .clear();
+        use embedded_graphics::prelude::Transform as _;
+
+        let moved: heapless::Vec<_, 8> = clear
+            .iter()
+            .map(|area| area.translate(Point::new(3, 37)))
+            .collect();
+        super::super::scatter::assert_changes_match(changes(), looks, &[&clear, &[], &moved]);
     }
 }

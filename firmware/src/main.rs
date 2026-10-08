@@ -858,8 +858,8 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
 const IMU_AXES: AxisMap = AxisMap([(1, 1.0), (0, 1.0), (2, -1.0)]);
 const MAG_AXES: AxisMap = AxisMap([(0, -1.0), (1, -1.0), (2, 1.0)]);
 const MOTION_PERIOD: Duration = Duration::from_millis(250);
-/// The panel's frame, from TE's period. The charging gauge and the drawer's breathing backdrop
-/// change no faster, so the frame loop steps them once a frame rather than as fast as it can.
+/// The panel's frame, from TE's period. The charging gauge changes no faster, so the frame loop
+/// steps it once a frame rather than as fast as it can.
 const PANEL_FRAME: Duration = Duration::from_micros(16_800);
 /// Faster than the frame loop redraws, so every frame has a fresh sample.
 const COMPASS_PERIOD: Duration = Duration::from_millis(20);
@@ -1258,7 +1258,9 @@ async fn sensor_task(task: SensorTask) {
                         latest.set(Some(mesh::Fix {
                             latitude: position.0,
                             longitude: position.1,
-                            stamp: utc as u32,
+                            // The mesh's second, not the RTC's, which the offset left up to a
+                            // second ahead: a packet leaves out a position stamped after it.
+                            stamp: (now.as_micros() as i64 - offset).div_euclid(1_000_000) as u32,
                             quality: octowhere_mesh::packet::Quality::Autonomous,
                             hdop_milli: Some(fix_inject::HDOP_MILLI),
                         }))
@@ -2789,6 +2791,8 @@ async fn frame_loop(
     // The count of the mesh's views the stage has, and of its messages.
     let mut mesh_seen = 0;
     let mut messages_seen = 0;
+    // A motion sample the stage had no use for yet, for the next step.
+    let mut kept_motion = None;
     #[cfg(feature = "touch-inject")]
     let mut injector = touch_inject::Injector::default();
     #[cfg(feature = "startup-timing-bench")]
@@ -2843,35 +2847,51 @@ async fn frame_loop(
             if injector.is_stroking() {
                 wait_timeout = wait_timeout.min(TOUCH_REPOLL);
             }
-            let (touch_read, sensor_state, motion_state, boot, key, boot_key) = match select4(
-                take_touch_read(),
-                select4(
-                    SENSOR_STATE.wait(),
-                    BOOT_REPORTS.receive(),
-                    KEY_PRESSES.receive(),
-                    select(BOOT_KEY_PRESSES.receive(), mesh::VIEW_CHANGED.wait()),
-                ),
-                MOTION_STATE.wait(),
-                Timer::after(wait_timeout),
-            )
-            .await
-            {
-                Either4::First(read) => (Some(read), None, None, None, None, None),
-                Either4::Second(Either4::First(state)) => {
-                    (None, Some(state), None, None, None, None)
+            // The member face samples motion every 20 ms, and most samples change nothing it
+            // shows. Waiting resumes after one of those, until the same deadline.
+            let deadline = Instant::now() + wait_timeout;
+            let (touch_read, sensor_state, motion_state, boot, key, boot_key) = loop {
+                let woke = match select4(
+                    take_touch_read(),
+                    select4(
+                        SENSOR_STATE.wait(),
+                        BOOT_REPORTS.receive(),
+                        KEY_PRESSES.receive(),
+                        select(BOOT_KEY_PRESSES.receive(), mesh::VIEW_CHANGED.wait()),
+                    ),
+                    MOTION_STATE.wait(),
+                    Timer::at(deadline),
+                )
+                .await
+                {
+                    Either4::First(read) => (Some(read), None, None, None, None, None),
+                    Either4::Second(Either4::First(state)) => {
+                        (None, Some(state), None, None, None, None)
+                    }
+                    Either4::Second(Either4::Second(report)) => {
+                        (None, None, None, Some(report), None, None)
+                    }
+                    Either4::Second(Either4::Third(key)) => {
+                        (None, None, None, None, Some(key), None)
+                    }
+                    Either4::Second(Either4::Fourth(Either::First(key))) => {
+                        (None, None, None, None, None, Some(key))
+                    }
+                    Either4::Second(Either4::Fourth(Either::Second(()))) | Either4::Fourth(()) => {
+                        (None, None, None, None, None, None)
+                    }
+                    Either4::Third(state) => (None, None, Some(state), None, None, None),
+                };
+                if let (None, None, Some(motion), None, None, None) = woke
+                    && !stage.needs_motion(&motion)
+                {
+                    kept_motion = Some(motion);
+                    continue;
                 }
-                Either4::Second(Either4::Second(report)) => {
-                    (None, None, None, Some(report), None, None)
-                }
-                Either4::Second(Either4::Third(key)) => (None, None, None, None, Some(key), None),
-                Either4::Second(Either4::Fourth(Either::First(key))) => {
-                    (None, None, None, None, None, Some(key))
-                }
-                Either4::Second(Either4::Fourth(Either::Second(()))) | Either4::Fourth(()) => {
-                    (None, None, None, None, None, None)
-                }
-                Either4::Third(state) => (None, None, Some(state), None, None, None),
+                break woke;
             };
+            let kept = kept_motion.take();
+            let motion_state = motion_state.or(kept);
             // A change that came with another wake is taken here too.
             if let Some(seen) = stage.update_mesh(|view| mesh::view_since(mesh_seen, view)) {
                 mesh_seen = seen;
