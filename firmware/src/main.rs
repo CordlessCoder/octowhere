@@ -2690,6 +2690,8 @@ async fn frame_loop(
     // The count of the mesh's views the stage has, and of its messages.
     let mut mesh_seen = 0;
     let mut messages_seen = 0;
+    // A motion sample the stage had no use for yet, for the next step.
+    let mut kept_motion = None;
     #[cfg(feature = "touch-inject")]
     let mut injector = touch_inject::Injector::default();
     #[cfg(feature = "crowded-screens-bench")]
@@ -2738,35 +2740,51 @@ async fn frame_loop(
             {
                 wait_timeout = bench.pace(wait_timeout);
             }
-            let (touch_read, sensor_state, motion_state, boot, key, boot_key) = match select4(
-                take_touch_read(),
-                select4(
-                    SENSOR_STATE.wait(),
-                    BOOT_REPORTS.receive(),
-                    KEY_PRESSES.receive(),
-                    select(BOOT_KEY_PRESSES.receive(), mesh::VIEW_CHANGED.wait()),
-                ),
-                MOTION_STATE.wait(),
-                Timer::after(wait_timeout),
-            )
-            .await
-            {
-                Either4::First(read) => (Some(read), None, None, None, None, None),
-                Either4::Second(Either4::First(state)) => {
-                    (None, Some(state), None, None, None, None)
+            // The member face samples motion every 20 ms, and most samples change nothing it
+            // shows. Waiting resumes after one of those, until the same deadline.
+            let deadline = Instant::now() + wait_timeout;
+            let (touch_read, sensor_state, motion_state, boot, key, boot_key) = loop {
+                let woke = match select4(
+                    take_touch_read(),
+                    select4(
+                        SENSOR_STATE.wait(),
+                        BOOT_REPORTS.receive(),
+                        KEY_PRESSES.receive(),
+                        select(BOOT_KEY_PRESSES.receive(), mesh::VIEW_CHANGED.wait()),
+                    ),
+                    MOTION_STATE.wait(),
+                    Timer::at(deadline),
+                )
+                .await
+                {
+                    Either4::First(read) => (Some(read), None, None, None, None, None),
+                    Either4::Second(Either4::First(state)) => {
+                        (None, Some(state), None, None, None, None)
+                    }
+                    Either4::Second(Either4::Second(report)) => {
+                        (None, None, None, Some(report), None, None)
+                    }
+                    Either4::Second(Either4::Third(key)) => {
+                        (None, None, None, None, Some(key), None)
+                    }
+                    Either4::Second(Either4::Fourth(Either::First(key))) => {
+                        (None, None, None, None, None, Some(key))
+                    }
+                    Either4::Second(Either4::Fourth(Either::Second(()))) | Either4::Fourth(()) => {
+                        (None, None, None, None, None, None)
+                    }
+                    Either4::Third(state) => (None, None, Some(state), None, None, None),
+                };
+                if let (None, None, Some(motion), None, None, None) = woke
+                    && !stage.needs_motion(&motion)
+                {
+                    kept_motion = Some(motion);
+                    continue;
                 }
-                Either4::Second(Either4::Second(report)) => {
-                    (None, None, None, Some(report), None, None)
-                }
-                Either4::Second(Either4::Third(key)) => (None, None, None, None, Some(key), None),
-                Either4::Second(Either4::Fourth(Either::First(key))) => {
-                    (None, None, None, None, None, Some(key))
-                }
-                Either4::Second(Either4::Fourth(Either::Second(()))) | Either4::Fourth(()) => {
-                    (None, None, None, None, None, None)
-                }
-                Either4::Third(state) => (None, None, Some(state), None, None, None),
+                break woke;
             };
+            let kept = kept_motion.take();
+            let motion_state = motion_state.or(kept);
             #[cfg(feature = "crowded-screens-bench")]
             let woke = Instant::now();
             // A change that came with another wake is taken here too.

@@ -918,6 +918,45 @@ impl Stage {
         self.raw_touch[0].is_some() || self.gesture.in_contact()
     }
 
+    /// Whether a step with `motion` would show or restart anything: any change of it while the
+    /// compass, the panel or a page shows, and otherwise only one that moves the member face's
+    /// held heading, or turns the heading far enough to count as use. The frame loop keeps a
+    /// sample this turns down for the next step, whatever wakes it.
+    #[must_use]
+    pub fn needs_motion(&self, motion: &Motion) -> bool {
+        let compass = &motion.compass;
+        if *compass == self.peripherals.compass {
+            return false;
+        }
+        let neighbour = self
+            .pager
+            .view()
+            .neighbour
+            .map(|(page, _)| Screen::ALL[page]);
+        if self.screen == Screen::Compass
+            || neighbour == Some(Screen::Compass)
+            || self.page.is_some()
+            || !self.sheet.is_closed()
+        {
+            return true;
+        }
+        let held = members::hold(
+            self.true_heading,
+            members::true_heading(compass, self.declination),
+        );
+        // As `heading_moved` takes it, where a first heading sets the anchor.
+        let turned = self.screen == Screen::Members
+            && self.faces_show()
+            && match (self.heading_anchor, compass.heading_decidegrees) {
+                (Some(anchor), Some(heading)) => {
+                    rest::heading_apart(anchor, heading) > rest::HEADING_RESTART
+                }
+                (None, Some(_)) => true,
+                _ => false,
+            };
+        held != self.true_heading || turned
+    }
+
     /// A page slide or a fade is under way, so the next step should come without waiting for
     /// input.
     #[must_use]

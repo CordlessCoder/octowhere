@@ -510,7 +510,8 @@ Core 1 owns the display SPI/DMA path.
 - `motion_task`, on `BUS_EXECUTOR`, owns the IMU and magnetometer, the compass calibration and
   the sensor fusion. It samples every 250 ms, or every 20 ms while the frame loop sets
   `COMPASS_ACTIVE` while the compass or the member face shows, and publishes a
-  `MotionSnapshot` through `MOTION_STATE`.
+  `MotionSnapshot` through `MOTION_STATE`. The frame loop steps for a sample only when the
+  stage asks for it (`Stage::needs_motion`), and hands it any other with its next step.
 - `touch_task`, on `BUS_EXECUTOR`, owns the touch controller. It reads it on each falling edge
   of the controller's INT, every 10 ms while a finger is down, or when the frame loop asks, and
   queues each read in `TOUCH_READS` without waiting for it to be taken. A newer contact replaces

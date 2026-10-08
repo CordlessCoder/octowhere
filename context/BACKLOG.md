@@ -397,11 +397,14 @@ until the feature set is complete, because profiling an incomplete firmware pric
       every item's bounds (`929400a`, `a7d8081`): a scrolling step that changed the panel takes
       about 12 ms at p95, against 26 to 28. While charging, the gauge steps the clock face every
       panel frame; the boards have no battery, so that was not measured.
-    - The member face samples motion every 20 ms and the frame loop steps for each sample, about
-      40 times a second. The face is kept while nothing it shows moved (`e81ec08`), so a step at
-      rest takes 1.2 ms with 31 members, 122 ms of each second, against 468 when it was built
-      every step. Waking the frame loop only for a sample that turns the held heading is what is
-      left.
+    - The member face samples motion every 20 ms, and the face is kept while nothing it shows
+      moved (`e81ec08`). The frame loop steps for a sample only when the stage asks for it
+      (`6614789`), so at rest it steps 6.5 times a second, against about 40, for 76 ms of each
+      second, against 129 with each sample stepped and 468 with the face built every step.
+      Most steps left build the face again, at about 14 ms. What makes those builds is not yet
+      measured: an age ticking, the mesh's view, or the sensor task's snapshot, whose whole
+      GNSS state the face's cache compares, including when the receiver last answered. A wake
+      source in the bench's frame line would tell them apart.
   - Stills of the new states from a board's framebuffer; the package has host renders.
     `tools/crowded-screens-bench.py --shots` on that branch reads one back after each phase.
 
