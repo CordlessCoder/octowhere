@@ -224,6 +224,25 @@ fn the_start_up_resets_then_sends_the_sequence_it_always_sent() {
 }
 
 #[test]
+fn a_controller_reset_before_starts_without_its_reset_line() {
+    let log = Log::default();
+    block_on(Display::after_reset(
+        Recorder(log.clone()),
+        Pin(log.clone()),
+        Te,
+        Delay(log.clone()),
+        PANEL,
+    ))
+    .unwrap();
+    let sequence = start_up();
+    let after_reset = sequence
+        .iter()
+        .position(|event| *event == command(0x11, &[]))
+        .unwrap();
+    assert_eq!(taken(&log), sequence[after_reset..]);
+}
+
+#[test]
 fn each_colour_mode_sends_its_format() {
     fn format<C: ColorMode>() -> Vec<u8> {
         let log = Log::default();
