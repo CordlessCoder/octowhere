@@ -2140,6 +2140,43 @@ fn turning_the_compass_keeps_the_screen_lit() {
 }
 
 #[test]
+fn the_open_drawer_neither_samples_fast_nor_keeps_the_screen_lit_by_turning() {
+    for screen in [Screen::Compass, Screen::Members] {
+        let mut driver = resting_on(screen, Timeout::Seconds15, false);
+        driver.swipe(Point::new(233, 430), Point::new(233, 120), 250_000);
+        driver.settle();
+        assert!(driver.stage.drawer().is_some(), "{screen:?}");
+        assert!(!driver.step(Input::default()).samples_fast, "{screen:?}");
+        let opened = driver.now();
+        for turn in 1..=4 {
+            driver.wait(3_000_000);
+            driver.motion(heading(470 + turn * 150));
+        }
+        let updates = wait_until(&mut driver, 4_000_000, is_dimmed);
+        assert!(
+            !updates.iter().any(|update| update.samples_fast),
+            "{screen:?}"
+        );
+        let Rest::Dimmed { since } = driver.stage.rest() else {
+            unreachable!()
+        };
+        // The drawer settling restarted the timer last, a frame or two before `opened`.
+        assert!(
+            (14_900_000..15_100_000).contains(&(since - opened)),
+            "{screen:?}: {}",
+            since - opened
+        );
+
+        driver.touch(Some(Point::new(233, 233)));
+        driver.touch(None);
+        driver.swipe(Point::new(233, 200), Point::new(233, 420), 250_000);
+        driver.settle();
+        assert!(driver.stage.drawer().is_none(), "{screen:?}");
+        assert!(driver.step(Input::default()).samples_fast, "{screen:?}");
+    }
+}
+
+#[test]
 fn the_timer_waits_for_the_start_up() {
     let mut driver = Driver::starting();
     driver.stage = Stage::starting(PeripheralState {

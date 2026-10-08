@@ -839,6 +839,11 @@ impl Stage {
         self.pager.view().offset.abs().max(self.sheet.offset())
     }
 
+    /// Whether the drawer is open and at rest, when it is all that draws.
+    fn drawer_covers(&self) -> bool {
+        self.drawer.is_some() && self.drawer_sheet.is_open()
+    }
+
     /// The pixels the last [`step`](Self::step) changed.
     #[must_use]
     pub fn changed(&self) -> &Dirty {
@@ -1122,7 +1127,7 @@ impl Stage {
 
         let view = self.pager.view();
         self.screen = Screen::ALL[view.page];
-        let face_shows = self.page.is_none() && !self.sheet.is_open();
+        let face_shows = self.page.is_none() && !self.sheet.is_open() && !self.drawer_covers();
         let samples_fast = |screen: Screen| matches!(screen, Screen::Compass | Screen::Members);
         update.samples_fast = face_shows
             && (samples_fast(self.screen)
@@ -1406,11 +1411,9 @@ impl Stage {
     /// the step before.
     fn build_members(&mut self, now: Micros) -> Option<alloc::boxed::Box<List>> {
         let view = self.pager.view();
-        // Open, the drawer is all that draws.
-        let covered = self.drawer.is_some() && self.drawer_sheet.is_open();
         let shows = self.page.is_none()
             && !self.sheet.is_open()
-            && !covered
+            && !self.drawer_covers()
             && (self.screen == Screen::Members
                 || view
                     .neighbour
@@ -1456,9 +1459,7 @@ impl Stage {
     /// Works out what lies over the screen this step, the toast and the unread arc, and damages
     /// where that changed.
     fn track_overlay(&mut self, now: Micros) {
-        let covered = self.startup.is_some()
-            || self.power_off.is_some()
-            || (self.drawer_sheet.is_open() && self.drawer.is_some());
+        let covered = self.startup.is_some() || self.power_off.is_some() || self.drawer_covers();
         let (before, arc_before) = match self.overlay.take() {
             Some((list, arc)) => (Some(list), arc),
             None => (None, false),
@@ -2738,8 +2739,7 @@ impl Stage {
                 .expect("drawing the power-off confirmation failed");
             return;
         }
-        if self.drawer.is_some()
-            && self.drawer_sheet.is_open()
+        if self.drawer_covers()
             && let Some(list) = &self.drawer_list
         {
             screens::clear(target).expect("clearing the panel failed");
