@@ -15,7 +15,7 @@ use octowhere_ui::{
         rest::Timeout,
         screens::{Gnss, GnssHealth, PeripheralState, Screen},
         second::Page,
-        stage::{Motion, Sensors, Stage},
+        stage::{Input, Motion, Sensors, Stage},
     },
 };
 use octowhere_ui_script::Driver;
@@ -409,4 +409,118 @@ fn an_age_ticking_redraws_only_what_shows_it() {
         }
     }
     assert!(partial > 0, "the ages ticked");
+}
+
+/// A sample that leaves the held heading where it is changes nothing the member face shows. A
+/// heading at rest lies within half a degree of the whole degree shown, so a quarter of a degree
+/// either way always stays held, and a degree and a quarter always moves it.
+#[test]
+fn the_member_face_asks_only_for_motion_that_moves_its_heading() {
+    let mut driver = start(|now| Some(group(&PLACED, now)));
+    let needs =
+        |driver: &Driver, compass: CompassView| driver.stage.needs_motion(&Motion { compass });
+    assert!(!needs(&driver, compass(Some(470))));
+    assert!(
+        !needs(&driver, compass(Some(472))),
+        "a wobble within the hold"
+    );
+    assert!(
+        !needs(
+            &driver,
+            CompassView {
+                pitch_deg: 9,
+                roll_deg: 4,
+                ..compass(Some(468))
+            }
+        ),
+        "a tilt the face does not show"
+    );
+    assert!(needs(&driver, compass(Some(490))), "a turn of two degrees");
+    assert!(
+        needs(
+            &driver,
+            CompassView {
+                disturbed: true,
+                ..compass(Some(470))
+            }
+        ),
+        "a heading it stops trusting"
+    );
+
+    // The compass face and the panel show every change.
+    driver.stage.show(Screen::Compass);
+    driver.wait(SECOND);
+    assert!(needs(&driver, compass(Some(471))));
+    driver.stage.show(Screen::Clock);
+    driver.wait(SECOND);
+    assert!(!needs(&driver, compass(Some(472))));
+    driver.swipe(Point::new(233, 80), Point::new(233, 420), 250_000);
+    driver.settle();
+    assert!(needs(&driver, compass(Some(476))));
+}
+
+/// Where the heading is withheld, a turn far enough to count as use is still asked for, so the
+/// screen's timeout restarts as it would.
+#[test]
+fn a_turn_counts_as_use_while_the_heading_is_withheld() {
+    let mut driver = start(|now| Some(group(&PLACED, now)));
+    let disturbed = |heading| Motion {
+        compass: CompassView {
+            disturbed: true,
+            ..compass(Some(heading))
+        },
+    };
+    driver.motion(disturbed(470));
+    driver.wait(SECOND);
+    assert!(!driver.stage.needs_motion(&disturbed(520)));
+    assert!(driver.stage.needs_motion(&disturbed(580)));
+}
+
+/// Stepping only for the samples the stage asks for, and handing it the rest with the sensor
+/// task's next wake, shows what stepping for every sample shows each time it steps.
+#[test]
+fn the_member_face_shows_the_same_stepped_only_for_the_motion_it_asks_for() {
+    let mut every = start(|now| Some(group(&PLACED, now))).stage;
+    let mut asked = start(|now| Some(group(&PLACED, now))).stage;
+    let from = start(|now| Some(group(&PLACED, now))).now();
+    // Still, wobbling within the hold, then turning 10° over a second, then still again.
+    let heading = |sample: u64| -> u16 {
+        let wobble = [0, 3, -4, 6, -2, 5][sample as usize % 6];
+        let turned = sample.saturating_sub(50).min(50) * 2;
+        (470 + turned as i32 + wobble) as u16
+    };
+    let mut stepped = 0;
+    let (mut whole_every, mut whole_asked) = (FB::boxed(), FB::boxed());
+    for sample in 1..=150 {
+        let now = from + sample * 20_000;
+        let motion = Motion {
+            compass: CompassView {
+                pitch_deg: (sample % 7) as i8,
+                ..compass(Some(heading(sample)))
+            },
+        };
+        let wake = |stage: &mut Stage, motion| {
+            stage.step(Input {
+                now,
+                motion,
+                ..Input::default()
+            });
+        };
+        wake(&mut every, Some(motion));
+        // The sensor task wakes the frame loop every 250 ms, and that step takes the sample.
+        let tick = now % 250_000 < 20_000;
+        if !tick && !asked.needs_motion(&motion) {
+            continue;
+        }
+        wake(&mut asked, Some(motion));
+        stepped += 1;
+        every.draw(&mut *whole_every);
+        asked.draw(&mut *whole_asked);
+        let wrong = differing(&whole_every, &whole_asked);
+        assert_eq!(wrong, 0, "sample {sample}: {wrong} pixels differ");
+    }
+    assert!(
+        (10..60).contains(&stepped),
+        "stepped for {stepped} of 150 samples"
+    );
 }
