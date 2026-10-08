@@ -73,6 +73,9 @@ touch-inject = []
 # them for a debugger to read after a cold start; see `tools/startup-timing.sh` and
 # `tools/startup-timing-read.py`.
 startup-timing-bench = []
+# Checks that the panel's reset turned TE off before core 1 starts the controller, which delays
+# that start by up to 60 ms.
+startup-te-check = ["startup-timing-bench"]
 
 [patch.crates-io]
 tca9554 = { git = "https://github.com/CordlessCoder/tca9554-rs", rev = "d7b01d5" }

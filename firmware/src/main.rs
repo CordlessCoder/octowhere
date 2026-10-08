@@ -807,6 +807,22 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
         cs,
     );
     Timer::at(panel_reset_at + Duration::from_millis(co5300::RESET_MS.into())).await;
+    // A reset turns TE off, so a pulse here means the controller kept its state through it.
+    #[cfg(feature = "startup-te-check")]
+    let mut te = te;
+    #[cfg(feature = "startup-te-check")]
+    {
+        match select(
+            te.wait_for_rising_edge(),
+            Timer::after(Duration::from_millis(60)),
+        )
+        .await
+        {
+            Either::First(_) => startup_timing::mark("te-before-start", "pulsed"),
+            Either::Second(()) => startup_timing::mark("te-before-start", "silent"),
+        }
+        startup_timing::mark("te-check", "end");
+    }
     let mut display: Display<'_, chrome::Color> =
         Display::after_reset(bus, panel_reset, te, embassy_time::Delay, board::DISPLAY)
             .await
