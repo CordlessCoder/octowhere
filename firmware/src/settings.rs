@@ -340,6 +340,13 @@ impl Store {
 
     /// Reads the mesh's state. Call it after [`Store::load`], which mounts the database.
     pub fn load_mesh(&mut self) -> MeshSaved {
+        #[cfg(feature = "startup-timing-bench")]
+        let stamp = |at: usize| {
+            LOAD_MARKS[at].store(
+                esp_hal::time::Instant::now().duration_since_epoch().as_micros() as u32,
+                core::sync::atomic::Ordering::Relaxed,
+            )
+        };
         let Some(database) = &self.database else {
             return MeshSaved::default();
         };
@@ -363,6 +370,8 @@ impl Store {
                 }
             };
             let group = value(KEY_GROUP).await;
+            #[cfg(feature = "startup-timing-bench")]
+            stamp(0);
             let mut slots = [None; IDS as usize];
             let mut stored_members = 0;
             if group.is_some() {
@@ -377,10 +386,14 @@ impl Store {
                     }
                 }
             }
+            #[cfg(feature = "startup-timing-bench")]
+            stamp(1);
             let group = group.and_then(|group| {
                 let (key, own, generation) = decode_stored_header(&group)?;
                 Group::restore(key, generation, own, slots)
             });
+            #[cfg(feature = "startup-timing-bench")]
+            stamp(2);
             let seed = value(KEY_IDENTITY)
                 .await
                 .and_then(|seed| seed.as_slice().try_into().ok());
@@ -398,6 +411,8 @@ impl Store {
                 }),
                 None => None,
             };
+            #[cfg(feature = "startup-timing-bench")]
+            stamp(3);
             // A row is longer than the other values, so it is read on the heap.
             let mut kept: [Option<Box<KeptRow>>; IDS as usize] = Default::default();
             if group.is_some() {
@@ -416,6 +431,8 @@ impl Store {
                     }
                 }
             }
+            #[cfg(feature = "startup-timing-bench")]
+            stamp(4);
             self.stored_members = stored_members;
             MeshSaved {
                 seed,
@@ -614,3 +631,9 @@ fn wait_in_ram() {
         core::hint::spin_loop();
     }
 }
+
+/// When `load_mesh` had read the group, the members, restored the group, read the rest but the
+/// kept rows, and read those, in µs from the timer's start.
+#[cfg(feature = "startup-timing-bench")]
+pub static LOAD_MARKS: [core::sync::atomic::AtomicU32; 5] =
+    [const { core::sync::atomic::AtomicU32::new(0) }; 5];

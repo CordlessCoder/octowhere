@@ -229,7 +229,7 @@ mod startup_timing {
 
     use super::Part;
 
-    type Marks = heapless::Vec<(&'static str, &'static str, u64), 48>;
+    type Marks = heapless::Vec<(&'static str, &'static str, u64), 64>;
 
     static MARKS: CriticalSectionMutex<RefCell<Marks>> =
         CriticalSectionMutex::new(RefCell::new(heapless::Vec::new()));
@@ -257,8 +257,12 @@ mod startup_timing {
     #[unsafe(no_mangle)]
     static OCTOWHERE_STARTUP_MARKS: [AtomicU32; WORDS] = [const { AtomicU32::new(0) }; WORDS];
 
+    /// From esp-hal's clock, the timer embassy's reads, so that a mark can come before
+    /// esp-rtos starts.
     pub fn mark(what: &'static str, how: &'static str) {
-        let at = Instant::now().as_micros();
+        let at = esp_hal::time::Instant::now()
+            .duration_since_epoch()
+            .as_micros();
         MARKS.lock(|marks| {
             let _ = marks.borrow_mut().push((what, how, at));
         });
@@ -299,6 +303,14 @@ mod startup_timing {
         defmt::info!("[STARTUP] board {=u8:02x}{=u8:02x}", mac[4], mac[5]);
         defmt::info!("[STARTUP] reset power_on={=bool}", power_on);
         let marks = MARKS.lock(|marks| marks.borrow().clone());
+        let loads = ["group", "members", "restored", "rest", "kept"];
+        for (name, at) in loads.iter().zip(&octowhere::settings::LOAD_MARKS) {
+            defmt::info!(
+                "[STARTUP] load-{=str} read {=u32}",
+                name,
+                at.load(Ordering::Relaxed)
+            );
+        }
         for (what, how, at) in marks {
             defmt::info!("[STARTUP] {=str} {=str} {=u64}", what, how, at);
         }
@@ -673,6 +685,8 @@ macro_rules! start_display_core {
 
 #[esp_hal::main]
 fn main() -> ! {
+    #[cfg(feature = "startup-timing-bench")]
+    startup_timing::mark("main", "enter");
     let mut executor = esp_rtos::embassy::Executor::new();
     let executor: &'static mut esp_rtos::embassy::Executor =
         unsafe { core::mem::transmute(&mut executor) };
@@ -686,6 +700,8 @@ fn main() -> ! {
 #[embassy_executor::task]
 async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHeap>) {
     info!("[DISPLAY] core_started");
+    #[cfg(feature = "startup-timing-bench")]
+    startup_timing::mark("core1", "enter");
     let SecondCore {
         gpio4,
         gpio5,
@@ -742,6 +758,14 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
             .await
             .expect("display init failed");
     info!("[DISPLAY] OK");
+    #[cfg(feature = "startup-timing-bench")]
+    startup_timing::mark("display", "up");
+    // The first two frames core 1 takes: the buffer it starts with, never drawn, then the
+    // frame loop's first.
+    #[cfg(feature = "startup-timing-bench")]
+    let mut timing_frames = 0u8;
+    #[cfg(feature = "startup-timing-bench")]
+    let mut timing_lit = false;
 
     let mut prev_swap_spi = Duration::MIN;
     let mut first_flush = true;
@@ -762,6 +786,12 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
         } = state;
 
         let start = Instant::now();
+        #[cfg(feature = "startup-timing-bench")]
+        match timing_frames {
+            0 => startup_timing::mark("flush0", "start"),
+            1 => startup_timing::mark("flush1", "start"),
+            _ => {}
+        }
 
         if *display_on == Some(true) && display.display_on().await.is_err() {
             warn!("[DISPLAY] display on failed");
@@ -788,10 +818,17 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
             }
             timings.vsync_wait = start.elapsed();
         }
+        #[cfg(feature = "startup-timing-bench")]
+        let timing_level = *brightness;
         if let Some(level) = brightness.take()
             && display.set_brightness(level).await.is_err()
         {
             warn!("[DISPLAY] brightness command failed");
+        }
+        #[cfg(feature = "startup-timing-bench")]
+        if !timing_lit && timing_level.is_some_and(|level| level > 0) {
+            timing_lit = true;
+            startup_timing::mark("panel", "lit");
         }
 
         #[cfg(feature = "timing-log")]
@@ -833,6 +870,15 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
             warn!("[DISPLAY] display off failed");
         }
         timings.spi_time = start.elapsed() - timings.vsync_wait;
+        #[cfg(feature = "startup-timing-bench")]
+        {
+            match timing_frames {
+                0 => startup_timing::mark("flush0", "end"),
+                1 => startup_timing::mark("flush1", "end"),
+                _ => {}
+            }
+            timing_frames = timing_frames.saturating_add(1);
+        }
 
         timings.swap_spi = prev_swap_spi;
 
@@ -2087,6 +2133,8 @@ async fn async_main(spawner: Spawner) {
     // PERF: How low do we want to drop the clock speed?
     let mut peripherals =
         esp_hal::init(esp_hal::Config::default().with_cpu_clock(esp_hal::clock::CpuClock::_240MHz));
+    #[cfg(feature = "startup-timing-bench")]
+    startup_timing::mark("esp_hal", "init");
 
     let psram_config = esp_hal::psram::PsramConfig {
         mode: esp_hal::psram::PsramMode::OctalSpi,
@@ -2104,6 +2152,8 @@ async fn async_main(spawner: Spawner) {
             esp_alloc::MemoryCapability::External.into(),
         ));
     }
+    #[cfg(feature = "startup-timing-bench")]
+    startup_timing::mark("psram", "ready");
     let timg0 = TimerGroup::new(peripherals.TIMG0);
 
     esp_rtos::start(timg0.timer0, peripherals.FROM_CPU_INTR0);
@@ -2119,6 +2169,8 @@ async fn async_main(spawner: Spawner) {
     let seed = esp_hal::rng::Rng::new().random();
     let mut store = unsafe { Store::new(esp_storage::FlashStorage::new(peripherals.FLASH), seed) };
     let saved = store.load();
+    #[cfg(feature = "startup-timing-bench")]
+    startup_timing::mark("settings", "loaded");
     // The ADC's noise makes the RNG truly random, which the mesh's keys and nonces need. It
     // stays on.
     static TRNG_SOURCE: StaticCell<esp_hal::rng::TrngSource<'static>> = StaticCell::new();
@@ -2126,8 +2178,17 @@ async fn async_main(spawner: Spawner) {
         peripherals.RNG,
         peripherals.ADC1,
     ));
-    let mesh_start = mesh_start(store.load_mesh());
+    #[cfg(feature = "startup-timing-bench")]
+    startup_timing::mark("trng", "on");
+    let mesh_saved = store.load_mesh();
+    #[cfg(feature = "startup-timing-bench")]
+    startup_timing::mark("mesh-store", "read");
+    let mesh_start = mesh_start(mesh_saved);
+    #[cfg(feature = "startup-timing-bench")]
+    startup_timing::mark("identity", "made");
     mesh::publish_start(&mesh_start);
+    #[cfg(feature = "startup-timing-bench")]
+    startup_timing::mark("mesh-store", "loaded");
     info!(
         "[SETTINGS] zone mode={} manual={} automatic={} brightness={} timeout={} always_on={}",
         saved.zone_mode,
@@ -2148,7 +2209,11 @@ async fn async_main(spawner: Spawner) {
     spawner.spawn(boot_key_task(boot_key).unwrap());
 
     // The panel comes up first, so the self-test shows while the parts come up behind it.
+    #[cfg(feature = "startup-timing-bench")]
+    startup_timing::mark("core1", "starting");
     start_display_core!(peripherals, fb_st);
+    #[cfg(feature = "startup-timing-bench")]
+    startup_timing::mark("core1", "started");
 
     let mut stage = Stage::starting(PeripheralState {
         brightness: saved.brightness.unwrap_or(DEFAULT_BRIGHTNESS),
@@ -2799,6 +2864,8 @@ async fn frame_loop(
     let mut timing_first = true;
     #[cfg(feature = "startup-timing-bench")]
     let mut timing_starting = true;
+    #[cfg(feature = "startup-timing-bench")]
+    let mut timing_first_swap = true;
     loop {
         let start = Instant::now();
         #[cfg(feature = "startup-timing-bench")]
@@ -3064,8 +3131,19 @@ async fn frame_loop(
         }
 
         let start = Instant::now();
+        #[cfg(feature = "startup-timing-bench")]
+        let timing_handing = timing_first_swap;
+        #[cfg(feature = "startup-timing-bench")]
+        if timing_handing {
+            startup_timing::mark("frame_loop", "drawn");
+        }
         fb_st.swap().await;
         prev_swap_draw = start.elapsed();
+        #[cfg(feature = "startup-timing-bench")]
+        if timing_handing {
+            timing_first_swap = false;
+            startup_timing::mark("frame_loop", "handed");
+        }
         if let Some((write, swaps)) = pending_write.take() {
             if swaps > 1 {
                 pending_write = Some((write, swaps - 1));
