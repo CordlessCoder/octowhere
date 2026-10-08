@@ -291,6 +291,31 @@ mod startup_timing {
         }
     }
 
+    /// What the mesh's state held as read: the group's generation, or `u32::MAX` without one;
+    /// its members' ids and the ids with a kept row, as sets; and whether the seed, the name,
+    /// the sequence and a removal were stored, in bits 0 to 3.
+    static MESH_SUMMARY: [AtomicU32; 4] = [const { AtomicU32::new(0) }; 4];
+
+    pub fn summarise(saved: &octowhere::settings::MeshSaved) {
+        let generation = saved
+            .group
+            .as_ref()
+            .map_or(u32::MAX, |group| u32::from(group.generation()));
+        let members = saved.group.as_ref().map_or(0, |group| {
+            group.members().fold(0u32, |ids, (id, _)| ids | 1 << id)
+        });
+        let kept = (0..32).fold(0u32, |ids, id| {
+            ids | u32::from(saved.kept[id].is_some()) << id
+        });
+        let stored = u32::from(saved.seed.is_some())
+            | u32::from(saved.name.is_some()) << 1
+            | u32::from(saved.sequence.is_some()) << 2
+            | u32::from(saved.rekey.is_some()) << 3;
+        for (word, value) in MESH_SUMMARY.iter().zip([generation, members, kept, stored]) {
+            word.store(value, Ordering::Relaxed);
+        }
+    }
+
     /// Logs the marks 9 s after boot, past the start-up's hand-over to the clock.
     pub async fn log() {
         Timer::at(Instant::from_secs(9)).await;
@@ -302,6 +327,15 @@ mod startup_timing {
         let mac = mac.as_bytes();
         defmt::info!("[STARTUP] board {=u8:02x}{=u8:02x}", mac[4], mac[5]);
         defmt::info!("[STARTUP] reset power_on={=bool}", power_on);
+        let [generation, members, kept, stored] =
+            MESH_SUMMARY.each_ref().map(|word| word.load(Ordering::Relaxed));
+        defmt::info!(
+            "[STARTUP] mesh generation={=u32} members={=u32:#x} kept={=u32:#x} stored={=u32:#x}",
+            generation,
+            members,
+            kept,
+            stored
+        );
         let marks = MARKS.lock(|marks| marks.borrow().clone());
         let loads = ["group", "members", "restored", "rest", "kept"];
         for (name, at) in loads.iter().zip(&octowhere::settings::LOAD_MARKS) {
@@ -2182,7 +2216,10 @@ async fn async_main(spawner: Spawner) {
     startup_timing::mark("trng", "on");
     let mesh_saved = store.load_mesh();
     #[cfg(feature = "startup-timing-bench")]
-    startup_timing::mark("mesh-store", "read");
+    {
+        startup_timing::mark("mesh-store", "read");
+        startup_timing::summarise(&mesh_saved);
+    }
     let mesh_start = mesh_start(mesh_saved);
     #[cfg(feature = "startup-timing-bench")]
     startup_timing::mark("identity", "made");
