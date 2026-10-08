@@ -848,6 +848,12 @@ impl Stage {
         self.drawer.is_some() && self.drawer_sheet.is_open()
     }
 
+    /// Whether the faces show: nothing the panel opened, nor the panel or the drawer open over
+    /// them.
+    fn faces_show(&self) -> bool {
+        self.page.is_none() && !self.sheet.is_open() && !self.drawer_covers()
+    }
+
     /// The pixels the last [`step`](Self::step) changed.
     #[must_use]
     pub fn changed(&self) -> &Dirty {
@@ -1132,7 +1138,7 @@ impl Stage {
 
         let view = self.pager.view();
         self.screen = Screen::ALL[view.page];
-        let face_shows = self.page.is_none() && !self.sheet.is_open() && !self.drawer_covers();
+        let face_shows = self.faces_show();
         let samples_fast = |screen: Screen| matches!(screen, Screen::Compass | Screen::Members);
         update.samples_fast = face_shows
             && (samples_fast(self.screen)
@@ -2702,7 +2708,7 @@ impl Stage {
                 ..Accents::FULL
             };
         self.breathing |= self.rest == Rest::Awake;
-        self.gauge_moving |= lit && self.charge.is_moving(now);
+        self.gauge_moving |= lit && self.faces_show() && self.charge.is_moving(now);
         let p = swipe_progress(offset);
         let exit = Accents {
             icon_rows: rows_leaving(p, 0.3, 0.5),

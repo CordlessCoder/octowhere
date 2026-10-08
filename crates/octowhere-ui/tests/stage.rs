@@ -648,6 +648,24 @@ fn breathes_paced(name: &str, driver: &mut Driver, breath: fn(&Stage) -> Option<
     assert!((128..200).contains(&steps), "{name}: {steps}");
 }
 
+#[test]
+fn the_charging_gauge_steps_the_stage_only_while_the_clock_face_shows() {
+    let mut driver = driver_on(Screen::Clock);
+    driver.wait(1_000_000);
+    assert!(driver.stage.is_animating());
+    pull_down(&mut driver);
+    driver.wait(500_000);
+    assert!(!driver.stage.is_animating(), "under the panel");
+
+    let mut driver = driver_on(Screen::Clock);
+    driver.wait(1_000_000);
+    driver.swipe(Point::new(233, 430), Point::new(233, 120), 250_000);
+    driver.settle();
+    driver.wait(500_000);
+    assert!(driver.stage.drawer().is_some());
+    assert!(!driver.stage.is_animating(), "under the drawer");
+}
+
 /// Readings that walk the clock through ticks, rollovers and every state.
 fn clock_walk() -> Vec<(String, Input)> {
     let dublin = zone("Europe/Dublin", ZoneMode::Automatic);
