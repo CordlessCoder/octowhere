@@ -265,6 +265,11 @@ its text, and the serial stream needs the ELF to read. `espflash monitor --non-i
 is `info`, which leaves out the periodic sensor samples and the GNSS start-up trace; build with
 `DEFMT_LOG=debug` for them.
 
+[`firmware/espflash.toml`](firmware/espflash.toml) has espflash mark the image for an 80 MHz
+flash clock, which the ROM and the bootloader read it at; the firmware sets its own clock when
+it starts the PSRAM. espflash reads it from the directory it runs in. QIO does not boot: the ROM
+cannot read the bootloader in it.
+
 Every release build emits one `linker_messages` warning about a LOAD segment with RWX permissions.
 It is expected for this target and is not a regression.
 
