@@ -331,6 +331,54 @@ mod startup_timing {
         }
     }
 
+    /// When each of the frame loop's first steps woke and handed its frame over, in µs from the
+    /// timer's start.
+    const FRAMES: usize = 48;
+    static FRAME_TIMES: [[AtomicU32; 2]; FRAMES] =
+        [const { [AtomicU32::new(0), AtomicU32::new(0)] }; FRAMES];
+    static FRAME_AT: AtomicU32 = AtomicU32::new(0);
+
+    fn now_us() -> u32 {
+        esp_hal::time::Instant::now()
+            .duration_since_epoch()
+            .as_micros() as u32
+    }
+
+    pub fn frame_woke() {
+        let frame = FRAME_AT.load(Ordering::Relaxed) as usize;
+        if let Some(times) = FRAME_TIMES.get(frame) {
+            times[0].store(now_us(), Ordering::Relaxed);
+        }
+    }
+
+    pub fn frame_drawn() {
+        let frame = FRAME_AT.fetch_add(1, Ordering::Relaxed) as usize;
+        if let Some(times) = FRAME_TIMES.get(frame) {
+            times[1].store(now_us(), Ordering::Relaxed);
+        }
+    }
+
+    static CHECK_POLLS: AtomicU32 = AtomicU32::new(0);
+    static CHECK_POLL_TICKS: AtomicU32 = AtomicU32::new(0);
+
+    /// Counts how often the joined checks are polled.
+    pub async fn count_polls<F: Future>(future: F) -> F::Output {
+        let mut future = core::pin::pin!(future);
+        let mut polls = 0u32;
+        let mut busy = 0u64;
+        let output = core::future::poll_fn(|cx| {
+            polls += 1;
+            let start = esp_hal::time::Instant::now();
+            let poll = future.as_mut().poll(cx);
+            busy += start.elapsed().as_micros();
+            poll
+        })
+        .await;
+        CHECK_POLLS.store(polls, Ordering::Relaxed);
+        CHECK_POLL_TICKS.store(busy as u32, Ordering::Relaxed);
+        output
+    }
+
     /// Logs the marks 9 s after boot, past the start-up's hand-over to the clock.
     pub async fn log() {
         Timer::at(Instant::from_secs(9)).await;
@@ -364,6 +412,19 @@ mod startup_timing {
         for (what, how, at) in marks {
             defmt::info!("[STARTUP] {=str} {=str} {=u64}", what, how, at);
         }
+        for (frame, [woke, drawn]) in FRAME_TIMES.iter().enumerate() {
+            defmt::info!(
+                "[FRAMES] {=usize} woke {=u32} drawn {=u32}",
+                frame,
+                woke.load(Ordering::Relaxed),
+                drawn.load(Ordering::Relaxed)
+            );
+        }
+        defmt::info!(
+            "[POLLS] checks {=u32} in {=u32} us",
+            CHECK_POLLS.load(Ordering::Relaxed),
+            CHECK_POLL_TICKS.load(Ordering::Relaxed)
+        );
         defmt::info!("[STARTUP] done");
     }
 }
@@ -2446,7 +2507,7 @@ async fn bring_up(bring_up_with: BringUp) {
     let mut magnetometer = Bmm350::new(i2c.clone());
     // The parts on the I²C bus come up while the GNSS module settles, each on its own so that
     // one part's waits overlap the others'. Their transactions still take turns on the bus.
-    let ((), rtc_ok, touch_ok, imu_ok, magnetometer_ok) = join5(
+    let checks = join5(
         async {
             // Counted from the timer's start: the module powered up with the board, before it.
             // A module that a restart left held in reset is released by `reset_lora`, just before
@@ -2524,8 +2585,10 @@ async fn bring_up(bring_up_with: BringUp) {
             );
             Ok(())
         }),
-    )
-    .await;
+    );
+    #[cfg(feature = "startup-timing-bench")]
+    let checks = startup_timing::count_polls(checks);
+    let ((), rtc_ok, touch_ok, imu_ok, magnetometer_ok) = checks.await;
 
     let mut gnss = Lc76g::new(i2c.clone(), embassy_time::Delay);
     // Resetting the module clears its time, so it is reset only when it does not answer: a module
@@ -3039,6 +3102,8 @@ async fn frame_loop(
             };
             let kept = kept_motion.take();
             let motion_state = motion_state.or(kept);
+            #[cfg(feature = "startup-timing-bench")]
+            startup_timing::frame_woke();
             // A change that came with another wake is taken here too.
             if let Some(seen) = stage.update_mesh(|view| mesh::view_since(mesh_seen, view)) {
                 mesh_seen = seen;
@@ -3213,6 +3278,8 @@ async fn frame_loop(
         let start = Instant::now();
         #[cfg(feature = "startup-timing-bench")]
         let timing_handing = timing_first_swap;
+        #[cfg(feature = "startup-timing-bench")]
+        startup_timing::frame_drawn();
         #[cfg(feature = "startup-timing-bench")]
         if timing_handing {
             startup_timing::mark("frame_loop", "drawn");
