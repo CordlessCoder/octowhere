@@ -489,7 +489,8 @@ Core 1 owns the display SPI/DMA path.
   radio's last, then spawns the tasks below with the parts that answered, the bus tasks through
   `start_bus_tasks`. A part that fails is left
   out, and its owner runs without it; there is no motion task without the IMU. `frame_loop`
-  owns drawing. It takes touch reads from `TOUCH_READS`, asking for one through `TOUCH_POLL`
+  owns drawing. The start-up's sequence runs from its first step, which waits for core 1 to
+  start the panel (`DISPLAY_UP`). It takes touch reads from `TOUCH_READS`, asking for one through `TOUCH_POLL`
   while a contact is held, and the latest sensor values from `SENSOR_STATE` and
   `MOTION_STATE`, draws into its current framebuffer, records `dirty` and the display level to
   set, and hands the state to core 1.
@@ -548,7 +549,8 @@ Core 1 owns the display SPI/DMA path.
   to the frame loop through `BOOT_KEY_PRESSES`. The stage takes them as `Input::boot_key` and
   does nothing with them yet.
 - `second_core` on core 1 starts the panel's controller once the reset `async_main` pulsed has
-  run out. It waits for display TE with a timeout, flushes the handed-off regions
+  run out, and swaps away the buffer it starts with until the frame loop has drawn it. It waits
+  for display TE with a timeout, flushes the handed-off regions
   through `drivers::Display`, sets the display level a frame carries before flushing it, and
   returns the other framebuffer. It moves the picture by the frame's pixel shift as it copies
   each row into its DMA buffers, repeating the framebuffer's edge past it, and flushes in full

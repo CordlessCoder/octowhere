@@ -271,6 +271,8 @@ const BOOT_KEY_SETTLE: Duration = Duration::from_millis(20);
 /// Set by the frame loop once the panel is off after the power-off confirmation, for
 /// `gnss_task` to park the GNSS module.
 static POWER_OFF: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+/// Set by core 1 once the panel has started, for the frame loop's first step.
+static DISPLAY_UP: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 /// Set by `gnss_task` once the GNSS module is parked, for `sensor_task` to power the board off.
 static GNSS_PARKED: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 /// The receiver's state after each burst of NMEA, from `gnss_task` for `sensor_task`.
@@ -656,12 +658,18 @@ async fn second_core(_spawner: Spawner, io: SecondCore<&'static esp_alloc::EspHe
             .await
             .expect("display init failed");
     info!("[DISPLAY] OK");
+    DISPLAY_UP.signal(());
 
     let mut prev_swap_spi = Duration::MIN;
     let mut first_flush = true;
     let mut sent_shift = Point::zero();
     loop {
         settings::hold_display_core_if_asked();
+        // The buffer core 1 starts with holds nothing until the frame loop draws it.
+        if !swap.get().drawn {
+            swap.swap().await;
+            continue;
+        }
         let state = swap.get();
         let SwapState {
             fb,
@@ -2690,6 +2698,9 @@ async fn frame_loop(
     let mut kept_motion = None;
     #[cfg(feature = "touch-inject")]
     let mut injector = touch_inject::Injector::default();
+    // The start-up's sequence runs from the stage's first step, so that step waits for a panel
+    // that can show it.
+    DISPLAY_UP.wait().await;
     loop {
         let start = Instant::now();
         {
