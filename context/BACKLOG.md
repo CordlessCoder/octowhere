@@ -212,11 +212,11 @@ until the feature set is complete, because profiling an incomplete firmware pric
     `crates/co5300/src/lib.rs`). The datasheet asks for 5 ms before the next command and 60 ms
     before display on, and gives no wait after `MADCTL`. Shortening them needs someone watching
     the panel through a boot.
-  - The self-test's checks now run beside its frames in the thread-mode executor, and each
-    takes longer in wall time: the magnetometer's 346 ms of its 500 ms deadline, against 144
-    when the frame loop sat waiting for core 1. Every check passed, but a heavier self-test
-    frame would eat the margin. Running the checks on `BUS_EXECUTOR`, which preempts thread
-    mode, is the lever.
+  - The self-test's checks run on `BUS_EXECUTOR` and take their CPU time ahead of its frames:
+    about 29.5 ms of the 150 ms the clock, touch, motion and magnetometer checks run, polled
+    about 1,090 times. While they run the frame loop's steps take 11 ms at the median and up
+    to 60, against 6.2 and 23 with the checks in thread mode. What costs the most in those
+    polls was not looked into.
   - Core 1 starts 26 ms after the panel's reset has run out, behind the reads. Reading every
     stored key in one pass, not a lookup each, would close that.
   - `Co5300::new` and `leave_deep_standby` still send the vendor's second reset pulse; the

@@ -24,6 +24,8 @@ uv run tools/startup-timing-summary.py <out-dir>
 | `steps/early-reset/` | With the panel's reset pulsed by core 0 before the reads, and the identity made after core 1 starts |
 | `after/` | `d6fe523`, master's `57f427d` with the marks, flashed at 80 MHz; five boots on each board |
 | `reset-check/` | Whether the panel's reset pulse resets the controller (`startup-te-check`), and a one-off build without the pulse |
+| `bus-checks/` | Master's `9210fa9` with the marks, the checks run on `BUS_EXECUTOR`; five boots on each board |
+| `frames/` | The frame loop's first 48 steps, and the joined checks' polls (`d1ecedc`), with the checks in thread mode on `d6fe523` and on `BUS_EXECUTOR` on `9210fa9`; three boots on each board, and two on 1A38 for the polls |
 
 `summary.txt` is the summary script over all of them. The step runs came before `89ba403`, which
 logs `main`'s start in µs; in theirs it is in the timer's ticks, 16 to the µs.
@@ -103,11 +105,11 @@ running through an ESP32 reset. With the single 10 µs pulse, TE stayed silent o
 two boots each. The driver before sent a 10 ms pulse and then a second one of 10 µs, from the
 vendor's driver; the firmware's start-up now sends the one.
 
-The self-test's checks now run beside its frames. Before, the frame loop waited for core 1
-until about 1.28 s, after every check had ended, so the checks ran alone. Now they start 330 ms
-earlier, at 640 ms, while the frame loop draws the self-test in the same thread-mode executor.
-Each takes longer in wall time, and the last ends at about the same time as before (1,231 ms
-against 1,238 on 1A38):
+The self-test's checks ran beside its frames after these changes. Before them, the frame loop
+waited for core 1 until about 1.28 s, after every check had ended, so the checks ran alone.
+After them the checks started 330 ms earlier, at 640 ms, while the frame loop drew the
+self-test in the same thread-mode executor. Each took longer in wall time, and the last ended
+at about the same time as before (1,231 ms against 1,238 on 1A38):
 
 | Check, 1A38 | Deadline | Before | Early reset | After |
 | --- | ---: | ---: | ---: | ---: |
@@ -120,5 +122,32 @@ against 1,238 on 1A38):
 
 Every check passed in every boot. The magnetometer's took 343 to 346 ms in all ten, 69% of its
 deadline, against 29% before.
+
+The checks on the bus executor. `9210fa9` runs `bring_up` as a task on `BUS_EXECUTOR`, which
+preempts thread mode, so the self-test's frames no longer hold the checks up. Each check took
+about what it took alone again: the clock's 1.1 ms, the magnetometer's 149, the radio's 2.1.
+The last ended at 1,014 ms instead of 1,231, held by the GNSS module's settle, 1 s from the
+timer's start, and the start-up handed over to the clock at 6.10 s instead of 6.25, on both
+boards.
+
+The checks now take their CPU time ahead of the frames. In two boots on 1A38, the joined clock,
+touch, motion and magnetometer checks were polled about 1,090 times and spent 29.5 ms inside
+those polls, over the 150 ms they ran: a fifth of core 0. With the checks in thread mode they
+were polled as often, about 1,225 times, so the bus's lock does not wake them more on
+`BUS_EXECUTOR`. The frame loop's steps while the checks run, wake to hand-over, over three boots
+on each board (`frames/summary.txt`):
+
+| | Thread mode | `BUS_EXECUTOR` |
+| --- | ---: | ---: |
+| Steps while the checks run | 38, over 470 ms | 18, over 270 ms |
+| Step, median | 6.2 | 11.0 |
+| Step, p95 | 19.2 | 60.1 |
+| Gap between wakes, median | 9.6 | 15.8 |
+| Gap between wakes, longest | 30.1 | 46.0 |
+
+`66ea3af` then gave the radio's check 200 ms again, as the clock's has. The first frame was
+flushed at 779 ms either way. The second, which lights the panel, took 46 ms to step and draw
+instead of 24, so the panel lit at 823 ms instead of 790 on 1A38, and at 814 instead of 781 on
+1C1C. The owner saw no difference in the self-test's frames.
 
 No warnings or errors in any capture.
