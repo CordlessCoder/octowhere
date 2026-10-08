@@ -259,8 +259,9 @@ clock if it outranks its own: without that it stayed on its boot clock, where th
 stored never came.
 
 A node's clock is UTC only as well as its root's RTC was. Its own entries need a fix, so they are
-always stamped in GPS time; it relays another's entry only when the entry's stamp fits the 12-bit
-window below its base timestamp.
+always stamped in GPS time; it sends an entry, its own too, only when the entry's stamp fits the
+12-bit window below its base timestamp. A fix stamped after the second the packet starts in is
+left out of it, so a fix must never be stamped ahead of the node's clock.
 
 ### Listening
 

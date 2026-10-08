@@ -1,0 +1,57 @@
+73.291776 [INFO ] [RTC] injected 2026-10-08 08:29:40 as RTC
+113.154720 [INFO ] [MESH] heard id=0 timebase=Gps hops=1 taken=Adopted late_us=None len=36 rssi=-18 snr=6 entries=0 new=0 neighbours=0x00000002 messages=0/0 summary=false
+113.155213 [INFO ] [MESH] timebase GPS hops=0
+113.454582 [INFO ] [MESH] sent round=39809960 len=117 entries=1 records=0x00000000 asked=0x00000000 neighbours=0x00000001 messages=0 summary=false done=true
+113.454683 [INFO ] [BENCH] own stamp=1791448220 base=1791448220 carried=true
+151.441946 [INFO ] [MESH] sent round=39809961 len=117 entries=1 records=0x00000000 asked=0x00000000 neighbours=0x00000001 messages=0 summary=false done=true
+151.442046 [INFO ] [BENCH] own stamp=1791448258 base=1791448258 carried=true
+190.751839 [INFO ] [MESH] sent round=39809962 len=117 entries=1 records=0x00000000 asked=0x00000000 neighbours=0x00000001 messages=0 summary=false done=true
+190.751939 [INFO ] [BENCH] own stamp=1791448297 base=1791448297 carried=true
+213.831890 [INFO ] [MESH] not ours len=184 rssi=-113
+237.037821 [INFO ] [MESH] heard id=0 timebase=Gps hops=1 taken=Ignored late_us=Some(1318069) len=36 rssi=-18 snr=6 entries=0 new=0 neighbours=0x00000002 messages=0/0 summary=false
+316.328434 [INFO ] [MESH] sent round=39809964 len=48 entries=1 records=0x00000000 asked=0x00000000 neighbours=0x00000001 messages=0 summary=false done=true
+316.328527 [INFO ] [BENCH] own stamp=1791448423 base=1791448423 carried=true
+327.600799 [INFO ] [MESH] heard id=0 timebase=Gps hops=1 taken=Ignored late_us=Some(1321307) len=105 rssi=-18 snr=6 entries=0 new=0 neighbours=0x00000002 messages=0/0 summary=false
+329.186165 [INFO ] [MESH] sent round=39809965 len=117 entries=1 records=0x00000000 asked=0x00000000 neighbours=0x00000001 messages=0 summary=false done=true
+329.186257 [INFO ] [BENCH] own stamp=1791448435 base=1791448436 carried=true
+334.535053 [INFO ] [MESH] not ours len=114 rssi=-112
+449.118782 [INFO ] [MESH] heard id=0 timebase=Gps hops=1 taken=Ignored late_us=Some(1320942) len=36 rssi=-18 snr=6 entries=0 new=0 neighbours=0x00000002 messages=0/0 summary=false
+450.583990 [INFO ] [MESH] sent round=39809967 len=48 entries=1 records=0x00000000 asked=0x00000000 neighbours=0x00000001 messages=0 summary=false done=true
+450.584085 [INFO ] [BENCH] own stamp=1791448557 base=1791448557 carried=true
+573.194514 [INFO ] [MESH] sent round=39809970 len=48 entries=1 records=0x00000000 asked=0x00000000 neighbours=0x00000001 messages=0 summary=false done=true
+573.194613 [INFO ] [BENCH] own stamp=1791448680 base=1791448680 carried=true
+576.205910 [INFO ] [MESH] heard id=0 timebase=Gps hops=1 taken=Ignored late_us=Some(5758) len=36 rssi=-18 snr=7 entries=0 new=0 neighbours=0x00000002 messages=0/0 summary=false
+647.161595 [ERROR] Packet termination failed due to PayloadCrcError
+647.161828 [WARN ] [MESH] receive failed: PacketTermination flags=Some(IrqFlags(112))
+697.621642 [INFO ] [MESH] heard id=0 timebase=Gps hops=1 taken=Ignored late_us=Some(3505) len=36 rssi=-18 snr=6 entries=0 new=0 neighbours=0x00000002 messages=0/0 summary=false
+700.046944 [INFO ] [MESH] sent round=39809973 len=48 entries=1 records=0x00000000 asked=0x00000000 neighbours=0x00000001 messages=0 summary=false done=true
+700.047041 [INFO ] [BENCH] own stamp=1791448806 base=1791448807 carried=true
+817.371351 [ERROR] Packet termination failed due to PayloadCrcError
+817.371599 [WARN ] [MESH] receive failed: PacketTermination flags=Some(IrqFlags(112))
+818.309429 [INFO ] [MESH] heard id=0 timebase=Gps hops=1 taken=Ignored late_us=Some(-369789) len=36 rssi=-18 snr=7 entries=0 new=0 neighbours=0x00000002 messages=0/0 summary=false
+821.735903 [INFO ] [MESH] sent round=39809976 len=48 entries=1 records=0x00000000 asked=0x00000000 neighbours=0x00000001 messages=0 summary=false done=true
+821.735991 [INFO ] [BENCH] own stamp=1791448928 base=1791448928 carried=true
+915.191372 [INFO ] [MESH] heard id=0 timebase=Gps hops=1 taken=Ignored late_us=Some(-371850) len=105 rssi=-18 snr=7 entries=0 new=0 neighbours=0x00000002 messages=0/0 summary=false
+915.863369 [INFO ] [MESH] sent round=39809978 len=117 entries=1 records=0x00000000 asked=0x00000000 neighbours=0x00000001 messages=0 summary=false done=true
+915.863462 [INFO ] [BENCH] own stamp=1791449022 base=1791449022 carried=true
+1038.228146 [INFO ] [MESH] sent round=39809980 len=48 entries=1 records=0x00000000 asked=0x00000000 neighbours=0x00000001 messages=0 summary=false done=true
+1038.228253 [INFO ] [BENCH] own stamp=1791449144 base=1791449144 carried=true
+1045.049493 [INFO ] [MESH] heard id=0 timebase=Gps hops=1 taken=Ignored late_us=Some(6988) len=36 rssi=-17 snr=6 entries=0 new=0 neighbours=0x00000002 messages=0/0 summary=false
+1083.321001 [INFO ] [MESH] sent round=39809982 len=48 entries=1 records=0x00000000 asked=0x00000000 neighbours=0x00000001 messages=0 summary=false done=true
+1083.321106 [INFO ] [BENCH] own stamp=1791449190 base=1791449190 carried=true
+1128.501033 [INFO ] [MESH] sent round=39809983 len=48 entries=1 records=0x00000000 asked=0x00000000 neighbours=0x00000001 messages=0 summary=false done=true
+1128.501131 [INFO ] [BENCH] own stamp=1791449235 base=1791449235 carried=true
+1173.411059 [INFO ] [MESH] sent round=39809984 len=48 entries=1 records=0x00000000 asked=0x00000000 neighbours=0x00000001 messages=0 summary=false done=true
+1173.411151 [INFO ] [BENCH] own stamp=1791449280 base=1791449280 carried=true
+1174.161649 [INFO ] [MESH] heard id=0 timebase=Gps hops=1 taken=Ignored late_us=Some(5868) len=36 rssi=-18 snr=6 entries=0 new=0 neighbours=0x00000002 messages=0/0 summary=false
+1294.476532 [INFO ] [MESH] sent round=39809986 len=36 entries=0 records=0x00000000 asked=0x00000000 neighbours=0x00000001 messages=0 summary=false done=true
+1294.476679 [INFO ] [BENCH] own stamp=1791449401 base=1791449400 carried=false
+1304.207347 [INFO ] [MESH] heard id=0 timebase=Gps hops=1 taken=Ignored late_us=Some(-344228) len=36 rssi=-16 snr=6 entries=0 new=0 neighbours=0x00000002 messages=0/0 summary=false
+1424.163816 [INFO ] [MESH] sent round=39809989 len=48 entries=1 records=0x00000000 asked=0x00000000 neighbours=0x00000001 messages=0 summary=false done=true
+1424.163952 [INFO ] [BENCH] own stamp=1791449530 base=1791449530 carried=true
+1427.110243 [INFO ] [MESH] heard id=0 timebase=Gps hops=1 taken=Ignored late_us=Some(-343725) len=36 rssi=-16 snr=6 entries=0 new=0 neighbours=0x00000002 messages=0/0 summary=false
+1468.741343 [INFO ] [MESH] sent round=39809990 len=48 entries=1 records=0x00000000 asked=0x00000000 neighbours=0x00000001 messages=0 summary=false done=true
+1468.741434 [INFO ] [BENCH] own stamp=1791449575 base=1791449575 carried=true
+1491.646897 [INFO ] [MESH] heard id=0 timebase=Gps hops=1 taken=Ignored late_us=Some(-343362) len=105 rssi=-17 snr=7 entries=0 new=0 neighbours=0x00000002 messages=0/0 summary=false
+1499.503952 [INFO ] [MESH] sent round=39809991 len=105 entries=0 records=0x00000000 asked=0x00000000 neighbours=0x00000001 messages=0 summary=false done=true
+1499.504043 [INFO ] [BENCH] own stamp=1791449606 base=1791449605 carried=false

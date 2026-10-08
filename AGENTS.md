@@ -461,7 +461,10 @@ a removal's switch (`RELAY_COST_EXTRA_ROUNDS`, summarised by `tools/removal-cuto
 follow-up packet and an answer to an unlike digest for a chain's end (`RELAY_COST_FOLLOW_UP`,
 `RELAY_COST_ANSWER`), and counts positions never shown; results in
 `docs/logs/lora/removal-changes-2026-10-07/` and `docs/logs/lora/rotation-2026-10-07/`, whose
-rotation runs predate its merge of master, which dropped the rotation and its switch.
+rotation runs predate its merge of master, which dropped the rotation and its switch. And
+`bench/own-position` logs, for each packet a node sends, its own position's stamp against the
+packet's base, before and after a stand-in fix was stamped from the mesh's clock; results in
+`docs/logs/lora/own-position-2026-10-08/`.
 
 ## Concurrency
 
