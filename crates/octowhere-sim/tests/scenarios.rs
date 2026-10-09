@@ -176,9 +176,9 @@ fn a_member_back_by_pairing_is_not_waited_for_on_the_old_key() {
     sim.command(0, Command::Accept);
     sim.command(1, Command::Accept);
     let done = sim.run_while_not(5 * 60, |sim| {
-        sim.count(0, "returning: true") == 1 && sim.count(1, "Done(Joined") == 1
+        sim.count(0, "returning: true") == 1 && sim.count(1, "returning: true") == 1
     });
-    assert!(done, "node 1 came back");
+    assert!(done, "node 1 came back, and each side says so");
     // The adder stays on the pairing's channel a few seconds after it is done.
     let dropped = sim.run_while_not(60, |sim| sim.count(0, "old one is dropped") == 1);
     assert!(

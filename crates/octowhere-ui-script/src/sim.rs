@@ -702,6 +702,7 @@ impl Sim {
                     Phase::Done(Done::Joined {
                         id,
                         confirmed: false,
+                        returning: false,
                     }),
                     None,
                 );
@@ -914,6 +915,7 @@ impl Sim {
                 Phase::Done(Done::Joined {
                     id: 2,
                     confirmed: true,
+                    returning: false,
                 }),
                 None,
             ),

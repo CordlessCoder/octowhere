@@ -851,7 +851,10 @@ transcript. A key whose shared secret is not contributory ends the pairing.
   done, sweeps for 135 s, then starts its own timebase and sends at once. Starting
   another pairing or leaving ends the wait.
 - **Capacity.** A full group refuses to add before it searches, a returning device included (design
-  hand-off). Below 32, a returning device keeps its id.
+  hand-off). Below 32, a returning device keeps its id. A returning device is one whose key the
+  adding device still holds as a member's, and the welcome's last byte tells it so, since
+  version 4 of the frames (2026-10-09): nothing else it receives would, because its record is
+  made again.
 - **Founding.** A device in no group that adds one founds a group, with a random key and itself at
   id 0, only when the pairing completes. The first joining device gets id 1.
 - **Joining** needs a device in no group. Leaving is its own step, which the screens put first.

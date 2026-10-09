@@ -32,8 +32,8 @@ use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
 
 /// 2 added the key's generation and gone records to the group's transfer, 3 the gone records of
-/// ids since given to new members.
-pub const VERSION: u8 = 3;
+/// ids since given to new members, 4 whether the joining device was a member already.
+pub const VERSION: u8 = 4;
 /// The radio's largest payload.
 pub const MAX_FRAME: usize = 255;
 pub const NONCE_LEN: usize = 16;
@@ -88,8 +88,10 @@ const SEALED_HEADER: usize = 2 + SESSION_LEN;
 const PART_HEADER: usize = 3;
 const PART_DATA: usize = MAX_FRAME - SEALED_HEADER - SIV_LEN - PART_HEADER;
 /// The key, its generation, the joining device's id, the count, then each slot's record behind
-/// its length; then the count of former members' gone records, and each of them.
-const WELCOME_MAX: usize = 32 + 2 + 2 + IDS as usize * (1 + RECORD_MAX_LEN) + 1 + FORMER * GONE_LEN;
+/// its length; then the count of former members' gone records, and each of them; then 1 if the
+/// joining device was a member already, otherwise 0.
+const WELCOME_MAX: usize =
+    32 + 2 + 2 + IDS as usize * (1 + RECORD_MAX_LEN) + 1 + FORMER * GONE_LEN + 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -171,7 +173,11 @@ pub enum Done {
     Added { id: u8, returning: bool },
     /// Joining: the group is stored. `confirmed` once the adding device said it had the last
     /// acknowledgement.
-    Joined { id: u8, confirmed: bool },
+    Joined {
+        id: u8,
+        confirmed: bool,
+        returning: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -588,6 +594,7 @@ impl Pairing {
                 self.stage = Stage::Done(Done::Joined {
                     id: self.new_id,
                     confirmed: false,
+                    returning: self.returning,
                 });
                 self.due = None;
             }
@@ -874,6 +881,7 @@ impl Pairing {
                     self.stage = Stage::Done(Done::Joined {
                         id: self.new_id,
                         confirmed: true,
+                        returning: self.returning,
                     });
                     self.due = None;
                     self.deadline = now;
@@ -904,7 +912,7 @@ impl Pairing {
                 signature: [0; SIGNATURE_LEN],
             },
         );
-        self.blob_len = welcome(group, id, &mut self.blob);
+        self.blob_len = welcome(group, id, self.returning, &mut self.blob);
         self.parts = self.blob_len.div_ceil(PART_DATA) as u8;
         self.parts_done = 0;
         self.stage = Stage::Transfer;
@@ -988,13 +996,14 @@ impl Pairing {
                     return;
                 }
                 match read_welcome(&self.blob[..self.blob_len]) {
-                    Some(mut group)
+                    Some((mut group, returning))
                         if group.me().public == self.public
                             && group.me().mac == self.me.mac
                             && group.me().name == self.me.name =>
                     {
                         group.sign_own(&self.me);
                         self.new_id = group.own();
+                        self.returning = returning;
                         self.group = Some(group);
                         self.stage = Stage::Storing;
                         self.due = None;
@@ -1028,7 +1037,7 @@ fn commitment(nonce: &[u8; NONCE_LEN], adding: &[u8; 32], joining: &[u8; 32]) ->
     mac.finalize().into_bytes().into()
 }
 
-fn welcome(group: &Group, id: u8, out: &mut [u8; WELCOME_MAX]) -> usize {
+fn welcome(group: &Group, id: u8, returning: bool, out: &mut [u8; WELCOME_MAX]) -> usize {
     out[..32].copy_from_slice(group.key().bytes());
     out[32..34].copy_from_slice(&group.generation().to_le_bytes());
     out[34] = id;
@@ -1056,11 +1065,12 @@ fn welcome(group: &Group, id: u8, out: &mut [u8; WELCOME_MAX]) -> usize {
         former += 1;
     }
     out[former_at] = former;
-    len
+    out[len] = u8::from(returning);
+    len + 1
 }
 
-/// Reads what [`welcome`] wrote.
-fn read_welcome(blob: &[u8]) -> Option<Group> {
+/// Reads what [`welcome`] wrote: the group, and whether the joining device was a member already.
+fn read_welcome(blob: &[u8]) -> Option<(Group, bool)> {
     let key = Key::new(blob.get(..32)?.try_into().ok()?);
     let generation = u16::from_le_bytes(blob.get(32..34)?.try_into().ok()?);
     let own = *blob.get(34)?;
@@ -1081,12 +1091,17 @@ fn read_welcome(blob: &[u8]) -> Option<Group> {
         *held = Some(Gone::decode(record)?);
         rest = after;
     }
-    if usize::from(count) > FORMER || !rest.is_empty() {
+    let returning = match rest {
+        [0] => false,
+        [1] => true,
+        _ => return None,
+    };
+    if usize::from(count) > FORMER {
         return None;
     }
     let mut group = Group::restore(key, generation, own, slots)?;
     group.restore_former(former.into_iter().flatten());
-    Some(group)
+    Some((group, returning))
 }
 
 #[cfg(test)]
@@ -1134,10 +1149,10 @@ mod tests {
         slots[31] = Some(Slot::Member(member(3, 300)));
         let group = Group::restore(Key::new([6; 32]), 9, 0, slots).unwrap();
         let mut blob = [0; WELCOME_MAX];
-        let len = welcome(&group, 31, &mut blob);
+        let len = welcome(&group, 31, false, &mut blob);
         let mut expected = welcome_as_first_written(&group, 31);
-        // No former members, since version 3.
-        expected.push(0);
+        // No former members, since version 3, and not a member already, since version 4.
+        expected.extend([0, 0]);
         assert_eq!(blob[..len], expected);
     }
 
@@ -1151,8 +1166,8 @@ mod tests {
         let mut group = Group::restore(Key::new([6; 32]), 9, 0, slots).unwrap();
         group.enrol(2, signed(2, 4, 300));
         let mut blob = [0; WELCOME_MAX];
-        let len = welcome(&group, 2, &mut blob);
-        let mut theirs = read_welcome(&blob[..len]).unwrap();
+        let len = welcome(&group, 2, false, &mut blob);
+        let (mut theirs, _) = read_welcome(&blob[..len]).unwrap();
         assert_eq!(
             theirs.former().collect::<alloc::vec::Vec<_>>(),
             [(2, left(2, 2, 200))]
@@ -1170,8 +1185,9 @@ mod tests {
         slots[31] = Some(Slot::Member(member(3, 300)));
         let group = Group::restore(Key::new([6; 32]), 9, 0, slots).unwrap();
         let mut blob = [0; WELCOME_MAX];
-        let len = welcome(&group, 31, &mut blob);
-        let theirs = read_welcome(&blob[..len]).unwrap();
+        let len = welcome(&group, 31, true, &mut blob);
+        let (theirs, returning) = read_welcome(&blob[..len]).unwrap();
+        assert!(returning);
         assert_eq!(theirs.own(), 31);
         assert_eq!(theirs.generation(), 9);
         assert!(theirs.key() == group.key());
@@ -1291,7 +1307,8 @@ mod tests {
             joiner.phase(),
             Phase::Done(Done::Joined {
                 id: 2,
-                confirmed: true
+                confirmed: true,
+                returning: false
             })
         );
         assert_eq!(joiner.peer(), Some(a.mac));
@@ -1626,6 +1643,14 @@ mod tests {
                 returning: true
             })
         );
+        assert_eq!(
+            joiner.phase(),
+            Phase::Done(Done::Joined {
+                id: 5,
+                confirmed: true,
+                returning: true
+            })
+        );
         let renewed = adder.group().unwrap().member(5).unwrap();
         assert_eq!((renewed.public, renewed.joined), (j.public(), UTC));
     }
@@ -1649,7 +1674,8 @@ mod tests {
             joiner.phase(),
             Phase::Done(Done::Joined {
                 id: 1,
-                confirmed: false
+                confirmed: false,
+                returning: false
             })
         );
     }

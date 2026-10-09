@@ -277,8 +277,6 @@ until the feature set is complete, because profiling an incomplete firmware pric
   built"):
   - Every group screen's legibility on the panel, which nobody has judged yet. Typing on the
     name keyboard's 39 × 53 px keys with a finger is accurate and responsive (owner, 2026-10-02).
-  - The joining device cannot tell it was returning, so its RESTORED screen never shows. The
-    group it receives would need to say so.
   - Reading a screen back with `touch-inject` takes about 11 s and interrupts the board. The
     link is the ESP32-S3's own USB Serial/JTAG controller, full-speed USB, whose JTAG side
     takes one 4-bit command per clock (the owner's probe-rs fork,

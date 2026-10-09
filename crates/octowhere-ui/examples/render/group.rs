@@ -414,6 +414,20 @@ pub fn frames() -> Vec<(String, Stage)> {
         }),
     );
     push("add-returning", returning);
+    let mut rejoined = code(false);
+    accept(&mut rejoined);
+    until(&mut rejoined, |view| {
+        matches!(phase(view), Some(Phase::Done(_)))
+    });
+    force(
+        &mut rejoined,
+        Phase::Done(Done::Joined {
+            id: 2,
+            confirmed: true,
+            returning: true,
+        }),
+    );
+    push("join-returning", rejoined);
     let mut created = pairing(true, None);
     until(&mut created, |view| phase(view) == Some(Phase::Found));
     tap(&mut created, 233, 247);
@@ -438,6 +452,7 @@ pub fn frames() -> Vec<(String, Stage)> {
         Phase::Done(Done::Joined {
             id: 1,
             confirmed: true,
+            returning: false,
         }),
     );
     push("join-create-done", first);
@@ -451,6 +466,7 @@ pub fn frames() -> Vec<(String, Stage)> {
         Phase::Done(Done::Joined {
             id: 2,
             confirmed: false,
+            returning: false,
         }),
     );
     push("join-confirmation-lost", lost);

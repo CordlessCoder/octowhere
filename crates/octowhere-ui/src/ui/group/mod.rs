@@ -2328,7 +2328,11 @@ fn finished(
             action(list, "VIEW GROUP", false, ACTION, chrome::WHITE, None);
             footer(list, COVER);
         }
-        Done::Joined { id, .. } if count == 2 => {
+        Done::Joined {
+            id,
+            returning: false,
+            ..
+        } if count == 2 => {
             head(list, "PAIRING", caption, None, DONE, chrome::GRAY);
             big(list, "JOINED", chrome::WHITE);
             copy(
@@ -2345,7 +2349,10 @@ fn finished(
             let word = if returning { "RESTORED" } else { "ADDED" };
             member_done(list, caption, word, &other(pairing), id, count);
         }
-        Done::Joined { id, .. } => member_done(list, caption, "JOINED", me, id, count),
+        Done::Joined { id, returning, .. } => {
+            let word = if returning { "RESTORED" } else { "JOINED" };
+            member_done(list, caption, word, me, id, count);
+        }
     }
 }
 

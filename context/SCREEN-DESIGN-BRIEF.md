@@ -323,9 +323,10 @@ interpreted the two hand-offs:
 - **CANCEL** sends the cancel and stays to show what the mesh reports, normally CANCELLED,
   rather than going straight back to the group: the mesh may already be storing. While it
   stores, the top button is left out, since the mesh can no longer cancel.
-- **Not shown.** The joining device cannot tell that it was returning, so the joining side
-  never shows RESTORED. It shows the GROUP OF TWO form of JOINED whenever the group it joined
-  has two members. JOIN never shows GROUP FULL: the protocol has no capacity rejection for the
+- **Returning.** Both sides show RESTORED when the group still held the joining device as a
+  member. Otherwise the joining side shows the GROUP OF TWO form of JOINED whenever the group it
+  joined has two members.
+- **Not shown.** JOIN never shows GROUP FULL: the protocol has no capacity rejection for the
   joining device.
 - **Outcomes without a render.** A failed key check (KEY CHECK FAILED) and an unusable group
   (TRANSFER FAILED) are red. Contact lost before the transfer says KEY EXCHANGE DID NOT FINISH.

@@ -200,6 +200,37 @@ fn adding_runs_through_the_code_to_a_stored_member() {
     assert!(driver.stage.page().is_some());
 }
 
+/// A device its group still held is told it was restored, at its old id, even into a group of
+/// two, which greets a first join with JOINED.
+#[test]
+fn a_returning_device_is_told_it_was_restored() {
+    for count in [2, 9] {
+        let mut driver = hub(None);
+        tap(&mut driver, 310, 353);
+        tap(&mut driver, 233, 353);
+        until(&mut driver, |driver| {
+            matches!(phase(driver), Some(Phase::Compare { .. }))
+        });
+        accept(&mut driver);
+        until(&mut driver, |driver| {
+            matches!(phase(driver), Some(Phase::Done(_)))
+        });
+        let mesh = sim(&mut driver);
+        mesh.hold();
+        let pairing = mesh.view_mut().pairing.as_mut().expect("a pairing");
+        pairing.phase = Phase::Done(Done::Joined {
+            id: 5,
+            confirmed: true,
+            returning: true,
+        });
+        pairing.group = Some((5, count));
+        driver.wait(100_000);
+        assert!(shows(&driver, "RESTORED"), "{:?}", shown(&driver));
+        assert!(shows(&driver, "MEMBER 05"), "{:?}", shown(&driver));
+        assert!(!shows(&driver, "JOINED"), "{:?}", shown(&driver));
+    }
+}
+
 #[test]
 fn a_vertical_drag_on_the_handle_confirms_nothing() {
     let mut driver = adding_at_the_code();
