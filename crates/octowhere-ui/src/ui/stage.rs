@@ -264,6 +264,7 @@ fn mirrored(drag: &Drag) -> Drag {
         start: flip(drag.start),
         current: flip(drag.current),
         velocity: (drag.velocity.0, -drag.velocity.1),
+        lasted: drag.lasted,
     }
 }
 

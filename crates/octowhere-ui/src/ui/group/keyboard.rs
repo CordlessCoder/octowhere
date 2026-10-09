@@ -1,7 +1,8 @@
 //! The keyboard: every printable ASCII character over four views, a draft edited at a caret, and
 //! CANCEL, DELETE and SAVE for a name, or REVIEW for a message. A key acts when the finger lifts
-//! inside the key it came down on. Its geometry is the pairing hand-off's `KEYBOARD-VIEWS.json`,
-//! and a message's field and buttons the 2026-10-04 hand-off's.
+//! on or near the key it came down on, or after a short press wherever it lifts. Its geometry is
+//! the pairing hand-off's `KEYBOARD-VIEWS.json`, and a message's field and buttons the 2026-10-04
+//! hand-off's.
 
 use embedded_graphics::{prelude::Point, primitives::Rectangle};
 use heapless::Vec;
@@ -13,7 +14,7 @@ use super::{
 use crate::{
     chrome::{self, Color, FontdueRenderer},
     ui::{
-        gesture::GestureEvent,
+        gesture::{GestureEvent, Micros},
         text::{style, wrap},
     },
 };
@@ -98,6 +99,11 @@ const NAME_TOP: i32 = 82;
 const CARET_TOP: i32 = 102;
 const CENTRE: i32 = 233;
 const KEYS: usize = 36;
+/// A press shorter than this types the key it came down on wherever it lifts: a finger's last
+/// reports before it lifts can be most of a key's width from where it pressed (owner, 2026-10-09).
+const SHORT_PRESS: Micros = 300_000;
+/// How far past its key's edge a held finger can go and still type it.
+const HELD_SLOP: i32 = 16;
 
 fn label(c: u8) -> &'static str {
     let at = usize::from(c - b' ');
@@ -269,7 +275,7 @@ pub struct Keyboard {
     /// The boundary the next character goes in at, 0 to the draft's length.
     cursor: usize,
     mode: Mode,
-    /// The key a finger came down on, in this mode, and whether the finger is still inside it.
+    /// The key a finger came down on, in this mode, and whether the finger is still on or near it.
     held: Option<(usize, bool)>,
     note: Option<Note>,
 }
@@ -327,18 +333,19 @@ impl Keyboard {
         }
         let keys = keys(self.mode, self.field);
         let under = |point: Point| keys.iter().position(|key| key.rect.contains(point));
+        let near = |index: usize, point: Point| keys[index].rect.offset(HELD_SLOP).contains(point);
         match *event {
             GestureEvent::Down(point) => {
                 self.held = under(point).map(|index| (index, true));
             }
             GestureEvent::DragStart(drag) | GestureEvent::DragMove(drag) => {
                 if let Some((index, inside)) = &mut self.held {
-                    *inside = keys[*index].rect.contains(drag.current);
+                    *inside = near(*index, drag.current);
                 }
             }
             GestureEvent::DragEnd(drag) => {
                 if let Some((index, _)) = self.held.take()
-                    && keys[index].rect.contains(drag.current)
+                    && (drag.lasted < SHORT_PRESS || near(index, drag.current))
                 {
                     return self.act(keys[index].action);
                 }
@@ -790,26 +797,85 @@ mod tests {
         assert_eq!(keyboard.note, Some(Note::Blank));
     }
 
-    #[test]
-    fn a_release_outside_the_key_does_nothing() {
-        let font = crate::chrome::FontdueRenderer::new(
-            crate::chrome::FontdueRendererCtx::new_rc(),
-            20,
-            chrome::WHITE,
-            chrome::FONTS,
-        );
+    /// The keyboard's response to a drag that came down on `key`'s centre and lifted at `to`.
+    fn drag_off(key: usize, to: Point, lasted: Micros) -> Keyboard {
         let mut keyboard = Keyboard::new(Name::new(b"A").unwrap());
-        let q = keys(Mode::Upper, keyboard.field)[0].rect.center();
-        let w = keys(Mode::Upper, keyboard.field)[1].rect.center();
-        keyboard.handle(&GestureEvent::Down(q), &font);
+        let start = keys(Mode::Upper, keyboard.field)[key].rect.center();
         let drag = crate::ui::gesture::Drag {
-            start: q,
-            current: w,
+            start,
+            current: to,
             velocity: (0.0, 0.0),
+            lasted,
         };
-        keyboard.handle(&GestureEvent::DragMove(drag), &font);
+        keyboard.handle(&GestureEvent::Down(start), &font());
+        keyboard.handle(&GestureEvent::DragMove(drag), &font());
+        keyboard.handle(&GestureEvent::DragEnd(drag), &font());
+        keyboard
+    }
+
+    #[test]
+    fn a_long_press_released_off_its_key_does_nothing() {
+        let w = keys(Mode::Upper, Field::Name(Name::new(b"A").unwrap()))[1]
+            .rect
+            .center();
+        assert_eq!(drag_off(0, w, SHORT_PRESS).draft(), "A");
+    }
+
+    #[test]
+    fn a_short_press_types_its_key_wherever_it_lifts() {
+        let w = keys(Mode::Upper, Field::Name(Name::new(b"A").unwrap()))[1]
+            .rect
+            .center();
+        assert_eq!(drag_off(0, w, SHORT_PRESS - 1).draft(), "AQ");
+    }
+
+    #[test]
+    fn a_held_key_stays_pressed_up_to_its_slop_past_its_edge() {
+        let mut keyboard = Keyboard::new(Name::new(b"A").unwrap());
+        let q = keys(Mode::Upper, keyboard.field)[0].rect;
+        let edge = q.bottom_right().unwrap();
+        let mut drag = crate::ui::gesture::Drag {
+            start: q.center(),
+            current: Point::new(edge.x + HELD_SLOP, q.center().y),
+            velocity: (0.0, 0.0),
+            lasted: SHORT_PRESS,
+        };
+        keyboard.handle(&GestureEvent::Down(q.center()), &font());
+        keyboard.handle(&GestureEvent::DragMove(drag), &font());
+        assert_eq!(keyboard.held, Some((0, true)));
+        drag.current.x += 1;
+        keyboard.handle(&GestureEvent::DragMove(drag), &font());
         assert_eq!(keyboard.held, Some((0, false)));
-        keyboard.handle(&GestureEvent::DragEnd(drag), &font);
-        assert_eq!(keyboard.draft(), "A");
+        assert_eq!(drag_off(0, drag.current, SHORT_PRESS).draft(), "A");
+        drag.current.x -= 1;
+        assert_eq!(drag_off(0, drag.current, SHORT_PRESS).draft(), "AQ");
+    }
+
+    /// A tap recorded on the panel (`docs/logs/touch/finger-hold-lift-2026-09-24.log`, its last
+    /// contact), its reports every 10 ms held still for 200 ms, then 13 and 34 px to the left
+    /// in the last two before the lift, laid on G.
+    #[test]
+    fn the_recorded_tap_types_the_key_it_came_down_on() {
+        let mut keyboard = Keyboard::new(Name::new(b"A").unwrap());
+        let g = keys(Mode::Upper, keyboard.field)
+            .into_iter()
+            .find(|key| key.label == "G")
+            .unwrap()
+            .rect
+            .center();
+        let mut reports: std::vec::Vec<_> = (0..21).map(|_| Some(g)).collect();
+        reports.extend([
+            Some(g - Point::new(13, 1)),
+            Some(g - Point::new(34, 3)),
+            None,
+        ]);
+        let mut tracker = crate::ui::gesture::GestureTracker::default();
+        for (at, report) in reports.into_iter().enumerate() {
+            let event = tracker.update(report, at as Micros * 10_000);
+            keyboard.handle(&event, &font());
+        }
+        let lifted = tracker.lift_due().unwrap();
+        keyboard.handle(&tracker.expire(lifted), &font());
+        assert_eq!(keyboard.draft(), "AG");
     }
 }

@@ -199,6 +199,7 @@ mod tests {
             start: Point::new(233, 233),
             current: Point::new(233 + dx, 233 + dy),
             velocity: (velocity, 0.0),
+            lasted: 0,
         }
     }
 

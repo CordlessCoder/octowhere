@@ -110,6 +110,7 @@ mod tests {
             start: from,
             current: to,
             velocity: (0.0, 0.0),
+            lasted: 0,
         }
     }
 

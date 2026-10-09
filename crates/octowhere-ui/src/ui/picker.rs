@@ -751,6 +751,7 @@ mod tests {
             start: Point::new(from.0, from.1),
             current: Point::new(to.0, to.1),
             velocity: (0.0, speed),
+            lasted: 0,
         })
     }
 

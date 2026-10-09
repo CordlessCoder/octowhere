@@ -23,6 +23,8 @@ pub struct Drag {
     pub current: Point,
     /// Pixels per second over [`VELOCITY_WINDOW`], x then y.
     pub velocity: (f32, f32),
+    /// How long the contact had lasted when it reached `current`.
+    pub lasted: Micros,
 }
 
 impl Drag {
@@ -59,6 +61,7 @@ const HISTORY: usize = 8;
 #[derive(Clone, Copy, Debug, Default)]
 struct Contact {
     start: Point,
+    landed: Micros,
     dragging: bool,
     /// The most recent samples with a position, newest at `history[newest]`.
     history: [(Point, Micros); HISTORY],
@@ -102,6 +105,7 @@ impl Contact {
             start: self.start,
             current: self.current(),
             velocity: self.velocity(),
+            lasted: self.history[self.newest].1 - self.landed,
         }
     }
 }
@@ -172,6 +176,7 @@ impl GestureTracker {
             (Some(position), None) => {
                 let mut contact = Contact {
                     start: position,
+                    landed: now,
                     ..Contact::default()
                 };
                 contact.push(position, now);
@@ -244,17 +249,21 @@ mod tests {
                 None,
             ],
         );
-        assert!(
-            matches!(events[1], GestureEvent::DragStart(drag) if drag.offset() == Point::new(-20, 0))
-        );
+        assert!(matches!(
+            events[1],
+            GestureEvent::DragStart(drag)
+                if drag.offset() == Point::new(-20, 0) && drag.lasted == FRAME
+        ));
         assert!(matches!(events[3], GestureEvent::DragMove(_)));
         let GestureEvent::DragEnd(end) = events[6] else {
             panic!("expected a drag end, got {:?}", events[6]);
         };
         assert_eq!(end.current, Point::new(240, 200));
-        // 20 px per 20 ms sample; the lift samples carry no position and do not slow it.
+        // 20 px per 20 ms sample; the lift samples carry no position and neither slow nor
+        // lengthen it.
         assert!((end.velocity.0 + 1000.0).abs() < 1.0);
         assert_eq!(end.velocity.1, 0.0);
+        assert_eq!(end.lasted, 3 * FRAME);
     }
 
     #[test]

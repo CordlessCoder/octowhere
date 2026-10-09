@@ -192,3 +192,11 @@ Recorded 2026-09-26. These override the hand-off where they differ.
     what the build reports back. The refresh's records needed no migration: events live in RAM,
     so the update that removes the refresh restarts the device without any, and the mesh's
     refresh command and view went with it.
+35. **A short press types its key wherever it lifts** (owner, 2026-10-09). The pairing
+    hand-off's keyboard acts only on a release inside the key pressed (`KEYBOARD-GEOMETRY.md`).
+    A finger's last reports before it lifts can move most of a key's width, 34 px in a tap
+    recorded on the panel, so a quick press lit its key and typed nothing. A press shorter than
+    300 ms now types the key it came down on wherever it lifts. A longer one keeps the
+    hand-off's rule, but its key reaches 16 px past its edge, and so does its pressed look.
+    Typing the key under the lift instead would have typed the neighbour. Typing messages on a
+    board felt better with it (owner). The design has not seen it.

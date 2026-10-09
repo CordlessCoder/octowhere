@@ -2614,6 +2614,7 @@ mod tests {
             start,
             current: start - Point::new(0, up),
             velocity: (0.0, 0.0),
+            lasted: 0,
         };
         scroll.handle(&GestureEvent::Down(start), rows, 0);
         scroll.handle(&GestureEvent::DragStart(drag(10)), rows, 0);
