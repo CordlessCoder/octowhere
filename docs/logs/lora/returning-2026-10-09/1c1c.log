@@ -1,0 +1,33 @@
+[2026-10-09T13:49:59Z INFO ] Serial port: '/dev/ttyACM3'
+[2026-10-09T13:49:59Z INFO ] Connecting...
+[2026-10-09T13:49:59Z INFO ] Using flash stub
+I (447) boot: Loaded app from partition at offset 0x10000
+
+1.713831 [INFO ] [GNSS] configured=true (octowhere firmware/src/main.rs:1244)
+1.714600 [INFO ] [GNSS] no reference time: the RTC has none (octowhere firmware/src/main.rs:2506)
+136.015435 [INFO ] [MESH] timebase root=1 from its boot hops=0 (octowhere_node octowhere-node/src/node.rs:2947)
+136.219232 [INFO ] [MESH] heard id=0 timebase=Boot(0) hops=0 taken=Held late_us=None len=105 rssi=-24 snr=7 entries=0 new=0 neighbours=0x00000000 messages=0/0 summary=false (octowhere_node octowhere-node/src/node.rs:1686)
+137.242802 [INFO ] [MESH] sent round=3 len=105 entries=0 records=0x00000000 asked=0x00000000 neighbours=0x00000001 messages=0 summary=false done=true (octowhere_node octowhere-node/src/node.rs:1827)
+149.586487 [INFO ] [MESH] command Leave (octowhere_node octowhere-node/src/node.rs:980)
+149.777131 [INFO ] [SETTINGS] Leave saved in 190205us (octowhere firmware/src/main.rs:979)
+149.812962 [INFO ] [MESH] left the group (octowhere_node octowhere-node/src/node.rs:1016)
+150.041541 [INFO ] [MESH] told the group it left done=true (octowhere_node octowhere-node/src/node.rs:1402)
+160.174454 [INFO ] [MESH] told the group it left done=true (octowhere_node octowhere-node/src/node.rs:1402)
+339.852268 [INFO ] [MESH] command Join (octowhere_node octowhere-node/src/node.rs:980)
+339.937314 [INFO ] [PAIR] Join Searching (119s left) (octowhere_node octowhere-node/src/node.rs:2930)
+341.430082 [INFO ] [PAIR] Join Connecting (29s left) (octowhere_node octowhere-node/src/node.rs:2930)
+341.553761 [INFO ] [PAIR] a frame took 29300us to take (octowhere_node octowhere-node/src/node.rs:1976)
+341.553834 [INFO ] [PAIR] code 784798 with [44, 1b, f6, 86, 1a, 38]; 59s to confirm (octowhere_node octowhere-node/src/node.rs:2922)
+341.553900 [INFO ] [PAIR] Join Compare { code: 784798 } (59s left) (octowhere_node octowhere-node/src/node.rs:2930)
+350.976539 [INFO ] [PAIR] command Accept (octowhere_node octowhere-node/src/node.rs:1983)
+351.062283 [INFO ] [PAIR] Join Waiting { code: 784798 } (50s left) (octowhere_node octowhere-node/src/node.rs:2930)
+351.538800 [INFO ] [PAIR] Join Transfer { done: 1, total: 3 } (29s left) (octowhere_node octowhere-node/src/node.rs:2930)
+352.015886 [INFO ] [PAIR] Join Transfer { done: 2, total: 3 } (29s left) (octowhere_node octowhere-node/src/node.rs:2930)
+352.169210 [INFO ] [PAIR] a frame took 35337us to take (octowhere_node octowhere-node/src/node.rs:1976)
+352.169270 [INFO ] [PAIR] Join Storing (0s left) (octowhere_node octowhere-node/src/node.rs:2930)
+352.190579 [INFO ] [SETTINGS] Group(own=1 members=2 generation=20 rekey=false) saved in 19651us (octowhere firmware/src/main.rs:979)
+352.353469 [INFO ] [PAIR] Join Finishing (29s left) (octowhere_node octowhere-node/src/node.rs:2930)
+352.476047 [INFO ] [PAIR] Join Done(Joined { id: 1, confirmed: true, returning: true }) (0s left) (octowhere_node octowhere-node/src/node.rs:2930)
+357.837326 [INFO ] [MESH] heard id=0 timebase=Boot(0) hops=0 taken=Adopted late_us=None len=160 rssi=-23 snr=7 entries=0 new=0 neighbours=0x00000002 messages=0/0 summary=false (octowhere_node octowhere-node/src/node.rs:1686)
+357.837740 [INFO ] [MESH] timebase root=0 from its boot hops=1 (octowhere_node octowhere-node/src/node.rs:2947)
+358.108513 [INFO ] [MESH] sent round=7 len=36 entries=0 records=0x00000000 asked=0x00000000 neighbours=0x00000001 messages=0 summary=false done=true (octowhere_node octowhere-node/src/node.rs:1827)
