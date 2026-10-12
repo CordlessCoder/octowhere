@@ -200,3 +200,13 @@ Recorded 2026-09-26. These override the hand-off where they differ.
     hand-off's rule, but its key reaches 16 px past its edge, and so does its pressed look.
     Typing the key under the lift instead would have typed the neighbour. Typing messages on a
     board felt better with it (owner). The design has not seen it.
+36. **A tap that rolls as the finger lifts is a tap on every screen** (owner, 2026-10-12).
+    Entry 35 covered only the keyboard. Every other button acts on a tap alone, so a roll of
+    more than 16 px as the finger lifted lost the tap, and could scroll or turn what was under
+    it. A contact held inside the 16 px for 50 ms is now a press. A press that leaves them
+    becomes a drag only on a report 40 ms after it left; if it lifts first, it is a tap where it
+    landed. A contact that leaves the 16 px sooner after landing, as a swipe does, is a drag at
+    once, so only a drag after a press starts later. The 50 and 40 ms are chosen, not measured:
+    the one recorded roll crossed the 16 px on its last report before the lift. On the keyboard,
+    a long press that rolls off its key as it lifts now types it. It felt right on a board
+    (owner). The design has not seen it.

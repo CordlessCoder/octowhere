@@ -914,9 +914,11 @@ show it with a 15 s timeout. Where the build differs from the spec or interprets
 ## Gestures as built
 
 A contact becomes a drag after 16 px of movement, and its axis is decided then. One that lifts
-before that is a tap, reported where it landed. A keyboard's key also types on a drag that
-lifts within 16 px of it, and on any press shorter than 300 ms wherever it lifts
-(`design/DECISIONS.md` 35). The firmware tracks one finger's position and
+before that is a tap, reported where it landed. So is a press, a contact held inside the 16 px
+for 50 ms, that lifts before a report 40 ms after it left them, since a finger's last reports
+before it lifts can move a key's width; a press's drag starts on that report
+(`design/DECISIONS.md` 36). A keyboard's key also types on a drag that lifts within 16 px of
+it, and on any press shorter than 300 ms wherever it lifts (`design/DECISIONS.md` 35). The firmware tracks one finger's position and
 velocity. It sees a second contact but no gesture uses one.
 
 | Where | Gesture | Effect |

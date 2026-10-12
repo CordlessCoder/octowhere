@@ -1248,6 +1248,25 @@ fn the_compass_cell_restarts_calibration_and_closes_to_the_compass() {
     assert_eq!(driver.stage.peripherals().compass.heading_decidegrees, None);
 }
 
+/// The roll of a tap recorded on the panel (`docs/logs/touch/finger-hold-lift-2026-09-24.log`):
+/// held still for 200 ms, then 13 and 34 px to the left in the last two reports before the lift.
+#[test]
+fn a_row_tapped_with_a_roll_as_the_finger_lifts_opens_and_the_grid_stays() {
+    let mut driver = open_panel(Screen::Clock);
+    let row = panel::Cell::Brightness
+        .bounds(driver.stage.panel_scroll())
+        .center();
+    for _ in 0..12 {
+        driver.touch(Some(row));
+    }
+    driver.touch(Some(row - Point::new(13, 1)));
+    driver.touch(Some(row - Point::new(34, 3)));
+    driver.lift();
+    driver.wait(300_000);
+    assert!(matches!(driver.stage.page(), Some(Page::Brightness(_))));
+    assert_eq!(driver.stage.panel_scroll(), 0);
+}
+
 #[test]
 fn the_brightness_editor_shows_each_step_live_and_stores_on_a_tap_on_its_hint() {
     let mut driver = open_panel(Screen::Clock);

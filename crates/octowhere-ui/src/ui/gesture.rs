@@ -7,6 +7,12 @@ pub type Micros = u64;
 
 /// Travel on either axis, in pixels, beyond which a contact is a drag rather than a tap.
 pub const TAP_SLOP: i32 = 16;
+/// A contact that stays inside the tap slop this long is a press.
+pub const PRESS: Micros = 50_000;
+/// A press that leaves the tap slop is still a tap if it lifts before a report this long after
+/// it left, and its drag starts only on that report: a finger's last reports before it lifts can
+/// be a key's width from where it pressed (`design/DECISIONS.md` 36).
+pub const LIFT_ROLL: Micros = 40_000;
 /// Velocity is measured over the samples in this trailing window.
 pub const VELOCITY_WINDOW: Micros = 80_000;
 /// How long after a lift is reported the contact counts as lifted. The controller reports a
@@ -47,22 +53,33 @@ pub enum GestureEvent {
     None,
     /// Contact landed. Every contact starts with this, and ends with `Tap` or `DragEnd`.
     Down(Point),
-    /// Contact left the tap slop. Later movement is reported as `DragMove`.
+    /// Contact left the tap slop. A press's drag starts on its first report [`LIFT_ROLL`] after
+    /// it left. Later movement is reported as `DragMove`.
     DragStart(Drag),
     DragMove(Drag),
     /// Contact lifted after a drag, at the last position it touched.
     DragEnd(Drag),
-    /// Contact lifted without leaving the slop, reported where it landed.
+    /// Contact lifted without starting a drag, reported where it landed.
     Tap(Point),
 }
 
 const HISTORY: usize = 8;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+enum Phase {
+    /// Inside the tap slop.
+    #[default]
+    Still,
+    /// A press that left the slop at this time, not yet reported as a drag.
+    Leaving(Micros),
+    Dragging,
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 struct Contact {
     start: Point,
     landed: Micros,
-    dragging: bool,
+    phase: Phase,
     /// The most recent samples with a position, newest at `history[newest]`.
     history: [(Point, Micros); HISTORY],
     newest: usize,
@@ -141,7 +158,7 @@ impl GestureTracker {
         let Some(contact) = self.contact.take() else {
             return GestureEvent::None;
         };
-        if contact.dragging {
+        if contact.phase == Phase::Dragging {
             GestureEvent::DragEnd(contact.drag())
         } else {
             GestureEvent::Tap(contact.start)
@@ -156,7 +173,7 @@ impl GestureTracker {
         };
         let moved = contact.lifted.is_none() && last.is_some_and(|last| last != contact.current());
         let event = match last {
-            Some(last) if moved => self.update(Some(last), now),
+            Some(last) if moved => self.moved(last, now, true),
             _ => GestureEvent::None,
         };
         if let Some(contact) = &mut self.contact {
@@ -185,19 +202,34 @@ impl GestureTracker {
             }
             (Some(position), Some(contact)) => {
                 contact.lifted = None;
-                contact.push(position, now);
-                let offset = position - contact.start;
-                if contact.dragging {
-                    GestureEvent::DragMove(contact.drag())
-                } else if offset.x.abs() > TAP_SLOP || offset.y.abs() > TAP_SLOP {
-                    contact.dragging = true;
-                    GestureEvent::DragStart(contact.drag())
-                } else {
-                    GestureEvent::None
-                }
+                self.moved(position, now, false)
             }
             (None, Some(_)) => self.lift(None, now),
             (None, None) => GestureEvent::None,
+        }
+    }
+
+    /// Moves the contact to `position`. A lift's own position never starts a drag that a press
+    /// is holding back.
+    fn moved(&mut self, position: Point, now: Micros, lifting: bool) -> GestureEvent {
+        let Some(contact) = &mut self.contact else {
+            return GestureEvent::None;
+        };
+        contact.push(position, now);
+        let offset = position - contact.start;
+        let outside = offset.x.abs() > TAP_SLOP || offset.y.abs() > TAP_SLOP;
+        match contact.phase {
+            Phase::Dragging => GestureEvent::DragMove(contact.drag()),
+            Phase::Still if !outside => GestureEvent::None,
+            Phase::Still if now - contact.landed >= PRESS => {
+                contact.phase = Phase::Leaving(now);
+                GestureEvent::None
+            }
+            Phase::Leaving(left) if lifting || now - left < LIFT_ROLL => GestureEvent::None,
+            Phase::Still | Phase::Leaving(_) => {
+                contact.phase = Phase::Dragging;
+                GestureEvent::DragStart(contact.drag())
+            }
         }
     }
 }
@@ -264,6 +296,74 @@ mod tests {
         assert!((end.velocity.0 + 1000.0).abs() < 1.0);
         assert_eq!(end.velocity.1, 0.0);
         assert_eq!(end.lasted, 3 * FRAME);
+    }
+
+    /// The last contact in `docs/logs/touch/finger-hold-lift-2026-09-24.log`: a tap held still
+    /// for 198 ms, then 13 and 34 px to the left in the last two reports before the lift.
+    #[test]
+    fn the_recorded_tap_that_rolls_as_it_lifts_is_a_tap_where_it_landed() {
+        let mut tracker = GestureTracker::default();
+        let landed = Point::new(290, 241);
+        let mut reports: Vec<_> = [
+            0, 20, 47, 66, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 198,
+        ]
+        .map(|ms| (ms, Some(landed)))
+        .to_vec();
+        reports.extend([
+            (218, Some(Point::new(277, 240))),
+            (230, Some(Point::new(256, 238))),
+            (262, None),
+        ]);
+        for (ms, report) in reports {
+            let event = tracker.update(report, ms * 1_000);
+            assert!(
+                matches!(event, GestureEvent::None | GestureEvent::Down(_)),
+                "{event:?} at {ms} ms"
+            );
+        }
+        let due = tracker.lift_due().unwrap();
+        assert_eq!(tracker.expire(due), GestureEvent::Tap(landed));
+    }
+
+    #[test]
+    fn a_press_that_goes_on_moving_starts_its_drag_a_lift_roll_after_it_left() {
+        fn at(tracker: &mut GestureTracker, ms: Micros, x: i32) -> GestureEvent {
+            tracker.update(Some(Point::new(x, 100)), ms * 1_000)
+        }
+        let mut tracker = GestureTracker::default();
+        at(&mut tracker, 0, 100);
+        assert_eq!(at(&mut tracker, PRESS / 1_000, 100), GestureEvent::None);
+        let left = PRESS / 1_000 + 10;
+        assert_eq!(at(&mut tracker, left, 120), GestureEvent::None);
+        assert_eq!(
+            at(&mut tracker, left + LIFT_ROLL / 1_000 - 1, 140),
+            GestureEvent::None
+        );
+        let GestureEvent::DragStart(drag) = at(&mut tracker, left + LIFT_ROLL / 1_000, 160) else {
+            panic!("expected the drag to start");
+        };
+        assert_eq!(drag.start, Point::new(100, 100));
+        assert_eq!(drag.current, Point::new(160, 100));
+        tracker.update(None, (left + 50) * 1_000);
+        let due = tracker.lift_due().unwrap();
+        assert!(matches!(tracker.expire(due), GestureEvent::DragEnd(_)));
+    }
+
+    #[test]
+    fn a_lift_found_further_off_during_the_roll_is_still_a_tap() {
+        let mut tracker = GestureTracker::default();
+        tracker.update(Some(Point::new(100, 100)), 0);
+        tracker.update(Some(Point::new(100, 100)), PRESS);
+        tracker.update(Some(Point::new(80, 100)), PRESS + 10_000);
+        let late = PRESS + 10_000 + LIFT_ROLL;
+        assert_eq!(
+            tracker.lift(Some(Point::new(40, 100)), late),
+            GestureEvent::None
+        );
+        assert_eq!(
+            tracker.expire(late + LIFT_GRACE),
+            GestureEvent::Tap(Point::new(100, 100))
+        );
     }
 
     #[test]
